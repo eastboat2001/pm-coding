@@ -1,0 +1,647 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+
+type MessageRole = 'user' | 'assistant'
+
+type ChatMessage = {
+  role: MessageRole
+  content: string
+  thinking?: string
+}
+
+const sessionId = ref('')
+const inputText = ref('')
+const messages = ref<ChatMessage[]>([])
+const chatList = ref<HTMLElement | null>(null)
+
+const loadingSession = ref(false)
+const sending = ref(false)
+const quickGuiding = ref(false)
+const globalError = ref('')
+const isConnected = ref(true)
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const QUICK_GUIDE_PROMPT =
+  'For the remaining key requirement questions, assume the simplest reasonable business needs by default and generate a system design.'
+
+// 录音相关变量
+const recording = ref(false)
+const audioBuffer = ref<Float32Array[]>([])
+const audioContext = ref<AudioContext | null>(null)
+const scriptProcessor = ref<ScriptProcessorNode | null>(null)
+
+const hasSession = computed(() => Boolean(sessionId.value))
+const STREAM_REVEAL_INTERVAL_MS = 24
+
+function clearError() {
+  globalError.value = ''
+}
+
+function formatError(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+  return fallback
+}
+
+function apiUrl(path: string): string {
+  if (!API_BASE_URL) {
+    return path
+  }
+  return `${API_BASE_URL}${path}`
+}
+
+function parseThinkContent(raw: string): { content: string; thinking: string } {
+  const thinkRegex = /<think>([\s\S]*?)<\/think>/gi
+  const thinkingParts: string[] = []
+  let plain = raw
+  let match = thinkRegex.exec(raw)
+
+  while (match) {
+    if (match[1]?.trim()) {
+      thinkingParts.push(match[1].trim())
+    }
+    match = thinkRegex.exec(raw)
+  }
+
+  plain = plain.replace(thinkRegex, '').trim()
+  return { content: plain, thinking: thinkingParts.join('\n\n') }
+}
+
+function normalizeMessages(rawMessages: Array<{ role: MessageRole; content: string }>): ChatMessage[] {
+  return rawMessages.map((item) => {
+    if (item.role !== 'assistant') {
+      return { role: item.role, content: item.content }
+    }
+
+    const parsed = parseThinkContent(item.content)
+    return {
+      role: item.role,
+      content: parsed.content,
+      thinking: parsed.thinking,
+    }
+  })
+}
+
+async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    ...init,
+  })
+
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const errorMessage = typeof data?.error === 'string' ? data.error : `Request failed: ${response.status}`
+    throw new Error(errorMessage)
+  }
+  return data as T
+}
+
+async function createSession() {
+  clearError()
+  loadingSession.value = true
+  isConnected.value = true
+  try {
+    const data = await apiJson<{ session_id: string; messages: Array<{ role: MessageRole; content: string }> }>(
+      '/api/sessions',
+      {
+        method: 'POST',
+      },
+    )
+    sessionId.value = data.session_id
+    messages.value = normalizeMessages(data.messages ?? [])
+    scrollToBottom()
+  } catch (error) {
+    globalError.value = formatError(error, 'Failed to create session.')
+    isConnected.value = false
+  } finally {
+    loadingSession.value = false
+  }
+}
+
+function parseSseEvent(eventBlock: string): { event: string; data: string } {
+  const lines = eventBlock.split(/\r?\n/)
+  let eventName = 'message'
+  const dataLines: string[] = []
+
+  for (const line of lines) {
+    if (!line || line.startsWith(':')) {
+      continue
+    }
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim()
+      continue
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart())
+    }
+  }
+
+  return { event: eventName, data: dataLines.join('\n') }
+}
+
+function splitSseBlocks(rawBuffer: string): { blocks: string[]; rest: string } {
+  const blocks: string[] = []
+  const separator = /(?:\r?\n){2}/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null = separator.exec(rawBuffer)
+
+  while (match) {
+    const block = rawBuffer.slice(lastIndex, match.index)
+    if (block.trim()) {
+      blocks.push(block)
+    }
+    lastIndex = separator.lastIndex
+    match = separator.exec(rawBuffer)
+  }
+
+  return {
+    blocks,
+    rest: rawBuffer.slice(lastIndex),
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function createSmoothWriter(target: ChatMessage) {
+  let pending = ''
+  let finished = false
+  let flushing = false
+  let resolveDone: (() => void) | null = null
+  const donePromise = new Promise<void>((resolve) => {
+    resolveDone = resolve
+  })
+
+  const flush = async () => {
+    if (flushing) {
+      return
+    }
+    flushing = true
+    try {
+      while (!finished || pending.length > 0) {
+        if (!pending.length) {
+          await sleep(STREAM_REVEAL_INTERVAL_MS)
+          continue
+        }
+        const step = 1
+        target.content += pending.slice(0, step)
+        pending = pending.slice(step)
+        await sleep(STREAM_REVEAL_INTERVAL_MS)
+      }
+    } finally {
+      flushing = false
+      if (resolveDone) {
+        resolveDone()
+      }
+    }
+  }
+
+  return {
+    push(chunk: string) {
+      if (!chunk) {
+        return
+      }
+      pending += chunk
+      void flush()
+    },
+    async finish() {
+      finished = true
+      await flush()
+      await donePromise
+    },
+  }
+}
+
+async function sendMessageStream(session: string, message: string, assistantMessage: ChatMessage) {
+  const response = await fetch(apiUrl(`/api/sessions/${session}/messages/stream`), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ message }),
+  })
+
+  if (!response.ok) {
+    const errorJson = await response.json().catch(() => ({}))
+    throw new Error(typeof errorJson?.error === 'string' ? errorJson.error : `Request failed: ${response.status}`)
+  }
+
+  if (!response.body) {
+    throw new Error('Browser does not support streaming responses.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const writer = createSmoothWriter(assistantMessage)
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    const extracted = splitSseBlocks(buffer)
+    const chunks = extracted.blocks
+    buffer = extracted.rest
+
+    for (const chunk of chunks) {
+      const parsed = parseSseEvent(chunk)
+      let payload: any = {}
+      try {
+        payload = parsed.data ? JSON.parse(parsed.data) : {}
+      } catch {
+        payload = {}
+      }
+
+      if (parsed.event === 'error') {
+        throw new Error(payload.error || 'Streaming response error.')
+      }
+
+      if (parsed.event === 'content' && typeof payload.delta === 'string') {
+        writer.push(payload.delta)
+      }
+
+      if (parsed.event === 'thinking' && typeof payload.delta === 'string') {
+        assistantMessage.thinking = (assistantMessage.thinking || '') + payload.delta
+      }
+
+      if (parsed.event === 'thinking_done' && typeof payload.thinking === 'string') {
+        assistantMessage.thinking = payload.thinking
+      }
+    }
+  }
+
+  await writer.finish()
+}
+
+async function sendMessageFallback(session: string, message: string, assistantMessage: ChatMessage) {
+  const data = await apiJson<{
+    assistant_message: string
+  }>(`/api/sessions/${session}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  })
+
+  const parsed = parseThinkContent(data.assistant_message || '')
+  assistantMessage.content = parsed.content
+  assistantMessage.thinking = parsed.thinking
+}
+
+function scrollToBottom() {
+  setTimeout(() => {
+    if (chatList.value) {
+      chatList.value.scrollTop = chatList.value.scrollHeight
+    }
+  }, 100)
+}
+
+async function sendMessage() {
+  const message = inputText.value.trim()
+  if (!message || sending.value) {
+    return
+  }
+
+  if (!hasSession.value) {
+    await createSession()
+    if (!hasSession.value) {
+      return
+    }
+  }
+
+  clearError()
+  sending.value = true
+
+  messages.value.push({ role: 'user', content: message })
+  messages.value.push({ role: 'assistant', content: '', thinking: '' })
+  const assistantMessage = messages.value[messages.value.length - 1] as ChatMessage
+  inputText.value = ''
+  
+  // 滚动到底部
+  scrollToBottom()
+
+  try {
+    await sendMessageStream(sessionId.value, message, assistantMessage)
+    const streamParsed = parseThinkContent(assistantMessage.content)
+    assistantMessage.content = streamParsed.content
+    assistantMessage.thinking = [assistantMessage.thinking || '', streamParsed.thinking].filter(Boolean).join('\n\n')
+
+    if (!assistantMessage.content.trim()) {
+      await sendMessageFallback(sessionId.value, message, assistantMessage)
+    }
+  } catch (error) {
+    messages.value.pop()
+    messages.value.pop()
+    globalError.value = formatError(error, 'Failed to send message.')
+    isConnected.value = false
+  } finally {
+    sending.value = false
+    scrollToBottom()
+  }
+}
+
+async function quickFinalize() {
+  if (!hasSession.value || quickGuiding.value || sending.value) {
+    return
+  }
+
+  clearError()
+  quickGuiding.value = true
+  try {
+    messages.value.push({ role: 'assistant', content: '', thinking: '' })
+    const assistantMessage = messages.value[messages.value.length - 1] as ChatMessage
+    
+    // 滚动到底部
+    scrollToBottom()
+
+    await sendMessageStream(sessionId.value, QUICK_GUIDE_PROMPT, assistantMessage)
+    const streamParsed = parseThinkContent(assistantMessage.content)
+    assistantMessage.content = streamParsed.content
+    assistantMessage.thinking = [assistantMessage.thinking || '', streamParsed.thinking].filter(Boolean).join('\n\n')
+
+    if (!assistantMessage.content.trim()) {
+      await sendMessageFallback(sessionId.value, QUICK_GUIDE_PROMPT, assistantMessage)
+    }
+  } catch (error) {
+    globalError.value = formatError(error, 'Failed to generate quick system design.')
+    isConnected.value = false
+    const last = messages.value[messages.value.length - 1]
+    if (last && last.role === 'assistant' && !last.content) {
+      messages.value.pop()
+    }
+  } finally {
+    quickGuiding.value = false
+    scrollToBottom()
+  }
+}
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    
+    // 重置音频缓冲区
+    audioBuffer.value = []
+    
+    // 创建AudioContext
+    audioContext.value = new AudioContext({ sampleRate: 16000 })
+    const source = audioContext.value.createMediaStreamSource(stream)
+    const processor = audioContext.value.createScriptProcessor(4096, 1, 1)
+    
+    processor.onaudioprocess = (event) => {
+      const inputData = event.inputBuffer.getChannelData(0)
+      audioBuffer.value.push(new Float32Array(inputData))
+    }
+    
+    source.connect(processor)
+    processor.connect(audioContext.value.destination)
+    
+    scriptProcessor.value = processor
+    recording.value = true
+    console.log('Recording started')
+  } catch (error) {
+    console.error('Error starting recording:', error)
+    globalError.value = '无法访问麦克风'
+  }
+}
+
+function stopRecording() {
+  if (audioContext.value && scriptProcessor.value) {
+    scriptProcessor.value.disconnect()
+    
+    // 关闭AudioContext
+    if (audioContext.value.state !== 'closed') {
+      audioContext.value.close()
+    }
+    
+    // 合并音频数据
+    const totalLength = audioBuffer.value.reduce((acc, chunk) => acc + chunk.length, 0)
+    const result = new Float32Array(totalLength)
+    let offset = 0
+    for (const chunk of audioBuffer.value) {
+      result.set(chunk, offset)
+      offset += chunk.length
+    }
+    
+    // 转换为16-bit PCM
+    const pcmData = new Int16Array(result.length)
+    for (let i = 0; i < result.length; i++) {
+      pcmData[i] = Math.max(-32768, Math.min(32767, result[i] * 32767))
+    }
+    
+    // 创建WAV文件头
+    const wavData = createWavHeader(pcmData.buffer)
+    
+    // 创建FormData
+    const formData = new FormData()
+    const audioBlob = new Blob([wavData], { type: 'audio/wav' })
+    formData.append('audio', audioBlob, 'recording.wav')
+    
+    // 发送到后端
+    fetch(apiUrl('/api/asr/recognize'), {
+      method: 'POST',
+      body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.text) {
+        inputText.value = data.text
+        sendMessage()
+      } else if (data.error) {
+        globalError.value = data.error
+      }
+    })
+    .catch(error => {
+      console.error('Error recognizing speech:', error)
+      globalError.value = '语音识别失败'
+    })
+    
+    recording.value = false
+    console.log('Recording stopped')
+  }
+}
+
+function createWavHeader(pcmData: ArrayBuffer) {
+  const dataLength = pcmData.byteLength
+  const buffer = new ArrayBuffer(44 + dataLength)
+  const view = new DataView(buffer)
+  
+  // RIFF头
+  writeString(view, 0, 'RIFF')
+  view.setUint32(4, 36 + dataLength, true)
+  writeString(view, 8, 'WAVE')
+  
+  // fmt子块
+  writeString(view, 12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)  // PCM格式
+  view.setUint16(22, 1, true)  // 单声道
+  view.setUint32(24, 16000, true)  // 采样率
+  view.setUint32(28, 32000, true)  // 字节率
+  view.setUint16(32, 2, true)  // 块对齐
+  view.setUint16(34, 16, true)  // 位深度
+  
+  // data子块
+  writeString(view, 36, 'data')
+  view.setUint32(40, dataLength, true)
+  
+  // 写入PCM数据
+  const pcmArray = new Int16Array(pcmData)
+  const dataView = new DataView(buffer, 44)
+  for (let i = 0; i < pcmArray.length; i++) {
+    dataView.setInt16(i * 2, pcmArray[i], true)
+  }
+  
+  return buffer
+}
+
+function writeString(view: DataView, offset: number, string: string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i))
+  }
+}
+
+onMounted(async () => {
+  await createSession()
+})
+</script>
+
+<template>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="header-content">
+        <p class="eyebrow">Requirement Studio</p>
+        <h1>PM Requirement Conversation</h1>
+      </div>
+      <div class="header-actions">
+        <div class="status-indicator" :class="{ 'online': isConnected, 'offline': !isConnected }">
+          <span class="status-dot"></span>
+          <span class="status-text">{{ isConnected ? 'Connected' : 'Disconnected' }}</span>
+        </div>
+      </div>
+    </header>
+
+    <div v-if="globalError" class="error-banner" @click="clearError">
+      <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <span>{{ globalError }}</span>
+      <button class="close-btn" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <main class="layout">
+      <section class="panel chat-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <h2>Conversation</h2>
+            <span class="message-count">{{ messages.length }} messages</span>
+          </div>
+          <div class="panel-actions">
+            <button class="btn btn-secondary" :disabled="loadingSession" @click="createSession">
+              <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              {{ loadingSession ? 'Creating...' : 'New Chat' }}
+            </button>
+          </div>
+        </div>
+
+        <div class="chat-list" ref="chatList">
+          <div v-for="(msg, idx) in messages" :key="`${msg.role}-${idx}`" class="bubble" :class="msg.role">
+            <div class="message-header">
+              <span class="role">{{ msg.role === 'user' ? 'You' : 'PM Assistant' }}</span>
+              <span class="timestamp">{{ new Date().toLocaleTimeString() }}</span>
+            </div>
+            <details v-if="msg.role === 'assistant' && msg.thinking" class="think-box" :open="!msg.content">
+              <summary class="think-box-summary">
+                <svg class="think-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 16v-4"/>
+                  <path d="M12 8h.01"/>
+                </svg>
+                View reasoning
+              </summary>
+              <pre class="think-content">{{ msg.thinking }}</pre>
+            </details>
+
+            <div v-if="(sending || quickGuiding) && msg.role === 'assistant' && !msg.content" class="typing-indicator">
+              <div class="typing-dot"></div>
+              <div class="typing-dot"></div>
+              <div class="typing-dot"></div>
+            </div>
+            <p v-else class="content">{{ msg.content }}</p>
+          </div>
+          <div v-if="!messages.length" class="empty-state">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <h3>Start a conversation</h3>
+            <p>Describe your project requirements and our PM Assistant will help you collect and refine them.</p>
+          </div>
+        </div>
+
+        <form class="composer" @submit.prevent="sendMessage">
+          <div class="composer-input-wrapper">
+            <textarea
+              v-model="inputText"
+              rows="3"
+              placeholder="Describe your requirements..."
+              :disabled="sending"
+              class="composer-input"
+              @keydown.enter.exact.prevent="sendMessage"
+              @keydown.enter.shift="$event.target.value += '\n'"
+            />
+            <div class="composer-actions">
+              <button 
+                class="btn btn-icon" 
+                type="button" 
+                :class="{ 'recording': recording }"
+                @click="recording ? stopRecording() : startRecording()"
+                :title="recording ? 'Stop Recording' : 'Start Recording'"
+                :disabled="sending"
+              >
+                <svg v-if="!recording" class="icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="23"/>
+                  <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+                <svg v-else class="icon-stop" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="6" width="12" height="12" rx="2"/>
+                </svg>
+              </button>
+              <button class="btn btn-primary" type="submit" :disabled="!inputText.trim() || sending">
+                <svg v-if="!sending" class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="22" y1="2" x2="11" y2="13"/>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+                {{ sending ? 'Sending...' : 'Send' }}
+              </button>
+            </div>
+          </div>
+        </form>
+
+        <div class="quick-actions">
+          <button class="btn btn-ghost" :disabled="quickGuiding || sending || !hasSession" @click="quickFinalize">
+            <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
+              <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+            </svg>
+            {{ quickGuiding ? 'Generating...' : 'Quick System Design' }}
+          </button>
+        </div>
+      </section>
+    </main>
+  </div>
+</template>

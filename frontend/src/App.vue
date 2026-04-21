@@ -13,6 +13,7 @@ const sessionId = ref('')
 const inputText = ref('')
 const messages = ref<ChatMessage[]>([])
 const chatList = ref<HTMLElement | null>(null)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 const loadingSession = ref(false)
 const sending = ref(false)
@@ -20,6 +21,7 @@ const quickGuiding = ref(false)
 const globalError = ref('')
 const isConnected = ref(true)
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+
 const QUICK_GUIDE_PROMPT =
   'For the remaining key requirement questions, assume the simplest reasonable business needs by default and generate a system design.'
 
@@ -300,6 +302,14 @@ function scrollToBottom() {
   }, 100)
 }
 
+function autoResizeTextarea() {
+  const textarea = textareaRef.value
+  if (textarea) {
+    textarea.style.height = 'auto'
+    textarea.style.height = Math.min(textarea.scrollHeight, 300) + 'px'
+  }
+}
+
 async function sendMessage() {
   const message = inputText.value.trim()
   if (!message || sending.value) {
@@ -557,7 +567,7 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="chat-list" ref="chatList">
+        <div class="chat-list" ref="chatList" :class="{ 'empty': !messages.length }">
           <div v-for="(msg, idx) in messages" :key="`${msg.role}-${idx}`" class="bubble" :class="msg.role">
             <div class="message-header">
               <span class="role">{{ msg.role === 'user' ? 'You' : 'PM Assistant' }}</span>
@@ -582,6 +592,7 @@ onMounted(async () => {
             </div>
             <p v-else class="content">{{ msg.content }}</p>
           </div>
+          
           <div v-if="!messages.length" class="empty-state">
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
@@ -595,52 +606,55 @@ onMounted(async () => {
           <div class="composer-input-wrapper">
             <textarea
               v-model="inputText"
-              rows="3"
+              rows="1"
               placeholder="Describe your requirements..."
               :disabled="sending"
               class="composer-input"
               @keydown.enter.exact.prevent="sendMessage"
               @keydown.enter.shift="$event.target.value += '\n'"
+              @input="autoResizeTextarea"
+              ref="textareaRef"
             />
             <div class="composer-actions">
-              <button 
-                class="btn btn-icon" 
-                type="button" 
-                :class="{ 'recording': recording }"
-                @click="recording ? stopRecording() : startRecording()"
-                :title="recording ? 'Stop Recording' : 'Start Recording'"
-                :disabled="sending"
-              >
-                <svg v-if="!recording" class="icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                  <line x1="12" y1="19" x2="12" y2="23"/>
-                  <line x1="8" y1="23" x2="16" y2="23"/>
-                </svg>
-                <svg v-else class="icon-stop" viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="6" y="6" width="12" height="12" rx="2"/>
-                </svg>
-              </button>
-              <button class="btn btn-primary" type="submit" :disabled="!inputText.trim() || sending">
-                <svg v-if="!sending" class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="22" y1="2" x2="11" y2="13"/>
-                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                </svg>
-                {{ sending ? 'Sending...' : 'Send' }}
-              </button>
+              <div class="composer-actions-left">
+                <button class="btn btn-ghost" :disabled="quickGuiding || sending || !hasSession" @click="quickFinalize">
+                  <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
+                    <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+                  </svg>
+                  {{ quickGuiding ? 'Generating...' : 'Quick System Design' }}
+                </button>
+              </div>
+              <div class="composer-actions-right">
+                <button 
+                    class="btn btn-icon" 
+                    type="button" 
+                    :class="{ 'recording': recording }"
+                    @click="recording ? stopRecording() : startRecording()"
+                    :title="recording ? 'Stop Recording' : 'Start Recording'"
+                    :disabled="sending"
+                  >
+                    <svg v-if="!recording" class="icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                      <line x1="12" y1="19" x2="12" y2="23"/>
+                      <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                    <svg v-else class="icon-stop" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="6" width="12" height="12" rx="2"/>
+                    </svg>
+                  </button>
+                <button class="btn btn-primary" type="submit" :disabled="!inputText.trim() || sending">
+                  <svg v-if="!sending" class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="22" y1="2" x2="11" y2="13"/>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                  </svg>
+                  {{ sending ? 'Sending...' : 'Send' }}
+                </button>
+              </div>
             </div>
           </div>
         </form>
-
-        <div class="quick-actions">
-          <button class="btn btn-ghost" :disabled="quickGuiding || sending || !hasSession" @click="quickFinalize">
-            <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
-              <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
-            </svg>
-            {{ quickGuiding ? 'Generating...' : 'Quick System Design' }}
-          </button>
-        </div>
       </section>
     </main>
   </div>

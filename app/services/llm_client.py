@@ -138,6 +138,8 @@ class MiniMaxChatClient:
         url = f"{self.config.base_url.rstrip('/')}/chat/completions"
         headers = {
             "Content-Type": "application/json",
+            # Some OpenAI-compatible providers (e.g., NVIDIA) rely on this for SSE streaming.
+            "Accept": "text/event-stream" if stream else "application/json",
         }
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"

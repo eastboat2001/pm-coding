@@ -443,7 +443,7 @@ class DoubaoASRClient:
         wav_data = CommonUtils.convert_to_wav(audio_data)
         
         # 构建请求URL
-        url = f"{self.base_url.rstrip('/')}/asr"
+        url = f"{self.base_url.rstrip('/')}/audio/transcriptions"
         
         # 构建请求头
         headers = {
@@ -454,7 +454,7 @@ class DoubaoASRClient:
         files = {
             "audio": ("audio.wav", wav_data, "audio/wav")
         }
-        
+        print(url)
         # 发送请求
         try:
             logger.info(f"Sending ASR request to: {url}")

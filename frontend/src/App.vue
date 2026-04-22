@@ -32,7 +32,7 @@ const audioContext = ref<AudioContext | null>(null)
 const scriptProcessor = ref<ScriptProcessorNode | null>(null)
 
 const hasSession = computed(() => Boolean(sessionId.value))
-const STREAM_REVEAL_INTERVAL_MS = 24
+
 
 function clearError() {
   globalError.value = ''
@@ -164,55 +164,16 @@ function splitSseBlocks(rawBuffer: string): { blocks: string[]; rest: string } {
   }
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 function createSmoothWriter(target: ChatMessage) {
-  let pending = ''
-  let finished = false
-  let flushing = false
-  let resolveDone: (() => void) | null = null
-  const donePromise = new Promise<void>((resolve) => {
-    resolveDone = resolve
-  })
-
-  const flush = async () => {
-    if (flushing) {
-      return
-    }
-    flushing = true
-    try {
-      while (!finished || pending.length > 0) {
-        if (!pending.length) {
-          await sleep(STREAM_REVEAL_INTERVAL_MS)
-          continue
-        }
-        const step = 1
-        target.content += pending.slice(0, step)
-        pending = pending.slice(step)
-        await sleep(STREAM_REVEAL_INTERVAL_MS)
-      }
-    } finally {
-      flushing = false
-      if (resolveDone) {
-        resolveDone()
-      }
-    }
-  }
-
   return {
     push(chunk: string) {
       if (!chunk) {
         return
       }
-      pending += chunk
-      void flush()
+      target.content += chunk
     },
     async finish() {
-      finished = true
-      await flush()
-      await donePromise
+      // No-op: content is already written directly
     },
   }
 }

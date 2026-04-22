@@ -63,12 +63,13 @@ def get_session(session_id: str):
 def send_message(session_id: str):
     payload = request.get_json(silent=True) or {}
     user_message = str(payload.get("message", "")).strip()
+    language = str(payload.get("language", "zh")).strip()
     if not user_message:
         return jsonify({"error": "Field `message` is required."}), HTTPStatus.BAD_REQUEST
 
     service = _get_service()
     try:
-        result = service.send_user_message(session_id, user_message)
+        result = service.send_user_message(session_id, user_message, language)
     except KeyError:
         return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
     except LLMError as exc:
@@ -81,6 +82,7 @@ def send_message(session_id: str):
 def stream_message(session_id: str):
     payload = request.get_json(silent=True) or {}
     user_message = str(payload.get("message", "")).strip()
+    language = str(payload.get("language", "zh")).strip()
     if not user_message:
         return jsonify({"error": "Field `message` is required."}), HTTPStatus.BAD_REQUEST
 
@@ -88,7 +90,7 @@ def stream_message(session_id: str):
 
     def event_stream():
         try:
-            for item in service.stream_user_message(session_id, user_message):
+            for item in service.stream_user_message(session_id, user_message, language):
                 event_name = item.get("event", "message")
                 data = json.dumps(item, ensure_ascii=False)
                 yield f"event: {event_name}\n"

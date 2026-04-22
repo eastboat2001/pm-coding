@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -34,6 +34,31 @@ Rules:
 5) For data-related topics, always clarify: entity definitions, unique keys, cardinality, consistency rules, retention/audit, and privacy/security needs.
 6) When enough detail is available, provide a brief current requirement summary and explicitly list missing inputs needed to complete the design document.
 7) If user statements conflict, call it out and ask for confirmation.
+"""
+
+PM_SYSTEM_PROMPT_ZH = """你是一位资深的产品经理。
+你的主要任务是需求收集，以便为工程团队生成完整的系统设计文档。
+最终输出应指导端到端开发，包括系统用例、数据库设计和实施指导。
+
+需要支持的文档章节：
+- 产品范围和业务目标
+- 角色和系统用例
+- 功能需求和用户流程
+- 非功能性需求（安全性、性能、可靠性、合规性）
+- 数据实体、关系、约束和生命周期（用于数据库设计）
+- API/领域边界和集成依赖
+- 技术约束、假设和风险
+- 验收标准和发布优先级
+
+规则：
+1) 每次只问一个最高价值的澄清问题。
+   绝不要在单次对话中问多个问题。
+2) 回复要简洁、专业且友好。
+3) 优先收集系统设计所需的信息：业务目标、角色、用例、实体、数据规则、接口、约束和验收标准。
+4) 对于每个主要功能，要询问：触发条件、前置条件、主流程、备选流程、异常情况和可衡量的完成标准。
+5) 对于数据相关主题，始终要澄清：实体定义、唯一键、基数、一致性规则、保留/审计以及隐私/安全需求。
+6) 当有足够细节时，提供当前需求的简要总结，并明确列出完成设计文档所需的缺失输入。
+7) 如果用户陈述有冲突，指出并要求确认。
 """
 
 SUMMARY_SYSTEM_PROMPT = """You are a requirement analysis assistant.
@@ -135,7 +160,7 @@ class RequirementCollectorService:
         with self._lock:
             return self._sessions.get(session_id)
 
-    def send_user_message(self, session_id: str, user_message: str) -> dict[str, Any]:
+    def send_user_message(self, session_id: str, user_message: str, language: str = "zh") -> dict[str, Any]:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
@@ -143,7 +168,8 @@ class RequirementCollectorService:
         user_item = {"role": "user", "content": user_message}
         session.messages.append(user_item)
 
-        llm_messages = [{"role": "system", "content": PM_SYSTEM_PROMPT}, *session.messages]
+        system_prompt = PM_SYSTEM_PROMPT_ZH if language == "zh" else PM_SYSTEM_PROMPT
+        llm_messages = [{"role": "system", "content": system_prompt}, *session.messages]
         assistant_text_raw = self.llm_client.chat(llm_messages)
         assistant_text, thinking_text = self._split_thinking(assistant_text_raw)
 
@@ -159,7 +185,7 @@ class RequirementCollectorService:
             "message_count": len(session.messages),
         }
 
-    def stream_user_message(self, session_id: str, user_message: str) -> Iterator[dict[str, Any]]:
+    def stream_user_message(self, session_id: str, user_message: str, language: str = "zh") -> Iterator[dict[str, Any]]:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
@@ -167,7 +193,8 @@ class RequirementCollectorService:
         user_item = {"role": "user", "content": user_message}
         session.messages.append(user_item)
 
-        llm_messages = [{"role": "system", "content": PM_SYSTEM_PROMPT}, *session.messages]
+        system_prompt = PM_SYSTEM_PROMPT_ZH if language == "zh" else PM_SYSTEM_PROMPT
+        llm_messages = [{"role": "system", "content": system_prompt}, *session.messages]
         assistant_text_parts: list[str] = []
         thinking_parts: list[str] = []
 

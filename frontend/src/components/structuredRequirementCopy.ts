@@ -6,8 +6,10 @@ export const structuredRequirementPanelCopy = {
     progressTitle: 'Requirement Progress',
     loading: 'Updating the current structured requirement model...',
     syncing: 'Syncing...',
-    generatePrd: 'Generate PRD',
-    generatingPrd: 'Generating PRD...',
+    generateDocuments: 'Generate Documents',
+    generatingDocuments: 'Generating documents...',
+    downloadPrd: 'Download Requirements Document',
+    downloadDesign: 'Download Design Document',
     notCaptured: 'TBD',
     status: {
       missing: 'Missing',
@@ -47,8 +49,10 @@ export const structuredRequirementPanelCopy = {
     progressTitle: 'Anforderungsfortschritt',
     loading: 'Das strukturierte Anforderungsmodell wird aktualisiert...',
     syncing: 'Synchronisiert...',
-    generatePrd: 'PRD erzeugen',
-    generatingPrd: 'PRD wird erzeugt...',
+    generateDocuments: 'Dokumente erzeugen',
+    generatingDocuments: 'Dokumente werden erzeugt...',
+    downloadPrd: 'Anforderungsdokument herunterladen',
+    downloadDesign: 'Designdokument herunterladen',
     notCaptured: 'TBD',
     status: {
       missing: 'Fehlt',
@@ -88,8 +92,10 @@ export const structuredRequirementPanelCopy = {
     progressTitle: '\u9700\u6c42\u91c7\u96c6\u8fdb\u5ea6',
     loading: '\u6b63\u5728\u66f4\u65b0\u5f53\u524d\u7ed3\u6784\u5316\u9700\u6c42\u6a21\u578b...',
     syncing: '\u540c\u6b65\u4e2d...',
-    generatePrd: '\u751f\u6210 PRD \u6587\u6863',
-    generatingPrd: '\u6b63\u5728\u751f\u6210 PRD...',
+    generateDocuments: '\u751f\u6210\u6587\u6863',
+    generatingDocuments: '\u6b63\u5728\u751f\u6210\u6587\u6863...',
+    downloadPrd: '\u4e0b\u8f7d\u9700\u6c42\u6587\u6863',
+    downloadDesign: '\u4e0b\u8f7d\u8bbe\u8ba1\u6587\u6863',
     notCaptured: 'TBD',
     status: {
       missing: '\u672a\u6536\u96c6',
@@ -129,8 +135,10 @@ export const structuredRequirementPanelCopy = {
     progressTitle: 'Kemajuan Keperluan',
     loading: 'Model keperluan berstruktur sedang dikemas kini...',
     syncing: 'Sedang menyelaras...',
-    generatePrd: 'Jana PRD',
-    generatingPrd: 'Sedang menjana PRD...',
+    generateDocuments: 'Jana Dokumen',
+    generatingDocuments: 'Sedang menjana dokumen...',
+    downloadPrd: 'Muat Turun Dokumen Keperluan',
+    downloadDesign: 'Muat Turun Dokumen Reka Bentuk',
     notCaptured: 'TBD',
     status: {
       missing: 'Belum ada',
@@ -172,8 +180,10 @@ export const structuredRequirementPanelCopy = {
     progressTitle: string
     loading: string
     syncing: string
-    generatePrd: string
-    generatingPrd: string
+    generateDocuments: string
+    generatingDocuments: string
+    downloadPrd: string
+    downloadDesign: string
     notCaptured: string
     status: Record<'missing' | 'captured' | 'pendingConfirmation' | 'confirmed' | 'conflict', string>
     rows: Record<

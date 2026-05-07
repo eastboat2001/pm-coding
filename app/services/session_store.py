@@ -43,6 +43,9 @@ class SQLiteSessionStore:
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     thinking TEXT NOT NULL DEFAULT '',
+                    kind TEXT NOT NULL DEFAULT 'chat',
+                    download_filename TEXT NOT NULL DEFAULT '',
+                    storage_path TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
@@ -55,6 +58,7 @@ class SQLiteSessionStore:
                 """
             )
             self._ensure_session_columns(conn)
+            self._ensure_message_columns(conn)
 
     def _ensure_session_columns(self, conn: sqlite3.Connection) -> None:
         existing_columns = {
@@ -87,6 +91,33 @@ class SQLiteSessionStore:
                 """
                 ALTER TABLE sessions
                 ADD COLUMN applied_template_name TEXT NOT NULL DEFAULT ''
+                """
+            )
+
+    def _ensure_message_columns(self, conn: sqlite3.Connection) -> None:
+        existing_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "kind" not in existing_columns:
+            conn.execute(
+                """
+                ALTER TABLE messages
+                ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'
+                """
+            )
+        if "download_filename" not in existing_columns:
+            conn.execute(
+                """
+                ALTER TABLE messages
+                ADD COLUMN download_filename TEXT NOT NULL DEFAULT ''
+                """
+            )
+        if "storage_path" not in existing_columns:
+            conn.execute(
+                """
+                ALTER TABLE messages
+                ADD COLUMN storage_path TEXT NOT NULL DEFAULT ''
                 """
             )
 
@@ -150,6 +181,7 @@ class SQLiteSessionStore:
                             FROM messages latest_assistant
                             WHERE latest_assistant.session_id = s.id
                               AND latest_assistant.role = 'assistant'
+                              AND latest_assistant.kind = 'chat'
                             ORDER BY latest_assistant.id DESC
                             LIMIT 1
                         ),
@@ -157,6 +189,7 @@ class SQLiteSessionStore:
                             SELECT content
                             FROM messages latest
                             WHERE latest.session_id = s.id
+                              AND latest.kind = 'chat'
                             ORDER BY latest.id DESC
                             LIMIT 1
                         ),
@@ -220,7 +253,7 @@ class SQLiteSessionStore:
 
             message_rows = conn.execute(
                 """
-                SELECT role, content, thinking, created_at
+                SELECT id, role, content, thinking, kind, download_filename, storage_path, created_at
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY id ASC
@@ -231,12 +264,18 @@ class SQLiteSessionStore:
         messages = []
         for row in message_rows:
             item: dict[str, Any] = {
+                "message_id": int(row["id"]),
                 "role": row["role"],
                 "content": row["content"],
                 "created_at": row["created_at"],
+                "kind": row["kind"] or "chat",
             }
             if row["thinking"]:
                 item["thinking"] = row["thinking"]
+            if row["download_filename"]:
+                item["download_filename"] = row["download_filename"]
+            if row["storage_path"]:
+                item["storage_path"] = row["storage_path"]
             messages.append(item)
 
         return {
@@ -260,14 +299,35 @@ class SQLiteSessionStore:
         content: str,
         created_at: str,
         thinking: str = "",
-    ) -> None:
+        kind: str = "chat",
+        download_filename: str = "",
+        storage_path: str = "",
+    ) -> int:
         with self._connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
-                INSERT INTO messages (session_id, role, content, thinking, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO messages (
+                    session_id,
+                    role,
+                    content,
+                    thinking,
+                    kind,
+                    download_filename,
+                    storage_path,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, role, content, thinking, created_at),
+                (
+                    session_id,
+                    role,
+                    content,
+                    thinking,
+                    kind,
+                    download_filename,
+                    storage_path,
+                    created_at,
+                ),
             )
             conn.execute(
                 """
@@ -278,6 +338,51 @@ class SQLiteSessionStore:
                 (created_at, session_id),
             )
             conn.commit()
+        return int(cursor.lastrowid)
+
+    def get_message_document(self, session_id: str, message_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, kind, download_filename, storage_path
+                FROM messages
+                WHERE session_id = ? AND id = ?
+                """,
+                (session_id, message_id),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "message_id": int(row["id"]),
+            "kind": row["kind"] or "chat",
+            "download_filename": row["download_filename"] or "",
+            "storage_path": row["storage_path"] or "",
+        }
+
+    def get_latest_document_message(self, session_id: str, kind: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, kind, download_filename, storage_path
+                FROM messages
+                WHERE session_id = ? AND kind = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (session_id, kind),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return {
+            "message_id": int(row["id"]),
+            "kind": row["kind"] or "chat",
+            "download_filename": row["download_filename"] or "",
+            "storage_path": row["storage_path"] or "",
+        }
 
     def update_session_title(self, session_id: str, title: str) -> None:
         with self._connect() as conn:

@@ -250,7 +250,7 @@ def get_design_doc(session_id: str):
     language = _request_language()
     service = _get_service()
     try:
-        result = service.build_system_design_document(session_id, language)
+        result = service.build_system_design_document(session_id, language, save_history=False)
     except KeyError:
         return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
     except LLMError as exc:
@@ -263,7 +263,7 @@ def get_prd_doc(session_id: str):
     language = _request_language()
     service = _get_service()
     try:
-        result = service.build_prd_document(session_id, language)
+        result = service.build_prd_document(session_id, language, save_history=False)
     except KeyError:
         return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
     except LLMError as exc:
@@ -276,7 +276,7 @@ def post_prd_doc(session_id: str):
     language = _request_language()
     service = _get_service()
     try:
-        result = service.build_prd_document(session_id, language)
+        result = service.build_prd_document(session_id, language, save_history=True)
     except KeyError:
         return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
     except LLMError as exc:
@@ -291,7 +291,7 @@ def stream_prd_doc(session_id: str):
 
     def event_stream():
         try:
-            for item in service.stream_prd_document(session_id, language):
+            for item in service.stream_prd_document(session_id, language, save_history=True):
                 event_name = item.get("event", "message")
                 data = json.dumps(item, ensure_ascii=False)
                 yield f"event: {event_name}\n"
@@ -321,7 +321,7 @@ def post_design_doc(session_id: str):
     language = _request_language()
     service = _get_service()
     try:
-        result = service.build_system_design_document(session_id, language)
+        result = service.build_system_design_document(session_id, language, save_history=True)
     except KeyError:
         return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
     except LLMError as exc:
@@ -336,7 +336,7 @@ def stream_design_doc(session_id: str):
 
     def event_stream():
         try:
-            for item in service.stream_system_design_document(session_id, language):
+            for item in service.stream_system_design_document(session_id, language, save_history=True):
                 event_name = item.get("event", "message")
                 data = json.dumps(item, ensure_ascii=False)
                 yield f"event: {event_name}\n"
@@ -371,6 +371,27 @@ def download_design_doc(session_id: str):
 
     if result is None:
         return jsonify({"error": "Design document not found. Generate it first."}), HTTPStatus.NOT_FOUND
+
+    file_path, download_name = result
+    return send_file(
+        file_path,
+        mimetype="text/markdown; charset=utf-8",
+        as_attachment=True,
+        download_name=download_name,
+        max_age=0,
+    )
+
+
+@api.get("/sessions/<session_id>/messages/<int:message_id>/download")
+def download_session_message_document(session_id: str, message_id: int):
+    service = _get_service()
+    try:
+        result = service.get_saved_message_document(session_id, message_id)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+
+    if result is None:
+        return jsonify({"error": "Document not found for this history item."}), HTTPStatus.NOT_FOUND
 
     file_path, download_name = result
     return send_file(

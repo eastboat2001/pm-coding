@@ -298,6 +298,30 @@ DESIGN_DOC_EMPTY_BY_LANGUAGE = {
     "ms": "# Dokumen Reka Bentuk Sistem\n\nTBD: belum ada perbualan keperluan yang mencukupi dalam sesi ini.",
 }
 
+CHAT_MESSAGE_KIND = "chat"
+PRD_MESSAGE_KIND = "prd_doc"
+DESIGN_MESSAGE_KIND = "design_doc"
+
+DOCUMENT_TYPE_BY_MESSAGE_KIND = {
+    PRD_MESSAGE_KIND: "prd_markdown",
+    DESIGN_MESSAGE_KIND: "system_design_markdown",
+}
+
+DOCUMENT_FILENAME_LABELS = {
+    PRD_MESSAGE_KIND: {
+        "en": "Requirements Document",
+        "de": "Anforderungsdokument",
+        "zh": "需求文档",
+        "ms": "Dokumen Keperluan",
+    },
+    DESIGN_MESSAGE_KIND: {
+        "en": "Design Document",
+        "de": "Designdokument",
+        "zh": "设计文档",
+        "ms": "Dokumen Reka Bentuk",
+    },
+}
+
 CONVERSATION_LABELS = {
     "en": "Requirement conversation messages",
     "de": "Nachrichten aus dem Anforderungsdialog",
@@ -668,26 +692,29 @@ class RequirementCollectorService:
             "message_count": message_count,
         }
 
-    def build_system_design_document(self, session_id: str, language: str = "zh") -> dict[str, Any]:
+    def build_system_design_document(
+        self,
+        session_id: str,
+        language: str = "zh",
+        save_history: bool = False,
+    ) -> dict[str, Any]:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
 
-        if not session.messages:
+        conversation_messages = self._chat_history_messages(session.messages)
+        if not conversation_messages:
             doc_markdown = self._default_design_doc(language)
-            saved_at = self._save_design_document(session_id, doc_markdown)
             structured_requirement_model = self._empty_structured_requirement_model()
-            return {
-                "session_id": session_id,
-                "document_markdown": doc_markdown,
-                "document_type": "system_design_markdown",
-                "filename": self._build_design_doc_filename(session),
-                "download_url": f"/api/sessions/{session_id}/design-doc/download",
-                "saved_at": saved_at,
-                "summary": structured_requirement_model,
-                "structured_requirement_model": structured_requirement_model,
-                "status": "insufficient_input",
-            }
+            return self._build_generated_document_result(
+                session_id=session_id,
+                document_kind=DESIGN_MESSAGE_KIND,
+                language=language,
+                doc_markdown=doc_markdown,
+                structured_requirement_model=structured_requirement_model,
+                status="insufficient_input",
+                save_history=save_history,
+            )
 
         structured_requirement_model = self.build_structured_requirement_model(session_id, language)
         progress = self._structured_requirement_progress(structured_requirement_model)
@@ -699,7 +726,7 @@ class RequirementCollectorService:
         doc_markdown = self.llm_client.chat(
             self._build_design_doc_messages(
                 session,
-                session.messages,
+                conversation_messages,
                 structured_requirement_model,
                 progress,
                 seed_markdown,
@@ -709,40 +736,42 @@ class RequirementCollectorService:
         )
         doc_markdown, _ = self._split_thinking(doc_markdown)
         doc_markdown = doc_markdown.strip() or seed_markdown
-        saved_at = self._save_design_document(session_id, doc_markdown)
-        return {
-            "session_id": session_id,
-            "document_markdown": doc_markdown,
-            "document_type": "system_design_markdown",
-            "filename": self._build_design_doc_filename(session),
-            "download_url": f"/api/sessions/{session_id}/design-doc/download",
-            "saved_at": saved_at,
-            "summary": structured_requirement_model,
-            "structured_requirement_model": structured_requirement_model,
-            "status": "ok" if progress["ready_to_generate"] else "draft_with_assumptions",
-        }
+        return self._build_generated_document_result(
+            session_id=session_id,
+            document_kind=DESIGN_MESSAGE_KIND,
+            language=language,
+            doc_markdown=doc_markdown,
+            structured_requirement_model=structured_requirement_model,
+            status="ok" if progress["ready_to_generate"] else "draft_with_assumptions",
+            save_history=save_history,
+        )
 
-    def stream_system_design_document(self, session_id: str, language: str = "zh") -> Iterator[dict[str, Any]]:
+    def stream_system_design_document(
+        self,
+        session_id: str,
+        language: str = "zh",
+        save_history: bool = False,
+    ) -> Iterator[dict[str, Any]]:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
 
-        if not session.messages:
+        conversation_messages = self._chat_history_messages(session.messages)
+        if not conversation_messages:
             doc_markdown = self._default_design_doc(language)
-            saved_at = self._save_design_document(session_id, doc_markdown)
             structured_requirement_model = self._empty_structured_requirement_model()
             yield {"event": "content", "delta": doc_markdown}
             yield {
                 "event": "done",
-                "session_id": session_id,
-                "document_markdown": doc_markdown,
-                "document_type": "system_design_markdown",
-                "filename": self._build_design_doc_filename(session),
-                "download_url": f"/api/sessions/{session_id}/design-doc/download",
-                "saved_at": saved_at,
-                "summary": structured_requirement_model,
-                "structured_requirement_model": structured_requirement_model,
-                "status": "insufficient_input",
+                **self._build_generated_document_result(
+                    session_id=session_id,
+                    document_kind=DESIGN_MESSAGE_KIND,
+                    language=language,
+                    doc_markdown=doc_markdown,
+                    structured_requirement_model=structured_requirement_model,
+                    status="insufficient_input",
+                    save_history=save_history,
+                ),
             }
             return
 
@@ -757,7 +786,7 @@ class RequirementCollectorService:
         thinking_parts: list[str] = []
         llm_messages = self._build_design_doc_messages(
             session,
-            session.messages,
+            conversation_messages,
             structured_requirement_model,
             progress,
             seed_markdown,
@@ -788,89 +817,93 @@ class RequirementCollectorService:
             if not doc_parts:
                 yield {"event": "content", "delta": doc_markdown}
 
-        saved_at = self._save_design_document(session_id, doc_markdown)
         if thinking_text:
             yield {"event": "thinking_done", "thinking": thinking_text}
         yield {
             "event": "done",
-            "session_id": session_id,
-            "document_markdown": doc_markdown,
-            "document_type": "system_design_markdown",
-            "filename": self._build_design_doc_filename(session),
-            "download_url": f"/api/sessions/{session_id}/design-doc/download",
-            "saved_at": saved_at,
-            "summary": structured_requirement_model,
-            "structured_requirement_model": structured_requirement_model,
-            "status": "ok" if progress["ready_to_generate"] else "draft_with_assumptions",
+            **self._build_generated_document_result(
+                session_id=session_id,
+                document_kind=DESIGN_MESSAGE_KIND,
+                language=language,
+                doc_markdown=doc_markdown,
+                structured_requirement_model=structured_requirement_model,
+                status="ok" if progress["ready_to_generate"] else "draft_with_assumptions",
+                save_history=save_history,
+            ),
         }
 
-    def build_prd_document(self, session_id: str, language: str = "zh") -> dict[str, Any]:
+    def build_prd_document(
+        self,
+        session_id: str,
+        language: str = "zh",
+        save_history: bool = False,
+    ) -> dict[str, Any]:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
 
-        if not session.messages:
+        conversation_messages = self._chat_history_messages(session.messages)
+        if not conversation_messages:
             doc_markdown = self._load_prd_template(session, language) or self._default_prd_doc(language)
-            saved_at = self._save_prd_document(session_id, doc_markdown)
             structured_requirement_model = self._empty_structured_requirement_model()
-            return {
-                "session_id": session_id,
-                "document_markdown": doc_markdown,
-                "document_type": "prd_markdown",
-                "filename": self._build_prd_doc_filename(session),
-                "download_url": f"/api/sessions/{session_id}/prd-doc/download",
-                "saved_at": saved_at,
-                "summary": structured_requirement_model,
-                "structured_requirement_model": structured_requirement_model,
-                "status": "template_scaffold" if session.applied_template_id else "insufficient_input",
-            }
+            return self._build_generated_document_result(
+                session_id=session_id,
+                document_kind=PRD_MESSAGE_KIND,
+                language=language,
+                doc_markdown=doc_markdown,
+                structured_requirement_model=structured_requirement_model,
+                status="template_scaffold" if session.applied_template_id else "insufficient_input",
+                save_history=save_history,
+            )
 
         structured_requirement_model = self.build_structured_requirement_model(session_id, language)
         progress = self._structured_requirement_progress(structured_requirement_model)
         doc_markdown = self.llm_client.chat(
             self._build_prd_doc_messages(
                 session,
-                session.messages,
+                conversation_messages,
                 structured_requirement_model,
                 progress,
                 language,
             ),
             temperature=0.2,
         )
-        saved_at = self._save_prd_document(session_id, doc_markdown)
-        return {
-            "session_id": session_id,
-            "document_markdown": doc_markdown,
-            "document_type": "prd_markdown",
-            "filename": self._build_prd_doc_filename(session),
-            "download_url": f"/api/sessions/{session_id}/prd-doc/download",
-            "saved_at": saved_at,
-            "summary": structured_requirement_model,
-            "structured_requirement_model": structured_requirement_model,
-            "status": "ok" if progress["ready_to_generate"] else "draft_with_assumptions",
-        }
+        return self._build_generated_document_result(
+            session_id=session_id,
+            document_kind=PRD_MESSAGE_KIND,
+            language=language,
+            doc_markdown=doc_markdown,
+            structured_requirement_model=structured_requirement_model,
+            status="ok" if progress["ready_to_generate"] else "draft_with_assumptions",
+            save_history=save_history,
+        )
 
-    def stream_prd_document(self, session_id: str, language: str = "zh") -> Iterator[dict[str, Any]]:
+    def stream_prd_document(
+        self,
+        session_id: str,
+        language: str = "zh",
+        save_history: bool = False,
+    ) -> Iterator[dict[str, Any]]:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
 
-        if not session.messages:
+        conversation_messages = self._chat_history_messages(session.messages)
+        if not conversation_messages:
             doc_markdown = self._load_prd_template(session, language) or self._default_prd_doc(language)
-            saved_at = self._save_prd_document(session_id, doc_markdown)
             structured_requirement_model = self._empty_structured_requirement_model()
             yield {"event": "content", "delta": doc_markdown}
             yield {
                 "event": "done",
-                "session_id": session_id,
-                "document_markdown": doc_markdown,
-                "document_type": "prd_markdown",
-                "filename": self._build_prd_doc_filename(session),
-                "download_url": f"/api/sessions/{session_id}/prd-doc/download",
-                "saved_at": saved_at,
-                "summary": structured_requirement_model,
-                "structured_requirement_model": structured_requirement_model,
-                "status": "template_scaffold" if session.applied_template_id else "insufficient_input",
+                **self._build_generated_document_result(
+                    session_id=session_id,
+                    document_kind=PRD_MESSAGE_KIND,
+                    language=language,
+                    doc_markdown=doc_markdown,
+                    structured_requirement_model=structured_requirement_model,
+                    status="template_scaffold" if session.applied_template_id else "insufficient_input",
+                    save_history=save_history,
+                ),
             }
             return
 
@@ -880,7 +913,7 @@ class RequirementCollectorService:
         thinking_parts: list[str] = []
         llm_messages = self._build_prd_doc_messages(
             session,
-            session.messages,
+            conversation_messages,
             structured_requirement_model,
             progress,
             language,
@@ -908,20 +941,19 @@ class RequirementCollectorService:
         if not doc_markdown:
             raise RuntimeError("LLM returned empty streamed PRD document.")
 
-        saved_at = self._save_prd_document(session_id, doc_markdown)
         if thinking_text:
             yield {"event": "thinking_done", "thinking": thinking_text}
         yield {
             "event": "done",
-            "session_id": session_id,
-            "document_markdown": doc_markdown,
-            "document_type": "prd_markdown",
-            "filename": self._build_prd_doc_filename(session),
-            "download_url": f"/api/sessions/{session_id}/prd-doc/download",
-            "saved_at": saved_at,
-            "summary": structured_requirement_model,
-            "structured_requirement_model": structured_requirement_model,
-            "status": "ok" if progress["ready_to_generate"] else "draft_with_assumptions",
+            **self._build_generated_document_result(
+                session_id=session_id,
+                document_kind=PRD_MESSAGE_KIND,
+                language=language,
+                doc_markdown=doc_markdown,
+                structured_requirement_model=structured_requirement_model,
+                status="ok" if progress["ready_to_generate"] else "draft_with_assumptions",
+                save_history=save_history,
+            ),
         }
 
     def get_saved_design_document(self, session_id: str) -> tuple[Path, str] | None:
@@ -929,25 +961,42 @@ class RequirementCollectorService:
         if session is None:
             raise KeyError("Session not found.")
 
-        design_doc_path = self._design_doc_path(session_id)
-        if not design_doc_path.exists():
-            return None
+        latest_entry = self.session_store.get_latest_document_message(session_id, DESIGN_MESSAGE_KIND)
+        resolved = self._resolve_document_entry(latest_entry)
+        if resolved is not None:
+            return resolved
 
-        return design_doc_path, self._build_design_doc_filename(session)
+        design_doc_path = self._design_doc_path(session_id)
+        if design_doc_path.exists():
+            return design_doc_path, design_doc_path.name
+        return None
 
     def get_saved_prd_document(self, session_id: str) -> tuple[Path, str] | None:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
 
-        prd_doc_path = self._prd_doc_path(session_id)
-        if not prd_doc_path.exists():
-            return None
+        latest_entry = self.session_store.get_latest_document_message(session_id, PRD_MESSAGE_KIND)
+        resolved = self._resolve_document_entry(latest_entry)
+        if resolved is not None:
+            return resolved
 
-        return prd_doc_path, self._build_prd_doc_filename(session)
+        prd_doc_path = self._prd_doc_path(session_id)
+        if prd_doc_path.exists():
+            return prd_doc_path, prd_doc_path.name
+        return None
+
+    def get_saved_message_document(self, session_id: str, message_id: int) -> tuple[Path, str] | None:
+        session = self.get_session(session_id)
+        if session is None:
+            raise KeyError("Session not found.")
+
+        entry = self.session_store.get_message_document(session_id, message_id)
+        return self._resolve_document_entry(entry)
 
     def _build_structured_requirement_model(self, session: Session, language: str = "zh") -> dict[str, Any]:
-        if not session.messages:
+        conversation_messages = self._conversation_messages(session.messages)
+        if not conversation_messages:
             return self._empty_structured_requirement_model()
 
         raw_model = self.llm_client.chat(
@@ -958,7 +1007,7 @@ class RequirementCollectorService:
                 },
                 {
                     "role": "user",
-                    "content": json.dumps(self._conversation_messages(session.messages), ensure_ascii=False),
+                    "content": json.dumps(conversation_messages, ensure_ascii=False),
                 },
             ],
             temperature=0.1,
@@ -995,13 +1044,68 @@ class RequirementCollectorService:
         return normalize_structured_requirement_model(cached_entry.get("model"))
 
     def _message_count(self, messages: list[dict[str, Any]]) -> int:
-        return len(messages)
+        return len(self._chat_history_messages(messages))
 
     def _safe_int(self, value: Any) -> int:
         try:
             return int(value)
         except (TypeError, ValueError):
             return -1
+
+    def _hydrate_message_payloads(
+        self,
+        messages: list[dict[str, Any]],
+        session_id: str,
+    ) -> list[dict[str, Any]]:
+        hydrated: list[dict[str, Any]] = []
+        for item in messages:
+            payload: dict[str, Any] = {
+                "role": str(item.get("role", "")).strip(),
+                "content": str(item.get("content", "")),
+                "created_at": str(item.get("created_at", "")).strip(),
+                "kind": self._message_kind(item),
+            }
+            message_id = self._safe_int(item.get("message_id"))
+            if message_id >= 0:
+                payload["message_id"] = message_id
+            thinking = str(item.get("thinking", "")).strip()
+            if thinking:
+                payload["thinking"] = thinking
+            download_filename = str(item.get("download_filename", "")).strip()
+            if download_filename:
+                payload["download_filename"] = download_filename
+            if download_filename and message_id >= 0:
+                payload["download_url"] = self._document_download_url(session_id, message_id)
+            hydrated.append(payload)
+        return hydrated
+
+    def _message_kind(self, message: dict[str, Any]) -> str:
+        kind = str(message.get("kind", CHAT_MESSAGE_KIND)).strip()
+        return kind or CHAT_MESSAGE_KIND
+
+    def _chat_history_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [item for item in messages if self._message_kind(item) == CHAT_MESSAGE_KIND]
+
+    def _document_download_url(self, session_id: str, message_id: int) -> str:
+        return f"/api/sessions/{session_id}/messages/{message_id}/download"
+
+    def _legacy_document_download_url(self, session_id: str, document_kind: str) -> str:
+        if document_kind == PRD_MESSAGE_KIND:
+            return f"/api/sessions/{session_id}/prd-doc/download"
+        return f"/api/sessions/{session_id}/design-doc/download"
+
+    def _resolve_document_entry(self, entry: dict[str, Any] | None) -> tuple[Path, str] | None:
+        if not isinstance(entry, dict):
+            return None
+        storage_path = str(entry.get("storage_path", "")).strip()
+        download_filename = str(entry.get("download_filename", "")).strip()
+        if not storage_path or not download_filename:
+            return None
+
+        file_path = Path(storage_path)
+        if not file_path.exists():
+            return None
+        return file_path, download_filename
 
     def _session_from_record(self, record: dict[str, Any]) -> Session:
         return Session(
@@ -1012,7 +1116,10 @@ class RequirementCollectorService:
             applied_template_name=str(record.get("applied_template_name", "")).strip(),
             created_at=record["created_at"],
             updated_at=record.get("updated_at", record["created_at"]),
-            messages=record.get("messages", []),
+            messages=self._hydrate_message_payloads(
+                record.get("messages", []),
+                session_id=record["session_id"],
+            ),
         )
 
     def _conversation_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -1021,7 +1128,7 @@ class RequirementCollectorService:
                 "role": str(item.get("role", "")),
                 "content": str(item.get("content", "")),
             }
-            for item in messages
+            for item in self._chat_history_messages(messages)
         ]
 
     def _build_llm_messages(self, system_prompt: str, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -1121,14 +1228,27 @@ class RequirementCollectorService:
             },
         ]
 
-    def _append_message(self, session_id: str, role: str, content: str, thinking: str = "") -> None:
-        created_at = datetime.now(timezone.utc).isoformat()
-        self.session_store.append_message(
+    def _append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        thinking: str = "",
+        kind: str = CHAT_MESSAGE_KIND,
+        download_filename: str = "",
+        storage_path: str = "",
+        created_at: str | None = None,
+    ) -> int:
+        created_at_value = created_at or datetime.now(timezone.utc).isoformat()
+        return self.session_store.append_message(
             session_id=session_id,
             role=role,
             content=content,
-            created_at=created_at,
+            created_at=created_at_value,
             thinking=thinking,
+            kind=kind,
+            download_filename=download_filename,
+            storage_path=storage_path,
         )
 
     def _require_session(self, session_id: str) -> Session:
@@ -1605,15 +1725,120 @@ class RequirementCollectorService:
         language = self._normalize_language(language)
         return PRD_EMPTY_BY_LANGUAGE.get(language, PRD_EMPTY_BY_LANGUAGE["en"])
 
-    def _save_design_document(self, session_id: str, doc_markdown: str) -> str:
-        self.design_docs_dir.mkdir(parents=True, exist_ok=True)
-        self._design_doc_path(session_id).write_text(doc_markdown, encoding="utf-8")
-        return datetime.now(timezone.utc).isoformat()
+    def _build_generated_document_result(
+        self,
+        session_id: str,
+        document_kind: str,
+        language: str,
+        doc_markdown: str,
+        structured_requirement_model: dict[str, Any],
+        status: str,
+        save_history: bool,
+    ) -> dict[str, Any]:
+        if save_history:
+            persisted = self._persist_generated_document(
+                session_id=session_id,
+                document_kind=document_kind,
+                language=language,
+                doc_markdown=doc_markdown,
+            )
+        else:
+            persisted = self._save_generated_document_snapshot(
+                session_id=session_id,
+                document_kind=document_kind,
+                language=language,
+                doc_markdown=doc_markdown,
+            )
 
-    def _save_prd_document(self, session_id: str, doc_markdown: str) -> str:
-        self.prd_docs_dir.mkdir(parents=True, exist_ok=True)
-        self._prd_doc_path(session_id).write_text(doc_markdown, encoding="utf-8")
-        return datetime.now(timezone.utc).isoformat()
+        return {
+            "session_id": session_id,
+            "document_markdown": doc_markdown,
+            "document_type": DOCUMENT_TYPE_BY_MESSAGE_KIND[document_kind],
+            "filename": persisted["filename"],
+            "download_url": persisted["download_url"],
+            "saved_at": persisted["saved_at"],
+            "summary": structured_requirement_model,
+            "structured_requirement_model": structured_requirement_model,
+            "status": status,
+        }
+
+    def _persist_generated_document(
+        self,
+        session_id: str,
+        document_kind: str,
+        language: str,
+        doc_markdown: str,
+    ) -> dict[str, Any]:
+        created_at = datetime.now(timezone.utc)
+        file_path, download_filename = self._write_generated_document_files(
+            session_id=session_id,
+            document_kind=document_kind,
+            language=language,
+            doc_markdown=doc_markdown,
+            created_at=created_at,
+        )
+        message_id = self._append_message(
+            session_id=session_id,
+            role="assistant",
+            content=doc_markdown,
+            kind=document_kind,
+            download_filename=download_filename,
+            storage_path=str(file_path),
+            created_at=created_at.isoformat(),
+        )
+        return {
+            "message_id": message_id,
+            "filename": download_filename,
+            "download_url": self._document_download_url(session_id, message_id),
+            "saved_at": created_at.isoformat(),
+        }
+
+    def _save_generated_document_snapshot(
+        self,
+        session_id: str,
+        document_kind: str,
+        language: str,
+        doc_markdown: str,
+    ) -> dict[str, str]:
+        created_at = datetime.now(timezone.utc)
+        _, download_filename = self._write_generated_document_files(
+            session_id=session_id,
+            document_kind=document_kind,
+            language=language,
+            doc_markdown=doc_markdown,
+            created_at=created_at,
+        )
+        return {
+            "filename": download_filename,
+            "download_url": self._legacy_document_download_url(session_id, document_kind),
+            "saved_at": created_at.isoformat(),
+        }
+
+    def _write_generated_document_files(
+        self,
+        session_id: str,
+        document_kind: str,
+        language: str,
+        doc_markdown: str,
+        created_at: datetime,
+    ) -> tuple[Path, str]:
+        directory = self._document_directory(document_kind)
+        directory.mkdir(parents=True, exist_ok=True)
+        download_filename = self._build_document_download_filename(document_kind, language, created_at)
+        versioned_path = (directory / download_filename).resolve()
+        versioned_path.write_text(doc_markdown, encoding="utf-8")
+        self._latest_document_path(session_id, document_kind).write_text(doc_markdown, encoding="utf-8")
+        return versioned_path, download_filename
+
+    def _document_directory(self, document_kind: str) -> Path:
+        if document_kind == PRD_MESSAGE_KIND:
+            return self.prd_docs_dir
+        return self.design_docs_dir
+
+    def _latest_document_path(self, session_id: str, document_kind: str) -> Path:
+        if document_kind == PRD_MESSAGE_KIND:
+            return self._prd_doc_path(session_id)
+        return self._design_doc_path(session_id)
 
     def _design_doc_path(self, session_id: str) -> Path:
         return self.design_docs_dir / f"{session_id}.md"
@@ -1621,21 +1846,19 @@ class RequirementCollectorService:
     def _prd_doc_path(self, session_id: str) -> Path:
         return self.prd_docs_dir / f"{session_id}.md"
 
-    def _build_design_doc_filename(self, session: Session) -> str:
-        base_name = self._slugify_filename(session.title) or f"system-design-{session.id[:8]}"
-        return f"{base_name}.md"
-
-    def _build_prd_doc_filename(self, session: Session) -> str:
-        base_name = self._slugify_filename(session.title) or f"prd-{session.id[:8]}"
-        return f"{base_name}-prd.md"
-
-    def _slugify_filename(self, text: str) -> str:
-        collapsed = " ".join(text.split()).strip().lower()
-        if not collapsed:
-            return ""
-
-        slug = re.sub(r"[^a-z0-9]+", "-", collapsed).strip("-")
-        return slug[:64].strip("-")
+    def _build_document_download_filename(
+        self,
+        document_kind: str,
+        language: str,
+        created_at: datetime,
+    ) -> str:
+        normalized_language = self._normalize_language(language)
+        document_label = DOCUMENT_FILENAME_LABELS.get(document_kind, DOCUMENT_FILENAME_LABELS[DESIGN_MESSAGE_KIND]).get(
+            normalized_language,
+            DOCUMENT_FILENAME_LABELS[document_kind]["en"],
+        )
+        timestamp = created_at.strftime("%Y%m%d-%H%M%S-%f")
+        return f"{document_label}-{timestamp}.md"
 
     def _safe_parse_structured_requirement_model(self, raw_model: str) -> dict[str, Any]:
         parsed = self._parse_json_from_model_output(raw_model)

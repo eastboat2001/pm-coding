@@ -39,7 +39,7 @@ const loadingTemplates = ref(false)
 const switchingSession = ref(false)
 const deletingSessionId = ref('')
 const applyingTemplateId = ref('')
-const generatingPrd = ref(false)
+const generatingDocuments = ref(false)
 const globalError = ref('')
 const loadingStructuredRequirement = ref(false)
 const structuredRequirementError = ref('')
@@ -84,8 +84,8 @@ const translations = {
     historyEmpty: 'No conversation history yet',
     untitledChat: 'New Chat',
     newChat: 'New Chat',
-    generatePrd: 'Generate PRD',
-    generatingPrd: 'Generating PRD...',
+    generatePrd: 'Generate Documents',
+    generatingPrd: 'Generating documents...',
     sending: 'Sending...',
     send: 'Send',
     recording: 'Recording',
@@ -101,10 +101,10 @@ const translations = {
     failedToCreate: 'Failed to create session',
     failedToLoadHistory: 'Failed to load conversation history',
     failedToLoadSession: 'Failed to load session',
-    failedToGenerate: 'Failed to generate PRD document',
+    failedToGenerate: 'Failed to generate documents',
     microphoneAccessError: 'Unable to access microphone',
     speechRecognitionError: 'Speech recognition failed',
-    prdDocLabel: 'PRD Document',
+    prdDocLabel: 'Requirements Document',
     designDocLabel: 'Design Document',
     downloadMarkdown: 'Download Markdown',
     streamingError: 'Streaming response error',
@@ -160,8 +160,8 @@ const translations = {
     historyEmpty: 'Noch kein Verlauf vorhanden',
     untitledChat: 'Neuer Chat',
     newChat: 'Neuer Chat',
-    generatePrd: 'PRD erzeugen',
-    generatingPrd: 'PRD wird erzeugt...',
+    generatePrd: 'Dokumente erzeugen',
+    generatingPrd: 'Dokumente werden erzeugt...',
     sending: 'Wird gesendet...',
     send: 'Senden',
     recording: 'Aufnahme',
@@ -177,10 +177,10 @@ const translations = {
     failedToCreate: 'Chat konnte nicht erstellt werden',
     failedToLoadHistory: 'Verlauf konnte nicht geladen werden',
     failedToLoadSession: 'Chat konnte nicht geladen werden',
-    failedToGenerate: 'PRD-Dokument konnte nicht erstellt werden',
+    failedToGenerate: 'Dokumente konnten nicht erstellt werden',
     microphoneAccessError: 'Kein Zugriff auf das Mikrofon',
     speechRecognitionError: 'Spracherkennung fehlgeschlagen',
-    prdDocLabel: 'PRD-Dokument',
+    prdDocLabel: 'Anforderungsdokument',
     designDocLabel: 'Design-Dokument',
     downloadMarkdown: 'Markdown herunterladen',
     streamingError: 'Fehler bei der Streaming-Antwort',
@@ -236,8 +236,8 @@ const translations = {
     historyEmpty: '还没有历史会话',
     untitledChat: '新建对话',
     newChat: '新建对话',
-    generatePrd: '生成 PRD 文档',
-    generatingPrd: '正在生成 PRD...',
+    generatePrd: '生成文档',
+    generatingPrd: '正在生成文档...',
     sending: '发送中...',
     send: '发送',
     recording: '录音中',
@@ -253,10 +253,10 @@ const translations = {
     failedToCreate: '创建对话失败',
     failedToLoadHistory: '加载历史会话失败',
     failedToLoadSession: '加载会话失败',
-    failedToGenerate: '生成 PRD 文档失败',
+    failedToGenerate: '生成文档失败',
     microphoneAccessError: '无法访问麦克风',
     speechRecognitionError: '语音识别失败',
-    prdDocLabel: 'PRD 文档',
+    prdDocLabel: '需求文档',
     designDocLabel: '设计文档',
     downloadMarkdown: '下载 Markdown',
     streamingError: '流式响应错误',
@@ -312,8 +312,8 @@ const translations = {
     historyEmpty: 'Belum ada sejarah perbualan',
     untitledChat: 'Sembang Baharu',
     newChat: 'Sembang Baharu',
-    generatePrd: 'Jana PRD',
-    generatingPrd: 'Sedang menjana PRD...',
+    generatePrd: 'Jana Dokumen',
+    generatingPrd: 'Sedang menjana dokumen...',
     sending: 'Menghantar...',
     send: 'Hantar',
     recording: 'Merakam',
@@ -329,10 +329,10 @@ const translations = {
     failedToCreate: 'Gagal mencipta sesi',
     failedToLoadHistory: 'Gagal memuatkan sejarah perbualan',
     failedToLoadSession: 'Gagal memuatkan sesi',
-    failedToGenerate: 'Gagal menjana dokumen PRD',
+    failedToGenerate: 'Gagal menjana dokumen',
     microphoneAccessError: 'Tidak dapat mengakses mikrofon',
     speechRecognitionError: 'Pengecaman suara gagal',
-    prdDocLabel: 'Dokumen PRD',
+    prdDocLabel: 'Dokumen Keperluan',
     designDocLabel: 'Dokumen Reka Bentuk',
     downloadMarkdown: 'Muat Turun Markdown',
     streamingError: 'Ralat respons penstriman',
@@ -386,6 +386,8 @@ const activeSessionTitle = computed(() => sessionTitle(activeSessionSummary.valu
 const activeBusinessTemplateName = computed(() => activeSessionSummary.value?.applied_template_name?.trim() || '')
 const templateDrivenSession = computed(() => Boolean(activeSessionSummary.value?.applied_template_id))
 const hasUserMessage = computed(() => messages.value.some((item) => item.role === 'user'))
+const latestPrdDocument = computed(() => findLatestDocumentMessage('prd_doc'))
+const latestDesignDocument = computed(() => findLatestDocumentMessage('design_doc'))
 const selectedBusinessTemplate = computed<BusinessTemplateDetail | null>(() => {
   const templateId = selectedBusinessTemplateId.value
   if (!templateId) {
@@ -409,7 +411,7 @@ const canChangePromptTemplate = computed(
     !templateDrivenSession.value &&
     !hasUserMessage.value &&
     !messagePipelineActive.value &&
-    !generatingPrd.value &&
+    !generatingDocuments.value &&
     !switchingSession.value &&
     !loadingSession.value,
 )
@@ -496,10 +498,25 @@ function parseThinkContent(raw: string): { content: string; thinking: string } {
   return { content: plain, thinking: thinkingParts.join('\n\n') }
 }
 
+function normalizeMessageKind(kind?: string): ChatMessage['kind'] {
+  if (kind === 'prd_doc' || kind === 'design_doc') {
+    return kind
+  }
+  return 'chat'
+}
+
 function normalizeMessages(rawMessages: ChatMessagePayload[]): ChatMessage[] {
   return rawMessages.map((item) => {
+    const normalizedKind = normalizeMessageKind(item.kind)
     if (item.role !== 'assistant') {
-      return { role: item.role, content: item.content, createdAt: item.created_at, kind: 'chat' }
+      return {
+        role: item.role,
+        content: item.content,
+        createdAt: item.created_at,
+        kind: normalizedKind,
+        downloadUrl: item.download_url,
+        downloadFilename: item.download_filename,
+      }
     }
 
     const parsed = parseThinkContent(item.content)
@@ -508,7 +525,9 @@ function normalizeMessages(rawMessages: ChatMessagePayload[]): ChatMessage[] {
       content: parsed.content,
       thinking: item.thinking || parsed.thinking,
       createdAt: item.created_at,
-      kind: 'chat',
+      kind: normalizedKind,
+      downloadUrl: item.download_url,
+      downloadFilename: item.download_filename,
     }
   })
 }
@@ -608,7 +627,7 @@ function sessionPreview(session: SessionSummary): string {
 }
 
 function canMutateHistory(): boolean {
-  return !messagePipelineActive.value && !generatingPrd.value && !loadingSession.value && !switchingSession.value
+  return !messagePipelineActive.value && !generatingDocuments.value && !loadingSession.value && !switchingSession.value
 }
 
 function formatSessionTime(timestamp?: string): string {
@@ -669,6 +688,16 @@ function isGeneratedDocumentMessage(message: ChatMessage): boolean {
   return message.kind === 'design_doc' || message.kind === 'prd_doc'
 }
 
+function findLatestDocumentMessage(kind: NonNullable<ChatMessage['kind']>): ChatMessage | null {
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    const message = messages.value[index]
+    if (message.kind === kind && message.downloadUrl) {
+      return message
+    }
+  }
+  return null
+}
+
 function documentBadgeLabel(message: ChatMessage): string {
   if (message.kind === 'prd_doc') {
     return t.value.prdDocLabel
@@ -686,6 +715,14 @@ function triggerDocumentDownload(path: string, filename?: string) {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
+}
+
+function downloadLatestGeneratedDocument(kind: 'prd' | 'design') {
+  const target = kind === 'prd' ? latestPrdDocument.value : latestDesignDocument.value
+  if (!target?.downloadUrl) {
+    return
+  }
+  triggerDocumentDownload(target.downloadUrl, target.downloadFilename)
 }
 
 async function loadSessions() {
@@ -717,18 +754,18 @@ async function ensureBusinessTemplateDetail(templateId: string): Promise<Busines
   return detail
 }
 
-function buildPrdGenerationConfirmMessage(): string {
+function buildDocumentGenerationConfirmMessage(): string {
   const progress = structuredRequirementProgress.value
   if (currentLanguage.value === 'zh') {
-    return `当前收集覆盖率为 ${progress.collectionCoveragePercentage}%，确认完成度为 ${progress.confirmationPercentage}%，生成的 PRD 会带较多假设，是否继续？`
+    return `当前收集覆盖率为 ${progress.collectionCoveragePercentage}%，确认完成度为 ${progress.confirmationPercentage}%，生成的文档会带较多假设，是否继续？`
   }
   if (currentLanguage.value === 'de') {
-    return `Die Erfassungsquote liegt bei ${progress.collectionCoveragePercentage}% und der Bestaetigungsstand bei ${progress.confirmationPercentage}%. Das erzeugte PRD wird mehr Annahmen enthalten. Trotzdem fortfahren?`
+    return `Die Erfassungsquote liegt bei ${progress.collectionCoveragePercentage}% und der Bestaetigungsstand bei ${progress.confirmationPercentage}%. Die erzeugten Dokumente werden mehr Annahmen enthalten. Trotzdem fortfahren?`
   }
   if (currentLanguage.value === 'ms') {
-    return `Liputan kutipan kini ${progress.collectionCoveragePercentage}% dan kemajuan pengesahan ${progress.confirmationPercentage}%. PRD yang dijana akan mengandungi lebih banyak andaian. Teruskan?`
+    return `Liputan kutipan kini ${progress.collectionCoveragePercentage}% dan kemajuan pengesahan ${progress.confirmationPercentage}%. Dokumen yang dijana akan mengandungi lebih banyak andaian. Teruskan?`
   }
-  return `Collection coverage is ${progress.collectionCoveragePercentage}% and confirmation progress is ${progress.confirmationPercentage}%. The generated PRD will contain more assumptions. Continue anyway?`
+  return `Collection coverage is ${progress.collectionCoveragePercentage}% and confirmation progress is ${progress.confirmationPercentage}%. The generated documents will contain more assumptions. Continue anyway?`
 }
 
 async function loadStructuredRequirement(
@@ -811,7 +848,7 @@ async function loadSession(targetSessionId: string) {
 }
 
 async function createSession(options: { templateId?: string } = {}) {
-  if (messagePipelineActive.value || generatingPrd.value || loadingSession.value) {
+  if (messagePipelineActive.value || generatingDocuments.value || loadingSession.value) {
     return
   }
 
@@ -874,7 +911,7 @@ async function openBusinessTemplate(templateId: string) {
     switchingSession.value ||
     deletingSessionId.value ||
     messagePipelineActive.value ||
-    generatingPrd.value
+    generatingDocuments.value
   ) {
     return
   }
@@ -909,7 +946,7 @@ async function applyBusinessTemplate() {
     switchingSession.value ||
     deletingSessionId.value ||
     messagePipelineActive.value ||
-    generatingPrd.value
+    generatingDocuments.value
   ) {
     return
   }
@@ -959,7 +996,7 @@ async function selectSession(targetSessionId: string) {
     !targetSessionId ||
     targetSessionId === sessionId.value ||
     messagePipelineActive.value ||
-    generatingPrd.value ||
+    generatingDocuments.value ||
     loadingSession.value ||
     deletingSessionId.value
   ) {
@@ -1170,12 +1207,55 @@ async function sendMessageFallback(
   applyStructuredRequirementPayload(data)
 }
 
-async function sendPrdDocStream(
+function documentKindFromType(documentType?: string): ChatMessage['kind'] {
+  if (documentType === 'prd_markdown') {
+    return 'prd_doc'
+  }
+  if (documentType === 'system_design_markdown') {
+    return 'design_doc'
+  }
+  return 'chat'
+}
+
+function applyGeneratedDocumentResponse(
+  assistantMessage: ChatMessage,
+  payload: Partial<GeneratedDocumentResponse>,
+) {
+  if (typeof payload.document_markdown === 'string') {
+    assistantMessage.content = payload.document_markdown
+  }
+
+  const resolvedKind = documentKindFromType(payload.document_type)
+  assistantMessage.kind = resolvedKind === 'chat' ? assistantMessage.kind || 'chat' : resolvedKind
+  assistantMessage.downloadUrl = payload.download_url
+  assistantMessage.downloadFilename = payload.filename
+  assistantMessage.createdAt = payload.saved_at || assistantMessage.createdAt
+  applyStructuredRequirementPayload(payload)
+}
+
+function finalizeGeneratedDocumentContent(assistantMessage: ChatMessage) {
+  const parsed = parseThinkContent(assistantMessage.content)
+  assistantMessage.content = parsed.content
+  assistantMessage.thinking = [assistantMessage.thinking || '', parsed.thinking].filter(Boolean).join('\n\n')
+}
+
+function createGeneratedDocumentMessage(kind: NonNullable<ChatMessage['kind']>): ChatMessage {
+  return {
+    role: 'assistant',
+    content: '',
+    thinking: '',
+    createdAt: new Date().toISOString(),
+    kind,
+  }
+}
+
+async function sendDocumentStream(
   session: string,
+  endpoint: string,
   assistantMessage: ChatMessage,
   language: LanguageCode = 'zh',
 ) {
-  const response = await fetch(apiUrl(`/api/sessions/${session}/prd-doc/stream`), {
+  const response = await fetch(apiUrl(`/api/sessions/${session}/${endpoint}/stream`), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1236,11 +1316,7 @@ async function sendPrdDocStream(
       }
 
       if (parsed.event === 'done') {
-        assistantMessage.kind = payload.document_type === 'prd_markdown' ? 'prd_doc' : 'chat'
-        assistantMessage.downloadUrl = payload.download_url
-        assistantMessage.downloadFilename = payload.filename
-        assistantMessage.createdAt = payload.saved_at || assistantMessage.createdAt
-        applyStructuredRequirementPayload(payload)
+        applyGeneratedDocumentResponse(assistantMessage, payload)
       }
     }
   }
@@ -1248,18 +1324,50 @@ async function sendPrdDocStream(
   await writer.finish()
 }
 
-async function sendPrdDocFallback(session: string, assistantMessage: ChatMessage, language: LanguageCode = 'zh') {
-  const data = await apiJson<GeneratedDocumentResponse>(`/api/sessions/${session}/prd-doc`, {
+async function sendDocumentFallback(
+  session: string,
+  endpoint: string,
+  assistantMessage: ChatMessage,
+  language: LanguageCode = 'zh',
+) {
+  const data = await apiJson<GeneratedDocumentResponse>(`/api/sessions/${session}/${endpoint}`, {
     method: 'POST',
     body: JSON.stringify({ language }),
   })
 
-  assistantMessage.content = data.document_markdown || ''
-  assistantMessage.kind = data.document_type === 'prd_markdown' ? 'prd_doc' : 'chat'
-  assistantMessage.downloadUrl = data.download_url
-  assistantMessage.downloadFilename = data.filename
-  assistantMessage.createdAt = data.saved_at || assistantMessage.createdAt
-  applyStructuredRequirementPayload(data)
+  applyGeneratedDocumentResponse(assistantMessage, data)
+}
+
+async function sendPrdDocStream(
+  session: string,
+  assistantMessage: ChatMessage,
+  language: LanguageCode = 'zh',
+) {
+  await sendDocumentStream(session, 'prd-doc', assistantMessage, language)
+}
+
+async function sendPrdDocFallback(
+  session: string,
+  assistantMessage: ChatMessage,
+  language: LanguageCode = 'zh',
+) {
+  await sendDocumentFallback(session, 'prd-doc', assistantMessage, language)
+}
+
+async function sendDesignDocStream(
+  session: string,
+  assistantMessage: ChatMessage,
+  language: LanguageCode = 'zh',
+) {
+  await sendDocumentStream(session, 'design-doc', assistantMessage, language)
+}
+
+async function sendDesignDocFallback(
+  session: string,
+  assistantMessage: ChatMessage,
+  language: LanguageCode = 'zh',
+) {
+  await sendDocumentFallback(session, 'design-doc', assistantMessage, language)
 }
 
 function scrollToBottom() {
@@ -1299,7 +1407,7 @@ async function insertLineBreak(event: KeyboardEvent) {
 
 async function sendMessage() {
   const message = inputText.value.trim()
-  if (!message || sending.value || switchingSession.value) {
+  if (!message || sending.value || generatingDocuments.value || switchingSession.value) {
     return
   }
 
@@ -1352,42 +1460,46 @@ async function sendMessage() {
   }
 }
 
-async function generatePrdDocument() {
-  if (!hasSession.value || generatingPrd.value || messagePipelineActive.value || switchingSession.value) {
+async function generateDocuments() {
+  if (!hasSession.value || generatingDocuments.value || messagePipelineActive.value || switchingSession.value) {
     return
   }
 
   if (!structuredRequirementProgress.value.readyToGenerate) {
-    const confirmed = window.confirm(buildPrdGenerationConfirmMessage())
+    const confirmed = window.confirm(buildDocumentGenerationConfirmMessage())
     if (!confirmed) {
       return
     }
   }
 
   clearError()
-  generatingPrd.value = true
+  generatingDocuments.value = true
+  let shouldRefreshHistory = false
 
   try {
-    messages.value.push({
-      role: 'assistant',
-      content: '',
-      thinking: '',
-      createdAt: new Date().toISOString(),
-      kind: 'prd_doc',
-    })
-    const assistantMessage = messages.value[messages.value.length - 1] as ChatMessage
+    const prdMessage = createGeneratedDocumentMessage('prd_doc')
+    messages.value.push(prdMessage)
     scrollToBottom()
 
-    await sendPrdDocStream(sessionId.value, assistantMessage, currentLanguage.value)
-    const streamParsed = parseThinkContent(assistantMessage.content)
-    assistantMessage.content = streamParsed.content
-    assistantMessage.thinking = [assistantMessage.thinking || '', streamParsed.thinking].filter(Boolean).join('\n\n')
-
-    if (!assistantMessage.content.trim()) {
-      await sendPrdDocFallback(sessionId.value, assistantMessage, currentLanguage.value)
+    await sendPrdDocStream(sessionId.value, prdMessage, currentLanguage.value)
+    finalizeGeneratedDocumentContent(prdMessage)
+    if (!prdMessage.content.trim()) {
+      await sendPrdDocFallback(sessionId.value, prdMessage, currentLanguage.value)
+      finalizeGeneratedDocumentContent(prdMessage)
     }
+    shouldRefreshHistory = true
 
-    await refreshHistory()
+    const designMessage = createGeneratedDocumentMessage('design_doc')
+    messages.value.push(designMessage)
+    scrollToBottom()
+
+    await sendDesignDocStream(sessionId.value, designMessage, currentLanguage.value)
+    finalizeGeneratedDocumentContent(designMessage)
+    if (!designMessage.content.trim()) {
+      await sendDesignDocFallback(sessionId.value, designMessage, currentLanguage.value)
+      finalizeGeneratedDocumentContent(designMessage)
+    }
+    shouldRefreshHistory = true
   } catch (error) {
     globalError.value = formatError(error, t.value.failedToGenerate)
     const last = messages.value[messages.value.length - 1]
@@ -1395,7 +1507,10 @@ async function generatePrdDocument() {
       messages.value.pop()
     }
   } finally {
-    generatingPrd.value = false
+    if (shouldRefreshHistory) {
+      await refreshHistory()
+    }
+    generatingDocuments.value = false
     scrollToBottom()
   }
 }
@@ -1634,7 +1749,7 @@ watch(currentLanguage, (language, previousLanguage) => {
                   />
                 </svg>
               </button>
-              <button class="btn btn-primary sidebar-new-chat" type="button" :disabled="loadingSession || sending || generatingPrd || switchingSession || Boolean(deletingSessionId) || Boolean(applyingTemplateId)" @click="createSession()">
+              <button class="btn btn-primary sidebar-new-chat" type="button" :disabled="loadingSession || sending || generatingDocuments || switchingSession || Boolean(deletingSessionId) || Boolean(applyingTemplateId)" @click="createSession()">
                 <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <line x1="12" y1="5" x2="12" y2="19"/>
                   <line x1="5" y1="12" x2="19" y2="12"/>
@@ -1669,7 +1784,7 @@ watch(currentLanguage, (language, previousLanguage) => {
                 <button
                   class="session-card-main"
                   type="button"
-                  :disabled="switchingSession || sending || generatingPrd || Boolean(deletingSessionId)"
+                  :disabled="switchingSession || sending || generatingDocuments || Boolean(deletingSessionId)"
                   @click="selectSession(session.session_id)"
                   >
                     <div class="session-card-top">
@@ -1740,7 +1855,7 @@ watch(currentLanguage, (language, previousLanguage) => {
                   :key="templateItem.template_id"
                   class="template-library-item"
                   type="button"
-                  :disabled="loadingSession || messagePipelineActive || generatingPrd || Boolean(applyingTemplateId)"
+                  :disabled="loadingSession || messagePipelineActive || generatingDocuments || Boolean(applyingTemplateId)"
                   @click="openBusinessTemplate(templateItem.template_id)"
                 >
                   <div class="template-library-item-main">
@@ -1827,7 +1942,7 @@ watch(currentLanguage, (language, previousLanguage) => {
                       <pre class="think-content">{{ msg.thinking }}</pre>
                     </details>
 
-                    <div v-if="(sending || generatingPrd) && msg.role === 'assistant' && !msg.content" class="typing-indicator">
+                    <div v-if="(sending || generatingDocuments) && msg.role === 'assistant' && !msg.content" class="typing-indicator">
                       <div class="typing-dot"></div>
                       <div class="typing-dot"></div>
                       <div class="typing-dot"></div>
@@ -1870,7 +1985,7 @@ watch(currentLanguage, (language, previousLanguage) => {
                       v-model="inputText"
                       rows="1"
                       :placeholder="t.describeRequirements"
-                      :disabled="sending || switchingSession"
+                      :disabled="sending || generatingDocuments || switchingSession"
                       class="composer-input"
                       @keydown.enter.exact.prevent="sendMessage"
                       @keydown.enter.shift.prevent="insertLineBreak"
@@ -1884,7 +1999,7 @@ watch(currentLanguage, (language, previousLanguage) => {
                         :class="{ 'recording': recording }"
                         @click="recording ? stopRecording() : startRecording()"
                         :title="recording ? t.stopRecording : t.startRecording"
-                        :disabled="sending || switchingSession"
+                        :disabled="sending || generatingDocuments || switchingSession"
                       >
                         <svg v-if="!recording" class="icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -1896,7 +2011,7 @@ watch(currentLanguage, (language, previousLanguage) => {
                           <rect x="6" y="6" width="12" height="12" rx="2"/>
                         </svg>
                       </button>
-                      <button class="btn btn-primary" type="submit" :disabled="!inputText.trim() || sending || switchingSession">
+                      <button class="btn btn-primary" type="submit" :disabled="!inputText.trim() || sending || generatingDocuments || switchingSession">
                         <svg v-if="!sending" class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <line x1="22" y1="2" x2="11" y2="13"/>
                           <polygon points="22 2 15 22 11 13 2 9 22 2"/>
@@ -1929,10 +2044,13 @@ watch(currentLanguage, (language, previousLanguage) => {
             :model="structuredRequirementModel"
             :loading="loadingStructuredRequirement"
             :syncing="syncingStructuredRequirement"
-            :generating-prd="generatingPrd"
+            :generating-documents="generatingDocuments"
             :generation-disabled="messagePipelineActive || switchingSession || !hasSession"
+            :has-prd-document="Boolean(latestPrdDocument)"
+            :has-design-document="Boolean(latestDesignDocument)"
             :error="structuredRequirementError"
-            @generate-prd="generatePrdDocument"
+            @generate-documents="generateDocuments"
+            @download-document="downloadLatestGeneratedDocument"
           />
         </div>
       </aside>

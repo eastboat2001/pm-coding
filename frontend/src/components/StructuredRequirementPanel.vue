@@ -18,20 +18,25 @@ const props = withDefaults(
     model: StructuredRequirementModel
     loading?: boolean
     syncing?: boolean
-    generatingPrd?: boolean
+    generatingDocuments?: boolean
     generationDisabled?: boolean
+    hasPrdDocument?: boolean
+    hasDesignDocument?: boolean
     error?: string
   }>(),
   {
     loading: false,
     syncing: false,
-    generatingPrd: false,
+    generatingDocuments: false,
     generationDisabled: false,
+    hasPrdDocument: false,
+    hasDesignDocument: false,
     error: '',
   },
 )
 const emit = defineEmits<{
-  (event: 'generate-prd'): void
+  (event: 'generate-documents'): void
+  (event: 'download-document', kind: 'prd' | 'design'): void
 }>()
 
 type RequirementRow = {
@@ -276,11 +281,31 @@ function summarizeText(value: string): string {
           class="generate-prd-btn"
           :class="{ ready: progress.readyToGenerate }"
           type="button"
-          :disabled="loading || generatingPrd || generationDisabled"
-          @click="emit('generate-prd')"
+          :disabled="loading || generatingDocuments || generationDisabled"
+          @click="emit('generate-documents')"
         >
-          {{ generatingPrd ? copy.generatingPrd : copy.generatePrd }}
+          {{ generatingDocuments ? copy.generatingDocuments : copy.generateDocuments }}
         </button>
+        <div v-if="hasPrdDocument || hasDesignDocument" class="document-download-actions">
+          <button
+            v-if="hasPrdDocument"
+            class="document-download-btn"
+            type="button"
+            :disabled="generationDisabled"
+            @click="emit('download-document', 'prd')"
+          >
+            {{ copy.downloadPrd }}
+          </button>
+          <button
+            v-if="hasDesignDocument"
+            class="document-download-btn"
+            type="button"
+            :disabled="generationDisabled"
+            @click="emit('download-document', 'design')"
+          >
+            {{ copy.downloadDesign }}
+          </button>
+        </div>
       </div>
     </section>
 
@@ -522,6 +547,37 @@ function summarizeText(value: string): string {
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+.document-download-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.document-download-btn {
+  width: 100%;
+  border: 1px solid #d7e6df;
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: #fff;
+  color: #17312b;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.document-download-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: #bfd4ca;
+  box-shadow: 0 10px 18px rgba(13, 35, 28, 0.08);
+}
+
+.document-download-btn:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .progress-row {

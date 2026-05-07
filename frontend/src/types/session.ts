@@ -4,9 +4,13 @@ export type PromptTemplate = 'personal_project' | 'standard'
 export type LanguageCode = 'en' | 'de' | 'zh' | 'ms'
 
 export type ChatMessagePayload = {
+  message_id?: number
   role: MessageRole
   content: string
   thinking?: string
+  kind?: MessageKind
+  download_url?: string
+  download_filename?: string
   created_at?: string
 }
 

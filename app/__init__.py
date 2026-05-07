@@ -7,6 +7,7 @@ from flask import Flask, request
 from .services.llm_client import LLMConfig, MiniMaxChatClient
 from .services.requirement_collector import RequirementCollectorService
 from .services.asr_client import ASRConfig, DoubaoASRClient
+from .services.session_store import SQLiteSessionStore
 
 
 def _load_dotenv() -> None:
@@ -41,8 +42,14 @@ def create_app() -> Flask:
 
     # CORS configuration
     app.config["CORS_ORIGINS"] = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:9530").split(",")
+    app.config["CORS_ALLOW_METHODS"] = "GET, POST, DELETE, OPTIONS"
+    app.config["SQLITE_DB_PATH"] = os.getenv(
+        "SQLITE_DB_PATH",
+        str(Path(__file__).resolve().parent.parent / "data" / "rqmd.sqlite3"),
+    )
 
     # LLM configuration
+    app.config["LLM_PROVIDER"] = os.getenv("LLM_PROVIDER", "openai_compatible")
     app.config["LLM_BASE_URL"] = os.getenv("LLM_BASE_URL", "https://api.minimaxi.com/v1")
     app.config["LLM_API_KEY"] = os.getenv("LLM_API_KEY", "")
     app.config["LLM_MODEL"] = os.getenv("LLM_MODEL", "MiniMax-M2.7")
@@ -50,6 +57,12 @@ def create_app() -> Flask:
     app.config["LLM_PROXY_URL"] = os.getenv("LLM_PROXY_URL", "")
     app.config["LLM_MAX_RETRIES"] = int(os.getenv("LLM_MAX_RETRIES", "2"))
     app.config["LLM_DEBUG_STREAM"] = os.getenv("LLM_DEBUG_STREAM", "false").lower() in {"1", "true", "yes", "on"}
+    app.config["LLM_GCP_PROJECT_ID"] = os.getenv("LLM_GCP_PROJECT_ID", "")
+    app.config["LLM_GCP_LOCATION"] = os.getenv("LLM_GCP_LOCATION", "global")
+    app.config["LLM_GCP_CREDENTIALS_PATH"] = os.getenv(
+        "LLM_GCP_CREDENTIALS_PATH",
+        os.getenv("GOOGLE_APPLICATION_CREDENTIALS", ""),
+    )
     
     # ASR configuration
     app.config["ASR_APP_ID"] = os.getenv("ASR_APP_ID", "")
@@ -57,10 +70,11 @@ def create_app() -> Flask:
     app.config["ASR_SECRET_KEY"] = os.getenv("ASR_SECRET_KEY", "")
     app.config["ASR_BASE_URL"] = os.getenv("ASR_BASE_URL", "http://10.125.110.103:8004/v1")
 
-
+    session_store = SQLiteSessionStore(app.config["SQLITE_DB_PATH"])
 
     llm_client = MiniMaxChatClient(
         LLMConfig(
+            provider=app.config["LLM_PROVIDER"],
             base_url=app.config["LLM_BASE_URL"],
             api_key=app.config["LLM_API_KEY"],
             model=app.config["LLM_MODEL"],
@@ -68,9 +82,12 @@ def create_app() -> Flask:
             proxy_url=app.config["LLM_PROXY_URL"],
             max_retries=app.config["LLM_MAX_RETRIES"],
             debug_stream=app.config["LLM_DEBUG_STREAM"],
+            google_project_id=app.config["LLM_GCP_PROJECT_ID"],
+            google_location=app.config["LLM_GCP_LOCATION"],
+            google_credentials_path=app.config["LLM_GCP_CREDENTIALS_PATH"],
         )
     )
-    app.extensions["requirement_collector"] = RequirementCollectorService(llm_client)
+    app.extensions["requirement_collector"] = RequirementCollectorService(llm_client, session_store)
     
     # Initialize ASR client
     asr_client = DoubaoASRClient(
@@ -90,7 +107,7 @@ def create_app() -> Flask:
         origin = request.headers.get("Origin")
         response.headers["Access-Control-Allow-Origin"] = origin or "*"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = app.config["CORS_ALLOW_METHODS"]
         response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
 
@@ -100,7 +117,7 @@ def create_app() -> Flask:
             origin = request.headers.get("Origin")
             response.headers["Access-Control-Allow-Origin"] = origin or "*"
             response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = app.config["CORS_ALLOW_METHODS"]
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
 

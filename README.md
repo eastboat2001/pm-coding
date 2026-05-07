@@ -17,10 +17,22 @@ pip install -r requirements.txt
 
 ## 4. Configure LLM environment variables
 ```powershell
+$env:LLM_PROVIDER="openai_compatible"
 $env:LLM_BASE_URL="https://api.minimaxi.com/v1"
 $env:LLM_API_KEY="your_api_key"
 $env:LLM_MODEL="MiniMax-M2.7"
 $env:LLM_TIMEOUT_SECONDS="500"
+```
+
+### Gemini on Vertex AI (service account)
+If you use a Google Cloud service account JSON file instead of an OpenAI-compatible API:
+
+```powershell
+$env:LLM_PROVIDER="vertex_gemini"
+$env:LLM_MODEL="gemini-2.5-flash"
+$env:LLM_GCP_PROJECT_ID="your-gcp-project-id"
+$env:LLM_GCP_LOCATION="global"
+$env:LLM_GCP_CREDENTIALS_PATH="C:\path\to\service-account.json"
 ```
 
 ## 5. Start backend

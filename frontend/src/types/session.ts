@@ -1,0 +1,70 @@
+export type MessageRole = 'user' | 'assistant'
+export type MessageKind = 'chat' | 'design_doc' | 'prd_doc'
+export type PromptTemplate = 'personal_project' | 'standard'
+export type LanguageCode = 'en' | 'de' | 'zh' | 'ms'
+
+export type ChatMessagePayload = {
+  role: MessageRole
+  content: string
+  thinking?: string
+  created_at?: string
+}
+
+export type ChatMessage = {
+  role: MessageRole
+  content: string
+  thinking?: string
+  createdAt?: string
+  kind?: MessageKind
+  downloadUrl?: string
+  downloadFilename?: string
+}
+
+export type SessionSummary = {
+  session_id: string
+  title: string
+  prompt_template: PromptTemplate
+  applied_template_id: string
+  applied_template_name: string
+  created_at: string
+  updated_at: string
+  message_count: number
+  last_message_preview: string
+}
+
+export type SessionDetail = {
+  session_id: string
+  title: string
+  prompt_template: PromptTemplate
+  applied_template_id: string
+  applied_template_name: string
+  created_at: string
+  updated_at: string
+  messages: ChatMessagePayload[]
+  summary?: unknown
+  structured_requirement_model?: unknown
+  structured_requirement_sync_status?: 'ready' | 'stale' | 'missing'
+}
+
+export type GeneratedDocumentResponse = {
+  session_id: string
+  document_markdown: string
+  document_type?: string
+  filename?: string
+  download_url?: string
+  saved_at?: string
+  status: string
+  summary?: unknown
+  structured_requirement_model?: unknown
+  structured_requirement_sync_status?: 'ready' | 'stale' | 'missing'
+}
+
+export type MessageResponse = {
+  assistant_message: string
+  assistant_thinking?: string
+  summary?: unknown
+  structured_requirement_model?: unknown
+  structured_requirement_sync_status?: 'ready' | 'stale' | 'missing'
+  session_id?: string
+  message_count?: number
+}

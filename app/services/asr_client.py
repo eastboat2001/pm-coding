@@ -446,13 +446,13 @@ class DoubaoASRClient:
         url = f"{self.base_url.rstrip('/')}/audio/transcriptions"
         
         # 构建请求头
-        headers = {
-            "Content-Type": "audio/wav"
-        }
+        # headers = {
+        #     "Content-Type": "audio/wav"
+        # }
         
         # 构建请求数据
         files = {
-            "audio": ("audio.wav", wav_data, "audio/wav")
+            "file": ("audio.wav", wav_data, "audio/wav")
         }
         print(url)
         # 发送请求

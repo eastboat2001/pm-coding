@@ -13,3 +13,7 @@ venv/
 .env
 
 node_modules/
+
+# Runtime data
+data/
+*.sqlite3

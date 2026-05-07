@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from http import HTTPStatus
 
-from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
+from flask import Blueprint, Response, current_app, jsonify, request, send_file, stream_with_context
 
 from .services.llm_client import LLMError
 from .services.requirement_collector import RequirementCollectorService
@@ -27,20 +27,74 @@ def _get_asr_client():
     return asr_client
 
 
+def _request_language(default: str = "zh") -> str:
+    payload = request.get_json(silent=True) or {}
+    language = str(payload.get("language", request.args.get("language", default))).strip().lower()
+    return language or default
+
+
+def _structured_requirement_response(
+    session_id: str,
+    structured_requirement_model: dict[str, object],
+    sync_status: str = "ready",
+):
+    return {
+        "session_id": session_id,
+        "summary": structured_requirement_model,
+        "structured_requirement_model": structured_requirement_model,
+        "structured_requirement_sync_status": sync_status,
+    }
+
+
 @api.post("/sessions")
 def create_session():
     service = _get_service()
-    session = service.create_session()
+    payload = request.get_json(silent=True) or {}
+    template_id = str(payload.get("template_id", "")).strip() or None
+    try:
+        session = service.create_session(template_id=template_id)
+    except KeyError:
+        return jsonify({"error": "Business template not found."}), HTTPStatus.NOT_FOUND
+    structured_requirement_snapshot = service.get_structured_requirement_snapshot(session.id, _request_language())
     return (
         jsonify(
             {
                 "session_id": session.id,
+                "title": session.title,
+                "prompt_template": session.prompt_template,
+                "applied_template_id": session.applied_template_id,
+                "applied_template_name": session.applied_template_name,
                 "created_at": session.created_at,
+                "updated_at": session.updated_at,
                 "messages": session.messages,
+                "summary": structured_requirement_snapshot["structured_requirement_model"],
+                "structured_requirement_model": structured_requirement_snapshot["structured_requirement_model"],
+                "structured_requirement_sync_status": structured_requirement_snapshot["structured_requirement_sync_status"],
             }
         ),
         HTTPStatus.CREATED,
     )
+
+
+@api.get("/sessions")
+def list_sessions():
+    service = _get_service()
+    return jsonify({"sessions": service.list_sessions()})
+
+
+@api.get("/templates")
+def list_templates():
+    service = _get_service()
+    return jsonify({"templates": service.list_business_templates()})
+
+
+@api.get("/templates/<template_id>")
+def get_template(template_id: str):
+    service = _get_service()
+    template = service.get_business_template(template_id)
+    if template is None:
+        return jsonify({"error": "Business template not found."}), HTTPStatus.NOT_FOUND
+    return jsonify(template)
 
 
 @api.get("/sessions/<session_id>")
@@ -49,11 +103,61 @@ def get_session(session_id: str):
     session = service.get_session(session_id)
     if session is None:
         return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    structured_requirement_snapshot = service.get_structured_requirement_snapshot(
+        session_id,
+        _request_language(),
+    )
 
     return jsonify(
         {
             "session_id": session.id,
+            "title": session.title,
+            "prompt_template": session.prompt_template,
+            "applied_template_id": session.applied_template_id,
+            "applied_template_name": session.applied_template_name,
             "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "messages": session.messages,
+            "summary": structured_requirement_snapshot["structured_requirement_model"],
+            "structured_requirement_model": structured_requirement_snapshot["structured_requirement_model"],
+            "structured_requirement_sync_status": structured_requirement_snapshot["structured_requirement_sync_status"],
+        }
+    )
+
+
+@api.delete("/sessions/<session_id>")
+def delete_session(session_id: str):
+    service = _get_service()
+    deleted = service.delete_session(session_id)
+    if not deleted:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    return ("", HTTPStatus.NO_CONTENT)
+
+
+@api.post("/sessions/<session_id>/prompt-template")
+def update_session_prompt_template(session_id: str):
+    payload = request.get_json(silent=True) or {}
+    prompt_template = str(payload.get("prompt_template", "")).strip()
+    if not prompt_template:
+        return jsonify({"error": "Field `prompt_template` is required."}), HTTPStatus.BAD_REQUEST
+
+    service = _get_service()
+    try:
+        session = service.update_session_prompt_template(session_id, prompt_template)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.CONFLICT
+
+    return jsonify(
+        {
+            "session_id": session.id,
+            "title": session.title,
+            "prompt_template": session.prompt_template,
+            "applied_template_id": session.applied_template_id,
+            "applied_template_name": session.applied_template_name,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
             "messages": session.messages,
         }
     )
@@ -117,26 +221,186 @@ def stream_message(session_id: str):
 
 @api.get("/sessions/<session_id>/summary")
 def get_summary(session_id: str):
+    language = _request_language()
     service = _get_service()
     try:
-        summary = service.build_session_summary(session_id)
+        structured_requirement_model = service.build_structured_requirement_model(session_id, language)
     except KeyError:
         return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
     except LLMError as exc:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
-    return jsonify({"session_id": session_id, "summary": summary})
+    return jsonify(_structured_requirement_response(session_id, structured_requirement_model, "ready"))
+
+
+@api.get("/sessions/<session_id>/structured-requirement")
+def get_structured_requirement(session_id: str):
+    language = _request_language()
+    service = _get_service()
+    try:
+        structured_requirement_model = service.build_structured_requirement_model(session_id, language)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    except LLMError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+    return jsonify(_structured_requirement_response(session_id, structured_requirement_model, "ready"))
 
 
 @api.get("/sessions/<session_id>/design-doc")
 def get_design_doc(session_id: str):
+    language = _request_language()
     service = _get_service()
     try:
-        result = service.build_system_design_document(session_id)
+        result = service.build_system_design_document(session_id, language)
     except KeyError:
         return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
     except LLMError as exc:
         return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
     return jsonify(result)
+
+
+@api.get("/sessions/<session_id>/prd-doc")
+def get_prd_doc(session_id: str):
+    language = _request_language()
+    service = _get_service()
+    try:
+        result = service.build_prd_document(session_id, language)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    except LLMError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+    return jsonify(result)
+
+
+@api.post("/sessions/<session_id>/prd-doc")
+def post_prd_doc(session_id: str):
+    language = _request_language()
+    service = _get_service()
+    try:
+        result = service.build_prd_document(session_id, language)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    except LLMError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+    return jsonify(result)
+
+
+@api.post("/sessions/<session_id>/prd-doc/stream")
+def stream_prd_doc(session_id: str):
+    language = _request_language()
+    service = _get_service()
+
+    def event_stream():
+        try:
+            for item in service.stream_prd_document(session_id, language):
+                event_name = item.get("event", "message")
+                data = json.dumps(item, ensure_ascii=False)
+                yield f"event: {event_name}\n"
+                yield f"data: {data}\n\n"
+        except KeyError:
+            data = json.dumps({"event": "error", "error": "Session not found."}, ensure_ascii=False)
+            yield "event: error\n"
+            yield f"data: {data}\n\n"
+        except LLMError as exc:
+            data = json.dumps({"event": "error", "error": str(exc)}, ensure_ascii=False)
+            yield "event: error\n"
+            yield f"data: {data}\n\n"
+        except Exception as exc:
+            data = json.dumps({"event": "error", "error": str(exc)}, ensure_ascii=False)
+            yield "event: error\n"
+            yield f"data: {data}\n\n"
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@api.post("/sessions/<session_id>/design-doc")
+def post_design_doc(session_id: str):
+    language = _request_language()
+    service = _get_service()
+    try:
+        result = service.build_system_design_document(session_id, language)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    except LLMError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_GATEWAY
+    return jsonify(result)
+
+
+@api.post("/sessions/<session_id>/design-doc/stream")
+def stream_design_doc(session_id: str):
+    language = _request_language()
+    service = _get_service()
+
+    def event_stream():
+        try:
+            for item in service.stream_system_design_document(session_id, language):
+                event_name = item.get("event", "message")
+                data = json.dumps(item, ensure_ascii=False)
+                yield f"event: {event_name}\n"
+                yield f"data: {data}\n\n"
+        except KeyError:
+            data = json.dumps({"event": "error", "error": "Session not found."}, ensure_ascii=False)
+            yield "event: error\n"
+            yield f"data: {data}\n\n"
+        except LLMError as exc:
+            data = json.dumps({"event": "error", "error": str(exc)}, ensure_ascii=False)
+            yield "event: error\n"
+            yield f"data: {data}\n\n"
+        except Exception as exc:
+            data = json.dumps({"event": "error", "error": str(exc)}, ensure_ascii=False)
+            yield "event: error\n"
+            yield f"data: {data}\n\n"
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@api.get("/sessions/<session_id>/design-doc/download")
+def download_design_doc(session_id: str):
+    service = _get_service()
+    try:
+        result = service.get_saved_design_document(session_id)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+
+    if result is None:
+        return jsonify({"error": "Design document not found. Generate it first."}), HTTPStatus.NOT_FOUND
+
+    file_path, download_name = result
+    return send_file(
+        file_path,
+        mimetype="text/markdown; charset=utf-8",
+        as_attachment=True,
+        download_name=download_name,
+        max_age=0,
+    )
+
+
+@api.get("/sessions/<session_id>/prd-doc/download")
+def download_prd_doc(session_id: str):
+    service = _get_service()
+    try:
+        result = service.get_saved_prd_document(session_id)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+
+    if result is None:
+        return jsonify({"error": "PRD document not found. Generate it first."}), HTTPStatus.NOT_FOUND
+
+    file_path, download_name = result
+    return send_file(
+        file_path,
+        mimetype="text/markdown; charset=utf-8",
+        as_attachment=True,
+        download_name=download_name,
+        max_age=0,
+    )
 
 
 @api.post("/asr/recognize")

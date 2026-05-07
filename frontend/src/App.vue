@@ -2399,7 +2399,21 @@ button {
 
 .sidebar.collapsed .sidebar-brand {
   width: 100%;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.sidebar.collapsed .sidebar-brand-lockup {
+  gap: 0;
+  justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-brand-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
 }
 
 .sidebar.collapsed .sidebar-brand-copy,

@@ -345,8 +345,17 @@ function onWheelScroll(event: WheelEvent): void {
     return
   }
 
+  const maxScrollTop = container.scrollHeight - container.clientHeight
+  const isAtTop = container.scrollTop <= 0
+  const isAtBottom = container.scrollTop >= maxScrollTop - 1
+
+  if ((event.deltaY < 0 && isAtTop) || (event.deltaY > 0 && isAtBottom)) {
+    return
+  }
+
   event.preventDefault()
-  container.scrollTop += event.deltaY
+  const nextScrollTop = container.scrollTop + event.deltaY
+  container.scrollTop = Math.min(maxScrollTop, Math.max(0, nextScrollTop))
 }
 
 function buildUserMarkdownDocument(
@@ -720,7 +729,6 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
   background: #fff;
   box-shadow: 0 10px 24px rgba(13, 35, 28, 0.05);
   overflow: auto;
-  overscroll-behavior: contain;
   scrollbar-gutter: stable;
   scrollbar-width: none;
   scrollbar-color: transparent transparent;

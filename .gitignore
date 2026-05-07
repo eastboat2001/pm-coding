@@ -15,5 +15,5 @@ venv/
 node_modules/
 
 # Runtime data
-data/
+
 *.sqlite3

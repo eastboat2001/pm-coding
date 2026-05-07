@@ -72,3 +72,21 @@ export type MessageResponse = {
   session_id?: string
   message_count?: number
 }
+
+export type ImplementationContextResponse = {
+  session_id: string
+  title: string
+  documents_ready: boolean
+  missing_documents?: Array<'prd' | 'design'>
+  documents?: {
+    prd: {
+      filename: string
+      path: string
+    }
+    design: {
+      filename: string
+      path: string
+    }
+  }
+  implementation_prompt?: string
+}

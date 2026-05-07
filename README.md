@@ -84,6 +84,11 @@ GET /api/sessions/{session_id}/summary
 GET /api/sessions/{session_id}/design-doc
 ```
 
+7. Get implementation context for downstream coding AI
+```http
+GET /api/sessions/{session_id}/implementation-context
+```
+
 ## Optional proxy settings
 If your network requires a proxy to access the LLM endpoint:
 
@@ -99,6 +104,7 @@ LLM_PROXY_URL=http://127.0.0.1:7890
 LLM_MAX_RETRIES=2
 LLM_DEBUG_STREAM=true
 LOG_LEVEL=INFO
-# Optional: frontend direct backend URL (helps avoid dev-proxy buffering)
+# Optional: configure the Vite frontend in frontend/.env
 VITE_API_BASE_URL=http://127.0.0.1:5000
+VITE_GO_CODING_URL=http://localhost:8888
 ```

@@ -19,6 +19,7 @@ const props = withDefaults(
     loading?: boolean
     syncing?: boolean
     generatingDocuments?: boolean
+    openingGoCoding?: boolean
     generationDisabled?: boolean
     hasPrdDocument?: boolean
     hasDesignDocument?: boolean
@@ -28,6 +29,7 @@ const props = withDefaults(
     loading: false,
     syncing: false,
     generatingDocuments: false,
+    openingGoCoding: false,
     generationDisabled: false,
     hasPrdDocument: false,
     hasDesignDocument: false,
@@ -37,6 +39,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (event: 'generate-documents'): void
   (event: 'download-document', kind: 'prd' | 'design'): void
+  (event: 'go-coding'): void
 }>()
 
 type RequirementRow = {
@@ -304,6 +307,15 @@ function summarizeText(value: string): string {
             @click="emit('download-document', 'design')"
           >
             {{ copy.downloadDesign }}
+          </button>
+          <button
+            v-if="hasPrdDocument && hasDesignDocument"
+            class="go-coding-btn"
+            type="button"
+            :disabled="generationDisabled || openingGoCoding"
+            @click="emit('go-coding')"
+          >
+            {{ openingGoCoding ? copy.openingGoCoding : copy.goCoding }}
           </button>
         </div>
       </div>
@@ -574,6 +586,31 @@ function summarizeText(value: string): string {
 }
 
 .document-download-btn:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.go-coding-btn {
+  width: 100%;
+  border: 1px solid #0d6b8c;
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: linear-gradient(135deg, #0d6b8c 0%, #1497b8 100%);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+  box-shadow: 0 14px 22px rgba(13, 107, 140, 0.2);
+}
+
+.go-coding-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 24px rgba(13, 107, 140, 0.24);
+}
+
+.go-coding-btn:disabled {
   opacity: 0.72;
   cursor: not-allowed;
   box-shadow: none;

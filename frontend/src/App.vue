@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   ChatMessagePayload,
   GeneratedDocumentResponse,
+  ImplementationContextResponse,
   LanguageCode,
   MessageResponse,
   PromptTemplate,
@@ -40,11 +41,13 @@ const switchingSession = ref(false)
 const deletingSessionId = ref('')
 const applyingTemplateId = ref('')
 const generatingDocuments = ref(false)
+const openingGoCoding = ref(false)
 const globalError = ref('')
 const loadingStructuredRequirement = ref(false)
 const structuredRequirementError = ref('')
 const structuredRequirementModel = ref<StructuredRequirementModel>(createEmptyStructuredRequirementModel())
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const GO_CODING_URL = resolveExternalUrl(import.meta.env.VITE_GO_CODING_URL, 'http://localhost:8888')
 let structuredRequirementRequestToken = 0
 const activeReplyCount = ref(0)
 const activeMessagePipelineCount = ref(0)
@@ -149,6 +152,7 @@ const translations = {
     templatePromptManagedHint: 'A business template is active. Generic quick/expert prompting is disabled for this session.',
     templateSessionBadge: 'Template session',
     failedToLoadTemplates: 'Failed to load template library',
+    failedToOpenGoCoding: 'Failed to open coding workspace',
   },
   de: {
     title: 'AI PM',
@@ -225,6 +229,7 @@ const translations = {
     templatePromptManagedHint: 'Diese Sitzung wird von einer Fachvorlage gesteuert. Die generischen Schnell/Experte-Prompts sind deaktiviert.',
     templateSessionBadge: 'Vorlagen-Sitzung',
     failedToLoadTemplates: 'Vorlagenbibliothek konnte nicht geladen werden',
+    failedToOpenGoCoding: 'Coding-Workspace konnte nicht geoeffnet werden',
   },
   zh: {
     title: 'AI PM',
@@ -301,6 +306,7 @@ const translations = {
     templatePromptManagedHint: '当前会话已启用业务模板，通用的“快速/专家”提问策略已停用。',
     templateSessionBadge: '模板会话',
     failedToLoadTemplates: '加载模板库失败',
+    failedToOpenGoCoding: '打开 Coding 工作区失败',
   },
   ms: {
     title: 'AI PM',
@@ -377,6 +383,7 @@ const translations = {
     templatePromptManagedHint: 'Sesi ini dikawal oleh templat perniagaan. Mod prompt umum Pantas/Pakar dimatikan.',
     templateSessionBadge: 'Sesi templat',
     failedToLoadTemplates: 'Gagal memuatkan pustaka templat',
+    failedToOpenGoCoding: 'Gagal membuka workspace coding',
   },
 } satisfies Record<LanguageCode, Record<string, string>>
 
@@ -466,6 +473,15 @@ function apiUrl(path: string): string {
     return path
   }
   return `${API_BASE_URL}${path}`
+}
+
+function resolveExternalUrl(rawValue: unknown, fallback: string): string {
+  const candidate = String(rawValue || '').trim() || fallback
+  try {
+    return new URL(candidate).toString()
+  } catch {
+    return new URL(`http://${candidate}`).toString()
+  }
 }
 
 function localeCode() {
@@ -723,6 +739,45 @@ function downloadLatestGeneratedDocument(kind: 'prd' | 'design') {
     return
   }
   triggerDocumentDownload(target.downloadUrl, target.downloadFilename)
+}
+
+function redirectToGoCoding(payload: ImplementationContextResponse) {
+  const targetUrl = new URL(GO_CODING_URL)
+  targetUrl.searchParams.set('source', 'rqmd')
+  targetUrl.searchParams.set('context_transport', 'window.name')
+  targetUrl.searchParams.set('context_type', 'implementation-context')
+  targetUrl.searchParams.set('session_id', payload.session_id)
+
+  window.name = JSON.stringify(payload)
+  window.location.assign(targetUrl.toString())
+}
+
+async function openGoCoding() {
+  if (
+    !sessionId.value ||
+    openingGoCoding.value ||
+    generatingDocuments.value ||
+    messagePipelineActive.value ||
+    switchingSession.value ||
+    !latestPrdDocument.value ||
+    !latestDesignDocument.value
+  ) {
+    return
+  }
+
+  clearError()
+  openingGoCoding.value = true
+
+  try {
+    const payload = await apiJson<ImplementationContextResponse>(
+      `/api/sessions/${sessionId.value}/implementation-context?language=${encodeURIComponent(currentLanguage.value)}`,
+    )
+    redirectToGoCoding(payload)
+  } catch (error) {
+    globalError.value = formatError(error, t.value.failedToOpenGoCoding)
+  } finally {
+    openingGoCoding.value = false
+  }
 }
 
 async function loadSessions() {
@@ -2045,12 +2100,14 @@ watch(currentLanguage, (language, previousLanguage) => {
             :loading="loadingStructuredRequirement"
             :syncing="syncingStructuredRequirement"
             :generating-documents="generatingDocuments"
+            :opening-go-coding="openingGoCoding"
             :generation-disabled="messagePipelineActive || switchingSession || !hasSession"
             :has-prd-document="Boolean(latestPrdDocument)"
             :has-design-document="Boolean(latestDesignDocument)"
             :error="structuredRequirementError"
             @generate-documents="generateDocuments"
             @download-document="downloadLatestGeneratedDocument"
+            @go-coding="openGoCoding"
           />
         </div>
       </aside>

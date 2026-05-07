@@ -424,6 +424,31 @@ def download_prd_doc(session_id: str):
     )
 
 
+@api.get("/sessions/<session_id>/implementation-context")
+def get_implementation_context(session_id: str):
+    language = _request_language()
+    service = _get_service()
+    try:
+        result = service.build_implementation_context(session_id, language)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+
+    if not result.get("documents_ready"):
+        missing_documents = result.get("missing_documents", [])
+        missing_summary = ", ".join(str(item) for item in missing_documents) or "prd, design"
+        return (
+            jsonify(
+                {
+                    "error": f"Required generated documents are missing: {missing_summary}.",
+                    **result,
+                }
+            ),
+            HTTPStatus.NOT_FOUND,
+        )
+
+    return jsonify(result)
+
+
 @api.post("/asr/recognize")
 def recognize_speech():
     """识别语音并返回文本"""

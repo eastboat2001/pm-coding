@@ -10,6 +10,8 @@ export const structuredRequirementPanelCopy = {
     generatingDocuments: 'Generating documents...',
     downloadPrd: 'Download Requirements Document',
     downloadDesign: 'Download Design Document',
+    goCoding: 'Go Coding',
+    openingGoCoding: 'Opening Coding Workspace...',
     notCaptured: 'TBD',
     status: {
       missing: 'Missing',
@@ -53,6 +55,8 @@ export const structuredRequirementPanelCopy = {
     generatingDocuments: 'Dokumente werden erzeugt...',
     downloadPrd: 'Anforderungsdokument herunterladen',
     downloadDesign: 'Designdokument herunterladen',
+    goCoding: 'Go Coding',
+    openingGoCoding: 'Coding-Workspace wird geoeffnet...',
     notCaptured: 'TBD',
     status: {
       missing: 'Fehlt',
@@ -96,6 +100,8 @@ export const structuredRequirementPanelCopy = {
     generatingDocuments: '\u6b63\u5728\u751f\u6210\u6587\u6863...',
     downloadPrd: '\u4e0b\u8f7d\u9700\u6c42\u6587\u6863',
     downloadDesign: '\u4e0b\u8f7d\u8bbe\u8ba1\u6587\u6863',
+    goCoding: 'Go Coding',
+    openingGoCoding: '\u6b63\u5728\u6253\u5f00 Coding \u5de5\u4f5c\u533a...',
     notCaptured: 'TBD',
     status: {
       missing: '\u672a\u6536\u96c6',
@@ -139,6 +145,8 @@ export const structuredRequirementPanelCopy = {
     generatingDocuments: 'Sedang menjana dokumen...',
     downloadPrd: 'Muat Turun Dokumen Keperluan',
     downloadDesign: 'Muat Turun Dokumen Reka Bentuk',
+    goCoding: 'Go Coding',
+    openingGoCoding: 'Membuka Workspace Coding...',
     notCaptured: 'TBD',
     status: {
       missing: 'Belum ada',
@@ -184,6 +192,8 @@ export const structuredRequirementPanelCopy = {
     generatingDocuments: string
     downloadPrd: string
     downloadDesign: string
+    goCoding: string
+    openingGoCoding: string
     notCaptured: string
     status: Record<'missing' | 'captured' | 'pendingConfirmation' | 'confirmed' | 'conflict', string>
     rows: Record<

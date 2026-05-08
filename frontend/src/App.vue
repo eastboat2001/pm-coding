@@ -517,6 +517,20 @@ const currentLanguageLabel = computed(
 const templateShelfItems = computed(() => businessTemplates.value.slice(0, 6))
 const recentSessions = computed(() => sessions.value.slice(0, 6))
 const activeMessageCountLabel = computed(() => `${messages.value.length} ${t.value.messagesLabel}`)
+const messageRenderSignature = computed(() =>
+  messages.value
+    .map((message, index) =>
+      [
+        index,
+        message.role,
+        message.kind || 'chat',
+        message.content.length,
+        message.thinking?.length ?? 0,
+        message.downloadUrl ? 1 : 0,
+      ].join(':'),
+    )
+    .join('|'),
+)
 const sessionCountLabel = computed(() => `${sessions.value.length} ${t.value.sessionsLabel}`)
 const templateCountLabel = computed(() => `${businessTemplates.value.length} ${t.value.templatesLabel}`)
 const isChatView = computed(() => currentWorkspaceView.value === 'chat')
@@ -1615,11 +1629,21 @@ async function sendDesignDocFallback(
 }
 
 function scrollToBottom() {
-  setTimeout(() => {
-    if (chatList.value) {
-      chatList.value.scrollTop = chatList.value.scrollHeight
+  const align = (remainingFrames = 2) => {
+    if (!chatList.value) {
+      return
     }
-  }, 100)
+
+    chatList.value.scrollTop = chatList.value.scrollHeight
+
+    if (remainingFrames > 0) {
+      window.requestAnimationFrame(() => align(remainingFrames - 1))
+    }
+  }
+
+  void nextTick(() => {
+    window.requestAnimationFrame(() => align())
+  })
 }
 
 function autoResizeTextarea() {
@@ -1891,6 +1915,13 @@ watch(currentLanguage, (language, previousLanguage) => {
     sessionId.value,
     { background: hasStructuredRequirementContent(structuredRequirementModel.value) },
   )
+})
+
+watch(messageRenderSignature, (signature, previousSignature) => {
+  if (!isChatView.value || !messages.value.length || signature === previousSignature) {
+    return
+  }
+  scrollToBottom()
 })
 </script>
 
@@ -2225,7 +2256,6 @@ watch(currentLanguage, (language, previousLanguage) => {
               </div>
 
               <form class="composer-card" @submit.prevent="sendMessage">
-                <span class="composer-add" aria-hidden="true">+</span>
                 <textarea
                   v-model="inputText"
                   rows="1"
@@ -2258,12 +2288,21 @@ watch(currentLanguage, (language, previousLanguage) => {
                     </svg>
                   </button>
 
-                  <button class="composer-send" type="submit" :disabled="!inputText.trim() || sending || generatingDocuments || switchingSession">
+                  <button
+                    class="composer-send"
+                    type="submit"
+                    :aria-label="sending ? t.sending : t.send"
+                    :title="sending ? t.sending : t.send"
+                    :disabled="!inputText.trim() || sending || generatingDocuments || switchingSession"
+                  >
                     <svg v-if="!sending" class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
                       <path d="M12 5v14"/>
                       <path d="M6.5 10.5 12 5l5.5 5.5"/>
                     </svg>
-                    <span v-else>{{ t.sending }}</span>
+                    <svg v-else class="composer-send-spinner" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-opacity="0.28" stroke-width="2.4"/>
+                      <path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+                    </svg>
                   </button>
                 </div>
               </form>
@@ -2865,6 +2904,13 @@ body {
   color: var(--muted);
   font-size: 0.76rem;
   line-height: 1.4;
+}
+
+.session-card-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .session-card {
@@ -3654,7 +3700,7 @@ body {
 
 .composer-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-end;
   gap: 16px;
   padding: 18px 20px 18px 22px;
@@ -3662,13 +3708,6 @@ body {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: var(--shadow);
-}
-
-.composer-add {
-  align-self: center;
-  color: var(--muted);
-  font-size: 2rem;
-  line-height: 1;
 }
 
 .composer-input {
@@ -3967,6 +4006,12 @@ body {
   height: 20px;
 }
 
+.composer-send-spinner {
+  width: 20px;
+  height: 20px;
+  animation: spin 0.9s linear infinite;
+}
+
 @keyframes typingBounce {
   0%,
   80%,
@@ -3987,6 +4032,15 @@ body {
   }
   100% {
     box-shadow: 0 0 0 0 rgba(181, 72, 72, 0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -4181,10 +4235,6 @@ body {
 
   .composer-context-row {
     align-items: stretch;
-  }
-
-  .composer-add {
-    display: none;
   }
 
   .composer-actions {

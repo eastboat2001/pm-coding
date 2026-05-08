@@ -123,8 +123,8 @@ const props = withDefaults(
 )
 
 const enCopy: PreviewCopy = {
-  title: 'Dual Document Preview',
-  subtitle: 'Switch between the user-facing PRD draft and the developer-facing design draft.',
+  title: 'Document Drafts',
+  subtitle: 'Switch between the PRD draft and the technical draft generated from the current requirement model.',
   loading: 'Refreshing the latest collected requirements...',
   syncing: 'Syncing...',
   tbd: 'TBD',
@@ -135,8 +135,8 @@ const enCopy: PreviewCopy = {
     developer: 'Developer View',
   },
   documentTitles: {
-    user: 'PRD preview',
-    developer: 'System design preview',
+    user: 'PRD draft',
+    developer: 'System design draft',
   },
   draftHints: {
     user: '> This PRD draft auto-syncs from the currently collected requirements.',
@@ -218,8 +218,8 @@ const enCopy: PreviewCopy = {
 }
 
 const zhCopy: PreviewCopy = {
-  title: '\u53cc\u6587\u6863\u9884\u89c8',
-  subtitle: '\u5728\u9884\u89c8\u533a\u5207\u6362\u67e5\u770b PRD \u8349\u7a3f\u548c\u8bbe\u8ba1\u6587\u6863\u8349\u7a3f\u3002',
+  title: '\u6587\u6863\u8349\u7a3f',
+  subtitle: '\u5207\u6362\u67e5\u770b PRD \u8349\u7a3f\u4e0e\u8bbe\u8ba1\u8349\u7a3f\u3002',
   loading: '\u6b63\u5728\u5237\u65b0\u6700\u65b0\u6536\u96c6\u5230\u7684\u9700\u6c42...',
   syncing: '\u540c\u6b65\u4e2d...',
   tbd: 'TBD',
@@ -230,8 +230,8 @@ const zhCopy: PreviewCopy = {
     developer: '\u5f00\u53d1\u7248',
   },
   documentTitles: {
-    user: 'PRD \u6587\u6863\u9884\u89c8',
-    developer: '\u7cfb\u7edf\u8bbe\u8ba1\u6587\u6863\u9884\u89c8',
+    user: 'PRD \u8349\u7a3f',
+    developer: '\u8bbe\u8ba1\u8349\u7a3f',
   },
   draftHints: {
     user: '> \u8be5 PRD \u8349\u7a3f\u4f1a\u6839\u636e\u5f53\u524d\u5df2\u6536\u96c6\u7684\u9700\u6c42\u81ea\u52a8\u540c\u6b65\u66f4\u65b0\u3002',
@@ -316,14 +316,14 @@ const previewCopy: Record<LanguageCode, PreviewCopy> = {
   en: enCopy,
   de: {
     ...enCopy,
-    title: 'Duale Dokumentvorschau',
-    subtitle: 'Zwischen PRD-Entwurf und technischem Designentwurf umschalten.',
+    title: 'Dokumententwuerfe',
+    subtitle: 'Zwischen PRD-Entwurf und technischem Entwurf aus dem aktuellen Anforderungsmodell wechseln.',
   },
   zh: zhCopy,
   ms: {
     ...enCopy,
-    title: 'Pratonton Dua Dokumen',
-    subtitle: 'Tukar antara draf PRD dan draf dokumen reka bentuk.',
+    title: 'Draf Dokumen',
+    subtitle: 'Tukar antara draf PRD dan draf teknikal berdasarkan model keperluan semasa.',
   },
 }
 
@@ -725,9 +725,9 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
   height: 100%;
   display: block;
   border: 1px solid var(--line);
-  border-radius: 18px;
-  background: #fff;
-  box-shadow: 0 10px 24px rgba(13, 35, 28, 0.05);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 12px 30px rgba(74, 104, 157, 0.1);
   overflow: auto;
   scrollbar-gutter: stable;
   scrollbar-width: none;
@@ -741,7 +741,7 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
 
 .document-preview-card:hover {
   scrollbar-width: thin;
-  scrollbar-color: rgba(109, 137, 128, 0.82) transparent;
+  scrollbar-color: rgba(117, 136, 173, 0.82) transparent;
 }
 
 .document-preview-card:hover::-webkit-scrollbar {
@@ -749,56 +749,48 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
   height: 6px;
 }
 
-.document-preview-card:hover::-webkit-scrollbar-track {
-  background: transparent;
-}
-
 .document-preview-card:hover::-webkit-scrollbar-thumb {
-  background: rgba(109, 137, 128, 0.82);
+  background: rgba(117, 136, 173, 0.82);
   border-radius: 999px;
-}
-
-.document-preview-card:hover::-webkit-scrollbar-thumb:hover {
-  background: rgba(76, 104, 96, 0.92);
 }
 
 .document-preview-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding: 18px 18px 14px;
-  border-bottom: 1px solid #edf2ef;
+  gap: 12px;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid #edf2fb;
 }
 
 .document-preview-head h3 {
   margin: 0;
-  font-size: 0.98rem;
-  color: #10231f;
+  font-size: 0.92rem;
+  color: #1d2a44;
 }
 
 .document-preview-head p {
   margin: 6px 0 0;
-  color: #5a6b65;
-  font-size: 0.84rem;
+  color: #61718a;
+  font-size: 0.78rem;
   line-height: 1.45;
 }
 
 .document-preview-head-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .document-preview-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 5px 9px;
   border-radius: 999px;
-  background: #eef7f3;
-  color: #2d6a59;
-  font-size: 0.76rem;
+  background: #eef3ff;
+  color: #43659f;
+  font-size: 0.72rem;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -815,42 +807,43 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
 .document-preview-tabs {
   display: inline-flex;
   align-items: center;
-  padding: 4px;
-  border-radius: 16px;
-  background: #eef3f0;
-  box-shadow: inset 0 0 0 1px rgba(16, 35, 31, 0.06);
+  padding: 3px;
+  border-radius: 14px;
+  background: #eef3ff;
+  box-shadow: inset 0 0 0 1px rgba(191, 210, 247, 0.7);
 }
 
 .document-preview-tab {
   border: 0;
   background: transparent;
-  color: #496057;
-  padding: 10px 18px;
-  border-radius: 12px;
-  font-size: 0.88rem;
+  color: #61718a;
+  padding: 8px 13px;
+  border-radius: 11px;
+  font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
   transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .document-preview-tab:hover {
-  color: #10231f;
+  color: #1d2a44;
 }
 
 .document-preview-tab.active {
-  background: #10231f;
+  background: linear-gradient(135deg, var(--accent) 0%, #5f8bf0 100%);
   color: #fff;
-  box-shadow: 0 6px 16px rgba(16, 35, 31, 0.18);
+  box-shadow: 0 10px 18px rgba(65, 117, 234, 0.22);
 }
 
 .document-preview-state {
-  margin: 18px;
-  padding: 14px 16px;
+  margin: 16px;
+  padding: 12px 14px;
   border-radius: 14px;
-  border: 1px dashed #c8d7d1;
+  border: 1px dashed #d6e1f3;
   color: var(--muted);
-  background: #fbfdfc;
-  line-height: 1.6;
+  background: #f7faff;
+  line-height: 1.5;
+  font-size: 0.82rem;
 }
 
 .document-preview-state.error {
@@ -862,14 +855,14 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
 
 .document-preview-shell {
   display: block;
-  padding: 18px;
+  padding: 16px;
   overflow: visible;
 }
 
 .document-preview-label {
-  margin-bottom: 10px;
-  color: #5a6b65;
-  font-size: 0.76rem;
+  margin-bottom: 8px;
+  color: #61718a;
+  font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -877,14 +870,14 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
 
 .document-preview-content {
   margin: 0;
-  padding: 16px 18px;
+  padding: 14px 16px;
   border-radius: 16px;
-  border: 1px solid #d7e7e1;
-  background: linear-gradient(180deg, #f9fcfb 0%, #f2f8f5 100%);
-  color: #1b2b26;
+  border: 1px solid #dce6f7;
+  background: linear-gradient(180deg, #fbfcff 0%, #f4f8ff 100%);
+  color: #2f4362;
   font-family: var(--mono);
-  font-size: 0.85rem;
-  line-height: 1.65;
+  font-size: 0.8rem;
+  line-height: 1.62;
   white-space: pre-wrap;
   overflow: visible;
   max-height: none;

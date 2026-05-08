@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import type { BusinessTemplateDetail, BusinessTemplateSummary } from './types/businessTemplate'
@@ -33,6 +33,7 @@ const inputText = ref('')
 const messages = ref<ChatMessage[]>([])
 const chatList = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const languageMenuRef = ref<HTMLDetailsElement | null>(null)
 
 const loadingSession = ref(false)
 const loadingHistory = ref(false)
@@ -52,15 +53,15 @@ let structuredRequirementRequestToken = 0
 const activeReplyCount = ref(0)
 const activeMessagePipelineCount = ref(0)
 const activeStructuredRequirementSyncCount = ref(0)
-const historyExpanded = ref(false)
-const templateLibraryExpanded = ref(true)
 const templateDialogOpen = ref(false)
 const loadingTemplateDetail = ref(false)
 const templateDialogError = ref('')
 const selectedBusinessTemplateId = ref('')
+const previewPanelOpen = ref(false)
+const currentWorkspaceView = ref<'chat' | 'templates'>('chat')
 
 
-// 褰曢煶鐩稿叧鍙橀噺
+// 鐟滅増娲熼悡鍫曟儎缁嬪灝褰犻柛娆愶耿閸?
 const recording = ref(false)
 const audioBuffer = ref<Float32Array[]>([])
 const audioContext = ref<AudioContext | null>(null)
@@ -307,8 +308,7 @@ const translations = {
     templateSessionBadge: '模板会话',
     failedToLoadTemplates: '加载模板库失败',
     failedToOpenGoCoding: '打开 Coding 工作区失败',
-  },
-  ms: {
+  },  ms: {
     title: 'AI PM',
     subtitle: 'Daripada temubual ke spesifikasi pembangunan',
     languageSection: 'Bahasa',
@@ -387,7 +387,92 @@ const translations = {
   },
 } satisfies Record<LanguageCode, Record<string, string>>
 
+const shellCopy = {
+  en: {
+    heroTag: 'AT&S requirement workspace',
+    heroLead: 'Hello,',
+    heroAccent: 'AI PM',
+    heroQuestion: 'Tell me what you need and I will help you turn it into a complete requirement document.',
+    assistantIntro: 'Hello, I am AITC. Ask directly, paste context, or start from a template below.',
+    composerPlaceholder: 'Ask AITC anything',
+    footerNotice: 'AITC may make mistakes. Please verify important information.',
+    footerBrand: 'BUME QDM | AI transformation club',
+    recent: 'Recent',
+    promptModes: 'Conversation strategy',
+    currentConversation: 'Current conversation',
+    currentConversationEmpty: 'The active session summary will appear here once the conversation starts.',
+    activeSession: 'Active topic',
+    messageCountLabel: 'Messages',
+  },
+  de: {
+    heroTag: 'AT&S Anforderungs-Workspace',
+    heroLead: 'Hallo,',
+    heroAccent: 'AI PM',
+    heroQuestion: 'Erzaehle mir deine Anforderungen und ich helfe dir, ein vollstaendiges Anforderungsdokument zu erstellen.',
+    assistantIntro: 'Hallo, ich bin AITC. Stelle direkt eine Frage, fuege Kontext ein oder starte mit einer Vorlage.',
+    composerPlaceholder: 'Stelle AITC eine Frage',
+    footerNotice: 'AITC kann Fehler machen. Bitte pruefe wichtige Informationen.',
+    footerBrand: 'BUME QDM | AI transformation club',
+    recent: 'Neueste',
+    promptModes: 'Dialogstrategie',
+    currentConversation: 'Aktive Konversation',
+    currentConversationEmpty: 'Sobald die Unterhaltung startet, erscheint hier eine Zusammenfassung der aktiven Sitzung.',
+    activeSession: 'Aktives Thema',
+    messageCountLabel: 'Nachrichten',
+  },
+  zh: {
+    heroTag: 'AT&S 需求工作台',
+    heroLead: '',
+    heroAccent: '',
+    heroQuestion: '',
+    assistantIntro: '你好，我是 AIPM。你可以直接提问、粘贴上下文，或选择一个模板开始。',
+    composerPlaceholder: '问AIPM任何问题',
+    footerNotice: 'AITC 可能会出错，请核对重要信息。',
+    footerBrand: 'BUME QDM | AI transformation club',
+    recent: '最近',
+    promptModes: '提问策略',
+    currentConversation: '当前会话',
+    currentConversationEmpty: '系统将自动记录当前对话，并支持会话追溯。',
+    activeSession: '当前主题',
+    messageCountLabel: '消息数',
+  },  ms: {
+    heroTag: 'Ruang kerja keperluan AT&S',
+    heroLead: 'Halo,',
+    heroAccent: 'AI PM',
+    heroQuestion: 'Beritahu keperluan anda dan saya akan bantu melengkapkan dokumen keperluan.',
+    assistantIntro: 'Halo, saya AITC. Tanya terus, tampal konteks, atau mulakan daripada templat.',
+    composerPlaceholder: 'Tanya apa sahaja kepada AITC',
+    footerNotice: 'AITC mungkin membuat kesilapan. Sila semak maklumat penting.',
+    footerBrand: 'BUME QDM | AI transformation club',
+    recent: 'Terkini',
+    promptModes: 'Strategi perbualan',
+    currentConversation: 'Perbualan semasa',
+    currentConversationEmpty: 'Ringkasan sesi aktif akan muncul di sini sebaik sahaja perbualan bermula.',
+    activeSession: 'Topik aktif',
+    messageCountLabel: 'Mesej',
+  },
+} satisfies Record<
+  LanguageCode,
+  {
+    heroTag: string
+    heroLead: string
+    heroAccent: string
+    heroQuestion: string
+    assistantIntro: string
+    composerPlaceholder: string
+    footerNotice: string
+    footerBrand: string
+    recent: string
+    promptModes: string
+    currentConversation: string
+    currentConversationEmpty: string
+    activeSession: string
+    messageCountLabel: string
+  }
+>
+
 const t = computed(() => translations[currentLanguage.value])
+const shellText = computed(() => shellCopy[currentLanguage.value] ?? shellCopy.en)
 const activeSessionSummary = computed(() => sessions.value.find((item) => item.session_id === sessionId.value) || null)
 const activeSessionTitle = computed(() => sessionTitle(activeSessionSummary.value?.title || ''))
 const activeBusinessTemplateName = computed(() => activeSessionSummary.value?.applied_template_name?.trim() || '')
@@ -426,6 +511,56 @@ const promptTemplateOptions = computed<{ value: PromptTemplate; label: string }[
   { value: 'personal_project', label: t.value.personalProjectTemplate },
   { value: 'standard', label: t.value.standardTemplate },
 ])
+const currentLanguageLabel = computed(
+  () => languageOptions.find((option) => option.code === currentLanguage.value)?.label || languageOptions[0].label,
+)
+const templateShelfItems = computed(() => businessTemplates.value.slice(0, 6))
+const recentSessions = computed(() => sessions.value.slice(0, 6))
+const activeMessageCountLabel = computed(() => `${messages.value.length} ${t.value.messagesLabel}`)
+const sessionCountLabel = computed(() => `${sessions.value.length} ${t.value.sessionsLabel}`)
+const templateCountLabel = computed(() => `${businessTemplates.value.length} ${t.value.templatesLabel}`)
+const isChatView = computed(() => currentWorkspaceView.value === 'chat')
+const isTemplateLibraryView = computed(() => currentWorkspaceView.value === 'templates')
+const previewToggleLabel = computed(() => {
+  if (currentLanguage.value === 'zh') {
+    return previewPanelOpen.value ? '收起预览' : '打开预览'
+  }
+  if (currentLanguage.value === 'de') {
+    return previewPanelOpen.value ? 'Vorschau schliessen' : 'Vorschau oeffnen'
+  }
+  if (currentLanguage.value === 'ms') {
+    return previewPanelOpen.value ? 'Tutup pratonton' : 'Buka pratonton'
+  }
+  return previewPanelOpen.value ? 'Hide Preview' : 'Open Preview'
+})
+const previewDialogCopy = computed(() => {
+  if (currentLanguage.value === 'zh') {
+    return {
+      eyebrow: '文档预览',
+      title: '需求文档预览',
+      description: '查看当前结构化需求生成的 PRD 与技术方案草稿。',
+    }
+  }
+  if (currentLanguage.value === 'de') {
+    return {
+      eyebrow: 'Dokumentvorschau',
+      title: 'Anforderungsvorschau',
+      description: 'Sieh dir den aktuellen PRD-Entwurf und den technischen Entwurf aus dem strukturierten Anforderungsmodell an.',
+    }
+  }
+  if (currentLanguage.value === 'ms') {
+    return {
+      eyebrow: 'Pratonton Dokumen',
+      title: 'Pratonton Dokumen Keperluan',
+      description: 'Lihat draf PRD dan draf teknikal yang dijana daripada model keperluan berstruktur semasa.',
+    }
+  }
+  return {
+    eyebrow: 'Document Preview',
+    title: 'Requirement Document Preview',
+    description: 'Review the current PRD draft and technical draft generated from the structured requirement model.',
+  }
+})
 const templateFacetLabels: Record<string, Record<LanguageCode, string>> = {
   business_requirement: {
     en: 'Business Requirement',
@@ -440,21 +575,32 @@ const templateFacetLabels: Record<string, Record<LanguageCode, string>> = {
     ms: 'Pengurusan Kewangan',
   },
 }
-
 function selectLanguage(lang: LanguageCode) {
   currentLanguage.value = lang
+  if (languageMenuRef.value) {
+    languageMenuRef.value.open = false
+  }
 }
 
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
-function toggleHistoryExpanded() {
-  historyExpanded.value = !historyExpanded.value
+function togglePreviewPanel() {
+  previewPanelOpen.value = !previewPanelOpen.value
 }
 
-function toggleTemplateLibraryExpanded() {
-  templateLibraryExpanded.value = !templateLibraryExpanded.value
+function closePreviewPanel() {
+  previewPanelOpen.value = false
+}
+
+function openChatView() {
+  currentWorkspaceView.value = 'chat'
+}
+
+function openTemplateLibraryView() {
+  closePreviewPanel()
+  currentWorkspaceView.value = 'templates'
 }
 
 function clearError() {
@@ -812,7 +958,7 @@ async function ensureBusinessTemplateDetail(templateId: string): Promise<Busines
 function buildDocumentGenerationConfirmMessage(): string {
   const progress = structuredRequirementProgress.value
   if (currentLanguage.value === 'zh') {
-    return `当前收集覆盖率为 ${progress.collectionCoveragePercentage}%，确认完成度为 ${progress.confirmationPercentage}%，生成的文档会带较多假设，是否继续？`
+    return `当前采集覆盖率为 ${progress.collectionCoveragePercentage}%，确认进度为 ${progress.confirmationPercentage}%。现在生成的文档会包含更多假设，仍要继续吗？`
   }
   if (currentLanguage.value === 'de') {
     return `Die Erfassungsquote liegt bei ${progress.collectionCoveragePercentage}% und der Bestaetigungsstand bei ${progress.confirmationPercentage}%. Die erzeugten Dokumente werden mehr Annahmen enthalten. Trotzdem fortfahren?`
@@ -822,7 +968,6 @@ function buildDocumentGenerationConfirmMessage(): string {
   }
   return `Collection coverage is ${progress.collectionCoveragePercentage}% and confirmation progress is ${progress.confirmationPercentage}%. The generated documents will contain more assumptions. Continue anyway?`
 }
-
 async function loadStructuredRequirement(
   targetSessionId: string,
   options: { background?: boolean } = {},
@@ -933,6 +1078,7 @@ async function createSession(options: { templateId?: string } = {}) {
 
   clearError()
   loadingSession.value = true
+  currentWorkspaceView.value = 'chat'
 
   try {
     const data = await apiJson<SessionDetail>('/api/sessions', {
@@ -1016,6 +1162,37 @@ function closeBusinessTemplateDialog() {
   selectedBusinessTemplateId.value = ''
 }
 
+async function launchBusinessTemplateSession(templateId: string, options: { closeDialog?: boolean } = {}) {
+  if (
+    !templateId ||
+    applyingTemplateId.value ||
+    loadingSession.value ||
+    switchingSession.value ||
+    deletingSessionId.value ||
+    messagePipelineActive.value ||
+    generatingDocuments.value
+  ) {
+    return
+  }
+
+  applyingTemplateId.value = templateId
+  templateDialogError.value = ''
+
+  try {
+    const created = await createSession({ templateId })
+    if (created) {
+      currentWorkspaceView.value = 'chat'
+      if (options.closeDialog) {
+        closeBusinessTemplateDialog()
+      }
+    }
+  } catch (error) {
+    templateDialogError.value = formatError(error, t.value.failedToCreate)
+  } finally {
+    applyingTemplateId.value = ''
+  }
+}
+
 async function applyBusinessTemplate() {
   const detail = selectedBusinessTemplate.value
   if (
@@ -1029,20 +1206,7 @@ async function applyBusinessTemplate() {
   ) {
     return
   }
-
-  applyingTemplateId.value = detail.template_id
-  templateDialogError.value = ''
-
-  try {
-    const created = await createSession({ templateId: detail.template_id })
-    if (created) {
-      closeBusinessTemplateDialog()
-    }
-  } catch (error) {
-    templateDialogError.value = formatError(error, t.value.failedToCreate)
-  } finally {
-    applyingTemplateId.value = ''
-  }
+  await launchBusinessTemplateSession(detail.template_id, { closeDialog: true })
 }
 
 async function updatePromptTemplate(template: PromptTemplate) {
@@ -1081,6 +1245,7 @@ async function selectSession(targetSessionId: string) {
   ) {
     return
   }
+  currentWorkspaceView.value = 'chat'
   await loadSession(targetSessionId)
 }
 
@@ -1746,396 +1911,460 @@ watch(currentLanguage, (language, previousLanguage) => {
       </button>
     </div>
 
-    <main class="layout" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'layout-empty-chat': !messages.length }">
-      <aside class="panel sidebar" :class="{ collapsed: sidebarCollapsed }">
-        <div class="sidebar-header">
-          <div class="sidebar-hero">
-            <div class="sidebar-brand">
-              <div class="sidebar-brand-lockup">
-                <div class="sidebar-brand-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="5" y="7" width="14" height="10" rx="2.4"/>
-                    <path d="M12 4v3"/>
-                    <path d="M8 17v2"/>
-                    <path d="M16 17v2"/>
-                    <path d="M3 11h2"/>
-                    <path d="M19 11h2"/>
-                    <path d="M9.25 11h.01"/>
-                    <path d="M14.75 11h.01"/>
-                  </svg>
-                </div>
-                <div class="sidebar-brand-copy">
-                  <h1>{{ t.title }}</h1>
-                  <p class="hero-subtitle">{{ t.subtitle }}</p>
-                </div>
-              </div>
-              <button
-                class="sidebar-toggle"
-                type="button"
-                :title="sidebarToggleAriaLabel"
-                :aria-label="sidebarToggleAriaLabel"
-                :aria-expanded="!sidebarCollapsed"
-                @click="toggleSidebar"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline v-if="!sidebarCollapsed" points="15 18 9 12 15 6"/>
-                  <polyline v-else points="9 18 15 12 9 6"/>
-                </svg>
-              </button>
-            </div>
-            <div class="language-card">
-              <div class="language-card-header">
-                <svg class="language-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M4 5h7"/>
-                  <path d="M7.5 5c0 7.5-3 11.5-5.5 13"/>
-                  <path d="M4.5 11c1.1 1.3 2.5 2.5 4.1 3.4"/>
-                  <path d="M13 7h7"/>
-                  <path d="M16.5 7c0 5.3 2.1 9 4.5 11"/>
-                  <path d="M12.8 14h7.4"/>
-                </svg>
-                <h2>{{ t.languageSection }}</h2>
-              </div>
-              <div class="language-grid">
-                <button
-                  v-for="option in languageOptions"
-                  :key="option.code"
-                  class="language-chip"
-                  type="button"
-                  :class="{ active: currentLanguage === option.code }"
-                  :aria-pressed="currentLanguage === option.code"
-                  @click="selectLanguage(option.code)"
-                >
-                  {{ option.label }}
-                </button>
-              </div>
+    <main class="layout" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+      <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
+        <div class="sidebar-topbar">
+          <div class="sidebar-identity">
+            <button
+              class="sidebar-toggle"
+              type="button"
+              :title="sidebarToggleAriaLabel"
+              :aria-label="sidebarToggleAriaLabel"
+              :aria-expanded="!sidebarCollapsed"
+              @click="toggleSidebar"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+                <line x1="4" y1="7" x2="20" y2="7"/>
+                <line x1="4" y1="12" x2="20" y2="12"/>
+                <line x1="4" y1="17" x2="20" y2="17"/>
+              </svg>
+            </button>
+            <div v-if="!sidebarCollapsed" class="sidebar-appmark">
+              <strong>{{ t.title }}</strong>
+              <span>{{ shellText.heroTag }}</span>
             </div>
           </div>
-          <div class="sidebar-history-head">
-            <div class="sidebar-copy">
-              <h2>{{ t.history }}</h2>
-              <p>{{ loadingHistory ? t.historyLoading : `${sessions.length} ${t.sessionsLabel}` }}</p>
-            </div>
-            <div class="sidebar-section-actions">
-              <button
-                class="sidebar-section-toggle"
-                type="button"
-                :title="historyExpanded ? t.historyCollapse : t.historyExpand"
-                :aria-label="historyExpanded ? t.historyCollapse : t.historyExpand"
-                @click="toggleHistoryExpanded"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline
-                    :points="historyExpanded ? '6 15 12 9 18 15' : '6 9 12 15 18 9'"
-                  />
-                </svg>
-              </button>
-              <button class="btn btn-primary sidebar-new-chat" type="button" :disabled="loadingSession || sending || generatingDocuments || switchingSession || Boolean(deletingSessionId) || Boolean(applyingTemplateId)" @click="createSession()">
-                <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <line x1="12" y1="5" x2="12" y2="19"/>
-                  <line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-                <span class="sidebar-new-chat-label">{{ loadingSession ? t.creating : t.newChat }}</span>
-              </button>
-            </div>
-          </div>
+
         </div>
 
-        <div
-          v-show="!sidebarCollapsed"
-          class="sidebar-body"
-          :class="{
-            'history-collapsed': !historyExpanded,
-            'template-library-collapsed': !templateLibraryExpanded,
-            'sidebar-body-fully-collapsed': !historyExpanded && !templateLibraryExpanded,
-          }"
-        >
-          <div v-show="historyExpanded" class="session-history" :class="{ 'empty': !sessions.length }">
-            <div v-if="loadingHistory && !sessions.length" class="session-history-placeholder">
-              {{ t.historyLoading }}
-            </div>
+        <div v-show="!sidebarCollapsed" class="sidebar-body">
+          <nav class="sidebar-nav">
+            <button type="button" class="sidebar-nav-item" :class="{ active: isChatView }" @click="openChatView">
+              <span class="sidebar-nav-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+              </span>
+              <span class="sidebar-nav-text">
+                <strong>{{ t.conversation }}</strong>
+                <small>{{ activeSessionTitle || t.untitledChat }}</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              class="sidebar-nav-item"
+              :class="{ active: isTemplateLibraryView }"
+              @click="openTemplateLibraryView"
+            >
+              <span class="sidebar-nav-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M4 7h16"/>
+                  <path d="M4 12h16"/>
+                  <path d="M4 17h10"/>
+                </svg>
+              </span>
+              <span class="sidebar-nav-text">
+                <strong>{{ t.templateLibrary }}</strong>
+                <small>{{ templateCountLabel }}</small>
+              </span>
+            </button>
+          </nav>
 
-            <template v-else-if="sessions.length">
-              <div
-                v-for="session in sessions"
-                :key="session.session_id"
-                class="session-card"
-                :class="{ 'active': session.session_id === sessionId }"
-              >
-                <button
-                  class="session-card-main"
-                  type="button"
-                  :disabled="switchingSession || sending || generatingDocuments || Boolean(deletingSessionId)"
-                  @click="selectSession(session.session_id)"
-                  >
-                    <div class="session-card-top">
-                      <span class="session-card-title">{{ sessionTitle(session.title) }}</span>
-                      <span class="session-card-time">{{ formatSessionTime(session.updated_at) }}</span>
-                    </div>
-                    <p class="session-card-preview">{{ sessionPreview(session) }}</p>
-                    <p v-if="session.applied_template_name" class="session-card-template">
-                      {{ t.templateSessionBadge }} · {{ session.applied_template_name }}
-                    </p>
-                  </button>
-
-                <button
-                  class="session-card-delete"
-                  type="button"
-                  :title="t.deleteSession"
-                  :aria-label="t.deleteSession"
-                  :disabled="!canMutateHistory() || deletingSessionId === session.session_id"
-                  @click="deleteSession(session.session_id)"
-                >
-                  <svg class="session-card-delete-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="3 6 5 6 21 6"/>
-                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                    <path d="M10 11v6"/>
-                    <path d="M14 11v6"/>
-                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                  </svg>
-                </button>
-              </div>
-            </template>
-
-            <div v-else class="session-history-placeholder">
-              {{ t.historyEmpty }}
-            </div>
-          </div>
-
-          <div class="template-library">
-            <div class="template-library-head">
-              <div class="sidebar-copy">
+          <div class="sidebar-menu-scroll">
+            <section v-if="false" ref="templateLibrarySectionRef" class="sidebar-block sidebar-template-block">
+              <div class="sidebar-block-head">
                 <h2>{{ t.templateLibrary }}</h2>
-                <p>{{ loadingTemplates ? t.templateLibraryLoading : `${businessTemplates.length} ${t.templatesLabel}` }}</p>
+                <span>{{ loadingTemplates ? t.templateLibraryLoading : templateCountLabel }}</span>
               </div>
-              <div class="sidebar-section-actions">
-                <button
-                  class="sidebar-section-toggle"
-                  type="button"
-                  :title="templateLibraryExpanded ? t.templateLibraryCollapse : t.templateLibraryExpand"
-                  :aria-label="templateLibraryExpanded ? t.templateLibraryCollapse : t.templateLibraryExpand"
-                  @click="toggleTemplateLibraryExpanded"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline
-                      :points="templateLibraryExpanded ? '6 15 12 9 18 15' : '6 9 12 15 18 9'"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
 
-            <div v-show="templateLibraryExpanded" class="template-library-body">
-              <div v-if="loadingTemplates && !businessTemplates.length" class="session-history-placeholder">
+              <div v-if="loadingTemplates && !templateShelfItems.length" class="session-history-placeholder">
                 {{ t.templateLibraryLoading }}
               </div>
-
-              <div v-else-if="businessTemplates.length" class="template-library-list">
+              <div v-else-if="templateShelfItems.length" class="template-library-list">
                 <button
-                  v-for="templateItem in businessTemplates"
+                  v-for="templateItem in templateShelfItems"
                   :key="templateItem.template_id"
                   class="template-library-item"
                   type="button"
                   :disabled="loadingSession || messagePipelineActive || generatingDocuments || Boolean(applyingTemplateId)"
                   @click="openBusinessTemplate(templateItem.template_id)"
                 >
+                  <span class="menu-entry-accent template" aria-hidden="true"></span>
                   <div class="template-library-item-main">
                     <div class="template-library-item-top">
                       <span class="template-library-item-title">{{ templateItem.template_name }}</span>
-                      <span class="template-library-item-count">
-                        {{ templateItem.section_count }} {{ t.templateSectionsShort }}
-                      </span>
+                      <span class="template-library-item-count">{{ templateItem.section_count }}</span>
                     </div>
                     <p class="template-library-item-meta">
                       {{ formatTemplateFacet(templateItem.business_domain || templateItem.template_category) }}
                       <span v-if="templateItem.version"> · v{{ templateItem.version }}</span>
                     </p>
                   </div>
-                  <span class="template-library-item-arrow" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="9 18 15 12 9 6"/>
-                    </svg>
-                  </span>
                 </button>
               </div>
-
               <div v-else class="session-history-placeholder">
                 {{ t.templateLibraryEmpty }}
               </div>
-            </div>
-          </div>
-        </div>
-      </aside>
+            </section>
 
-      <section class="panel chat-panel" :class="{ 'chat-panel-empty': !messages.length }">
-        <div class="chat-workspace">
-          <div class="workspace-stack">
-            <div class="chat-main" :class="{ 'chat-main-empty': !messages.length }">
-              <div class="chat-primary-stage">
-                <div class="panel-header chat-main-header">
-                  <div class="panel-title">
-                    <h2>{{ activeSessionTitle || t.conversation }}</h2>
-                    <span class="message-count">{{ messages.length }} {{ t.messagesLabel }}</span>
-                    <span v-if="activeBusinessTemplateName" class="message-count message-count-template">
-                      {{ activeBusinessTemplateName }}
-                    </span>
-                  </div>
-                  <div v-if="hasSession" class="template-picker">
-                    <div class="template-picker-options">
-                      <button
-                        v-for="option in promptTemplateOptions"
-                        :key="option.value"
-                        class="template-chip"
-                        :class="{ active: sessionPromptTemplate === option.value }"
-                        type="button"
-                        :disabled="!canChangePromptTemplate"
-                        @click="updatePromptTemplate(option.value)"
-                      >
-                        {{ option.label }}
-                      </button>
-                    </div>
-                    <p v-if="templateDrivenSession" class="template-picker-hint">
-                      {{ t.templatePromptManagedHint }}
-                    </p>
-                  </div>
-                </div>
+            <section class="sidebar-block sidebar-history-block">
+              <div class="sidebar-block-head">
+                <h2>{{ shellText.recent }}</h2>
+                <span>{{ loadingHistory ? t.historyLoading : sessionCountLabel }}</span>
+              </div>
 
-                <div class="chat-list" ref="chatList" :class="{ 'empty': !messages.length }">
-                  <div
-                    v-for="(msg, idx) in messages"
-                    :key="`${msg.role}-${idx}`"
-                    class="bubble"
-                    :class="[msg.role, { 'design-doc-bubble': isGeneratedDocumentMessage(msg) }]"
+              <div v-if="loadingHistory && !recentSessions.length" class="session-history-placeholder">
+                {{ t.historyLoading }}
+              </div>
+              <div v-else-if="recentSessions.length" class="session-history-list">
+                <div
+                  v-for="session in recentSessions"
+                  :key="session.session_id"
+                  class="session-card"
+                  :class="{ active: session.session_id === sessionId }"
+                >
+                  <button
+                    class="session-card-main"
+                    type="button"
+                    :disabled="switchingSession || sending || generatingDocuments || Boolean(deletingSessionId)"
+                    @click="selectSession(session.session_id)"
                   >
-                    <div class="message-header">
-                      <span class="role">{{ msg.role === 'user' ? t.you : t.pmAssistant }}</span>
-                      <span class="timestamp">{{ formatMessageTime(msg.createdAt) }}</span>
-                    </div>
-                    <details v-if="msg.role === 'assistant' && msg.thinking" class="think-box" :open="!msg.content">
-                      <summary class="think-box-summary">
-                        <svg class="think-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <circle cx="12" cy="12" r="10"/>
-                          <path d="M12 16v-4"/>
-                          <path d="M12 8h.01"/>
-                        </svg>
-                        {{ t.viewReasoning }}
-                      </summary>
-                      <pre class="think-content">{{ msg.thinking }}</pre>
-                    </details>
-
-                    <div v-if="(sending || generatingDocuments) && msg.role === 'assistant' && !msg.content" class="typing-indicator">
-                      <div class="typing-dot"></div>
-                      <div class="typing-dot"></div>
-                      <div class="typing-dot"></div>
-                    </div>
-                    <div v-else-if="isGeneratedDocumentMessage(msg)" class="design-doc-card">
-                      <div class="design-doc-toolbar">
-                        <span class="design-doc-badge">{{ documentBadgeLabel(msg) }}</span>
+                    <span class="menu-entry-accent recent" aria-hidden="true"></span>
+                    <div class="session-card-copy">
+                      <div class="session-card-top">
+                        <span class="session-card-title">{{ sessionTitle(session.title) }}</span>
+                        <span class="session-card-time">{{ formatSessionTime(session.updated_at) }}</span>
                       </div>
-                      <pre class="content design-doc-content">{{ msg.content }}</pre>
-                      <div v-if="msg.downloadUrl" class="design-doc-footer">
-                        <button
-                          class="btn btn-secondary design-doc-download"
-                          type="button"
-                          @click="triggerDocumentDownload(msg.downloadUrl, msg.downloadFilename)"
-                        >
-                          <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M12 3v12"/>
-                            <path d="M7 10l5 5 5-5"/>
-                            <path d="M5 21h14"/>
-                          </svg>
-                          {{ t.downloadMarkdown }}
-                        </button>
-                      </div>
+                      <p class="session-card-preview">{{ sessionPreview(session) }}</p>
+                      <p v-if="session.applied_template_name" class="session-card-template">
+                        {{ session.applied_template_name }}
+                      </p>
                     </div>
-                    <p v-else class="content">{{ msg.content }}</p>
-                  </div>
+                  </button>
 
-                  <div v-if="!messages.length" class="empty-state">
-                    <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  <button
+                    class="session-card-delete"
+                    type="button"
+                    :title="t.deleteSession"
+                    :aria-label="t.deleteSession"
+                    :disabled="!canMutateHistory() || deletingSessionId === session.session_id"
+                    @click="deleteSession(session.session_id)"
+                  >
+                    <svg class="session-card-delete-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                      <path d="M10 11v6"/>
+                      <path d="M14 11v6"/>
+                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
                     </svg>
-                    <h3>{{ t.startConversation }}</h3>
-                    <p>{{ t.startConversationDesc }}</p>
-                  </div>
+                  </button>
                 </div>
+              </div>
+              <div v-else class="session-history-placeholder">
+                {{ t.historyEmpty }}
+              </div>
+            </section>
+          </div>
+        </div>      </aside>
 
-                <form class="composer" @submit.prevent="sendMessage">
-                  <div class="composer-input-wrapper">
-                    <textarea
-                      v-model="inputText"
-                      rows="1"
-                      :placeholder="t.describeRequirements"
-                      :disabled="sending || generatingDocuments || switchingSession"
-                      class="composer-input"
-                      @keydown.enter.exact.prevent="sendMessage"
-                      @keydown.enter.shift.prevent="insertLineBreak"
-                      @input="autoResizeTextarea"
-                      ref="textareaRef"
-                    />
-                    <div class="composer-actions">
-                      <button
-                        class="btn btn-icon"
-                        type="button"
-                        :class="{ 'recording': recording }"
-                        @click="recording ? stopRecording() : startRecording()"
-                        :title="recording ? t.stopRecording : t.startRecording"
-                        :disabled="sending || generatingDocuments || switchingSession"
-                      >
-                        <svg v-if="!recording" class="icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                          <line x1="12" y1="19" x2="12" y2="23"/>
-                          <line x1="8" y1="23" x2="16" y2="23"/>
-                        </svg>
-                        <svg v-else class="icon-stop" viewBox="0 0 24 24" fill="currentColor">
-                          <rect x="6" y="6" width="12" height="12" rx="2"/>
-                        </svg>
-                      </button>
-                      <button class="btn btn-primary" type="submit" :disabled="!inputText.trim() || sending || generatingDocuments || switchingSession">
-                        <svg v-if="!sending" class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <line x1="22" y1="2" x2="11" y2="13"/>
-                          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                        </svg>
-                        {{ sending ? t.sending : t.send }}
-                      </button>
-                    </div>
-                  </div>
-                </form>
+      <section class="main-shell">
+        <header class="main-topbar">
+          <div class="ats-lockup" aria-label="AT&S AITC">
+            <span class="ats-lockup-segment dark">AT&amp;S</span>
+            <span class="ats-lockup-segment light">AITC</span>
+          </div>
+
+          <div class="main-topbar-actions">
+            <details ref="languageMenuRef" class="language-switcher">
+              <summary>
+                <span class="language-switcher-label">{{ t.languageSection }}</span>
+                <span class="language-switcher-value">{{ currentLanguageLabel }}</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </summary>
+
+              <div class="language-switcher-menu">
+                <button
+                  v-for="option in languageOptions"
+                  :key="option.code"
+                  type="button"
+                  class="language-switcher-option"
+                  :class="{ active: currentLanguage === option.code }"
+                  @click="selectLanguage(option.code)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </details>
+
+            <button class="profile-badge" type="button" aria-label="profile">
+              D
+            </button>
+          </div>
+        </header>
+
+        <div v-if="isChatView" class="main-stage">
+          <section class="conversation-shell" :class="{ 'has-messages': messages.length > 0 }">
+            <div v-if="!messages.length" class="welcome-stage">
+              <div class="welcome-copy">
+                <p class="welcome-kicker">{{ shellText.heroTag }}</p>
+              </div>
+
+              <div class="assistant-prompt">
+                <span class="assistant-prompt-badge">AI</span>
+                <p>{{ shellText.assistantIntro }}</p>
               </div>
             </div>
 
-            <div class="chat-preview-stage">
-              <RequirementMarkdownPreview
+            <div v-else class="chat-stream-shell">
+              <div class="conversation-meta">
+                <div class="conversation-title-wrap">
+                  <h2>{{ activeSessionTitle || t.conversation }}</h2>
+                  <span class="conversation-chip">{{ activeMessageCountLabel }}</span>
+                  <span v-if="activeBusinessTemplateName" class="conversation-chip accent">
+                    {{ activeBusinessTemplateName }}
+                  </span>
+                </div>
+                <button
+                  class="conversation-new-chat"
+                  type="button"
+                  :disabled="loadingSession || sending || generatingDocuments || switchingSession || Boolean(deletingSessionId) || Boolean(applyingTemplateId)"
+                  @click="createSession()"
+                >
+                  <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                  <span>{{ loadingSession ? t.creating : t.newChat }}</span>
+                </button>
+              </div>
+
+              <div class="chat-list" ref="chatList">
+                <div
+                  v-for="(msg, idx) in messages"
+                  :key="`${msg.role}-${idx}`"
+                  class="bubble"
+                  :class="[msg.role, { 'design-doc-bubble': isGeneratedDocumentMessage(msg) }]"
+                >
+                  <div class="message-header">
+                    <span class="role">{{ msg.role === 'user' ? t.you : t.pmAssistant }}</span>
+                    <span class="timestamp">{{ formatMessageTime(msg.createdAt) }}</span>
+                  </div>
+
+                  <details v-if="msg.role === 'assistant' && msg.thinking" class="think-box" :open="!msg.content">
+                    <summary class="think-box-summary">
+                      <svg class="think-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 16v-4"/>
+                        <path d="M12 8h.01"/>
+                      </svg>
+                      {{ t.viewReasoning }}
+                    </summary>
+                    <pre class="think-content">{{ msg.thinking }}</pre>
+                  </details>
+
+                  <div v-if="(sending || generatingDocuments) && msg.role === 'assistant' && !msg.content" class="typing-indicator">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                  </div>
+                  <div v-else-if="isGeneratedDocumentMessage(msg)" class="design-doc-card">
+                    <div class="design-doc-toolbar">
+                      <span class="design-doc-badge">{{ documentBadgeLabel(msg) }}</span>
+                    </div>
+                    <pre class="content design-doc-content">{{ msg.content }}</pre>
+                    <div v-if="msg.downloadUrl" class="design-doc-footer">
+                      <button
+                        class="btn btn-secondary design-doc-download"
+                        type="button"
+                        @click="triggerDocumentDownload(msg.downloadUrl, msg.downloadFilename)"
+                      >
+                        <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M12 3v12"/>
+                          <path d="M7 10l5 5 5-5"/>
+                          <path d="M5 21h14"/>
+                        </svg>
+                        {{ t.downloadMarkdown }}
+                      </button>
+                    </div>
+                  </div>
+                  <p v-else class="content">{{ msg.content }}</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="composer-zone">
+              <div v-if="hasSession" class="composer-context">
+                <div class="composer-context-row">
+                  <div class="template-picker-options">
+                    <button
+                      v-for="option in promptTemplateOptions"
+                      :key="option.value"
+                      class="template-chip"
+                      :class="{ active: sessionPromptTemplate === option.value }"
+                      type="button"
+                      :disabled="!canChangePromptTemplate"
+                      @click="updatePromptTemplate(option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                  <button
+                    class="preview-toggle-btn"
+                    type="button"
+                    :aria-expanded="previewPanelOpen"
+                    @click="togglePreviewPanel"
+                  >
+                    {{ previewToggleLabel }}
+                  </button>
+                </div>
+                <p v-if="templateDrivenSession" class="template-picker-hint">
+                  {{ t.templatePromptManagedHint }}
+                </p>
+              </div>
+
+              <form class="composer-card" @submit.prevent="sendMessage">
+                <span class="composer-add" aria-hidden="true">+</span>
+                <textarea
+                  v-model="inputText"
+                  rows="1"
+                  :placeholder="shellText.composerPlaceholder"
+                  :disabled="sending || generatingDocuments || switchingSession"
+                  class="composer-input"
+                  @keydown.enter.exact.prevent="sendMessage"
+                  @keydown.enter.shift.prevent="insertLineBreak"
+                  @input="autoResizeTextarea"
+                  ref="textareaRef"
+                />
+
+                <div class="composer-actions">
+                  <button
+                    class="btn btn-icon composer-mic"
+                    type="button"
+                    :class="{ recording: recording }"
+                    :title="recording ? t.stopRecording : t.startRecording"
+                    :disabled="sending || generatingDocuments || switchingSession"
+                    @click="recording ? stopRecording() : startRecording()"
+                  >
+                    <svg v-if="!recording" class="icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                      <line x1="12" y1="19" x2="12" y2="23"/>
+                      <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                    <svg v-else class="icon-stop" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="6" width="12" height="12" rx="2"/>
+                    </svg>
+                  </button>
+
+                  <button class="composer-send" type="submit" :disabled="!inputText.trim() || sending || generatingDocuments || switchingSession">
+                    <svg v-if="!sending" class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                      <path d="M12 5v14"/>
+                      <path d="M6.5 10.5 12 5l5.5 5.5"/>
+                    </svg>
+                    <span v-else>{{ t.sending }}</span>
+                  </button>
+                </div>
+              </form>
+
+              <div class="composer-footnote">
+                <span>{{ shellText.footerNotice }}</span>
+                <span>{{ shellText.footerBrand }}</span>
+              </div>
+            </div>
+          </section>
+
+          <aside class="workspace-side">
+            <div class="workspace-side-scroll">
+              <StructuredRequirementPanel
                 :language="currentLanguage"
                 :model="structuredRequirementModel"
                 :loading="loadingStructuredRequirement"
                 :syncing="syncingStructuredRequirement"
+                :generating-documents="generatingDocuments"
+                :opening-go-coding="openingGoCoding"
+                :generation-disabled="messagePipelineActive || switchingSession || !hasSession"
+                :has-prd-document="Boolean(latestPrdDocument)"
+                :has-design-document="Boolean(latestDesignDocument)"
                 :error="structuredRequirementError"
+                @generate-documents="generateDocuments"
+                @download-document="downloadLatestGeneratedDocument"
+                @go-coding="openGoCoding"
               />
             </div>
-          </div>
+          </aside>
+        </div>
+
+        <div v-else class="main-stage template-stage">
+          <section class="template-page-shell">
+            <header class="template-page-hero">
+              <div class="template-page-hero-copy">
+                <p class="template-page-kicker">{{ templateCountLabel }}</p>
+                <h1>{{ t.templateLibrary }}</h1>
+                <p>{{ t.templateLibraryHint }}</p>
+              </div>
+            </header>
+
+            <div v-if="loadingTemplates" class="template-page-state">
+              {{ t.templateLibraryLoading }}
+            </div>
+            <div v-else-if="businessTemplates.length" class="template-page-grid">
+              <article v-for="templateItem in businessTemplates" :key="templateItem.template_id" class="template-page-card">
+                <div class="template-page-card-head">
+                  <div class="template-page-card-heading">
+                    <p class="template-page-card-eyebrow">
+                      {{ formatTemplateFacet(templateItem.business_domain || templateItem.template_category) }}
+                    </p>
+                    <h3>{{ templateItem.template_name }}</h3>
+                  </div>
+                  <span class="template-page-card-count">{{ templateItem.section_count }} {{ t.templateSectionsShort }}</span>
+                </div>
+
+                <p class="template-page-card-description">
+                  {{ templateItem.description || t.templateLibraryHint }}
+                </p>
+
+                <div v-if="templateItem.tags.length" class="template-page-tags">
+                  <span v-for="tag in templateItem.tags.slice(0, 4)" :key="tag" class="template-page-tag">{{ tag }}</span>
+                </div>
+
+                <div v-if="templateItem.section_titles.length" class="template-page-sections">
+                  <span
+                    v-for="sectionTitle in templateItem.section_titles.slice(0, 4)"
+                    :key="sectionTitle"
+                    class="template-page-section-pill"
+                  >
+                    {{ sectionTitle }}
+                  </span>
+                </div>
+
+                <div class="template-page-card-actions">
+                  <button
+                    class="btn btn-secondary template-page-detail-btn"
+                    type="button"
+                    :disabled="loadingSession || messagePipelineActive || generatingDocuments || Boolean(applyingTemplateId)"
+                    @click="openBusinessTemplate(templateItem.template_id)"
+                  >
+                    {{ t.templateOpen }}
+                  </button>
+                  <button
+                    class="btn template-page-apply-btn"
+                    type="button"
+                    :disabled="loadingSession || messagePipelineActive || generatingDocuments || Boolean(applyingTemplateId)"
+                    @click="launchBusinessTemplateSession(templateItem.template_id)"
+                  >
+                    {{ applyingTemplateId === templateItem.template_id ? t.creating : t.templateApply }}
+                  </button>
+                </div>
+              </article>
+            </div>
+            <div v-else class="template-page-state">
+              {{ t.templateLibraryEmpty }}
+            </div>
+          </section>
         </div>
       </section>
-
-      <aside class="workspace-side">
-        <div class="workspace-requirement-stage">
-          <StructuredRequirementPanel
-            :language="currentLanguage"
-            :model="structuredRequirementModel"
-            :loading="loadingStructuredRequirement"
-            :syncing="syncingStructuredRequirement"
-            :generating-documents="generatingDocuments"
-            :opening-go-coding="openingGoCoding"
-            :generation-disabled="messagePipelineActive || switchingSession || !hasSession"
-            :has-prd-document="Boolean(latestPrdDocument)"
-            :has-design-document="Boolean(latestDesignDocument)"
-            :error="structuredRequirementError"
-            @generate-documents="generateDocuments"
-            @download-document="downloadLatestGeneratedDocument"
-            @go-coding="openGoCoding"
-          />
-        </div>
-      </aside>
     </main>
 
     <div v-if="templateDialogOpen" class="template-dialog-backdrop" @click.self="closeBusinessTemplateDialog">
@@ -2202,386 +2431,193 @@ watch(currentLanguage, (language, previousLanguage) => {
         </div>
       </div>
     </div>
+
+    <div v-if="previewPanelOpen" class="template-dialog-backdrop" @click.self="closePreviewPanel">
+      <div class="template-dialog preview-dialog" role="dialog" aria-modal="true" :aria-label="previewDialogCopy.title">
+        <div class="template-dialog-head">
+          <div>
+            <p class="template-dialog-eyebrow">{{ previewDialogCopy.eyebrow }}</p>
+            <h3>{{ previewDialogCopy.title }}</h3>
+          </div>
+          <button class="template-dialog-close" type="button" :aria-label="t.close" @click="closePreviewPanel">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="template-dialog-body preview-dialog-body">
+          <p class="preview-dialog-description">{{ previewDialogCopy.description }}</p>
+          <RequirementMarkdownPreview
+            class="preview-dialog-panel"
+            :language="currentLanguage"
+            :model="structuredRequirementModel"
+            :loading="loadingStructuredRequirement"
+            :syncing="syncingStructuredRequirement"
+            :error="structuredRequirementError"
+          />
+        </div>
+
+        <div class="template-dialog-actions">
+          <button class="btn btn-secondary" type="button" @click="closePreviewPanel">
+            {{ t.close }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style>
 :root {
-  --bg-0: #f4f7f0;
-  --bg-1: #fdfcf9;
-  --ink: #172422;
-  --muted: #50615b;
-  --line: #d8e1dc;
-  --panel: #ffffff;
-  --accent: #0e7c66;
-  --accent-strong: #085746;
-  --warn: #a32828;
-  --radius: 14px;
-  --shadow: 0 12px 30px rgba(13, 35, 28, 0.08);
-  --font: 'Space Grotesk', 'Noto Sans SC', 'Segoe UI', sans-serif;
+  --page-bg: #eef4fd;
+  --panel: rgba(255, 255, 255, 0.88);
+  --panel-strong: #ffffff;
+  --sidebar-bg: #edf3fc;
+  --ink: #1d2a44;
+  --muted: #6e7c94;
+  --line: #dce5f3;
+  --accent: #4175ea;
+  --accent-strong: #2e60cf;
+  --accent-soft: #dfe9ff;
+  --brand-dark: #214f88;
+  --brand-light: #62b1de;
+  --warn: #b54848;
+  --radius-lg: 28px;
+  --radius-md: 20px;
+  --radius-sm: 14px;
+  --shadow: 0 24px 60px rgba(74, 104, 157, 0.16);
+  --shadow-soft: 0 12px 30px rgba(74, 104, 157, 0.1);
+  --font: 'Avenir Next', 'PingFang SC', 'Noto Sans SC', 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
 
   font-family: var(--font);
   color: var(--ink);
-  background: radial-gradient(circle at 0% 0%, #e7f4ee, var(--bg-0) 45%),
-    linear-gradient(180deg, var(--bg-1), var(--bg-0));
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.96) 0%, rgba(245, 248, 255, 0.98) 42%, rgba(237, 244, 253, 1) 100%),
+    linear-gradient(180deg, #f7faff 0%, #eef4fd 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-* {
-  box-sizing: border-box;
+html,
+body,
+#app {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  min-height: 100vh;
+  background: var(--page-bg);
 }
 
-#app {
-  min-height: 100vh;
-}
-
-input,
-textarea,
-button {
-  font: inherit;
+* {
+  box-sizing: border-box;
 }
 
 .app-shell {
-  --shell-padding: clamp(12px, 1.6vw, 18px);
-  --workspace-gap: 16px;
-  --workspace-column-height: 200dvh;
-  width: 100%;
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: var(--shell-padding);
   min-height: 100dvh;
-  display: grid;
-  grid-template-rows: auto;
-  gap: var(--workspace-gap);
-  overflow: visible;
-}
-
-.topbar,
-.header-content,
-.header-actions {
-  display: none;
+  height: 100dvh;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
 }
 
 .error-banner {
   display: flex;
   align-items: center;
   gap: 12px;
-  border: 1px solid #efb7b7;
-  background: #fff1f1;
-  color: var(--warn);
-  border-radius: 12px;
   padding: 12px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid #f0c6c6;
+  background: #fff4f4;
+  color: #9a3434;
+  box-shadow: var(--shadow-soft);
   cursor: pointer;
-  transition: all 0.2s ease;
 }
 
-.error-banner:hover {
-  background: #ffe8e8;
-}
-
-.error-icon {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-}
-
-.error-banner span {
-  flex: 1;
-  font-size: 0.9rem;
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  color: var(--warn);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
+.error-icon,
 .close-btn svg {
   width: 16px;
   height: 16px;
 }
 
-.layout {
-  display: flex;
-  gap: var(--workspace-gap);
-  min-height: 0;
-  overflow: visible;
-  align-items: stretch;
+.close-btn {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.78;
+  cursor: pointer;
 }
 
-.layout.layout-empty-chat {
-  align-items: stretch;
+.layout {
+  flex: 1 1 auto;
+  height: 100%;
+  width: min(100%, 1760px);
+  margin: 0 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 292px minmax(0, 1fr);
+  gap: 20px;
 }
 
 .layout.sidebar-collapsed {
-  align-items: stretch;
-}
-
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  box-shadow: var(--shadow);
-  min-height: 0;
-  overflow: hidden;
+  grid-template-columns: 92px minmax(0, 1fr);
 }
 
 .sidebar {
-  position: relative;
-  flex: 1 1 0;
-  height: var(--workspace-column-height);
-  max-height: none;
-  padding: 18px;
-  display: grid;
-  grid-template-rows: auto 1fr;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   gap: 18px;
-  transition: padding 0.24s ease;
+  padding: 18px;
+  border-radius: 0;
+  background: linear-gradient(180deg, rgba(237, 243, 252, 0.98) 0%, rgba(232, 240, 252, 0.98) 100%);
+  border: 0;
+  box-shadow: none;
 }
 
 .sidebar.collapsed {
-  flex: 0 0 92px;
   padding: 18px 12px;
-  grid-template-rows: auto;
 }
 
-.sidebar-header {
-  display: grid;
-  gap: 14px;
-}
-
-.sidebar-hero {
-  display: grid;
-  gap: 18px;
-}
-
-.sidebar-brand-lockup {
+.sidebar-topbar,
+.sidebar-identity {
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  min-width: 0;
-}
-
-.sidebar-brand-icon {
-  width: 64px;
-  height: 64px;
-  border-radius: 18px;
-  background: #1b2b25;
-  color: #fff;
-  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 14px 24px rgba(27, 43, 37, 0.16);
-}
-
-.sidebar-brand-icon svg {
-  width: 30px;
-  height: 30px;
-}
-
-.sidebar-brand {
-  display: flex;
-  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.sidebar-brand-copy {
-  min-width: 0;
+.sidebar-identity {
+  justify-content: flex-start;
 }
 
-.sidebar-brand-copy h1 {
-  margin: 2px 0 0;
-  font-size: clamp(1.95rem, 2.2vw, 2.45rem);
-  line-height: 1.02;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-}
-
-.hero-subtitle {
-  margin: 8px 0 0;
-  color: #667871;
-  font-size: 0.98rem;
-  line-height: 1.35;
-}
-
-.language-card {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid #d9e2de;
-  border-radius: 16px;
-  background: #fff;
-  box-shadow: 0 8px 18px rgba(13, 35, 28, 0.05);
-}
-
-.language-card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.language-card-header h2 {
-  margin: 0;
-  font-size: 0.92rem;
-  font-weight: 700;
-}
-
-.language-card-icon {
-  width: 18px;
-  height: 18px;
-  color: #2c3b36;
-  flex-shrink: 0;
-}
-
-.language-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.language-chip {
-  min-height: 44px;
-  padding: 8px 10px;
-  border: 1px solid #d6dfdb;
-  border-radius: 12px;
-  background: #fff;
-  color: var(--ink);
-  font-size: 0.82rem;
-  font-weight: 700;
-  line-height: 1.2;
-  text-align: center;
+.sidebar-toggle,
+.profile-badge,
+.template-dialog-close,
+.session-card-delete {
+  border: 0;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
-}
-
-.language-chip:hover {
-  border-color: #b7c6bf;
-  box-shadow: 0 8px 16px rgba(13, 35, 28, 0.08);
-  transform: translateY(-1px);
-}
-
-.language-chip.active {
-  background: #1b2b25;
-  border-color: #1b2b25;
-  color: #fff;
-}
-
-.sidebar-history-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  column-gap: 12px;
-  padding: 2px 2px 0;
-}
-
-.sidebar-section-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.sidebar-copy {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.sidebar-copy h2 {
-  margin: 0;
-  font-size: 1rem;
-  line-height: 1.2;
-}
-
-.sidebar-copy p {
-  width: fit-content;
-  margin: 0;
-  padding: 5px 10px;
-  border-radius: 999px;
-  border: 1px solid #e3ebe7;
-  background: #f7fbf9;
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.sidebar-new-chat {
-  width: auto;
-  min-width: 0;
-  justify-content: center;
-  padding-inline: 14px;
-  border-radius: 14px;
-  box-shadow: 0 10px 18px rgba(14, 124, 102, 0.14);
-}
-
-.sidebar-section-toggle {
-  width: 40px;
-  height: 40px;
-  border: 1px solid #d9e2de;
-  border-radius: 12px;
-  background: #fff;
-  color: var(--muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
-}
-
-.sidebar-section-toggle:hover {
-  border-color: #b8d9cf;
-  color: var(--accent);
-  background: #eef7f3;
-}
-
-.sidebar-section-toggle svg {
-  width: 18px;
-  height: 18px;
-}
-
-.sidebar-new-chat-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .sidebar-toggle {
   width: 40px;
   height: 40px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #f6faf8;
-  color: var(--muted);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #6b7b97;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
-}
-
-.sidebar-toggle:hover {
-  background: #e8f5ee;
-  border-color: #b8d9cf;
-  color: var(--accent);
-  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px rgba(220, 229, 243, 0.88);
 }
 
 .sidebar-toggle svg {
@@ -2589,750 +2625,910 @@ button {
   height: 18px;
 }
 
-.sidebar.collapsed .sidebar-header {
-  justify-items: center;
+.sidebar-appmark {
+  display: grid;
+  gap: 2px;
 }
 
-.sidebar.collapsed .sidebar-hero {
-  width: 100%;
+.sidebar-appmark strong {
+  font-size: 1.12rem;
+  letter-spacing: -0.02em;
 }
 
-.sidebar.collapsed .sidebar-brand {
-  width: 100%;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 10px;
+.sidebar-appmark span {
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
-.sidebar.collapsed .sidebar-brand-lockup {
-  gap: 0;
-  justify-content: center;
+.conversation-new-chat:hover:not(:disabled),
+.btn:hover:not(:disabled),
+.composer-send:hover:not(:disabled) {
+  transform: translateY(-1px);
 }
 
-.sidebar.collapsed .sidebar-brand-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
-}
-
-.sidebar.collapsed .sidebar-brand-copy,
-.sidebar.collapsed .sidebar-copy,
-.sidebar.collapsed .language-card {
-  display: none;
-}
-
-.sidebar.collapsed .sidebar-history-head {
-  width: 100%;
-  justify-items: center;
-}
-
-.sidebar.collapsed .sidebar-section-toggle {
-  display: none;
-}
-
-.sidebar.collapsed .sidebar-new-chat {
-  width: 48px;
-  min-width: 48px;
-  height: 48px;
-  padding: 0;
-}
-
-.sidebar.collapsed .sidebar-new-chat-label {
-  display: none;
+.conversation-new-chat:disabled,
+.btn:disabled,
+.composer-send:disabled,
+.template-chip:disabled,
+.template-library-item:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .sidebar-body {
   min-height: 0;
-  overflow: hidden;
   display: grid;
-  grid-template-rows: minmax(260px, 0.96fr) minmax(280px, 1.04fr);
-  gap: 16px;
-}
-
-.sidebar-body.history-collapsed {
   grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
 }
 
-.sidebar-body.template-library-collapsed {
-  grid-template-rows: minmax(0, 1fr) auto;
+.sidebar-nav {
+  display: grid;
+  gap: 8px;
 }
 
-.sidebar-body.history-collapsed.template-library-collapsed,
-.sidebar-body.sidebar-body-fully-collapsed {
-  grid-template-rows: auto auto;
+.sidebar-nav-item {
+  min-height: 56px;
+  border: 0;
+  border-radius: 16px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.55);
+  color: #50637e;
+  text-align: left;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.session-history,
-.template-library {
-  min-height: 0;
-  overflow: auto;
-  padding-right: 4px;
-  scrollbar-width: none;
-  scrollbar-color: transparent transparent;
-  scrollbar-gutter: stable;
+.sidebar-nav-item:hover {
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--ink);
 }
 
-.session-history::-webkit-scrollbar,
-.template-library::-webkit-scrollbar {
-  width: 0;
+.sidebar-nav-item.active {
+  background: linear-gradient(90deg, #d8e7ff 0%, #c7dcff 100%);
+  color: #295bbc;
+  box-shadow: none;
 }
 
-.sidebar:hover .session-history,
-.sidebar:hover .template-library {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(109, 137, 128, 0.82) transparent;
-}
-
-.sidebar:hover .session-history::-webkit-scrollbar,
-.sidebar:hover .template-library::-webkit-scrollbar {
-  width: 6px;
-}
-
-.sidebar:hover .session-history::-webkit-scrollbar-track,
-.sidebar:hover .template-library::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.sidebar:hover .session-history::-webkit-scrollbar-thumb,
-.sidebar:hover .template-library::-webkit-scrollbar-thumb {
-  background: rgba(109, 137, 128, 0.82);
-  border-radius: 999px;
-}
-
-.sidebar:hover .session-history::-webkit-scrollbar-thumb:hover,
-.sidebar:hover .template-library::-webkit-scrollbar-thumb:hover {
-  background: rgba(76, 104, 96, 0.92);
-}
-
-.session-history {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px 0 0;
-  border-top: 1px solid #ecf2ef;
-}
-
-.session-history.empty {
+.sidebar-nav-icon {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
 }
 
-.session-history-placeholder {
-  border: 1px dashed var(--line);
-  border-radius: 14px;
-  padding: 18px 16px;
-  color: var(--muted);
-  background: #fcfffd;
-  text-align: center;
-  font-size: 0.9rem;
+.sidebar-nav-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
-.session-card {
-  width: 100%;
+.sidebar-nav-text {
+  min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 0;
-  color: var(--ink);
-  transition: none;
+  gap: 3px;
 }
 
-.session-card + .session-card {
-  padding-top: 6px;
-  border-top: 1px solid #e3ece7;
-}
-
-.session-card-main {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  padding: 13px 14px;
-  border: 1px solid transparent;
-  border-radius: 16px;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  display: block;
-  position: relative;
-  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.session-card-main:hover {
-  background: #f8fbfa;
-  border-color: #d8e5df;
-}
-
-.session-card.active .session-card-main {
-  background: linear-gradient(180deg, #f5fbf8 0%, #edf7f2 100%);
-  border-color: #9fc6b8;
-  box-shadow:
-    0 0 0 1px rgba(14, 124, 102, 0.1),
-    0 10px 18px rgba(14, 124, 102, 0.08);
-}
-
-.session-card-main:disabled,
-.session-card-delete:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.session-card-top {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  justify-content: space-between;
-}
-
-.session-card-title {
-  font-weight: 600;
+.sidebar-nav-text strong {
   font-size: 0.92rem;
-  line-height: 1.3;
-  color: var(--ink);
-  flex: 1;
+  font-weight: 800;
+}
+
+.sidebar-nav-text small {
+  display: block;
   min-width: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.3;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
 }
 
-.session-card.active .session-card-title {
-  color: #0b5c4a;
+.sidebar-nav-item.active .sidebar-nav-text small {
+  color: #4a71c5;
 }
 
-.session-card-time {
-  color: var(--muted);
-  font-size: 0.75rem;
-  white-space: nowrap;
-  flex-shrink: 0;
+.sidebar-menu-scroll {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding-right: 4px;
 }
 
-.session-card.active .session-card-time {
-  color: #356c60;
-  font-weight: 600;
+.sidebar-block {
+  min-height: 0;
+  display: grid;
+  gap: 10px;
 }
 
-.session-card-preview {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.sidebar-template-block {
+  align-content: start;
 }
 
-.session-card.active .session-card-preview {
-  color: #4b675f;
+.sidebar-history-block {
+  min-height: 0;
 }
 
-.session-card-template {
-  margin: 8px 0 0;
-  color: #2d6a59;
-  font-size: 0.74rem;
-  font-weight: 700;
-}
-
-.session-card-delete {
-  width: 32px;
-  height: 32px;
-  border: 1px solid #e1ebe6;
-  border-radius: 10px;
-  background: #fff;
-  color: var(--muted);
+.sidebar-block-head {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
-  opacity: 0.8;
-  margin-top: 0;
-  box-shadow: 0 1px 2px rgba(13, 35, 28, 0.04);
-}
-
-.session-card-delete:hover {
-  color: var(--warn);
-  background: #fff1f1;
-  border-color: #efb7b7;
-  opacity: 1;
-}
-
-.session-card-delete-icon {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-}
-
-.session-card.active .session-card-delete {
-  background: #f3fbf7;
-  border-color: #cfe1d9;
-}
-
-.template-library {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  align-items: baseline;
+  justify-content: space-between;
   gap: 12px;
-  padding: 14px 0 0;
-  border-top: 1px solid #ecf2ef;
-  align-content: start;
+  padding: 0 6px;
 }
 
-.template-library-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  column-gap: 12px;
-  padding: 0 2px 8px;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.94) 84%, rgba(255, 255, 255, 0) 100%);
-  backdrop-filter: blur(8px);
+.sidebar-block-head h2 {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b7b97;
 }
 
-.template-library-body {
+.sidebar-block-head span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.template-library-list,
+.session-history-list {
   min-height: 0;
   display: grid;
+  gap: 6px;
 }
 
-.template-library-list {
-  min-height: 0;
-  display: grid;
-  align-content: start;
-  gap: 0;
-  padding-bottom: 4px;
+.session-history-list {
+  overflow: visible;
+  padding-right: 0;
+}
+
+.session-history-placeholder {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.42);
+  color: var(--muted);
+  line-height: 1.5;
+  font-size: 0.78rem;
+}
+
+.template-library-item,
+.session-card {
+  width: 100%;
+  border-radius: 16px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
 }
 
 .template-library-item {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 10px;
-  border: 1px solid transparent;
-  border-radius: 14px;
-  background: transparent;
+  padding: 10px 12px;
   text-align: left;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  transition: background 0.2s ease, color 0.2s ease;
+  border-radius: 14px;
 }
 
-.template-library-item + .template-library-item {
-  border-top: 1px solid #e3ece7;
-  border-radius: 0;
-}
-
-.template-library-item:hover {
-  background: #f8fbfa;
-  border-color: #d8e5df;
-}
-
-.template-library-item:focus-visible {
-  outline: none;
-  border-color: #8ec7b5;
-  box-shadow: 0 0 0 3px rgba(14, 124, 102, 0.12);
-}
-
-.template-library-item:disabled {
-  opacity: 0.65;
-  cursor: not-allowed;
+.template-library-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .template-library-item-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.template-library-item-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.template-library-item-title,
+.session-card-title {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.template-library-item-title {
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  font-size: 0.88rem;
+}
+
+.template-library-item-count,
+.session-card-time {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.template-library-item-meta,
+.session-card-preview {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.session-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 0;
+  align-items: start;
+  transition: background 0.2s ease, color 0.2s ease;
+  border-radius: 14px;
+}
+
+.session-card.active {
+  background: linear-gradient(90deg, rgba(216, 231, 255, 0.85) 0%, rgba(199, 220, 255, 0.78) 100%);
+}
+
+.session-card-main {
+  border: 0;
+  background: transparent;
+  padding: 10px 10px 10px 12px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.session-card-copy {
   min-width: 0;
   display: grid;
   gap: 4px;
 }
 
-.template-library-item-top {
+.session-card-top {
   display: flex;
-  align-items: center;
+  gap: 8px;
   justify-content: space-between;
-  gap: 10px;
 }
 
-.template-library-item-title {
+.session-card-title {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.9rem;
-  font-weight: 700;
+  font-size: 0.86rem;
   line-height: 1.3;
-  color: var(--ink);
-}
-
-.template-library-item-count {
-  color: #2d6a59;
-  font-size: 0.73rem;
-  font-weight: 700;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.template-library-item-meta {
-  margin: 0;
-  color: #5a6d66;
-  font-size: 0.76rem;
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
+  text-overflow: ellipsis;
   overflow: hidden;
+  white-space: nowrap;
 }
 
-.template-library-item-arrow {
-  color: #6e837b;
+.session-card-template {
+  margin: 2px 0 0;
+  color: #295bbc;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.session-card-delete {
+  width: 28px;
+  height: 28px;
+  margin: 8px 8px 0 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-}
-
-.template-library-item:hover .template-library-item-arrow {
-  color: #0f715d;
-}
-
-.template-library-item-arrow svg {
-  width: 16px;
-  height: 16px;
-}
-
-@media (hover: hover) {
-  .session-card-delete {
-    opacity: 0;
-  }
-
-  .session-card:hover .session-card-delete,
-  .session-card.active .session-card-delete,
-  .session-card-delete:focus-visible {
-    opacity: 1;
-  }
-}
-
-.chat-panel {
-  flex: 2 1 0;
-  height: var(--workspace-column-height);
-  display: flex;
-  padding: 0;
-  min-width: 0;
-  min-height: 0;
-  background: transparent;
-  border: none;
   box-shadow: none;
-  overflow: visible;
 }
 
-.chat-panel.chat-panel-empty {
-  min-height: 0;
+.session-card-delete:hover:not(:disabled) {
+  color: var(--warn);
+  background: rgba(255, 242, 242, 0.9);
 }
 
-.chat-panel.chat-panel-empty .chat-workspace {
-  min-height: 0;
+.session-card-delete-icon {
+  width: 14px;
+  height: 14px;
 }
 
-.chat-panel .panel-header {
-  padding: 14px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: #fff;
-  box-shadow: var(--shadow);
-  border-bottom: none;
-}
-
-.chat-workspace {
-  flex: 1 1 auto;
+.menu-entry-accent {
+  width: 4px;
   height: 100%;
-  min-height: 0;
-  display: block;
-  overflow: visible;
+  min-height: 34px;
+  border-radius: 999px;
+  background: rgba(95, 139, 240, 0.28);
 }
 
-.workspace-stack {
-  flex: 2 1 0;
-  height: var(--workspace-column-height);
-  min-height: var(--workspace-column-height);
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--workspace-gap);
+.menu-entry-accent.template {
+  background: linear-gradient(180deg, #71a7ff 0%, #5f8bf0 100%);
 }
 
-.workspace-stack > * {
-  min-height: 0;
+.menu-entry-accent.recent {
+  background: linear-gradient(180deg, #9ebaf7 0%, #79a0f3 100%);
 }
 
-.chat-main {
+.main-shell {
   height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: #fff;
-  box-shadow: var(--shadow);
+  gap: 20px;
+  padding: 22px 24px 0;
+  border-radius: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(250, 252, 255, 0.78) 100%);
+  border: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 
-.workspace-side {
-  position: relative;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: var(--workspace-column-height);
-  height: var(--workspace-column-height);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.chat-main.chat-main-empty {
-  min-height: 0;
-}
-
-.chat-primary-stage {
-  min-height: 0;
-  flex: 1 1 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 14px;
-  padding: 18px;
-}
-
-.chat-preview-stage {
-  min-height: 0;
-  height: 100%;
-  padding: 0;
-  overflow: hidden;
-}
-
-.chat-preview-stage > * {
-  min-height: 0;
-}
-
-.workspace-requirement-stage {
-  min-height: 0;
-  height: 100%;
-  flex: 1 1 auto;
-  display: flex;
-  overflow: hidden;
-}
-
-.workspace-requirement-stage > * {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.panel-header {
+.main-topbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+  background: linear-gradient(180deg, rgba(232, 240, 252, 0.96) 0%, rgba(243, 247, 255, 0.82) 100%);
 }
 
-.panel-title {
+.main-topbar-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 10px;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.34);
 }
 
-.panel-title h2 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 600;
-}
-
-.template-picker {
-  display: grid;
-  justify-items: end;
-  gap: 0;
-}
-
-.template-picker-options {
+.ats-lockup {
   display: inline-flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  align-items: stretch;
+  overflow: hidden;
+  box-shadow: 0 10px 22px rgba(43, 76, 128, 0.1);
 }
 
-.template-picker-hint {
-  margin: 8px 0 0;
-  max-width: 320px;
-  color: var(--muted);
-  font-size: 0.74rem;
-  line-height: 1.45;
-  text-align: right;
+.ats-lockup-segment {
+  min-width: 108px;
+  padding: 10px 14px;
+  color: #fff;
+  font-size: 0.92rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
-.template-chip {
-  border: 1px solid var(--line);
+.ats-lockup-segment.dark {
+  background: var(--brand-dark);
+}
+
+.ats-lockup-segment.light {
+  background: var(--brand-light);
+}
+
+.language-switcher {
+  position: relative;
+}
+
+.language-switcher summary {
+  min-width: 184px;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px;
   border-radius: 999px;
-  padding: 8px 12px;
-  background: #f6faf8;
-  color: var(--muted);
-  font-size: 0.84rem;
-  font-weight: 600;
+  background: rgba(243, 247, 255, 0.94);
+  color: var(--ink);
   cursor: pointer;
-  transition: all 0.2s ease;
+  box-shadow: inset 0 0 0 1px rgba(220, 229, 243, 0.92);
 }
 
-.template-chip:hover {
-  border-color: #b8d9cf;
-  color: var(--accent);
+.language-switcher summary::-webkit-details-marker {
+  display: none;
 }
 
-.template-chip.active {
-  background: #e8f5ee;
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.template-chip:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.message-count {
+.language-switcher-label {
   color: var(--muted);
-  font-size: 0.86rem;
-  background: #f4f7f0;
-  padding: 4px 10px;
-  border-radius: 12px;
+  font-size: 0.82rem;
 }
 
-.message-count-template {
-  background: #eef7f3;
-  color: #2d6a59;
+.language-switcher-value {
+  font-size: 0.9rem;
   font-weight: 700;
+}
+
+.language-switcher summary svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.language-switcher[open] summary {
+  border-bottom-left-radius: 22px;
+  border-bottom-right-radius: 22px;
+}
+
+.language-switcher-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 10;
+  min-width: 220px;
+  padding: 10px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 8px;
+}
+
+.language-switcher-option {
+  border: 0;
+  border-radius: 14px;
+  padding: 11px 14px;
+  background: transparent;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.language-switcher-option.active,
+.language-switcher-option:hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.profile-badge {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, #4f83ef 100%);
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 800;
+  box-shadow: 0 12px 20px rgba(65, 117, 234, 0.18);
+}
+
+.main-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(258px, 286px);
+  gap: 18px;
+}
+
+.template-stage {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.conversation-shell {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow: hidden;
+}
+
+.template-page-shell {
+  min-height: 0;
+  width: min(100%, 1320px);
+  margin: 0 auto;
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  overflow: auto;
+  padding: 4px 6px 4px 0;
+}
+
+.template-page-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.template-page-kicker {
+  margin: 0 0 10px;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.template-page-hero-copy h1 {
+  margin: 0;
+  font-size: clamp(2.1rem, 3.6vw, 3.4rem);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+}
+
+.template-page-hero-copy p:last-child {
+  margin: 10px 0 0;
+  max-width: 760px;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.58;
+}
+
+.template-page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.template-page-card {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-soft);
+}
+
+.template-page-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.template-page-card-heading {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.template-page-card-eyebrow {
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.template-page-card-heading h3 {
+  margin: 0;
+  font-size: 1.08rem;
+  line-height: 1.3;
+}
+
+.template-page-card-count {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eef3ff;
+  color: #4b6ba4;
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.template-page-card-description {
+  margin: 0;
+  color: #42536c;
+  line-height: 1.58;
+  font-size: 0.9rem;
+}
+
+.template-page-tags,
+.template-page-sections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.template-page-tag,
+.template-page-section-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  line-height: 1;
+}
+
+.template-page-tag {
+  background: #eef4ff;
+  color: #4b6ba4;
+  font-weight: 700;
+}
+
+.template-page-section-pill {
+  background: #f7faff;
+  color: #5d6f8d;
+  border: 1px solid #dce6f7;
+}
+
+.template-page-card-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-top: auto;
+}
+
+.template-page-detail-btn,
+.template-page-apply-btn {
+  justify-content: center;
+}
+
+.template-page-state {
+  padding: 18px 20px;
+  border-radius: 22px;
+  border: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.conversation-shell.has-messages {
+  justify-content: flex-start;
+}
+
+.welcome-stage {
+  flex: 1 1 auto;
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 26px;
+  padding: clamp(8px, 1.6vw, 18px) min(6vw, 72px);
+  overflow: auto;
+}
+
+.welcome-kicker {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.assistant-prompt {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 14px;
+  max-width: 820px;
+  padding: 16px 20px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(220, 229, 243, 0.95);
+  box-shadow: var(--shadow-soft);
+}
+
+.assistant-prompt-badge {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4d7eff 0%, #59c3b4 100%);
+  color: #fff;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.assistant-prompt p {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.52;
+}
+
+.chat-stream-shell {
+  flex: 1 1 auto;
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.conversation-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.conversation-new-chat {
+  min-height: 38px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 14px;
+  background: rgba(238, 243, 255, 0.96);
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.conversation-new-chat:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: #e4edff;
+}
+
+.conversation-new-chat:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.conversation-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.conversation-title-wrap h2 {
+  margin: 0;
+  font-size: 1.36rem;
+  letter-spacing: -0.03em;
+}
+
+.conversation-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #eef3ff;
+  color: #4b6ba4;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.conversation-chip.accent {
+  background: rgba(65, 117, 234, 0.12);
+  color: var(--accent-strong);
+}
+
+.chat-list,
+.workspace-side-scroll,
+.template-page-shell,
+.sidebar-menu-scroll,
+.session-history-list {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(117, 136, 173, 0.55) transparent;
+}
+
+.chat-list::-webkit-scrollbar,
+.workspace-side-scroll::-webkit-scrollbar,
+.template-page-shell::-webkit-scrollbar,
+.sidebar-menu-scroll::-webkit-scrollbar,
+.session-history-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-list::-webkit-scrollbar-thumb,
+.workspace-side-scroll::-webkit-scrollbar-thumb,
+.template-page-shell::-webkit-scrollbar-thumb,
+.sidebar-menu-scroll::-webkit-scrollbar-thumb,
+.session-history-list::-webkit-scrollbar-thumb {
+  background: rgba(117, 136, 173, 0.45);
+  border-radius: 999px;
 }
 
 .chat-list {
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 16px;
-  background: linear-gradient(180deg, #fcfffd 0%, #f6faf8 100%);
-  overflow: auto;
+  flex: 1 1 auto;
   min-height: 0;
-  height: auto;
-  max-height: none;
+  padding: 6px 6px 6px 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  scrollbar-gutter: stable;
-}
-
-.chat-list.empty {
-  justify-content: center;
-  align-items: center;
-  min-height: 0;
+  gap: 14px;
+  overflow: auto;
 }
 
 .bubble {
+  width: min(100%, 920px);
+  padding: 18px 22px;
+  border-radius: 24px;
   border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 16px 20px;
-  transition: all 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-.bubble:hover {
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-soft);
 }
 
 .bubble.user {
-  background: #e8f5ee;
-  border-color: #c7e9dd;
-  border-top-right-radius: 6px;
   align-self: flex-end;
-  max-width: 85%;
   margin-left: auto;
+  background: linear-gradient(180deg, #edf4ff 0%, #e5efff 100%);
+  border-top-right-radius: 10px;
 }
 
 .bubble.assistant {
-  background: #f9fbfd;
-  border-top-left-radius: 6px;
-  align-self: flex-start;
-  max-width: 85%;
-  margin-right: auto;
+  background: rgba(255, 255, 255, 0.94);
+  border-top-left-radius: 10px;
 }
 
 .bubble.design-doc-bubble {
-  width: min(100%, 960px);
-  max-width: 100%;
+  width: 100%;
 }
 
 .message-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  justify-content: space-between;
   gap: 12px;
+  margin-bottom: 10px;
 }
 
 .role {
-  margin: 0;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #31564a;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #486486;
 }
 
 .timestamp {
-  font-size: 0.75rem;
   color: var(--muted);
-  white-space: nowrap;
+  font-size: 0.74rem;
 }
 
-.content {
+.content,
+.think-content,
+.design-doc-content {
   margin: 0;
   white-space: pre-wrap;
-  line-height: 1.5;
-  font-size: 0.95rem;
+  line-height: 1.6;
 }
 
 .design-doc-card {
   display: grid;
-  gap: 12px;
-}
-
-.design-doc-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 14px;
 }
 
 .design-doc-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  min-height: 30px;
+  padding: 0 12px;
   border-radius: 999px;
-  background: #e8f5ee;
-  color: #0e7c66;
-  font-size: 0.8rem;
+  background: #eef3ff;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
   font-weight: 700;
 }
 
-.design-doc-download {
-  padding: 8px 12px;
-}
-
-.design-doc-content {
-  padding: 14px;
-  border-radius: 12px;
-  border: 1px solid #d7e7e1;
-  background: #f4faf7;
+.design-doc-content,
+.think-content {
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid #e2e8f5;
+  background: #f7faff;
   font-family: var(--mono);
-  line-height: 1.55;
-  overflow: auto;
+  font-size: 0.84rem;
 }
 
 .design-doc-footer {
@@ -3341,19 +3537,16 @@ button {
 }
 
 .think-box {
-  margin-top: 12px;
-  border-top: 1px dashed #bfd2cb;
-  padding-top: 12px;
+  margin-bottom: 12px;
 }
 
 .think-box-summary {
-  cursor: pointer;
-  color: #31564a;
-  font-size: 0.85rem;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
 }
 
 .think-icon {
@@ -3361,24 +3554,10 @@ button {
   height: 16px;
 }
 
-.think-content {
-  margin: 12px 0 0;
-  padding: 12px;
-  border-radius: 10px;
-  background: #f4faf7;
-  border: 1px solid #d7e7e1;
-  color: #29443d;
-  white-space: pre-wrap;
-  font-size: 0.85rem;
-  font-family: var(--mono);
-  line-height: 1.4;
-}
-
 .typing-indicator {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 0;
+  gap: 6px;
 }
 
 .typing-dot {
@@ -3397,232 +3576,299 @@ button {
   animation-delay: -0.16s;
 }
 
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 18px 12px;
-  text-align: center;
-  color: var(--muted);
+.composer-zone {
+  flex: 0 0 auto;
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  display: grid;
+  gap: 12px;
 }
 
-.empty-icon {
-  width: 64px;
-  height: 64px;
-  margin-bottom: 14px;
-  opacity: 0.5;
-}
-
-.empty-state h3 {
-  margin: 0 0 8px 0;
-  font-size: 1.1rem;
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.empty-state p {
-  margin: 0;
-  font-size: 0.9rem;
-  line-height: 1.4;
-  max-width: 400px;
-}
-
-.composer {
-  padding-top: 4px;
-}
-
-.composer-input-wrapper {
-  display: flex;
-  align-items: flex-end;
+.composer-context {
+  display: grid;
   gap: 10px;
 }
 
-.composer-input {
+.composer-context-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.template-picker-options {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
   flex: 1 1 auto;
+}
+
+.preview-toggle-btn {
+  min-height: 38px;
+  border: 1px solid #d7e1f3;
+  border-radius: 999px;
+  padding: 0 16px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #365988;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.preview-toggle-btn:hover {
+  transform: translateY(-1px);
+  border-color: #bfd2f7;
+  color: var(--accent-strong);
+  box-shadow: 0 10px 18px rgba(74, 104, 157, 0.12);
+}
+
+.template-chip {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--muted);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.template-chip.active {
+  background: var(--accent-soft);
+  border-color: #bfd2f7;
+  color: var(--accent-strong);
+}
+
+.template-picker-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.composer-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 18px 20px 18px 22px;
+  border-radius: 32px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.composer-add {
+  align-self: center;
+  color: var(--muted);
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.composer-input {
   width: 100%;
-  min-width: 0;
-  border: 2px solid var(--line);
-  border-radius: 14px;
-  padding: 12px 16px;
-  color: var(--ink);
-  background: #fff;
+  min-height: 84px;
+  max-height: 220px;
+  border: 0;
+  background: transparent;
   resize: none;
-  min-height: 44px;
-  max-height: 200px;
-  font-size: 0.95rem;
-  line-height: 1.4;
-  transition: all 0.2s ease;
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.6;
   font-family: var(--font);
   overflow-y: hidden;
 }
 
 .composer-input:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 4px rgba(14, 124, 102, 0.1);
 }
 
-.composer-input:disabled {
-  background: #f4f7f0;
-  cursor: not-allowed;
-  opacity: 0.7;
+.composer-input::placeholder {
+  color: #9aa5b9;
 }
 
 .composer-actions {
   display: flex;
-  gap: 10px;
   align-items: center;
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
+  gap: 12px;
 }
 
 .btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 14px;
   border: 0;
-  border-radius: 12px;
-  padding: 12px 18px;
-  font-weight: 600;
   background: var(--accent);
   color: #fff;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.2s ease;
+  font-weight: 700;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--font);
-  font-size: 0.9rem;
-}
-
-.btn:hover {
-  background: var(--accent-strong);
-  transform: translateY(-1px);
-}
-
-.btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.btn-primary {
-  background: var(--accent);
-  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 12px 22px rgba(65, 117, 234, 0.18);
 }
 
 .btn-secondary {
-  background: #f4f7f0;
+  background: rgba(255, 255, 255, 0.9);
   color: var(--ink);
-  border: 1px solid var(--line);
-}
-
-.btn-secondary:hover {
-  background: #e7f2ee;
-}
-
-.btn-ghost {
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-}
-
-.btn-ghost:hover {
-  background: rgba(14, 124, 102, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(220, 229, 243, 0.92);
 }
 
 .btn-icon {
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
   padding: 0;
-  display: flex;
-  align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: #f4f7f0;
+  background: #f3f7ff;
   color: var(--accent);
-  border: 2px solid var(--line);
-}
-
-.btn-icon:hover {
-  background: #e7f2ee;
 }
 
 .btn-icon.recording {
-  background: var(--warn);
-  color: #fff;
-  border-color: var(--warn);
+  background: #fff1f1;
+  color: var(--warn);
+  box-shadow: 0 0 0 0 rgba(181, 72, 72, 0.4);
   animation: pulse 1.5s infinite;
 }
 
+.composer-send {
+  width: 54px;
+  height: 54px;
+  border: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, #5888ef 100%);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 16px 28px rgba(65, 117, 234, 0.24);
+  cursor: pointer;
+}
+
 .btn-icon-svg,
-.btn-icon svg {
-  width: 16px;
-  height: 16px;
+.btn-icon svg,
+.composer-send svg {
+  width: 18px;
+  height: 18px;
+}
+
+.composer-footnote {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.32;
+  text-align: center;
+}
+
+.workspace-side {
+  min-height: 0;
+}
+
+.workspace-side-scroll {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding-right: 2px;
 }
 
 .template-dialog-backdrop {
   position: fixed;
   inset: 0;
   z-index: 30;
-  background: rgba(11, 23, 19, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
+  background: rgba(27, 42, 68, 0.34);
+  backdrop-filter: blur(8px);
 }
 
 .template-dialog {
   width: min(720px, 100%);
-  max-height: min(88vh, 920px);
+  max-height: min(90vh, 920px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  border-radius: 24px;
-  border: 1px solid #dbe4df;
+  border-radius: 28px;
+  border: 1px solid var(--line);
   background: #fff;
-  box-shadow: 0 28px 60px rgba(11, 23, 19, 0.24);
+  box-shadow: 0 30px 80px rgba(36, 55, 96, 0.24);
   overflow: hidden;
 }
 
-.template-dialog-head {
+.template-dialog-head,
+.template-dialog-actions {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 22px 24px 16px;
-  border-bottom: 1px solid #ecf2ef;
+  padding: 20px 24px;
+}
+
+.template-dialog-head {
+  align-items: flex-start;
+  border-bottom: 1px solid #edf2fb;
 }
 
 .template-dialog-head h3 {
   margin: 6px 0 0;
-  font-size: 1.2rem;
-  line-height: 1.25;
+  font-size: 1.28rem;
 }
 
 .template-dialog-eyebrow {
   margin: 0;
-  color: #2d6a59;
+  color: var(--accent-strong);
   font-size: 0.74rem;
   font-weight: 800;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .template-dialog-close {
   width: 40px;
   height: 40px;
-  border: 1px solid #d9e2de;
-  border-radius: 12px;
-  background: #fff;
+  border-radius: 14px;
+  background: #f4f8ff;
   color: var(--muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
 }
 
 .template-dialog-close svg {
   width: 18px;
   height: 18px;
+}
+
+.template-dialog-state,
+.template-dialog-description,
+.template-dialog-body {
+  color: #42536c;
+}
+
+.template-dialog-state {
+  margin: 20px 24px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px dashed var(--line);
+  background: #f7faff;
+}
+
+.template-dialog-state.error {
+  border-style: solid;
+  border-color: #f0c6c6;
+  background: #fff4f4;
+  color: #9a3434;
 }
 
 .template-dialog-body {
@@ -3632,26 +3878,9 @@ button {
   gap: 18px;
 }
 
-.template-dialog-state {
-  margin: 20px 24px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px dashed #c8d7d1;
-  background: #fbfdfc;
-  color: var(--muted);
-}
-
-.template-dialog-state.error {
-  border-style: solid;
-  border-color: #efb7b7;
-  color: #8b2525;
-  background: #fff4f4;
-}
-
 .template-dialog-description {
   margin: 0;
-  color: #304640;
-  line-height: 1.65;
+  line-height: 1.7;
 }
 
 .template-dialog-block {
@@ -3671,12 +3900,10 @@ button {
 }
 
 .template-dialog-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 10px;
+  padding: 7px 12px;
   border-radius: 999px;
-  background: #eef7f3;
-  color: #2d6a59;
+  background: #eef4ff;
+  color: #4b6ba4;
   font-size: 0.78rem;
   font-weight: 700;
 }
@@ -3686,40 +3913,52 @@ button {
   padding-left: 18px;
   display: grid;
   gap: 8px;
-  color: #304640;
 }
 
 .template-dialog-field-count {
   margin-left: 8px;
   color: var(--muted);
   font-size: 0.76rem;
-  font-weight: 600;
 }
 
 .template-dialog-note {
   display: grid;
   gap: 8px;
   padding: 14px 16px;
-  border-radius: 16px;
-  background: linear-gradient(180deg, #f8fcfa 0%, #eef7f3 100%);
-  border: 1px solid #d9e7e0;
+  border-radius: 18px;
+  background: #f7faff;
+  border: 1px solid var(--line);
 }
 
 .template-dialog-note p {
   margin: 0;
-  color: #35524a;
-  font-size: 0.84rem;
   line-height: 1.55;
 }
 
 .template-dialog-actions {
-  display: flex;
-  align-items: center;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 16px 24px 22px;
-  border-top: 1px solid #ecf2ef;
-  background: #fff;
+  border-top: 1px solid #edf2fb;
+}
+
+.preview-dialog {
+  width: min(1080px, 100%);
+  max-height: min(92vh, 980px);
+}
+
+.preview-dialog-body {
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.preview-dialog-description {
+  margin: 0;
+  color: #61718a;
+  line-height: 1.65;
+}
+
+.preview-dialog-panel {
+  min-height: 0;
+  height: 100%;
 }
 
 .icon-mic,
@@ -3741,170 +3980,242 @@ button {
 
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(163, 40, 40, 0.4);
+    box-shadow: 0 0 0 0 rgba(181, 72, 72, 0.4);
   }
   70% {
-    box-shadow: 0 0 0 10px rgba(163, 40, 40, 0);
+    box-shadow: 0 0 0 12px rgba(181, 72, 72, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(163, 40, 40, 0);
+    box-shadow: 0 0 0 0 rgba(181, 72, 72, 0);
   }
 }
 
-@media (max-width: 1280px) {
+@media (max-width: 1100px) {
+  .main-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .workspace-side {
-    height: var(--workspace-column-height);
-    min-height: var(--workspace-column-height);
+    min-height: min(90dvh, 980px);
   }
 }
 
-@media (max-width: 1024px) {
+@media (max-height: 860px) {
   .app-shell {
-    min-height: 100dvh;
-    overflow: visible;
+    padding: 12px;
+    gap: 12px;
   }
 
   .layout {
-    flex-direction: column;
+    gap: 14px;
+  }
+
+  .sidebar,
+  .sidebar.collapsed {
+    gap: 14px;
+    padding: 14px;
+  }
+
+  .main-shell {
+    gap: 14px;
+    padding: 16px 18px 0;
+  }
+
+  .main-stage {
+    gap: 14px;
+  }
+
+  .conversation-shell,
+  .chat-stream-shell {
+    gap: 14px;
+  }
+
+  .welcome-stage {
+    gap: 18px;
+    padding: 4px min(4vw, 44px);
+  }
+
+  .welcome-kicker {
+    margin-bottom: 8px;
+  }
+
+  .assistant-prompt {
+    gap: 12px;
+    padding: 14px 18px;
+  }
+
+  .assistant-prompt-badge {
+    width: 38px;
+    height: 38px;
+  }
+
+  .assistant-prompt p {
+    font-size: 0.92rem;
+    line-height: 1.46;
+  }
+
+  .chat-list {
+    gap: 12px;
+  }
+
+  .bubble {
+    padding: 16px 18px;
+  }
+
+  .composer-zone {
+    gap: 10px;
+  }
+
+  .composer-context {
+    gap: 8px;
+  }
+
+  .composer-card {
+    gap: 14px;
+    padding: 14px 18px 14px 20px;
+    border-radius: 28px;
+  }
+
+  .composer-input {
+    min-height: 64px;
+    max-height: 180px;
+  }
+
+  .btn-icon {
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+  }
+
+  .composer-send {
+    width: 50px;
+    height: 50px;
+  }
+
+  .workspace-side-scroll {
+    gap: 10px;
+  }
+
+}
+
+@media (max-width: 1040px) {
+  .app-shell {
+    height: auto;
     overflow: visible;
   }
 
-  .layout.layout-empty-chat {
-    align-content: start;
-  }
-
+  .layout,
   .layout.sidebar-collapsed {
-    align-items: stretch;
+    grid-template-columns: 1fr;
   }
 
-  .sidebar {
-    flex: none;
-    position: static;
-    height: auto;
-    max-height: 320px;
-  }
-
+  .sidebar,
   .sidebar.collapsed {
-    max-height: none;
+    padding: 16px;
+  }
+
+  .sidebar.collapsed .sidebar-body,
+  .sidebar.collapsed .sidebar-appmark {
+    display: grid;
   }
 
   .sidebar-body {
-    overflow: visible;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .chat-workspace {
-    height: auto;
-    overflow: visible;
-  }
-
-  .workspace-stack {
-    min-height: auto;
-    grid-template-rows: minmax(78dvh, auto) minmax(78dvh, auto);
-  }
-
-  .chat-panel {
-    flex: none;
-    height: auto;
-  }
-
-  .chat-main {
-    height: auto;
-    min-height: min(78dvh, 920px);
-  }
-
-  .workspace-side {
-    flex: none;
-    height: auto;
-    min-height: min(100dvh, 980px);
+    grid-template-rows: auto auto auto;
   }
 }
 
 @media (max-width: 768px) {
   .app-shell {
-    padding: 10px;
-    gap: 12px;
+    padding: 12px;
   }
 
-  .panel-header {
-    flex-direction: column;
-    align-items: flex-start;
+  .main-shell {
+    padding: 18px 18px 0;
+    border-radius: 0;
   }
 
-  .template-picker {
-    width: 100%;
+  .main-topbar {
+    flex-wrap: wrap;
+  }
+
+  .ats-lockup-segment {
+    min-width: 110px;
+  }
+
+  .language-switcher summary {
+    min-width: 170px;
+  }
+
+  .welcome-stage {
+    padding: 8px 0;
+  }
+
+  .assistant-prompt {
+    grid-template-columns: 1fr;
     justify-items: start;
   }
 
-  .template-picker-options {
-    justify-content: flex-start;
+  .template-page-hero {
+    align-items: flex-start;
   }
 
-  .template-picker-hint {
-    text-align: left;
-    max-width: none;
+  .template-page-hero-copy h1 {
+    font-size: clamp(1.8rem, 8vw, 2.5rem);
   }
 
-  .template-library-item {
-    padding-left: 8px;
-    padding-right: 8px;
+  .template-page-hero-copy p:last-child {
+    font-size: 0.92rem;
   }
 
-  .composer-input-wrapper {
-    gap: 6px;
+  .template-page-card {
+    padding: 16px;
   }
 
-  .chat-main {
-    height: auto;
-    min-height: min(72dvh, 860px);
-    overflow: visible;
+  .template-page-card-actions {
+    grid-template-columns: 1fr;
   }
 
-  .workspace-stack {
-    min-height: auto;
-    grid-template-rows: minmax(72dvh, auto) minmax(320px, auto);
+  .composer-card {
+    grid-template-columns: 1fr;
   }
 
-  .workspace-side {
-    height: auto;
-    min-height: auto;
+  .composer-context-row {
+    align-items: stretch;
   }
 
-  .chat-list {
-    min-height: 0;
-    height: auto;
+  .composer-add {
+    display: none;
   }
 
-  .chat-main.chat-main-empty .chat-list.empty {
-    min-height: 56vh;
-    height: auto;
-    max-height: none;
+  .composer-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
-  .bubble.user,
-  .bubble.assistant {
-    max-width: 92%;
+  .composer-footnote {
+    gap: 4px;
+  }
+
+  .preview-toggle-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .bubble {
+    width: 100%;
   }
 
   .template-dialog-backdrop {
     padding: 10px;
   }
 
-  .template-dialog {
-    max-height: 92vh;
-  }
-
-  .template-dialog-head,
-  .template-dialog-body,
-  .template-dialog-actions {
-    padding-left: 16px;
-    padding-right: 16px;
+  .preview-dialog {
+    max-height: min(94vh, 860px);
   }
 
   .template-dialog-actions {
-    justify-content: stretch;
     flex-direction: column-reverse;
+    align-items: stretch;
   }
 
   .template-dialog-actions .btn {
@@ -3913,5 +4224,3 @@ button {
   }
 }
 </style>
-
-

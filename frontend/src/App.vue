@@ -1646,6 +1646,11 @@ function scrollToBottom() {
   })
 }
 
+function appendReactiveMessage(message: ChatMessage): ChatMessage {
+  messages.value.push(message)
+  return messages.value[messages.value.length - 1] as ChatMessage
+}
+
 function autoResizeTextarea() {
   const textarea = textareaRef.value
   if (textarea) {
@@ -1689,19 +1694,17 @@ async function sendMessage() {
   clearError()
   const pipelineState = createMessagePipelineState()
 
-  const userChatMessage: ChatMessage = {
+  const userChatMessage = appendReactiveMessage({
     role: 'user',
     content: message,
     createdAt: new Date().toISOString(),
-  }
-  const assistantMessage: ChatMessage = {
+  })
+  const assistantMessage = appendReactiveMessage({
     role: 'assistant',
     content: '',
     thinking: '',
     createdAt: new Date().toISOString(),
-  }
-  messages.value.push(userChatMessage)
-  messages.value.push(assistantMessage)
+  })
   inputText.value = ''
   autoResizeTextarea()
   scrollToBottom()
@@ -1745,8 +1748,7 @@ async function generateDocuments() {
   let shouldRefreshHistory = false
 
   try {
-    const prdMessage = createGeneratedDocumentMessage('prd_doc')
-    messages.value.push(prdMessage)
+    const prdMessage = appendReactiveMessage(createGeneratedDocumentMessage('prd_doc'))
     scrollToBottom()
 
     await sendPrdDocStream(sessionId.value, prdMessage, currentLanguage.value)
@@ -1757,8 +1759,7 @@ async function generateDocuments() {
     }
     shouldRefreshHistory = true
 
-    const designMessage = createGeneratedDocumentMessage('design_doc')
-    messages.value.push(designMessage)
+    const designMessage = appendReactiveMessage(createGeneratedDocumentMessage('design_doc'))
     scrollToBottom()
 
     await sendDesignDocStream(sessionId.value, designMessage, currentLanguage.value)

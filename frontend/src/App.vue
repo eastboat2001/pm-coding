@@ -880,25 +880,49 @@ async function loadSession(targetSessionId: string) {
     const data = await apiJson<SessionDetail>(
       `/api/sessions/${targetSessionId}?language=${encodeURIComponent(currentLanguage.value)}`,
     )
-    sessionId.value = data.session_id
-    sessionPromptTemplate.value = normalizePromptTemplate(data.prompt_template)
-    messages.value = normalizeMessages(data.messages ?? [])
-    structuredRequirementError.value = ''
-    applyStructuredRequirementPayload(data)
-    if (shouldRefreshStructuredRequirement(data.structured_requirement_sync_status)) {
-      void loadStructuredRequirement(
-        data.session_id,
-        { background: hasStructuredRequirementContent(structuredRequirementModel.value) },
-      )
-    } else {
-      loadingStructuredRequirement.value = false
-    }
+    applySessionDetail(data)
     await nextTick()
     scrollToBottom()
   } catch (error) {
     globalError.value = formatError(error, t.value.failedToLoadSession)
   } finally {
     switchingSession.value = false
+  }
+}
+
+function applySessionDetail(data: SessionDetail) {
+  sessionId.value = data.session_id
+  sessionPromptTemplate.value = normalizePromptTemplate(data.prompt_template)
+  messages.value = normalizeMessages(data.messages ?? [])
+  structuredRequirementError.value = ''
+  applyStructuredRequirementPayload(data)
+  if (shouldRefreshStructuredRequirement(data.structured_requirement_sync_status)) {
+    void loadStructuredRequirement(
+      data.session_id,
+      { background: hasStructuredRequirementContent(structuredRequirementModel.value) },
+    )
+  } else {
+    loadingStructuredRequirement.value = false
+  }
+}
+
+async function syncCurrentSessionDetail(targetSessionId: string) {
+  if (!targetSessionId) {
+    return
+  }
+
+  try {
+    const data = await apiJson<SessionDetail>(
+      `/api/sessions/${targetSessionId}?language=${encodeURIComponent(currentLanguage.value)}`,
+    )
+    if (sessionId.value !== targetSessionId) {
+      return
+    }
+    applySessionDetail(data)
+    await nextTick()
+    scrollToBottom()
+  } catch (error) {
+    globalError.value = formatError(error, t.value.failedToLoadSession)
   }
 }
 
@@ -1564,6 +1588,7 @@ async function generateDocuments() {
   } finally {
     if (shouldRefreshHistory) {
       await refreshHistory()
+      await syncCurrentSessionDetail(sessionId.value)
     }
     generatingDocuments.value = false
     scrollToBottom()

@@ -537,7 +537,7 @@ const isChatView = computed(() => currentWorkspaceView.value === 'chat')
 const isTemplateLibraryView = computed(() => currentWorkspaceView.value === 'templates')
 const previewToggleLabel = computed(() => {
   if (currentLanguage.value === 'zh') {
-    return previewPanelOpen.value ? '收起预览' : '打开预览'
+    return previewPanelOpen.value ? '收起预览' : '预览文档'
   }
   if (currentLanguage.value === 'de') {
     return previewPanelOpen.value ? 'Vorschau schliessen' : 'Vorschau oeffnen'
@@ -2129,10 +2129,6 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                 </button>
               </div>
             </details>
-
-            <button class="profile-badge" type="button" aria-label="profile">
-              D
-            </button>
           </div>
         </header>
 
@@ -2641,7 +2637,6 @@ body {
 }
 
 .sidebar-toggle,
-.profile-badge,
 .template-dialog-close,
 .session-card-delete {
   border: 0;
@@ -2919,7 +2914,7 @@ body {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   padding: 0;
-  align-items: start;
+  align-items: center;
   transition: background 0.2s ease, color 0.2s ease;
   border-radius: 14px;
 }
@@ -2973,7 +2968,7 @@ body {
 .session-card-delete {
   width: 28px;
   height: 28px;
-  margin: 8px 8px 0 0;
+  margin: 0 8px 0 0;
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
@@ -3035,9 +3030,8 @@ body {
 .main-topbar-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 6px;
-  background: rgba(255, 255, 255, 0.34);
+  gap: 0;
+  padding: 0;
 }
 
 .ats-lockup {
@@ -3076,11 +3070,13 @@ body {
   justify-content: space-between;
   gap: 12px;
   padding: 11px 16px;
-  border-radius: 999px;
-  background: rgba(243, 247, 255, 0.94);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.86);
   color: var(--ink);
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(220, 229, 243, 0.92);
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(205, 219, 240, 0.92), 0 8px 18px rgba(43, 76, 128, 0.06);
+  transition: background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
 }
 
 .language-switcher summary::-webkit-details-marker {
@@ -3101,53 +3097,55 @@ body {
   width: 14px;
   height: 14px;
   color: var(--muted);
+  transition: transform 0.18s ease, color 0.18s ease;
 }
 
 .language-switcher[open] summary {
-  border-bottom-left-radius: 22px;
-  border-bottom-right-radius: 22px;
+  background: #fff;
+  color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px rgba(95, 139, 240, 0.38), 0 12px 24px rgba(43, 76, 128, 0.1);
+}
+
+.language-switcher[open] summary svg {
+  color: var(--accent-strong);
+  transform: rotate(180deg);
+}
+
+.language-switcher summary:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(95, 139, 240, 0.5), 0 0 0 3px rgba(95, 139, 240, 0.16);
 }
 
 .language-switcher-menu {
   position: absolute;
   right: 0;
-  top: calc(100% + 10px);
+  top: calc(100% + 8px);
   z-index: 10;
-  min-width: 220px;
-  padding: 10px;
-  border-radius: 24px;
+  min-width: 100%;
+  padding: 8px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid var(--line);
-  box-shadow: var(--shadow);
+  box-shadow: 0 18px 38px rgba(43, 76, 128, 0.16);
   display: grid;
-  gap: 8px;
+  gap: 4px;
 }
 
 .language-switcher-option {
   border: 0;
-  border-radius: 14px;
-  padding: 11px 14px;
+  border-radius: 10px;
+  padding: 10px 12px;
   background: transparent;
   text-align: left;
   color: var(--ink);
   cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .language-switcher-option.active,
 .language-switcher-option:hover {
-  background: var(--accent-soft);
+  background: rgba(232, 240, 255, 0.9);
   color: var(--accent-strong);
-}
-
-.profile-badge {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent) 0%, #4f83ef 100%);
-  color: #fff;
-  font-size: 1rem;
-  font-weight: 800;
-  box-shadow: 0 12px 20px rgba(65, 117, 234, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(95, 139, 240, 0.16);
 }
 
 .main-stage {

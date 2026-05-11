@@ -414,6 +414,8 @@ IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深全栈工程师，现�
 """
 
 SUPPORTED_OUTPUT_LANGUAGES = {"en", "de", "zh", "ms"}
+STRUCTURED_REQUIREMENT_CANONICAL_CACHE_KEY = "__canonical__"
+STRUCTURED_REQUIREMENT_CANONICAL_FALLBACK_LANGUAGES = ("zh", "en", "de", "ms")
 
 DESIGN_DOC_EMPTY_BY_LANGUAGE = {
     "en": "# System Design Document\n\nTBD: no requirement conversation found in this session.",
@@ -779,16 +781,21 @@ class RequirementCollectorService:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
+        normalized_language = self._normalize_language(language)
         message_count = self._message_count(session.messages)
         if not force_refresh:
-            cached_model = self._get_cached_structured_requirement_model(
+            cached_model = self._get_cached_localized_structured_requirement_model(
                 session_id,
-                language,
+                normalized_language,
                 message_count,
             )
             if cached_model is not None:
                 return cached_model
-        return self._build_and_cache_structured_requirement_model(session, language)
+        return self._build_and_cache_structured_requirement_model(
+            session,
+            normalized_language,
+            force_refresh=force_refresh,
+        )
 
     def get_structured_requirement_snapshot(
         self,
@@ -799,9 +806,24 @@ class RequirementCollectorService:
         if session is None:
             raise KeyError("Session not found.")
 
+        normalized_language = self._normalize_language(language)
         message_count = self._message_count(session.messages)
-        cached_entry = self.session_store.get_structured_requirement_cache_entry(session_id, language)
+        cached_entry = self.session_store.get_structured_requirement_cache_entry(
+            session_id,
+            normalized_language,
+        )
         if cached_entry is None:
+            canonical_model = self._get_cached_canonical_structured_requirement_model(
+                session_id,
+                message_count,
+                normalized_language,
+            )
+            if canonical_model is not None:
+                return {
+                    "structured_requirement_model": canonical_model,
+                    "structured_requirement_sync_status": "missing",
+                    "message_count": message_count,
+                }
             return {
                 "structured_requirement_model": self._empty_structured_requirement_model(),
                 "structured_requirement_sync_status": "ready" if message_count == 0 else "missing",
@@ -810,6 +832,13 @@ class RequirementCollectorService:
 
         cached_model = normalize_structured_requirement_model(cached_entry.get("model"))
         cached_message_count = self._safe_int(cached_entry.get("message_count"))
+        canonical_model = self._get_cached_canonical_structured_requirement_model(
+            session_id,
+            cached_message_count,
+            normalized_language,
+        )
+        if canonical_model is not None:
+            cached_model = self._with_canonical_collection_status(cached_model, canonical_model)
         sync_status = "ready" if cached_message_count == message_count else "stale"
         return {
             "structured_requirement_model": cached_model,
@@ -1293,30 +1322,177 @@ class RequirementCollectorService:
         self,
         session: Session,
         language: str,
+        force_refresh: bool = False,
     ) -> dict[str, Any]:
-        structured_requirement_model = self._build_structured_requirement_model(session, language)
+        normalized_language = self._normalize_language(language)
+        message_count = self._message_count(session.messages)
+        canonical_model = None
+        if not force_refresh:
+            canonical_model = self._get_cached_canonical_structured_requirement_model(
+                session.id,
+                message_count,
+                normalized_language,
+            )
+
+        if canonical_model is None:
+            canonical_model = self._build_structured_requirement_model(session, normalized_language)
+            self._save_structured_requirement_model_cache(
+                session.id,
+                STRUCTURED_REQUIREMENT_CANONICAL_CACHE_KEY,
+                message_count,
+                canonical_model,
+            )
+            structured_requirement_model = canonical_model
+        else:
+            structured_requirement_model = self._build_structured_requirement_model(
+                session,
+                normalized_language,
+            )
+
+        structured_requirement_model = self._with_canonical_collection_status(
+            structured_requirement_model,
+            canonical_model,
+        )
+        self._save_structured_requirement_model_cache(
+            session.id,
+            normalized_language,
+            message_count,
+            structured_requirement_model,
+        )
+        return structured_requirement_model
+
+    def _save_structured_requirement_model_cache(
+        self,
+        session_id: str,
+        cache_key: str,
+        message_count: int,
+        structured_requirement_model: dict[str, Any],
+    ) -> None:
         self.session_store.save_structured_requirement_cache_entry(
-            session_id=session.id,
-            language=language,
-            message_count=self._message_count(session.messages),
+            session_id=session_id,
+            language=cache_key,
+            message_count=message_count,
             structured_requirement_model=structured_requirement_model,
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
-        return structured_requirement_model
 
     def _get_cached_structured_requirement_model(
         self,
         session_id: str,
-        language: str,
+        cache_key: str,
         message_count: int,
     ) -> dict[str, Any] | None:
-        cached_entry = self.session_store.get_structured_requirement_cache_entry(session_id, language)
+        cached_entry = self.session_store.get_structured_requirement_cache_entry(session_id, cache_key)
         if cached_entry is None:
             return None
         cached_message_count = self._safe_int(cached_entry.get("message_count"))
         if cached_message_count != message_count:
             return None
         return normalize_structured_requirement_model(cached_entry.get("model"))
+
+    def _get_cached_localized_structured_requirement_model(
+        self,
+        session_id: str,
+        language: str,
+        message_count: int,
+    ) -> dict[str, Any] | None:
+        cached_model = self._get_cached_structured_requirement_model(
+            session_id,
+            language,
+            message_count,
+        )
+        if cached_model is None:
+            return None
+
+        canonical_model = self._get_cached_canonical_structured_requirement_model(
+            session_id,
+            message_count,
+            language,
+        )
+        if canonical_model is None:
+            return cached_model
+        return self._with_canonical_collection_status(cached_model, canonical_model)
+
+    def _get_cached_canonical_structured_requirement_model(
+        self,
+        session_id: str,
+        message_count: int,
+        preferred_language: str | None = None,
+    ) -> dict[str, Any] | None:
+        cached_model = self._get_cached_structured_requirement_model(
+            session_id,
+            STRUCTURED_REQUIREMENT_CANONICAL_CACHE_KEY,
+            message_count,
+        )
+        if cached_model is not None:
+            return cached_model
+
+        best_model = self._best_cached_structured_requirement_model(
+            session_id,
+            message_count,
+            preferred_language,
+        )
+        if best_model is not None:
+            self._save_structured_requirement_model_cache(
+                session_id,
+                STRUCTURED_REQUIREMENT_CANONICAL_CACHE_KEY,
+                message_count,
+                best_model,
+            )
+        return best_model
+
+    def _best_cached_structured_requirement_model(
+        self,
+        session_id: str,
+        message_count: int,
+        preferred_language: str | None = None,
+    ) -> dict[str, Any] | None:
+        best_model: dict[str, Any] | None = None
+        best_score: tuple[int, int, int] | None = None
+        for cache_key in self._structured_requirement_fallback_cache_keys(preferred_language):
+            candidate = self._get_cached_structured_requirement_model(
+                session_id,
+                cache_key,
+                message_count,
+            )
+            if candidate is None:
+                continue
+            score = self._structured_requirement_status_score(candidate)
+            if best_score is None or score > best_score:
+                best_model = candidate
+                best_score = score
+        return best_model
+
+    def _structured_requirement_fallback_cache_keys(
+        self,
+        preferred_language: str | None = None,
+    ) -> list[str]:
+        cache_keys: list[str] = []
+        for cache_key in (
+            self._normalize_language(preferred_language) if preferred_language else "",
+            *STRUCTURED_REQUIREMENT_CANONICAL_FALLBACK_LANGUAGES,
+        ):
+            if cache_key and cache_key not in cache_keys:
+                cache_keys.append(cache_key)
+        return cache_keys
+
+    def _structured_requirement_status_score(self, model: dict[str, Any]) -> tuple[int, int, int]:
+        progress = self._structured_requirement_progress(model)
+        return (
+            self._safe_int(progress.get("collected_count")),
+            self._safe_int(progress.get("confirmed_count")),
+            -self._safe_int(progress.get("conflict_count")),
+        )
+
+    def _with_canonical_collection_status(
+        self,
+        model: dict[str, Any],
+        canonical_model: dict[str, Any],
+    ) -> dict[str, Any]:
+        localized_model = normalize_structured_requirement_model(model)
+        canonical_status = normalize_structured_requirement_model(canonical_model)["collection_status"]
+        localized_model["collection_status"] = canonical_status
+        return localized_model
 
     def _message_count(self, messages: list[dict[str, Any]]) -> int:
         return len(self._chat_history_messages(messages))

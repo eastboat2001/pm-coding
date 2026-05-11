@@ -5,6 +5,7 @@ import secrets
 import re
 import threading
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -622,11 +623,23 @@ class Session:
 
 
 class RequirementCollectorService:
-    def __init__(self, llm_client: MiniMaxChatClient, session_store: SQLiteSessionStore) -> None:
+    def __init__(
+        self,
+        llm_client: MiniMaxChatClient,
+        session_store: SQLiteSessionStore,
+        coding_ui_storage_dir: str | Path | None = None,
+        coding_ui_projects_root: str | Path | None = None,
+    ) -> None:
         self.llm_client = llm_client
         self.session_store = session_store
         self.design_docs_dir = self.session_store.db_path.parent / "design_docs"
         self.prd_docs_dir = self.session_store.db_path.parent / "prd_docs"
+        default_coding_ui_root = self.session_store.db_path.parent / "coding_ui"
+        default_projects_root = self.session_store.db_path.parent / "generated_projects"
+        self.coding_ui_storage_dir = Path(coding_ui_storage_dir or default_coding_ui_root).resolve()
+        self.coding_ui_projects_root = Path(coding_ui_projects_root or default_projects_root).resolve()
+        self.coding_ui_sessions_dir = self.coding_ui_storage_dir / "sessions"
+        self.coding_ui_settings_path = self.coding_ui_storage_dir / "settings.json"
         self.prd_templates_dir = Path(__file__).resolve().parents[2] / "data" / "PRD_template"
         self.business_template_library = BusinessTemplateLibrary(self.prd_templates_dir)
         self._lock = threading.Lock()
@@ -1260,6 +1273,98 @@ class RequirementCollectorService:
         if not isinstance(payload, dict):
             return None
         return payload
+
+    def get_coding_ui_storage_status(self) -> dict[str, Any]:
+        self.coding_ui_storage_dir.mkdir(parents=True, exist_ok=True)
+        self.coding_ui_projects_root.mkdir(parents=True, exist_ok=True)
+        self.coding_ui_sessions_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "configured": True,
+            "storageDir": str(self.coding_ui_storage_dir),
+            "projectsRootDir": str(self.coding_ui_projects_root),
+        }
+
+    def list_coding_ui_sessions(self) -> list[dict[str, Any]]:
+        sessions: list[dict[str, Any]] = []
+        if not self.coding_ui_sessions_dir.exists():
+            return sessions
+        for session_file in sorted(self.coding_ui_sessions_dir.glob("*.json")):
+            record = self._read_json_file(session_file)
+            metadata = record.get("metadata") if isinstance(record, dict) else None
+            if isinstance(metadata, dict):
+                sessions.append(metadata)
+        sessions.sort(key=lambda item: str(item.get("lastModified", "")), reverse=True)
+        return sessions
+
+    def get_coding_ui_session(self, session_id: str) -> dict[str, Any] | None:
+        path = self._coding_ui_session_path(session_id)
+        if not path.exists():
+            return None
+        record = self._read_json_file(path)
+        if not isinstance(record, dict):
+            return None
+        data = record.get("data")
+        metadata = record.get("metadata")
+        if not isinstance(data, dict) or not isinstance(metadata, dict):
+            return None
+        return {
+            "data": data,
+            "metadata": metadata,
+            "project": self._project_summary(data),
+        }
+
+    def save_coding_ui_session(self, session_id: str, data: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+        if str(data.get("id", "")).strip() != session_id:
+            raise ValueError("Session ID mismatch.")
+        if str(metadata.get("id", "")).strip() != session_id:
+            raise ValueError("Session metadata ID mismatch.")
+
+        record = {
+            "version": 1,
+            "savedAt": datetime.now(timezone.utc).isoformat(),
+            "data": data,
+            "metadata": metadata,
+        }
+        self._write_json_file(self._coding_ui_session_path(session_id), record)
+        project_info = self._persist_project_artifacts(session_id, data, metadata)
+        return {
+            "data": data,
+            "metadata": metadata,
+            "project": project_info,
+        }
+
+    def delete_coding_ui_session(self, session_id: str) -> bool:
+        deleted = False
+        session_path = self._coding_ui_session_path(session_id)
+        if session_path.exists():
+            session_path.unlink()
+            deleted = True
+        project_dir = self._project_directory(session_id)
+        if project_dir.exists():
+            for child in sorted(project_dir.rglob("*"), reverse=True):
+                if child.is_file():
+                    child.unlink()
+                elif child.is_dir():
+                    child.rmdir()
+            project_dir.rmdir()
+            deleted = True
+        return deleted
+
+    def get_coding_ui_settings(self) -> dict[str, Any] | None:
+        if not self.coding_ui_settings_path.exists():
+            return None
+        data = self._read_json_file(self.coding_ui_settings_path)
+        return data if isinstance(data, dict) else None
+
+    def save_coding_ui_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        record = {
+            "version": 1,
+            "savedAt": datetime.now(timezone.utc).isoformat(),
+            "currentSessionId": payload.get("currentSessionId"),
+            "selectedModel": payload.get("selectedModel"),
+        }
+        self._write_json_file(self.coding_ui_settings_path, record)
+        return record
 
     def get_saved_message_document(self, session_id: str, message_id: int) -> tuple[Path, str] | None:
         session = self.get_session(session_id)
@@ -2140,6 +2245,165 @@ class RequirementCollectorService:
         if document_kind == PRD_MESSAGE_KIND:
             return self._prd_doc_path(session_id)
         return self._design_doc_path(session_id)
+
+    def _coding_ui_session_path(self, session_id: str) -> Path:
+        safe_session_id = self._sanitize_path_component(session_id) or session_id
+        return self.coding_ui_sessions_dir / f"{safe_session_id}.json"
+
+    def _project_directory(self, session_id: str, title: str | None = None) -> Path:
+        slug = self._project_slug(session_id, title)
+        return self.coding_ui_projects_root / slug
+
+    def _project_slug(self, session_id: str, title: str | None = None) -> str:
+        base = self._sanitize_path_component(title or "")
+        suffix = self._sanitize_path_component(session_id)[:8] or session_id[:8]
+        if not base:
+            return f"project-{suffix}"
+        return f"{base}-{suffix}"
+
+    def _sanitize_path_component(self, value: str) -> str:
+        normalized = re.sub(r"\s+", "-", value.strip().lower())
+        normalized = re.sub(r"[^a-z0-9._-]", "-", normalized)
+        normalized = re.sub(r"-+", "-", normalized).strip("-._")
+        reserved = {
+            "con", "prn", "aux", "nul",
+            "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+            "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+        }
+        if normalized in reserved:
+            normalized = f"{normalized}-file"
+        return normalized[:80]
+
+    def _write_json_file(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix(f"{path.suffix}.tmp")
+        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_path.replace(path)
+
+    def _read_json_file(self, path: Path) -> Any:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _project_summary(self, session_data: dict[str, Any]) -> dict[str, Any]:
+        project_dir = self._project_directory(str(session_data.get("id", "")), str(session_data.get("title", "")))
+        file_count = 0
+        if project_dir.exists():
+            file_count = sum(1 for item in project_dir.rglob("*") if item.is_file())
+        return {
+            "projectRoot": str(project_dir),
+            "fileCount": file_count,
+        }
+
+    def _persist_project_artifacts(
+        self,
+        session_id: str,
+        session_data: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        project_dir = self._project_directory(session_id, str(metadata.get("title", "")))
+        project_dir.mkdir(parents=True, exist_ok=True)
+        artifacts = self._extract_artifacts_from_messages(session_data.get("messages", []))
+        self._sync_project_files(project_dir, artifacts)
+        return {
+            "projectRoot": str(project_dir),
+            "fileCount": len(artifacts),
+        }
+
+    def _extract_artifacts_from_messages(self, messages: Any) -> dict[str, str]:
+        tool_calls: dict[str, dict[str, Any]] = {}
+        operations: list[dict[str, Any]] = []
+        if not isinstance(messages, list):
+            return {}
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") == "assistant":
+                for block in message.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "toolCall" and block.get("name") == "artifacts":
+                        tool_calls[str(block.get("id", ""))] = deepcopy(block)
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role == "artifact":
+                action = str(message.get("action", "")).strip()
+                filename = str(message.get("filename", "")).strip()
+                if not filename:
+                    continue
+                if action == "create":
+                    operations.append({"command": "create", "filename": filename, "content": message.get("content", "")})
+                elif action == "update":
+                    operations.append({"command": "rewrite", "filename": filename, "content": message.get("content", "")})
+                elif action == "delete":
+                    operations.append({"command": "delete", "filename": filename})
+            elif role == "toolResult" and message.get("toolName") == "artifacts" and message.get("isError") is False:
+                tool_call_id = str(message.get("toolCallId", ""))
+                call = tool_calls.get(tool_call_id)
+                if not call:
+                    continue
+                arguments = call.get("arguments")
+                if isinstance(arguments, dict):
+                    operations.append(deepcopy(arguments))
+
+        final_artifacts: dict[str, str] = {}
+        for operation in operations:
+            command = str(operation.get("command", "")).strip()
+            filename = str(operation.get("filename", "")).strip()
+            if not filename:
+                continue
+            if command in {"create", "rewrite"}:
+                content = operation.get("content")
+                if isinstance(content, str):
+                    final_artifacts[filename] = content
+            elif command == "update":
+                old_str = operation.get("old_str")
+                new_str = operation.get("new_str")
+                existing = final_artifacts.get(filename)
+                if isinstance(existing, str) and isinstance(old_str, str) and isinstance(new_str, str):
+                    final_artifacts[filename] = existing.replace(old_str, new_str)
+            elif command == "delete":
+                final_artifacts.pop(filename, None)
+        return final_artifacts
+
+    def _sync_project_files(self, project_dir: Path, artifacts: dict[str, str]) -> None:
+        allowed_files: set[Path] = set()
+        for relative_name, content in artifacts.items():
+            safe_relative = self._safe_relative_artifact_path(relative_name)
+            target_path = (project_dir / safe_relative).resolve()
+            if project_dir not in target_path.parents and target_path != project_dir:
+                raise ValueError("Artifact path escapes project root.")
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(content, encoding="utf-8")
+            allowed_files.add(target_path)
+
+        if not project_dir.exists():
+            return
+
+        existing_files = [item for item in project_dir.rglob("*") if item.is_file()]
+        for existing in existing_files:
+            if existing not in allowed_files:
+                existing.unlink()
+
+        for directory in sorted([item for item in project_dir.rglob("*") if item.is_dir()], reverse=True):
+            if directory == project_dir:
+                continue
+            if any(directory.iterdir()):
+                continue
+            directory.rmdir()
+
+    def _safe_relative_artifact_path(self, filename: str) -> Path:
+        raw_path = Path(filename.replace("\\", "/"))
+        safe_parts: list[str] = []
+        for part in raw_path.parts:
+            if part in {"", ".", ".."}:
+                continue
+            safe_part = self._sanitize_path_component(part)
+            if safe_part:
+                safe_parts.append(safe_part)
+        if not safe_parts:
+            raise ValueError("Artifact filename is empty.")
+        return Path(*safe_parts)
 
     def _design_doc_path(self, session_id: str) -> Path:
         return self.design_docs_dir / f"{session_id}.md"

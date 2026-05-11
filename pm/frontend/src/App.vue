@@ -10,7 +10,6 @@ import type {
   ChatMessagePayload,
   CodingHandoffCreateResponse,
   GeneratedDocumentResponse,
-  ImplementationContextResponse,
   LanguageCode,
   MessageResponse,
   PromptTemplate,

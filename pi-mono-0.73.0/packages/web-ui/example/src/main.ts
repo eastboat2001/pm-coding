@@ -28,8 +28,7 @@ import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
 import { createSystemNotification, customConvertToLlm, registerCustomMessageRenderers } from "./custom-messages.js";
 import { LocalSessionListDialog } from "./dialogs/LocalSessionListDialog.js";
-import { LocalSyncSettingsTab } from "./dialogs/LocalSyncSettingsTab.js";
-import { LocalSessionSync } from "./storage/local-session-sync.js";
+import { ConfiguredServerStorage } from "./storage/configured-server-storage.js";
 import { mergeSessionMetadata } from "./storage/merged-session-index.js";
 
 registerCustomMessageRenderers();
@@ -60,7 +59,7 @@ sessions.setBackend(backend);
 
 const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 setAppStorage(storage);
-const localSync = new LocalSessionSync(settings);
+const configuredStorage = new ConfiguredServerStorage();
 
 const DEFAULT_MODEL_PROVIDER = "anthropic";
 const DEFAULT_MODEL_ID = "claude-sonnet-4-5-20250929";
@@ -163,16 +162,16 @@ const getDefaultModel = async (): Promise<Model<any>> => {
 	if (storedModel && typeof storedModel === "object" && storedModel.id && storedModel.provider) {
 		return storedModel;
 	}
-	const localSettings = await localSync.readSettings();
-	if (localSettings?.selectedModel && typeof localSettings.selectedModel === "object") {
-		return localSettings.selectedModel;
+	const configuredSettings = await configuredStorage.readSettings();
+	if (configuredSettings?.selectedModel && typeof configuredSettings.selectedModel === "object") {
+		return configuredSettings.selectedModel;
 	}
 	return getModel(DEFAULT_MODEL_PROVIDER, DEFAULT_MODEL_ID);
 };
 
 const persistSelectedModel = async (model: Model<any>) => {
 	await storage.settings.set(SELECTED_MODEL_KEY, model);
-	await localSync.writeSettings({ currentSessionId, selectedModel: model });
+	await configuredStorage.writeSettings({ currentSessionId, selectedModel: model });
 };
 
 const setCurrentSessionId = async (sessionId: string | undefined) => {
@@ -182,7 +181,7 @@ const setCurrentSessionId = async (sessionId: string | undefined) => {
 	} else {
 		await storage.settings.delete(CURRENT_SESSION_ID_KEY);
 	}
-	await localSync.writeSettings({ currentSessionId: sessionId, selectedModel: agent?.state.model });
+	await configuredStorage.writeSettings({ currentSessionId: sessionId, selectedModel: agent?.state.model });
 	updateUrl(sessionId);
 };
 
@@ -245,49 +244,49 @@ const saveSession = async () => {
 		};
 
 		await storage.sessions.save(sessionData, metadata);
-		await localSync.writeSession(sessionData, metadata);
+		await configuredStorage.writeSession(sessionData, metadata);
 	} catch (err) {
 		console.error("Failed to save session:", err);
 	}
 };
 
-const loadLocalSession = async (sessionId: string): Promise<boolean> => {
-	const localRecord = await localSync.readSession(sessionId);
-	if (!localRecord) {
+const loadConfiguredSession = async (sessionId: string): Promise<boolean> => {
+	const configuredRecord = await configuredStorage.readSession(sessionId);
+	if (!configuredRecord) {
 		return false;
 	}
-	await storage.sessions.save(localRecord.data, localRecord.metadata);
+	await storage.sessions.save(configuredRecord.data, configuredRecord.metadata);
 	await loadSession(sessionId);
 	return true;
 };
 
 const loadMergedSession = async (sessionId: string): Promise<boolean> => {
 	const browserSession = await storage.sessions.get(sessionId);
-	const localSession = await localSync.readSession(sessionId);
-	if (browserSession && localSession) {
-		if (localSession.data.lastModified > browserSession.lastModified) {
-			await storage.sessions.save(localSession.data, localSession.metadata);
+	const configuredSession = await configuredStorage.readSession(sessionId);
+	if (browserSession && configuredSession) {
+		if (configuredSession.data.lastModified > browserSession.lastModified) {
+			await storage.sessions.save(configuredSession.data, configuredSession.metadata);
 		}
 		return await loadSession(sessionId);
 	}
 	if (browserSession) {
 		return await loadSession(sessionId);
 	}
-	if (localSession) {
-		return await loadLocalSession(sessionId);
+	if (configuredSession) {
+		return await loadConfiguredSession(sessionId);
 	}
 	return false;
 };
 
 const getMergedSessions = async () => {
 	const browserSessions = await storage.sessions.getAllMetadata();
-	const localSessions = await localSync.listSessionMetadata();
-	return mergeSessionMetadata(browserSessions, localSessions);
+	const configuredSessions = await configuredStorage.listSessionMetadata();
+	return mergeSessionMetadata(browserSessions, configuredSessions);
 };
 
 const deleteMergedSession = async (sessionId: string) => {
 	await storage.sessions.deleteSession(sessionId);
-	await localSync.deleteSession(sessionId);
+	await configuredStorage.deleteSession(sessionId);
 };
 
 const handleAgentEvent = async (event: AgentEvent) => {
@@ -436,12 +435,12 @@ const restoreInitialSession = async () => {
 		await setCurrentSessionId(undefined);
 	}
 
-	const localSettings = await localSync.readSettings();
-	if (localSettings?.selectedModel) {
-		await storage.settings.set(SELECTED_MODEL_KEY, localSettings.selectedModel);
+	const configuredSettings = await configuredStorage.readSettings();
+	if (configuredSettings?.selectedModel) {
+		await storage.settings.set(SELECTED_MODEL_KEY, configuredSettings.selectedModel);
 	}
-	if (localSettings?.currentSessionId) {
-		const loaded = await loadMergedSession(localSettings.currentSessionId);
+	if (configuredSettings?.currentSessionId) {
+		const loaded = await loadMergedSession(configuredSettings.currentSessionId);
 		if (loaded) return;
 	}
 
@@ -590,12 +589,7 @@ const renderApp = () => {
 						size: "sm",
 						children: icon(Settings, "sm"),
 						onClick: () => {
-							const localSyncTab = new LocalSyncSettingsTab();
-							localSyncTab.syncService = localSync;
-							localSyncTab.onChange = () => {
-								renderApp();
-							};
-							SettingsDialog.open([new ProvidersModelsTab(), new ProxyTab(), localSyncTab]);
+							SettingsDialog.open([new ProvidersModelsTab(), new ProxyTab()]);
 						},
 						title: "Settings",
 					})}

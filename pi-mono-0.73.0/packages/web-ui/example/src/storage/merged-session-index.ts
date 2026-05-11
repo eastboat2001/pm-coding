@@ -1,6 +1,6 @@
 import type { SessionMetadata } from "@mariozechner/pi-web-ui";
 
-export type SessionSource = "browser" | "local";
+export type SessionSource = "browser" | "configured";
 
 export interface MergedSessionEntry {
 	id: string;
@@ -17,9 +17,9 @@ export interface MergedSessionEntry {
 }
 
 function pickPreferredSource(browser?: SessionMetadata, local?: SessionMetadata): SessionSource {
-	if (!browser) return "local";
+	if (!browser) return "configured";
 	if (!local) return "browser";
-	if (local.lastModified > browser.lastModified) return "local";
+	if (local.lastModified > browser.lastModified) return "configured";
 	return "browser";
 }
 
@@ -43,14 +43,14 @@ export function mergeSessionMetadata(
 			merged.set(session.id, {
 				...session,
 				local: session,
-				preferredSource: "local",
+				preferredSource: "configured",
 			});
 			continue;
 		}
 
 		existing.local = session;
 		existing.preferredSource = pickPreferredSource(existing.browser, session);
-		const preferred = existing.preferredSource === "local" ? session : existing.browser!;
+		const preferred = existing.preferredSource === "configured" ? session : existing.browser!;
 		existing.title = preferred.title;
 		existing.createdAt = preferred.createdAt;
 		existing.lastModified = preferred.lastModified;

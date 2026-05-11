@@ -25,7 +25,7 @@ This example demonstrates:
 - **Tools** - JavaScript REPL and artifacts tool
 - **Session persistence** - Active and recent sessions are restored from browser storage
 - **Model persistence** - The selected model is remembered across refreshes and new sessions
-- **Optional local sync** - Sessions can also be mirrored to a local directory as JSON files
+- **Configured local storage** - Sessions and generated project files are mirrored to fixed directories from `pi-storage.config.json`
 
 ## Configuration
 
@@ -54,6 +54,9 @@ By default, it persists:
 - session titles and history metadata
 - the current or most recent session pointer
 - the last selected model
+- a JSON mirror of sessions under the configured sessions directory
+- settings under the configured settings file
+- generated artifact files under the configured projects root directory
 
 Behavioral details:
 
@@ -71,34 +74,46 @@ Behavioral details:
 4. **New session behavior**
    - Creating a new session resets the active conversation in memory without relying on a full page reload.
 
-## Optional Local Directory Sync
+## Configured Local Storage
 
-The example can mirror sessions into a local directory using the browser's **File System Access API**.
+The example mirrors sessions and generated project files through the Vite dev/preview server. The browser no longer asks the user to choose a local directory.
 
 ### How it works
 
 - Browser IndexedDB remains the active runtime store.
-- When local sync is enabled, sessions are also written to JSON files on disk.
-- The session list merges browser-backed and local-backed records.
-- If a local session exists without a browser copy, it can be imported back into browser storage when opened.
+- Every saved session is also written to a JSON file on disk.
+- The session list merges browser-backed and configured local records.
+- If a configured local session exists without a browser copy, it is imported back into browser storage when opened.
+- Files created through the `artifacts` tool are reconstructed into a per-session project directory.
 
-### How to enable it
+### Configuration
 
-1. Open **Settings**.
-2. Go to **Local Sync**.
-3. Click **Choose Directory**.
-4. Select a local directory.
+Edit `pi-storage.config.json`:
 
-After that, the example writes:
+```json
+{
+  "sessionsDir": "./data/sessions",
+  "settingsFile": "./data/settings.json",
+  "projectsRootDir": "./data/generated_projects"
+}
+```
 
-- `sessions/<session-id>.json`
-- `settings.json`
+Relative paths are resolved from `packages/web-ui/example/`. Absolute paths are also supported.
+
+The example writes:
+
+- `<sessionsDir>/<session-id>.json`
+- `<settingsFile>`
+- one generated project directory per session under `projectsRootDir`
+
+With the default configuration, runtime data stays inside `packages/web-ui/example/data/` and remains decoupled from any PM application directory.
+
+Project directory names are generated from a sanitized session title plus a stable session-id suffix, so multiple generated projects do not collide.
 
 ### Limitations
 
-- This feature depends on the **File System Access API**.
-- It is only available in browsers that support directory handles and permission persistence.
-- If browser support is missing, the app continues to work with browser IndexedDB only.
+- The configured storage API is provided by this example's Vite dev/preview server.
+- If the app is served as static files without that server, the browser can still use IndexedDB, but disk mirroring and generated project file output are unavailable.
 - API keys are **not** mirrored to local files by this feature.
 
 ## Project Structure
@@ -110,14 +125,13 @@ example/
 │   ├── app.css                     # Tailwind CSS configuration
 │   ├── dialogs/
 │   │   ├── LocalSessionListDialog.ts
-│   │   └── LocalSyncSettingsTab.ts
 │   └── storage/
-│       ├── file-system-access.d.ts
-│       ├── local-session-sync.ts
-│       ├── merged-session-index.ts
-│       └── session-file-codec.ts
+│       ├── configured-server-storage.ts
+│       └── merged-session-index.ts
 ├── index.html        # HTML entry point
 ├── package.json      # Dependencies
+├── pi-storage.config.json
+├── storage-server.ts # Vite middleware for configured local storage and project file output
 ├── vite.config.ts    # Vite configuration
 └── tsconfig.json     # TypeScript configuration
 ```

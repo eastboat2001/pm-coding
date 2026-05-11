@@ -472,14 +472,18 @@ def create_coding_handoff(session_id: str):
             HTTPStatus.NOT_FOUND,
         )
 
-    open_url = request.args.get("open_url", "").strip()
     response_payload = {
         "handoff_token": result["handoff_token"],
         "expires_at": result["expires_at"],
     }
-    if open_url:
-        response_payload["open_url"] = open_url
     return jsonify(response_payload), HTTPStatus.CREATED
+
+
+def _coding_ui_payload() -> dict[str, object]:
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return {}
+    return payload
 
 
 @api.get("/coding-handoffs/<token>")
@@ -488,6 +492,68 @@ def resolve_coding_handoff(token: str):
     result = service.resolve_coding_handoff(token)
     if result is None:
         return jsonify({"error": "Coding handoff not found or expired."}), HTTPStatus.NOT_FOUND
+    return jsonify(result)
+
+
+@api.get("/coding-ui/storage")
+def get_coding_ui_storage_status():
+    service = _get_service()
+    return jsonify(service.get_coding_ui_storage_status())
+
+
+@api.get("/coding-ui/sessions")
+def list_coding_ui_sessions():
+    service = _get_service()
+    return jsonify({"sessions": service.list_coding_ui_sessions()})
+
+
+@api.get("/coding-ui/sessions/<session_id>")
+def get_coding_ui_session(session_id: str):
+    service = _get_service()
+    result = service.get_coding_ui_session(session_id)
+    if result is None:
+        return jsonify({"error": "Coding UI session not found."}), HTTPStatus.NOT_FOUND
+    return jsonify(result)
+
+
+@api.put("/coding-ui/sessions/<session_id>")
+def save_coding_ui_session(session_id: str):
+    service = _get_service()
+    payload = _coding_ui_payload()
+    data = payload.get("data")
+    metadata = payload.get("metadata")
+    if not isinstance(data, dict) or not isinstance(metadata, dict):
+        return jsonify({"error": "Fields `data` and `metadata` are required."}), HTTPStatus.BAD_REQUEST
+    try:
+        result = service.save_coding_ui_session(session_id, data, metadata)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), HTTPStatus.BAD_REQUEST
+    return jsonify(result)
+
+
+@api.delete("/coding-ui/sessions/<session_id>")
+def delete_coding_ui_session(session_id: str):
+    service = _get_service()
+    deleted = service.delete_coding_ui_session(session_id)
+    if not deleted:
+        return jsonify({"error": "Coding UI session not found."}), HTTPStatus.NOT_FOUND
+    return ("", HTTPStatus.NO_CONTENT)
+
+
+@api.get("/coding-ui/settings")
+def get_coding_ui_settings():
+    service = _get_service()
+    result = service.get_coding_ui_settings()
+    if result is None:
+        return jsonify({"error": "Coding UI settings not found."}), HTTPStatus.NOT_FOUND
+    return jsonify(result)
+
+
+@api.put("/coding-ui/settings")
+def save_coding_ui_settings():
+    service = _get_service()
+    payload = _coding_ui_payload()
+    result = service.save_coding_ui_settings(payload)
     return jsonify(result)
 
 

@@ -30,7 +30,7 @@ The library itself provides browser-side storage primitives and UI hooks, but it
 - sessions are stored in browser IndexedDB
 - refresh restores the active or latest session
 - the selected model is remembered across sessions
-- optional local directory mirroring can be enabled in browsers that support the File System Access API
+- the example app mirrors sessions and generated artifact projects to configured local directories through its Vite server
 
 ```typescript
 import { Agent } from '@mariozechner/pi-agent-core';
@@ -195,7 +195,7 @@ The recommended pattern for robust web apps is:
 3. use `onBeforeSend` to create or save a draft session before the first network roundtrip
 4. persist selected model changes explicitly instead of assuming UI-only changes will be restored automatically
 
-The example app in `packages/web-ui/example/` follows this pattern and additionally demonstrates optional local directory mirroring.
+The example app in `packages/web-ui/example/` follows this pattern and additionally demonstrates configured local disk mirroring.
 
 ## Example App Storage Behavior
 
@@ -205,9 +205,11 @@ The example app is intentionally more opinionated than the library:
 - the current or most recent session is restored on startup
 - the selected model is persisted and reused for new sessions
 - creating a new session no longer depends on a full page reload
-- optional local directory sync mirrors session JSON files to a user-chosen folder
+- session JSON files are mirrored to the configured `sessionsDir`
+- settings are mirrored to the configured `settingsFile`
+- generated artifact files are reconstructed under the configured `projectsRootDir`
 
-Local directory sync is implemented in the example app only. It is not part of the shared `StorageBackend` abstraction today.
+Configured local disk mirroring is implemented in the example app only. It is not part of the shared `StorageBackend` abstraction today. Edit `packages/web-ui/example/pi-storage.config.json` to change the storage and generated-project directories.
 
 ### Agent (from pi-agent-core)
 

@@ -1,0 +1,5 @@
+{
+	"sessionsDir": "./data/sessions",
+	"settingsFile": "./data/settings.json",
+	"projectsRootDir": "./data/generated_projects"
+}

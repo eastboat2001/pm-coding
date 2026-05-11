@@ -8,8 +8,8 @@ import { computeStructuredRequirementProgress } from './lib/structuredRequiremen
 import type {
   ChatMessage,
   ChatMessagePayload,
+  CodingHandoffCreateResponse,
   GeneratedDocumentResponse,
-  ImplementationContextResponse,
   LanguageCode,
   MessageResponse,
   PromptTemplate,
@@ -901,14 +901,11 @@ function downloadLatestGeneratedDocument(kind: 'prd' | 'design') {
   triggerDocumentDownload(target.downloadUrl, target.downloadFilename)
 }
 
-function redirectToGoCoding(payload: ImplementationContextResponse) {
+function redirectToGoCoding(token: string) {
   const targetUrl = new URL(GO_CODING_URL)
   targetUrl.searchParams.set('source', 'rqmd')
-  targetUrl.searchParams.set('context_transport', 'window.name')
-  targetUrl.searchParams.set('context_type', 'implementation-context')
-  targetUrl.searchParams.set('session_id', payload.session_id)
-
-  window.name = JSON.stringify(payload)
+  targetUrl.searchParams.set('handoff_token', token)
+  targetUrl.searchParams.set('pm_api_base_url', apiUrl('/api').replace(/\/api$/, ''))
   window.location.assign(targetUrl.toString())
 }
 
@@ -929,10 +926,13 @@ async function openGoCoding() {
   openingGoCoding.value = true
 
   try {
-    const payload = await apiJson<ImplementationContextResponse>(
-      `/api/sessions/${sessionId.value}/implementation-context?language=${encodeURIComponent(currentLanguage.value)}`,
+    const payload = await apiJson<CodingHandoffCreateResponse>(
+      `/api/sessions/${sessionId.value}/coding-handoff?language=${encodeURIComponent(currentLanguage.value)}`,
+      {
+        method: 'POST',
+      },
     )
-    redirectToGoCoding(payload)
+    redirectToGoCoding(payload.handoff_token)
   } catch (error) {
     globalError.value = formatError(error, t.value.failedToOpenGoCoding)
   } finally {

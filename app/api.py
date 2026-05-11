@@ -449,6 +449,48 @@ def get_implementation_context(session_id: str):
     return jsonify(result)
 
 
+@api.post("/sessions/<session_id>/coding-handoff")
+def create_coding_handoff(session_id: str):
+    language = _request_language()
+    service = _get_service()
+    try:
+        result = service.create_coding_handoff(session_id, language)
+    except KeyError:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+
+    if not result.get("payload", {}).get("documents_ready", result.get("documents_ready", False)):
+        payload = result.get("payload") if isinstance(result.get("payload"), dict) else result
+        missing_documents = payload.get("missing_documents", []) if isinstance(payload, dict) else []
+        missing_summary = ", ".join(str(item) for item in missing_documents) or "prd, design"
+        return (
+            jsonify(
+                {
+                    "error": f"Required generated documents are missing: {missing_summary}.",
+                    **payload,
+                }
+            ),
+            HTTPStatus.NOT_FOUND,
+        )
+
+    open_url = request.args.get("open_url", "").strip()
+    response_payload = {
+        "handoff_token": result["handoff_token"],
+        "expires_at": result["expires_at"],
+    }
+    if open_url:
+        response_payload["open_url"] = open_url
+    return jsonify(response_payload), HTTPStatus.CREATED
+
+
+@api.get("/coding-handoffs/<token>")
+def resolve_coding_handoff(token: str):
+    service = _get_service()
+    result = service.resolve_coding_handoff(token)
+    if result is None:
+        return jsonify({"error": "Coding handoff not found or expired."}), HTTPStatus.NOT_FOUND
+    return jsonify(result)
+
+
 @api.post("/asr/recognize")
 def recognize_speech():
     """识别语音并返回文本"""

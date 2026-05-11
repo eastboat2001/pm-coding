@@ -90,3 +90,9 @@ export type ImplementationContextResponse = {
   }
   implementation_prompt?: string
 }
+
+export type CodingHandoffCreateResponse = {
+  handoff_token: string
+  expires_at: string
+  open_url?: string
+}

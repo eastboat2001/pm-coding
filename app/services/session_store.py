@@ -50,11 +50,24 @@ class SQLiteSessionStore:
                     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS coding_handoffs (
+                    token TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at
                 ON sessions(updated_at DESC, created_at DESC);
 
                 CREATE INDEX IF NOT EXISTS idx_messages_session_id
                 ON messages(session_id, id);
+
+                CREATE INDEX IF NOT EXISTS idx_coding_handoffs_expires_at
+                ON coding_handoffs(expires_at);
                 """
             )
             self._ensure_session_columns(conn)
@@ -507,9 +520,96 @@ class SQLiteSessionStore:
             conn.commit()
         return cursor.rowcount > 0
 
+    def create_coding_handoff(
+        self,
+        token: str,
+        session_id: str,
+        payload: dict[str, Any],
+        created_at: str,
+        expires_at: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO coding_handoffs (
+                    token,
+                    session_id,
+                    payload_json,
+                    created_at,
+                    expires_at,
+                    consumed_at
+                )
+                VALUES (?, ?, ?, ?, ?, '')
+                """,
+                (
+                    token,
+                    session_id,
+                    json.dumps(payload, ensure_ascii=False),
+                    created_at,
+                    expires_at,
+                ),
+            )
+            conn.commit()
+
+    def get_coding_handoff(self, token: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT token, session_id, payload_json, created_at, expires_at, consumed_at
+                FROM coding_handoffs
+                WHERE token = ?
+                """,
+                (token,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        payload = self._parse_json_dict(row["payload_json"])
+        return {
+            "token": row["token"],
+            "session_id": row["session_id"],
+            "payload": payload,
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "consumed_at": row["consumed_at"] or "",
+        }
+
+    def mark_coding_handoff_consumed(self, token: str, consumed_at: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE coding_handoffs
+                SET consumed_at = ?
+                WHERE token = ?
+                """,
+                (consumed_at, token),
+            )
+            conn.commit()
+
+    def delete_expired_coding_handoffs(self, now_iso: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM coding_handoffs
+                WHERE expires_at <= ?
+                """,
+                (now_iso,),
+            )
+            conn.commit()
+
     def _parse_structured_requirement_cache(self, raw_value: Any) -> dict[str, Any]:
         if not raw_value:
             return {}
+        if isinstance(raw_value, dict):
+            return raw_value
+        try:
+            parsed = json.loads(str(raw_value))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _parse_json_dict(self, raw_value: Any) -> dict[str, Any]:
         if isinstance(raw_value, dict):
             return raw_value
         try:

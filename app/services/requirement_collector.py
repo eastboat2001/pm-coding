@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -424,6 +425,7 @@ DESIGN_DOC_EMPTY_BY_LANGUAGE = {
 CHAT_MESSAGE_KIND = "chat"
 PRD_MESSAGE_KIND = "prd_doc"
 DESIGN_MESSAGE_KIND = "design_doc"
+DEFAULT_HANDOFF_TTL_MINUTES = 20
 
 DOCUMENT_TYPE_BY_MESSAGE_KIND = {
     PRD_MESSAGE_KIND: "prd_markdown",
@@ -1158,6 +1160,106 @@ class RequirementCollectorService:
                 language=language,
             ),
         }
+
+    def build_browser_handoff_payload(self, session_id: str, language: str = "zh") -> dict[str, Any]:
+        session = self.get_session(session_id)
+        if session is None:
+            raise KeyError("Session not found.")
+
+        prd_result = self.get_saved_prd_document(session_id)
+        design_result = self.get_saved_design_document(session_id)
+
+        missing_documents: list[str] = []
+        if prd_result is None:
+            missing_documents.append("prd")
+        if design_result is None:
+            missing_documents.append("design")
+
+        if missing_documents:
+            return {
+                "session_id": session_id,
+                "title": session.title,
+                "documents_ready": False,
+                "missing_documents": missing_documents,
+            }
+
+        prd_path, prd_filename = prd_result
+        design_path, design_filename = design_result
+        implementation_prompt = self._build_implementation_prompt(
+            session_id=session_id,
+            session_title=session.title,
+            prd_path=prd_filename,
+            design_path=design_filename,
+            language=language,
+        )
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(minutes=DEFAULT_HANDOFF_TTL_MINUTES)).isoformat()
+
+        return {
+            "source": "pm",
+            "transport": "browser-handoff",
+            "session_id": session_id,
+            "title": session.title,
+            "documents_ready": True,
+            "implementation_prompt": implementation_prompt,
+            "documents": [
+                {
+                    "kind": "prd",
+                    "filename": prd_filename,
+                    "mime_type": "text/markdown; charset=utf-8",
+                    "download_url": self._legacy_document_download_url(session_id, PRD_MESSAGE_KIND),
+                },
+                {
+                    "kind": "design",
+                    "filename": design_filename,
+                    "mime_type": "text/markdown; charset=utf-8",
+                    "download_url": self._legacy_document_download_url(session_id, DESIGN_MESSAGE_KIND),
+                },
+            ],
+            "expires_at": expires_at,
+        }
+
+    def create_coding_handoff(self, session_id: str, language: str = "zh") -> dict[str, Any]:
+        payload = self.build_browser_handoff_payload(session_id, language)
+        if not payload.get("documents_ready"):
+            return payload
+
+        created_at = datetime.now(timezone.utc)
+        expires_at = payload.get("expires_at") or (created_at + timedelta(minutes=DEFAULT_HANDOFF_TTL_MINUTES)).isoformat()
+        token = f"hf_{secrets.token_urlsafe(24)}"
+        persisted_payload = {
+            **payload,
+            "created_at": created_at.isoformat(),
+            "expires_at": expires_at,
+        }
+        self.session_store.delete_expired_coding_handoffs(created_at.isoformat())
+        self.session_store.create_coding_handoff(
+            token=token,
+            session_id=session_id,
+            payload=persisted_payload,
+            created_at=created_at.isoformat(),
+            expires_at=expires_at,
+        )
+        return {
+            "handoff_token": token,
+            "expires_at": expires_at,
+            "payload": persisted_payload,
+        }
+
+    def resolve_coding_handoff(self, token: str) -> dict[str, Any] | None:
+        record = self.session_store.get_coding_handoff(token)
+        if record is None:
+            return None
+
+        now = datetime.now(timezone.utc)
+        expires_at = self._parse_datetime(record.get("expires_at"))
+        if expires_at is None or expires_at <= now:
+            return None
+
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        return payload
 
     def get_saved_message_document(self, session_id: str, message_id: int) -> tuple[Path, str] | None:
         session = self.get_session(session_id)
@@ -1900,6 +2002,15 @@ class RequirementCollectorService:
         if normalized in SUPPORTED_OUTPUT_LANGUAGES:
             return normalized
         return "zh"
+
+    def _parse_datetime(self, raw_value: Any) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(str(raw_value))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
 
     def _language_output_instruction(self, language: str) -> str:
         normalized = self._normalize_language(language)

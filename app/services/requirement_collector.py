@@ -633,7 +633,7 @@ class RequirementCollectorService:
         self.business_template_library = BusinessTemplateLibrary(self.prd_templates_dir)
         self._lock = threading.Lock()
 
-    def create_session(self, template_id: str | None = None) -> Session:
+    def create_session(self, template_id: str | None = None, language: str = "zh") -> Session:
         session_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
         applied_template_id = ""
@@ -641,7 +641,10 @@ class RequirementCollectorService:
         title = ""
 
         if template_id:
-            template_detail = self.get_business_template(template_id)
+            template_detail = self.business_template_library.get_localized_template(
+                template_id,
+                self._normalize_language(language),
+            )
             if template_detail is None:
                 raise KeyError("Business template not found.")
             applied_template_id = template_detail["template_id"]
@@ -1585,13 +1588,20 @@ class RequirementCollectorService:
     def _build_llm_messages(self, system_prompt: str, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         return [{"role": "system", "content": system_prompt}, *self._conversation_messages(messages)]
 
-    def _resolve_business_template(self, session: Session) -> dict[str, Any] | None:
+    def _resolve_business_template(
+        self,
+        session: Session,
+        language: str | None = None,
+    ) -> dict[str, Any] | None:
         if not session.applied_template_id:
             return None
-        return self.business_template_library.get_template_prompt_context(session.applied_template_id)
+        return self.business_template_library.get_template_prompt_context(
+            session.applied_template_id,
+            self._normalize_language(language) if language else None,
+        )
 
-    def _business_template_pm_addendum(self, session: Session) -> str:
-        template = self._resolve_business_template(session)
+    def _business_template_pm_addendum(self, session: Session, language: str | None = None) -> str:
+        template = self._resolve_business_template(session, language)
         if template is None:
             if not session.applied_template_name:
                 return ""
@@ -1614,8 +1624,8 @@ class RequirementCollectorService:
             f"- Template context: {json.dumps(template, ensure_ascii=False)}"
         )
 
-    def _business_template_document_context(self, session: Session) -> str:
-        template = self._resolve_business_template(session)
+    def _business_template_document_context(self, session: Session, language: str | None = None) -> str:
+        template = self._resolve_business_template(session, language)
         if template is None:
             if not session.applied_template_name:
                 return ""
@@ -1633,7 +1643,7 @@ class RequirementCollectorService:
 
     def _structured_requirement_model_prompt(self, session: Session, language: str) -> str:
         prompt_parts = [build_structured_requirement_model_prompt(language)]
-        template_addendum = self._business_template_pm_addendum(session)
+        template_addendum = self._business_template_pm_addendum(session, language)
         if template_addendum:
             prompt_parts.append(
                 "Template-aware extraction rules:\n"
@@ -1658,7 +1668,7 @@ class RequirementCollectorService:
         content_label = CONVERSATION_LABELS.get(language, CONVERSATION_LABELS["en"])
         summary_label = SUMMARY_LABELS.get(language, SUMMARY_LABELS["en"])
         draft_mode = "draft_with_assumptions" if not progress["ready_to_generate"] else "confirmed_design_doc"
-        business_template_context = self._business_template_document_context(session)
+        business_template_context = self._business_template_document_context(session, language)
         business_template_block = f"\n\n{business_template_context}" if business_template_context else ""
         return [
             {"role": "system", "content": self._design_doc_prompt(session, language)},
@@ -2105,7 +2115,7 @@ class RequirementCollectorService:
         normalized = self._normalize_prompt_template(session.prompt_template)
         base_prompt = PM_SYSTEM_PROMPT_ZH if language == "zh" else PM_SYSTEM_PROMPT
         prompt_parts = [base_prompt]
-        template_addendum = self._business_template_pm_addendum(session)
+        template_addendum = self._business_template_pm_addendum(session, language)
         if template_addendum:
             prompt_parts.append(template_addendum)
         elif normalized == PROMPT_TEMPLATE_PERSONAL_PROJECT:
@@ -2428,7 +2438,7 @@ class RequirementCollectorService:
         summary_label = SUMMARY_LABELS.get(language, SUMMARY_LABELS["en"])
         template_content = self._load_prd_template(session, language)
         draft_mode = "draft_with_assumptions" if not progress["ready_to_generate"] else "confirmed_prd"
-        business_template_context = self._business_template_document_context(session)
+        business_template_context = self._business_template_document_context(session, language)
         business_template_block = f"\n\n{business_template_context}" if business_template_context else ""
         return [
             {"role": "system", "content": self._prd_doc_prompt(session, language)},
@@ -2451,7 +2461,10 @@ class RequirementCollectorService:
 
     def _load_prd_template(self, session: Session, language: str) -> str:
         if session.applied_template_id:
-            template_markdown = self.business_template_library.get_template_markdown(session.applied_template_id)
+            template_markdown = self.business_template_library.get_template_markdown(
+                session.applied_template_id,
+                self._normalize_language(language),
+            )
             if template_markdown:
                 return template_markdown
 

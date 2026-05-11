@@ -51,11 +51,12 @@ def create_session():
     service = _get_service()
     payload = request.get_json(silent=True) or {}
     template_id = str(payload.get("template_id", "")).strip() or None
+    language = _request_language()
     try:
-        session = service.create_session(template_id=template_id)
+        session = service.create_session(template_id=template_id, language=language)
     except KeyError:
         return jsonify({"error": "Business template not found."}), HTTPStatus.NOT_FOUND
-    structured_requirement_snapshot = service.get_structured_requirement_snapshot(session.id, _request_language())
+    structured_requirement_snapshot = service.get_structured_requirement_snapshot(session.id, language)
     return (
         jsonify(
             {

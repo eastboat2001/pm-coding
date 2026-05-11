@@ -475,7 +475,14 @@ const t = computed(() => translations[currentLanguage.value])
 const shellText = computed(() => shellCopy[currentLanguage.value] ?? shellCopy.en)
 const activeSessionSummary = computed(() => sessions.value.find((item) => item.session_id === sessionId.value) || null)
 const activeSessionTitle = computed(() => sessionTitle(activeSessionSummary.value?.title || ''))
-const activeBusinessTemplateName = computed(() => activeSessionSummary.value?.applied_template_name?.trim() || '')
+const activeBusinessTemplateName = computed(() => {
+  const appliedTemplateId = activeSessionSummary.value?.applied_template_id || ''
+  return (
+    resolveLocalizedBusinessTemplateSummary(appliedTemplateId)?.template_name ||
+    activeSessionSummary.value?.applied_template_name?.trim() ||
+    ''
+  )
+})
 const templateDrivenSession = computed(() => Boolean(activeSessionSummary.value?.applied_template_id))
 const hasUserMessage = computed(() => messages.value.some((item) => item.role === 'user'))
 const latestPrdDocument = computed(() => findLatestDocumentMessage('prd_doc'))
@@ -514,7 +521,28 @@ const promptTemplateOptions = computed<{ value: PromptTemplate; label: string }[
 const currentLanguageLabel = computed(
   () => languageOptions.find((option) => option.code === currentLanguage.value)?.label || languageOptions[0].label,
 )
-const templateShelfItems = computed(() => businessTemplates.value.slice(0, 6))
+const localizedBusinessTemplates = computed(() => {
+  const byTemplateKey = new Map<string, BusinessTemplateSummary>()
+
+  for (const templateItem of businessTemplates.value) {
+    const groupingKey = templateItem.template_key || templateItem.template_id
+    const currentItem = byTemplateKey.get(groupingKey)
+
+    if (!currentItem) {
+      byTemplateKey.set(groupingKey, templateItem)
+      continue
+    }
+
+    const currentMatches = templateMatchesLanguage(currentItem, currentLanguage.value)
+    const nextMatches = templateMatchesLanguage(templateItem, currentLanguage.value)
+    if (nextMatches && !currentMatches) {
+      byTemplateKey.set(groupingKey, templateItem)
+    }
+  }
+
+  return Array.from(byTemplateKey.values())
+})
+const templateShelfItems = computed(() => localizedBusinessTemplates.value.slice(0, 6))
 const recentSessions = computed(() => sessions.value.slice(0, 6))
 const activeMessageCountLabel = computed(() => `${messages.value.length} ${t.value.messagesLabel}`)
 const messageRenderSignature = computed(() =>
@@ -532,7 +560,7 @@ const messageRenderSignature = computed(() =>
     .join('|'),
 )
 const sessionCountLabel = computed(() => `${sessions.value.length} ${t.value.sessionsLabel}`)
-const templateCountLabel = computed(() => `${businessTemplates.value.length} ${t.value.templatesLabel}`)
+const templateCountLabel = computed(() => `${localizedBusinessTemplates.value.length} ${t.value.templatesLabel}`)
 const isChatView = computed(() => currentWorkspaceView.value === 'chat')
 const isTemplateLibraryView = computed(() => currentWorkspaceView.value === 'templates')
 const previewToggleLabel = computed(() => {
@@ -588,6 +616,128 @@ const templateFacetLabels: Record<string, Record<LanguageCode, string>> = {
     zh: '财务管理',
     ms: 'Pengurusan Kewangan',
   },
+  human_resource_management: {
+    en: 'Human Resources',
+    de: 'Personalmanagement',
+    zh: '人力资源',
+    ms: 'Sumber Manusia',
+  },
+  training_system: {
+    en: 'Training System',
+    de: 'Schulungssystem',
+    zh: '培训系统',
+    ms: 'Sistem Latihan',
+  },
+}
+const templateTagLabels: Record<string, Record<LanguageCode, string>> = {
+  finance: {
+    en: 'Finance',
+    de: 'Finanzen',
+    zh: '财务',
+    ms: 'Kewangan',
+  },
+  budget: {
+    en: 'Budget',
+    de: 'Budget',
+    zh: '预算',
+    ms: 'Bajet',
+  },
+  expense: {
+    en: 'Expense',
+    de: 'Ausgaben',
+    zh: '费用',
+    ms: 'Perbelanjaan',
+  },
+  payment: {
+    en: 'Payment',
+    de: 'Zahlung',
+    zh: '付款',
+    ms: 'Bayaran',
+  },
+  invoice: {
+    en: 'Invoice',
+    de: 'Rechnung',
+    zh: '发票',
+    ms: 'Invois',
+  },
+  reporting: {
+    en: 'Reporting',
+    de: 'Reporting',
+    zh: '报表',
+    ms: 'Pelaporan',
+  },
+  hr: {
+    en: 'HR',
+    de: 'HR',
+    zh: '人力',
+    ms: 'HR',
+  },
+  employee: {
+    en: 'Employee',
+    de: 'Mitarbeitende',
+    zh: '员工',
+    ms: 'Pekerja',
+  },
+  recruitment: {
+    en: 'Recruitment',
+    de: 'Recruiting',
+    zh: '招聘',
+    ms: 'Pengambilan',
+  },
+  attendance: {
+    en: 'Attendance',
+    de: 'Anwesenheit',
+    zh: '考勤',
+    ms: 'Kehadiran',
+  },
+  payroll: {
+    en: 'Payroll',
+    de: 'Payroll',
+    zh: '薪酬',
+    ms: 'Gaji',
+  },
+  performance: {
+    en: 'Performance',
+    de: 'Performance',
+    zh: '绩效',
+    ms: 'Prestasi',
+  },
+  training: {
+    en: 'Training',
+    de: 'Schulung',
+    zh: '培训',
+    ms: 'Latihan',
+  },
+  course: {
+    en: 'Course',
+    de: 'Kurs',
+    zh: '课程',
+    ms: 'Kursus',
+  },
+  learning: {
+    en: 'Learning',
+    de: 'Lernen',
+    zh: '学习',
+    ms: 'Pembelajaran',
+  },
+  exam: {
+    en: 'Exam',
+    de: 'Pruefung',
+    zh: '考试',
+    ms: 'Peperiksaan',
+  },
+  certificate: {
+    en: 'Certificate',
+    de: 'Zertifikat',
+    zh: '证书',
+    ms: 'Sijil',
+  },
+  enrollment: {
+    en: 'Enrollment',
+    de: 'Anmeldung',
+    zh: '报名',
+    ms: 'Pendaftaran',
+  },
 }
 function selectLanguage(lang: LanguageCode) {
   currentLanguage.value = lang
@@ -626,6 +776,48 @@ function formatError(error: unknown, fallback: string): string {
     return error.message
   }
   return fallback
+}
+
+function normalizeLanguageToken(language: string): string {
+  const normalized = String(language || '').trim().toLowerCase().replace('_', '-')
+  if (normalized === 'zh' || normalized.startsWith('zh-')) {
+    return 'zh'
+  }
+  return normalized
+}
+
+function templateMatchesLanguage(templateItem: BusinessTemplateSummary, language: string): boolean {
+  return normalizeLanguageToken(templateItem.language) === normalizeLanguageToken(language)
+}
+
+function resolveLocalizedBusinessTemplateSummary(templateId: string): BusinessTemplateSummary | null {
+  if (!templateId) {
+    return null
+  }
+
+  const sourceTemplate = businessTemplates.value.find((item) => item.template_id === templateId)
+  if (!sourceTemplate) {
+    return null
+  }
+
+  const groupingKey = sourceTemplate.template_key || sourceTemplate.template_id
+  return (
+    businessTemplates.value.find(
+      (item) =>
+        (item.template_key || item.template_id) === groupingKey &&
+        templateMatchesLanguage(item, currentLanguage.value),
+    ) ||
+    sourceTemplate ||
+    null
+  )
+}
+
+function sessionTemplateName(session: SessionSummary): string {
+  return (
+    resolveLocalizedBusinessTemplateSummary(session.applied_template_id)?.template_name ||
+    session.applied_template_name?.trim() ||
+    ''
+  )
 }
 
 function apiUrl(path: string): string {
@@ -725,6 +917,14 @@ function formatTemplateFacet(value: string): string {
     return ''
   }
   return templateFacetLabels[normalized]?.[currentLanguage.value] || humanizeTemplateFacet(normalized)
+}
+
+function formatTemplateTag(value: string): string {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) {
+    return ''
+  }
+  return templateTagLabels[normalized]?.[currentLanguage.value] || humanizeTemplateFacet(normalized)
 }
 
 function resetStructuredRequirementState() {
@@ -1097,7 +1297,10 @@ async function createSession(options: { templateId?: string } = {}) {
   try {
     const data = await apiJson<SessionDetail>('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify(options.templateId ? { template_id: options.templateId } : {}),
+      body: JSON.stringify({
+        language: currentLanguage.value,
+        ...(options.templateId ? { template_id: options.templateId } : {}),
+      }),
     })
 
     sessionId.value = data.session_id
@@ -1909,6 +2112,19 @@ onMounted(async () => {
 })
 
 watch(currentLanguage, (language, previousLanguage) => {
+  const localizedTemplate = resolveLocalizedBusinessTemplateSummary(selectedBusinessTemplateId.value)
+  if (localizedTemplate && localizedTemplate.template_id !== selectedBusinessTemplateId.value) {
+    selectedBusinessTemplateId.value = localizedTemplate.template_id
+    loadingTemplateDetail.value = true
+    void ensureBusinessTemplateDetail(localizedTemplate.template_id)
+      .catch((error) => {
+        templateDialogError.value = formatError(error, t.value.failedToLoadTemplates)
+      })
+      .finally(() => {
+        loadingTemplateDetail.value = false
+      })
+  }
+
   if (!sessionId.value || language === previousLanguage) {
     return
   }
@@ -2068,8 +2284,8 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                         <span class="session-card-time">{{ formatSessionTime(session.updated_at) }}</span>
                       </div>
                       <p class="session-card-preview">{{ sessionPreview(session) }}</p>
-                      <p v-if="session.applied_template_name" class="session-card-template">
-                        {{ session.applied_template_name }}
+                      <p v-if="sessionTemplateName(session)" class="session-card-template">
+                        {{ sessionTemplateName(session) }}
                       </p>
                     </div>
                   </button>
@@ -2345,8 +2561,8 @@ watch(messageRenderSignature, (signature, previousSignature) => {
             <div v-if="loadingTemplates" class="template-page-state">
               {{ t.templateLibraryLoading }}
             </div>
-            <div v-else-if="businessTemplates.length" class="template-page-grid">
-              <article v-for="templateItem in businessTemplates" :key="templateItem.template_id" class="template-page-card">
+            <div v-else-if="localizedBusinessTemplates.length" class="template-page-grid">
+              <article v-for="templateItem in localizedBusinessTemplates" :key="templateItem.template_id" class="template-page-card">
                 <div class="template-page-card-head">
                   <div class="template-page-card-heading">
                     <p class="template-page-card-eyebrow">
@@ -2362,7 +2578,7 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                 </p>
 
                 <div v-if="templateItem.tags.length" class="template-page-tags">
-                  <span v-for="tag in templateItem.tags.slice(0, 4)" :key="tag" class="template-page-tag">{{ tag }}</span>
+                  <span v-for="tag in templateItem.tags.slice(0, 4)" :key="tag" class="template-page-tag">{{ formatTemplateTag(tag) }}</span>
                 </div>
 
                 <div v-if="templateItem.section_titles.length" class="template-page-sections">
@@ -2430,7 +2646,7 @@ watch(messageRenderSignature, (signature, previousSignature) => {
           <div v-if="selectedBusinessTemplate.tags.length" class="template-dialog-block">
             <h4>{{ t.templateTags }}</h4>
             <div class="template-dialog-tags">
-              <span v-for="tag in selectedBusinessTemplate.tags" :key="tag" class="template-dialog-tag">{{ tag }}</span>
+              <span v-for="tag in selectedBusinessTemplate.tags" :key="tag" class="template-dialog-tag">{{ formatTemplateTag(tag) }}</span>
             </div>
           </div>
 
@@ -3213,7 +3429,7 @@ body {
 
 .template-page-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
 }
 
@@ -4218,6 +4434,10 @@ body {
 
   .template-page-hero-copy p:last-child {
     font-size: 0.92rem;
+  }
+
+  .template-page-grid {
+    grid-template-columns: 1fr;
   }
 
   .template-page-card {

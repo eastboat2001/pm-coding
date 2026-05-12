@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "projectId": "project-7468b404",
+  "sessionId": "7468b404-0ceb-426c-b771-d8f7769cf1a0",
+  "title": "个人记账系统",
+  "status": "running",
+  "previewUrl": "http://localhost:5173/preview/project-7468b404/",
+  "deploymentRoot": "C:\\Users\\admin\\Desktop\\pm-ch\\pm-coding\\pi-mono-0.73.0\\packages\\web-ui\\example\\data\\deployments\\project-7468b404",
+  "serveRoot": "C:\\Users\\admin\\Desktop\\pm-ch\\pm-coding\\pi-mono-0.73.0\\packages\\web-ui\\example\\data\\deployments\\project-7468b404",
+  "fileCount": 23,
+  "updatedAt": "2026-05-12T01:10:30.208Z",
+  "logs": []
+}

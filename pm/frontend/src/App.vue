@@ -393,9 +393,9 @@ const shellCopy = {
     heroLead: 'Hello,',
     heroAccent: 'AI PM',
     heroQuestion: 'Tell me what you need and I will help you turn it into a complete requirement document.',
-    assistantIntro: 'Hello, I am AITC. Ask directly, paste context, or start from a template below.',
-    composerPlaceholder: 'Ask AITC anything',
-    footerNotice: 'AITC may make mistakes. Please verify important information.',
+    assistantIntro: 'Hello, I am AIPM. You can ask directly, paste context, or choose a template to start.',
+    composerPlaceholder: 'Ask AIPM anything',
+    footerNotice: 'AIPM may make mistakes. Please verify important information.',
     footerBrand: 'BUME QDM | AI transformation club',
     recent: 'Recent',
     promptModes: 'Conversation strategy',
@@ -409,9 +409,9 @@ const shellCopy = {
     heroLead: 'Hallo,',
     heroAccent: 'AI PM',
     heroQuestion: 'Erzaehle mir deine Anforderungen und ich helfe dir, ein vollstaendiges Anforderungsdokument zu erstellen.',
-    assistantIntro: 'Hallo, ich bin AITC. Stelle direkt eine Frage, fuege Kontext ein oder starte mit einer Vorlage.',
-    composerPlaceholder: 'Stelle AITC eine Frage',
-    footerNotice: 'AITC kann Fehler machen. Bitte pruefe wichtige Informationen.',
+    assistantIntro: 'Hallo, ich bin AIPM. Du kannst direkt fragen, Kontext einfuegen oder mit einer Vorlage starten.',
+    composerPlaceholder: 'Stelle AIPM eine Frage',
+    footerNotice: 'AIPM kann Fehler machen. Bitte pruefe wichtige Informationen.',
     footerBrand: 'BUME QDM | AI transformation club',
     recent: 'Neueste',
     promptModes: 'Dialogstrategie',
@@ -427,7 +427,7 @@ const shellCopy = {
     heroQuestion: '',
     assistantIntro: '你好，我是 AIPM。你可以直接提问、粘贴上下文，或选择一个模板开始。',
     composerPlaceholder: '问AIPM任何问题',
-    footerNotice: 'AITC 可能会出错，请核对重要信息。',
+    footerNotice: 'AIPM 可能会出错，请核对重要信息。',
     footerBrand: 'BUME QDM | AI transformation club',
     recent: '最近',
     promptModes: '提问策略',
@@ -440,9 +440,9 @@ const shellCopy = {
     heroLead: 'Halo,',
     heroAccent: 'AI PM',
     heroQuestion: 'Beritahu keperluan anda dan saya akan bantu melengkapkan dokumen keperluan.',
-    assistantIntro: 'Halo, saya AITC. Tanya terus, tampal konteks, atau mulakan daripada templat.',
-    composerPlaceholder: 'Tanya apa sahaja kepada AITC',
-    footerNotice: 'AITC mungkin membuat kesilapan. Sila semak maklumat penting.',
+    assistantIntro: 'Halo, saya AIPM. Anda boleh terus bertanya, tampal konteks, atau pilih templat untuk bermula.',
+    composerPlaceholder: 'Tanya apa sahaja kepada AIPM',
+    footerNotice: 'AIPM mungkin membuat kesilapan. Sila semak maklumat penting.',
     footerBrand: 'BUME QDM | AI transformation club',
     recent: 'Terkini',
     promptModes: 'Strategi perbualan',
@@ -475,7 +475,14 @@ const t = computed(() => translations[currentLanguage.value])
 const shellText = computed(() => shellCopy[currentLanguage.value] ?? shellCopy.en)
 const activeSessionSummary = computed(() => sessions.value.find((item) => item.session_id === sessionId.value) || null)
 const activeSessionTitle = computed(() => sessionTitle(activeSessionSummary.value?.title || ''))
-const activeBusinessTemplateName = computed(() => activeSessionSummary.value?.applied_template_name?.trim() || '')
+const activeBusinessTemplateName = computed(() => {
+  const appliedTemplateId = activeSessionSummary.value?.applied_template_id || ''
+  return (
+    resolveLocalizedBusinessTemplateSummary(appliedTemplateId)?.template_name ||
+    activeSessionSummary.value?.applied_template_name?.trim() ||
+    ''
+  )
+})
 const templateDrivenSession = computed(() => Boolean(activeSessionSummary.value?.applied_template_id))
 const hasUserMessage = computed(() => messages.value.some((item) => item.role === 'user'))
 const latestPrdDocument = computed(() => findLatestDocumentMessage('prd_doc'))
@@ -514,16 +521,51 @@ const promptTemplateOptions = computed<{ value: PromptTemplate; label: string }[
 const currentLanguageLabel = computed(
   () => languageOptions.find((option) => option.code === currentLanguage.value)?.label || languageOptions[0].label,
 )
-const templateShelfItems = computed(() => businessTemplates.value.slice(0, 6))
+const localizedBusinessTemplates = computed(() => {
+  const byTemplateKey = new Map<string, BusinessTemplateSummary>()
+
+  for (const templateItem of businessTemplates.value) {
+    const groupingKey = templateItem.template_key || templateItem.template_id
+    const currentItem = byTemplateKey.get(groupingKey)
+
+    if (!currentItem) {
+      byTemplateKey.set(groupingKey, templateItem)
+      continue
+    }
+
+    const currentMatches = templateMatchesLanguage(currentItem, currentLanguage.value)
+    const nextMatches = templateMatchesLanguage(templateItem, currentLanguage.value)
+    if (nextMatches && !currentMatches) {
+      byTemplateKey.set(groupingKey, templateItem)
+    }
+  }
+
+  return Array.from(byTemplateKey.values())
+})
+const templateShelfItems = computed(() => localizedBusinessTemplates.value.slice(0, 6))
 const recentSessions = computed(() => sessions.value.slice(0, 6))
 const activeMessageCountLabel = computed(() => `${messages.value.length} ${t.value.messagesLabel}`)
+const messageRenderSignature = computed(() =>
+  messages.value
+    .map((message, index) =>
+      [
+        index,
+        message.role,
+        message.kind || 'chat',
+        message.content.length,
+        message.thinking?.length ?? 0,
+        message.downloadUrl ? 1 : 0,
+      ].join(':'),
+    )
+    .join('|'),
+)
 const sessionCountLabel = computed(() => `${sessions.value.length} ${t.value.sessionsLabel}`)
-const templateCountLabel = computed(() => `${businessTemplates.value.length} ${t.value.templatesLabel}`)
+const templateCountLabel = computed(() => `${localizedBusinessTemplates.value.length} ${t.value.templatesLabel}`)
 const isChatView = computed(() => currentWorkspaceView.value === 'chat')
 const isTemplateLibraryView = computed(() => currentWorkspaceView.value === 'templates')
 const previewToggleLabel = computed(() => {
   if (currentLanguage.value === 'zh') {
-    return previewPanelOpen.value ? '收起预览' : '打开预览'
+    return previewPanelOpen.value ? '收起预览' : '预览文档'
   }
   if (currentLanguage.value === 'de') {
     return previewPanelOpen.value ? 'Vorschau schliessen' : 'Vorschau oeffnen'
@@ -574,6 +616,128 @@ const templateFacetLabels: Record<string, Record<LanguageCode, string>> = {
     zh: '财务管理',
     ms: 'Pengurusan Kewangan',
   },
+  human_resource_management: {
+    en: 'Human Resources',
+    de: 'Personalmanagement',
+    zh: '人力资源',
+    ms: 'Sumber Manusia',
+  },
+  training_system: {
+    en: 'Training System',
+    de: 'Schulungssystem',
+    zh: '培训系统',
+    ms: 'Sistem Latihan',
+  },
+}
+const templateTagLabels: Record<string, Record<LanguageCode, string>> = {
+  finance: {
+    en: 'Finance',
+    de: 'Finanzen',
+    zh: '财务',
+    ms: 'Kewangan',
+  },
+  budget: {
+    en: 'Budget',
+    de: 'Budget',
+    zh: '预算',
+    ms: 'Bajet',
+  },
+  expense: {
+    en: 'Expense',
+    de: 'Ausgaben',
+    zh: '费用',
+    ms: 'Perbelanjaan',
+  },
+  payment: {
+    en: 'Payment',
+    de: 'Zahlung',
+    zh: '付款',
+    ms: 'Bayaran',
+  },
+  invoice: {
+    en: 'Invoice',
+    de: 'Rechnung',
+    zh: '发票',
+    ms: 'Invois',
+  },
+  reporting: {
+    en: 'Reporting',
+    de: 'Reporting',
+    zh: '报表',
+    ms: 'Pelaporan',
+  },
+  hr: {
+    en: 'HR',
+    de: 'HR',
+    zh: '人力',
+    ms: 'HR',
+  },
+  employee: {
+    en: 'Employee',
+    de: 'Mitarbeitende',
+    zh: '员工',
+    ms: 'Pekerja',
+  },
+  recruitment: {
+    en: 'Recruitment',
+    de: 'Recruiting',
+    zh: '招聘',
+    ms: 'Pengambilan',
+  },
+  attendance: {
+    en: 'Attendance',
+    de: 'Anwesenheit',
+    zh: '考勤',
+    ms: 'Kehadiran',
+  },
+  payroll: {
+    en: 'Payroll',
+    de: 'Payroll',
+    zh: '薪酬',
+    ms: 'Gaji',
+  },
+  performance: {
+    en: 'Performance',
+    de: 'Performance',
+    zh: '绩效',
+    ms: 'Prestasi',
+  },
+  training: {
+    en: 'Training',
+    de: 'Schulung',
+    zh: '培训',
+    ms: 'Latihan',
+  },
+  course: {
+    en: 'Course',
+    de: 'Kurs',
+    zh: '课程',
+    ms: 'Kursus',
+  },
+  learning: {
+    en: 'Learning',
+    de: 'Lernen',
+    zh: '学习',
+    ms: 'Pembelajaran',
+  },
+  exam: {
+    en: 'Exam',
+    de: 'Pruefung',
+    zh: '考试',
+    ms: 'Peperiksaan',
+  },
+  certificate: {
+    en: 'Certificate',
+    de: 'Zertifikat',
+    zh: '证书',
+    ms: 'Sijil',
+  },
+  enrollment: {
+    en: 'Enrollment',
+    de: 'Anmeldung',
+    zh: '报名',
+    ms: 'Pendaftaran',
+  },
 }
 function selectLanguage(lang: LanguageCode) {
   currentLanguage.value = lang
@@ -612,6 +776,48 @@ function formatError(error: unknown, fallback: string): string {
     return error.message
   }
   return fallback
+}
+
+function normalizeLanguageToken(language: string): string {
+  const normalized = String(language || '').trim().toLowerCase().replace('_', '-')
+  if (normalized === 'zh' || normalized.startsWith('zh-')) {
+    return 'zh'
+  }
+  return normalized
+}
+
+function templateMatchesLanguage(templateItem: BusinessTemplateSummary, language: string): boolean {
+  return normalizeLanguageToken(templateItem.language) === normalizeLanguageToken(language)
+}
+
+function resolveLocalizedBusinessTemplateSummary(templateId: string): BusinessTemplateSummary | null {
+  if (!templateId) {
+    return null
+  }
+
+  const sourceTemplate = businessTemplates.value.find((item) => item.template_id === templateId)
+  if (!sourceTemplate) {
+    return null
+  }
+
+  const groupingKey = sourceTemplate.template_key || sourceTemplate.template_id
+  return (
+    businessTemplates.value.find(
+      (item) =>
+        (item.template_key || item.template_id) === groupingKey &&
+        templateMatchesLanguage(item, currentLanguage.value),
+    ) ||
+    sourceTemplate ||
+    null
+  )
+}
+
+function sessionTemplateName(session: SessionSummary): string {
+  return (
+    resolveLocalizedBusinessTemplateSummary(session.applied_template_id)?.template_name ||
+    session.applied_template_name?.trim() ||
+    ''
+  )
 }
 
 function apiUrl(path: string): string {
@@ -711,6 +917,14 @@ function formatTemplateFacet(value: string): string {
     return ''
   }
   return templateFacetLabels[normalized]?.[currentLanguage.value] || humanizeTemplateFacet(normalized)
+}
+
+function formatTemplateTag(value: string): string {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) {
+    return ''
+  }
+  return templateTagLabels[normalized]?.[currentLanguage.value] || humanizeTemplateFacet(normalized)
 }
 
 function resetStructuredRequirementState() {
@@ -1083,7 +1297,10 @@ async function createSession(options: { templateId?: string } = {}) {
   try {
     const data = await apiJson<SessionDetail>('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify(options.templateId ? { template_id: options.templateId } : {}),
+      body: JSON.stringify({
+        language: currentLanguage.value,
+        ...(options.templateId ? { template_id: options.templateId } : {}),
+      }),
     })
 
     sessionId.value = data.session_id
@@ -1615,11 +1832,26 @@ async function sendDesignDocFallback(
 }
 
 function scrollToBottom() {
-  setTimeout(() => {
-    if (chatList.value) {
-      chatList.value.scrollTop = chatList.value.scrollHeight
+  const align = (remainingFrames = 2) => {
+    if (!chatList.value) {
+      return
     }
-  }, 100)
+
+    chatList.value.scrollTop = chatList.value.scrollHeight
+
+    if (remainingFrames > 0) {
+      window.requestAnimationFrame(() => align(remainingFrames - 1))
+    }
+  }
+
+  void nextTick(() => {
+    window.requestAnimationFrame(() => align())
+  })
+}
+
+function appendReactiveMessage(message: ChatMessage): ChatMessage {
+  messages.value.push(message)
+  return messages.value[messages.value.length - 1] as ChatMessage
 }
 
 function autoResizeTextarea() {
@@ -1665,19 +1897,17 @@ async function sendMessage() {
   clearError()
   const pipelineState = createMessagePipelineState()
 
-  const userChatMessage: ChatMessage = {
+  const userChatMessage = appendReactiveMessage({
     role: 'user',
     content: message,
     createdAt: new Date().toISOString(),
-  }
-  const assistantMessage: ChatMessage = {
+  })
+  const assistantMessage = appendReactiveMessage({
     role: 'assistant',
     content: '',
     thinking: '',
     createdAt: new Date().toISOString(),
-  }
-  messages.value.push(userChatMessage)
-  messages.value.push(assistantMessage)
+  })
   inputText.value = ''
   autoResizeTextarea()
   scrollToBottom()
@@ -1721,8 +1951,7 @@ async function generateDocuments() {
   let shouldRefreshHistory = false
 
   try {
-    const prdMessage = createGeneratedDocumentMessage('prd_doc')
-    messages.value.push(prdMessage)
+    const prdMessage = appendReactiveMessage(createGeneratedDocumentMessage('prd_doc'))
     scrollToBottom()
 
     await sendPrdDocStream(sessionId.value, prdMessage, currentLanguage.value)
@@ -1733,8 +1962,7 @@ async function generateDocuments() {
     }
     shouldRefreshHistory = true
 
-    const designMessage = createGeneratedDocumentMessage('design_doc')
-    messages.value.push(designMessage)
+    const designMessage = appendReactiveMessage(createGeneratedDocumentMessage('design_doc'))
     scrollToBottom()
 
     await sendDesignDocStream(sessionId.value, designMessage, currentLanguage.value)
@@ -1884,6 +2112,19 @@ onMounted(async () => {
 })
 
 watch(currentLanguage, (language, previousLanguage) => {
+  const localizedTemplate = resolveLocalizedBusinessTemplateSummary(selectedBusinessTemplateId.value)
+  if (localizedTemplate && localizedTemplate.template_id !== selectedBusinessTemplateId.value) {
+    selectedBusinessTemplateId.value = localizedTemplate.template_id
+    loadingTemplateDetail.value = true
+    void ensureBusinessTemplateDetail(localizedTemplate.template_id)
+      .catch((error) => {
+        templateDialogError.value = formatError(error, t.value.failedToLoadTemplates)
+      })
+      .finally(() => {
+        loadingTemplateDetail.value = false
+      })
+  }
+
   if (!sessionId.value || language === previousLanguage) {
     return
   }
@@ -1891,6 +2132,13 @@ watch(currentLanguage, (language, previousLanguage) => {
     sessionId.value,
     { background: hasStructuredRequirementContent(structuredRequirementModel.value) },
   )
+})
+
+watch(messageRenderSignature, (signature, previousSignature) => {
+  if (!isChatView.value || !messages.value.length || signature === previousSignature) {
+    return
+  }
+  scrollToBottom()
 })
 </script>
 
@@ -2036,8 +2284,8 @@ watch(currentLanguage, (language, previousLanguage) => {
                         <span class="session-card-time">{{ formatSessionTime(session.updated_at) }}</span>
                       </div>
                       <p class="session-card-preview">{{ sessionPreview(session) }}</p>
-                      <p v-if="session.applied_template_name" class="session-card-template">
-                        {{ session.applied_template_name }}
+                      <p v-if="sessionTemplateName(session)" class="session-card-template">
+                        {{ sessionTemplateName(session) }}
                       </p>
                     </div>
                   </button>
@@ -2097,10 +2345,6 @@ watch(currentLanguage, (language, previousLanguage) => {
                 </button>
               </div>
             </details>
-
-            <button class="profile-badge" type="button" aria-label="profile">
-              D
-            </button>
           </div>
         </header>
 
@@ -2225,7 +2469,6 @@ watch(currentLanguage, (language, previousLanguage) => {
               </div>
 
               <form class="composer-card" @submit.prevent="sendMessage">
-                <span class="composer-add" aria-hidden="true">+</span>
                 <textarea
                   v-model="inputText"
                   rows="1"
@@ -2258,12 +2501,21 @@ watch(currentLanguage, (language, previousLanguage) => {
                     </svg>
                   </button>
 
-                  <button class="composer-send" type="submit" :disabled="!inputText.trim() || sending || generatingDocuments || switchingSession">
+                  <button
+                    class="composer-send"
+                    type="submit"
+                    :aria-label="sending ? t.sending : t.send"
+                    :title="sending ? t.sending : t.send"
+                    :disabled="!inputText.trim() || sending || generatingDocuments || switchingSession"
+                  >
                     <svg v-if="!sending" class="btn-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
                       <path d="M12 5v14"/>
                       <path d="M6.5 10.5 12 5l5.5 5.5"/>
                     </svg>
-                    <span v-else>{{ t.sending }}</span>
+                    <svg v-else class="composer-send-spinner" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-opacity="0.28" stroke-width="2.4"/>
+                      <path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+                    </svg>
                   </button>
                 </div>
               </form>
@@ -2309,8 +2561,8 @@ watch(currentLanguage, (language, previousLanguage) => {
             <div v-if="loadingTemplates" class="template-page-state">
               {{ t.templateLibraryLoading }}
             </div>
-            <div v-else-if="businessTemplates.length" class="template-page-grid">
-              <article v-for="templateItem in businessTemplates" :key="templateItem.template_id" class="template-page-card">
+            <div v-else-if="localizedBusinessTemplates.length" class="template-page-grid">
+              <article v-for="templateItem in localizedBusinessTemplates" :key="templateItem.template_id" class="template-page-card">
                 <div class="template-page-card-head">
                   <div class="template-page-card-heading">
                     <p class="template-page-card-eyebrow">
@@ -2326,7 +2578,7 @@ watch(currentLanguage, (language, previousLanguage) => {
                 </p>
 
                 <div v-if="templateItem.tags.length" class="template-page-tags">
-                  <span v-for="tag in templateItem.tags.slice(0, 4)" :key="tag" class="template-page-tag">{{ tag }}</span>
+                  <span v-for="tag in templateItem.tags.slice(0, 4)" :key="tag" class="template-page-tag">{{ formatTemplateTag(tag) }}</span>
                 </div>
 
                 <div v-if="templateItem.section_titles.length" class="template-page-sections">
@@ -2394,7 +2646,7 @@ watch(currentLanguage, (language, previousLanguage) => {
           <div v-if="selectedBusinessTemplate.tags.length" class="template-dialog-block">
             <h4>{{ t.templateTags }}</h4>
             <div class="template-dialog-tags">
-              <span v-for="tag in selectedBusinessTemplate.tags" :key="tag" class="template-dialog-tag">{{ tag }}</span>
+              <span v-for="tag in selectedBusinessTemplate.tags" :key="tag" class="template-dialog-tag">{{ formatTemplateTag(tag) }}</span>
             </div>
           </div>
 
@@ -2601,7 +2853,6 @@ body {
 }
 
 .sidebar-toggle,
-.profile-badge,
 .template-dialog-close,
 .session-card-delete {
   border: 0;
@@ -2867,12 +3118,19 @@ body {
   line-height: 1.4;
 }
 
+.session-card-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
 .session-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   padding: 0;
-  align-items: start;
+  align-items: center;
   transition: background 0.2s ease, color 0.2s ease;
   border-radius: 14px;
 }
@@ -2926,7 +3184,7 @@ body {
 .session-card-delete {
   width: 28px;
   height: 28px;
-  margin: 8px 8px 0 0;
+  margin: 0 8px 0 0;
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
@@ -2988,9 +3246,8 @@ body {
 .main-topbar-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 6px;
-  background: rgba(255, 255, 255, 0.34);
+  gap: 0;
+  padding: 0;
 }
 
 .ats-lockup {
@@ -3029,11 +3286,13 @@ body {
   justify-content: space-between;
   gap: 12px;
   padding: 11px 16px;
-  border-radius: 999px;
-  background: rgba(243, 247, 255, 0.94);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.86);
   color: var(--ink);
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(220, 229, 243, 0.92);
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(205, 219, 240, 0.92), 0 8px 18px rgba(43, 76, 128, 0.06);
+  transition: background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
 }
 
 .language-switcher summary::-webkit-details-marker {
@@ -3054,53 +3313,55 @@ body {
   width: 14px;
   height: 14px;
   color: var(--muted);
+  transition: transform 0.18s ease, color 0.18s ease;
 }
 
 .language-switcher[open] summary {
-  border-bottom-left-radius: 22px;
-  border-bottom-right-radius: 22px;
+  background: #fff;
+  color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px rgba(95, 139, 240, 0.38), 0 12px 24px rgba(43, 76, 128, 0.1);
+}
+
+.language-switcher[open] summary svg {
+  color: var(--accent-strong);
+  transform: rotate(180deg);
+}
+
+.language-switcher summary:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(95, 139, 240, 0.5), 0 0 0 3px rgba(95, 139, 240, 0.16);
 }
 
 .language-switcher-menu {
   position: absolute;
   right: 0;
-  top: calc(100% + 10px);
+  top: calc(100% + 8px);
   z-index: 10;
-  min-width: 220px;
-  padding: 10px;
-  border-radius: 24px;
+  min-width: 100%;
+  padding: 8px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid var(--line);
-  box-shadow: var(--shadow);
+  box-shadow: 0 18px 38px rgba(43, 76, 128, 0.16);
   display: grid;
-  gap: 8px;
+  gap: 4px;
 }
 
 .language-switcher-option {
   border: 0;
-  border-radius: 14px;
-  padding: 11px 14px;
+  border-radius: 10px;
+  padding: 10px 12px;
   background: transparent;
   text-align: left;
   color: var(--ink);
   cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .language-switcher-option.active,
 .language-switcher-option:hover {
-  background: var(--accent-soft);
+  background: rgba(232, 240, 255, 0.9);
   color: var(--accent-strong);
-}
-
-.profile-badge {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent) 0%, #4f83ef 100%);
-  color: #fff;
-  font-size: 1rem;
-  font-weight: 800;
-  box-shadow: 0 12px 20px rgba(65, 117, 234, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(95, 139, 240, 0.16);
 }
 
 .main-stage {
@@ -3168,7 +3429,7 @@ body {
 
 .template-page-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
 }
 
@@ -3654,7 +3915,7 @@ body {
 
 .composer-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-end;
   gap: 16px;
   padding: 18px 20px 18px 22px;
@@ -3662,13 +3923,6 @@ body {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: var(--shadow);
-}
-
-.composer-add {
-  align-self: center;
-  color: var(--muted);
-  font-size: 2rem;
-  line-height: 1;
 }
 
 .composer-input {
@@ -3967,6 +4221,12 @@ body {
   height: 20px;
 }
 
+.composer-send-spinner {
+  width: 20px;
+  height: 20px;
+  animation: spin 0.9s linear infinite;
+}
+
 @keyframes typingBounce {
   0%,
   80%,
@@ -3987,6 +4247,15 @@ body {
   }
   100% {
     box-shadow: 0 0 0 0 rgba(181, 72, 72, 0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -4167,6 +4436,10 @@ body {
     font-size: 0.92rem;
   }
 
+  .template-page-grid {
+    grid-template-columns: 1fr;
+  }
+
   .template-page-card {
     padding: 16px;
   }
@@ -4181,10 +4454,6 @@ body {
 
   .composer-context-row {
     align-items: stretch;
-  }
-
-  .composer-add {
-    display: none;
   }
 
   .composer-actions {

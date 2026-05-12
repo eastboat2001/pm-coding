@@ -31,6 +31,7 @@ The library itself provides browser-side storage primitives and UI hooks, but it
 - refresh restores the active or latest session
 - the selected model is remembered across sessions
 - the example app mirrors sessions and generated artifact projects to configured local directories through its Vite server
+- the example app can deploy generated artifacts in the background and return a preview URL in the chat conversation
 
 ```typescript
 import { Agent } from '@mariozechner/pi-agent-core';
@@ -208,8 +209,9 @@ The example app is intentionally more opinionated than the library:
 - session JSON files are mirrored to the configured `sessionsDir`
 - settings are mirrored to the configured `settingsFile`
 - generated artifact files are reconstructed under the configured `projectsRootDir`
+- deployed projects are written under the configured `deploymentsRootDir` and served from `/preview/<project-id>/`
 
-Configured local disk mirroring is implemented in the example app only. It is not part of the shared `StorageBackend` abstraction today. Edit `packages/web-ui/example/pi-storage.config.json` to change the storage and generated-project directories.
+Configured local disk mirroring and background deployment are implemented in the example app only. They are not part of the shared `StorageBackend` abstraction today. Edit `packages/web-ui/example/pi-storage.config.json` to change storage, generated-project, deployment, and preview URL settings.
 
 ### Agent (from pi-agent-core)
 

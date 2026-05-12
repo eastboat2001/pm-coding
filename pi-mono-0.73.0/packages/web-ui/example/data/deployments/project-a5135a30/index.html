@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人备忘录日历</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部导航栏 -->
+        <header class="header">
+            <div class="nav-controls">
+                <div class="dropdown-group">
+                    <label for="year-select">年份：</label>
+                    <select id="year-select" class="dropdown"></select>
+                </div>
+                <div class="dropdown-group">
+                    <label for="month-select">月份：</label>
+                    <select id="month-select" class="dropdown">
+                        <option value="1">1月</option>
+                        <option value="2">2月</option>
+                        <option value="3">3月</option>
+                        <option value="4">4月</option>
+                        <option value="5">5月</option>
+                        <option value="6">6月</option>
+                        <option value="7">7月</option>
+                        <option value="8">8月</option>
+                        <option value="9">9月</option>
+                        <option value="10">10月</option>
+                        <option value="11">11月</option>
+                        <option value="12">12月</option>
+                    </select>
+                </div>
+                <button id="today-btn" class="btn btn-primary">回到今天</button>
+            </div>
+            <div class="current-date">
+                <span id="current-date-display"></span>
+            </div>
+        </header>
+
+        <!-- 日历网格 -->
+        <main class="calendar-container">
+            <div class="calendar-header">
+                <div class="weekday">周一</div>
+                <div class="weekday">周二</div>
+                <div class="weekday">周三</div>
+                <div class="weekday">周四</div>
+                <div class="weekday">周五</div>
+                <div class="weekday">周六</div>
+                <div class="weekday">周日</div>
+            </div>
+            <div id="calendar-grid" class="calendar-grid">
+                <!-- 日历日期格子将通过JavaScript动态生成 -->
+            </div>
+        </main>
+    </div>
+
+    <!-- 备忘录模态框 -->
+    <div id="memo-modal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-date-title"></h3>
+                <button id="modal-close" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="memo-textarea" placeholder="请在此输入备忘录内容..." rows="8"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button id="memo-delete" class="btn btn-danger">删除</button>
+                <button id="memo-save" class="btn btn-primary">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

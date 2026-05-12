@@ -1,6 +1,7 @@
 import type { Connect, Plugin } from "vite";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 
 type JsonObject = Record<string, any>;
 
@@ -8,10 +9,20 @@ interface StorageConfig {
 	sessionsDir: string;
 	settingsFile: string;
 	projectsRootDir: string;
+	deploymentsRootDir: string;
+	previewBaseUrl: string;
+	projectInstallCommand: string;
+	projectBuildCommand: string;
+	projectInstallTimeoutMs: number;
+	projectBuildTimeoutMs: number;
 }
 
 const API_PREFIX = "/api/pi-storage";
+const PROJECTS_API_PREFIX = "/api/pi-projects";
+const PREVIEW_PREFIX = "/preview";
 const CONFIG_FILE = "pi-storage.config.json";
+const DEPLOYMENT_MANIFEST_FILE = ".pi-deploy-files.json";
+const DEPLOYMENT_METADATA_FILE = ".pi-deployment.json";
 
 export function configuredStoragePlugin(): Plugin {
 	const rootDir = process.cwd();
@@ -21,10 +32,21 @@ export function configuredStoragePlugin(): Plugin {
 		mkdirSync(config.sessionsDir, { recursive: true });
 		mkdirSync(dirname(config.settingsFile), { recursive: true });
 		mkdirSync(config.projectsRootDir, { recursive: true });
+		mkdirSync(config.deploymentsRootDir, { recursive: true });
 	};
 
 	const handler: Connect.NextHandleFunction = async (req, res, next) => {
-		if (!req.url?.startsWith(API_PREFIX)) {
+		if (req.url?.startsWith(PREVIEW_PREFIX)) {
+			try {
+				ensureStorageDirs();
+				if (servePreviewRequest(config, req, res)) return;
+			} catch (error) {
+				sendJson(res, { error: error instanceof Error ? error.message : String(error) }, 500);
+				return;
+			}
+		}
+
+		if (!req.url?.startsWith(API_PREFIX) && !req.url?.startsWith(PROJECTS_API_PREFIX)) {
 			next();
 			return;
 		}
@@ -32,8 +54,28 @@ export function configuredStoragePlugin(): Plugin {
 		try {
 			ensureStorageDirs();
 			const url = new URL(req.url, "http://localhost");
-			const route = url.pathname.slice(API_PREFIX.length) || "/";
+			const isProjectsApi = url.pathname.startsWith(PROJECTS_API_PREFIX);
+			const route = url.pathname.slice(isProjectsApi ? PROJECTS_API_PREFIX.length : API_PREFIX.length) || "/";
 			const method = req.method || "GET";
+
+			if (isProjectsApi) {
+				if (method === "POST" && route === "/deploy") {
+					const body = await readJsonBody(req);
+					const result = await deployProject(config, body, req);
+					sendJson(res, result);
+					return;
+				}
+
+				const logsMatch = route.match(/^\/([^/]+)\/logs$/);
+				if (method === "GET" && logsMatch) {
+					const projectId = decodeURIComponent(logsMatch[1]);
+					sendJson(res, readDeploymentLogs(config, projectId));
+					return;
+				}
+
+				sendJson(res, { error: "Not found." }, 404);
+				return;
+			}
 
 			if (method === "GET" && route === "/status") {
 				sendJson(res, {
@@ -41,6 +83,8 @@ export function configuredStoragePlugin(): Plugin {
 					sessionsDir: config.sessionsDir,
 					settingsFile: config.settingsFile,
 					projectsRootDir: config.projectsRootDir,
+					deploymentsRootDir: config.deploymentsRootDir,
+					previewBaseUrl: config.previewBaseUrl,
 				});
 				return;
 			}
@@ -146,6 +190,12 @@ function loadStorageConfig(rootDir: string): StorageConfig {
 		sessionsDir: resolveConfiguredPath(rootDir, raw.sessionsDir || (legacyStorageDir ? join(legacyStorageDir, "sessions") : "data/sessions")),
 		settingsFile: resolveConfiguredPath(rootDir, raw.settingsFile || (legacyStorageDir ? join(legacyStorageDir, "settings.json") : "data/settings.json")),
 		projectsRootDir: resolveConfiguredPath(rootDir, raw.projectsRootDir || "data/generated_projects"),
+		deploymentsRootDir: resolveConfiguredPath(rootDir, raw.deploymentsRootDir || "data/deployments"),
+		previewBaseUrl: String(raw.previewBaseUrl || "").replace(/\/+$/, ""),
+		projectInstallCommand: String(raw.projectInstallCommand || "npm install"),
+		projectBuildCommand: String(raw.projectBuildCommand || "npm run build"),
+		projectInstallTimeoutMs: Number(raw.projectInstallTimeoutMs || 120000),
+		projectBuildTimeoutMs: Number(raw.projectBuildTimeoutMs || 120000),
 	};
 }
 
@@ -346,6 +396,225 @@ function deleteSessionAndProjects(projectsRootDir: string, sessionPath: string, 
 		}
 	}
 	return deleted;
+}
+
+async function deployProject(config: StorageConfig, body: JsonObject, req: Connect.IncomingMessage): Promise<JsonObject> {
+	const sessionId = String(body.sessionId || "").trim();
+	const title = String(body.title || "").trim();
+	const files = normalizeProjectFiles(body.files);
+	if (!sessionId) throw new Error("Field `sessionId` is required.");
+	if (files.length === 0) throw new Error("No project files were provided.");
+
+	const projectId = projectSlug(sessionId, title);
+	const deploymentDir = join(config.deploymentsRootDir, projectId);
+	assertInside(config.deploymentsRootDir, deploymentDir);
+	mkdirSync(deploymentDir, { recursive: true });
+	syncDeploymentFiles(deploymentDir, files);
+
+	const logs: string[] = [];
+	const packageJsonPath = join(deploymentDir, "package.json");
+	let buildOutputDir = deploymentDir;
+	let status = "running";
+
+	try {
+		if (existsSync(packageJsonPath)) {
+			await runCommand(config.projectInstallCommand, deploymentDir, config.projectInstallTimeoutMs, logs);
+			const packageJson = readJsonFile(packageJsonPath);
+			if (isObject(packageJson.scripts) && typeof packageJson.scripts.build === "string") {
+				await runCommand(config.projectBuildCommand, deploymentDir, config.projectBuildTimeoutMs, logs);
+				const distDir = join(deploymentDir, "dist");
+				if (existsSync(distDir) && statSync(distDir).isDirectory()) {
+					buildOutputDir = distDir;
+				}
+			}
+		}
+	} catch (error) {
+		status = "failed";
+		logs.push(error instanceof Error ? error.message : String(error));
+	}
+
+	const previewUrl = buildPreviewUrl(config, req, projectId);
+	const metadata = {
+		version: 1,
+		projectId,
+		sessionId,
+		title,
+		status,
+		previewUrl,
+		deploymentRoot: deploymentDir,
+		serveRoot: buildOutputDir,
+		fileCount: files.length,
+		updatedAt: new Date().toISOString(),
+		logs,
+	};
+	writeJsonFile(join(deploymentDir, DEPLOYMENT_METADATA_FILE), metadata);
+
+	return metadata;
+}
+
+function normalizeProjectFiles(value: unknown): Array<{ filename: string; content: string }> {
+	if (!Array.isArray(value)) return [];
+	const files: Array<{ filename: string; content: string }> = [];
+	for (const item of value) {
+		if (!isObject(item)) continue;
+		const filename = String(item.filename || "").trim();
+		if (!filename || typeof item.content !== "string") continue;
+		files.push({ filename, content: item.content });
+	}
+	return files;
+}
+
+function syncDeploymentFiles(projectDir: string, files: Array<{ filename: string; content: string }>): void {
+	const manifestPath = join(projectDir, DEPLOYMENT_MANIFEST_FILE);
+	const previousFiles = readDeploymentManifest(manifestPath);
+	const nextFiles = new Set<string>();
+
+	for (const file of files) {
+		const relativePath = safeRelativeArtifactPath(file.filename);
+		const targetPath = resolve(projectDir, relativePath);
+		assertInside(projectDir, targetPath);
+		mkdirSync(dirname(targetPath), { recursive: true });
+		writeFileSync(targetPath, file.content, "utf8");
+		nextFiles.add(relativePath);
+	}
+
+	for (const previous of previousFiles) {
+		if (nextFiles.has(previous)) continue;
+		const targetPath = resolve(projectDir, previous);
+		assertInside(projectDir, targetPath);
+		if (existsSync(targetPath)) rmSync(targetPath, { force: true });
+	}
+
+	writeJsonFile(manifestPath, { files: Array.from(nextFiles).sort() });
+}
+
+function readDeploymentManifest(path: string): string[] {
+	if (!existsSync(path)) return [];
+	try {
+		const record = readJsonFile(path);
+		return Array.isArray(record.files) ? record.files.filter((file) => typeof file === "string") : [];
+	} catch {
+		return [];
+	}
+}
+
+function runCommand(command: string, cwd: string, timeoutMs: number, logs: string[]): Promise<void> {
+	const trimmedCommand = command.trim();
+	if (!trimmedCommand) return Promise.resolve();
+	logs.push(`$ ${trimmedCommand}`);
+	return new Promise((resolveCommand, rejectCommand) => {
+		const child = spawn(trimmedCommand, {
+			cwd,
+			shell: true,
+			stdio: ["ignore", "pipe", "pipe"],
+			env: { ...process.env, CI: "true" },
+			windowsHide: true,
+		});
+		const timeout = setTimeout(() => {
+			child.kill();
+			rejectCommand(new Error(`Command timed out after ${timeoutMs}ms: ${trimmedCommand}`));
+		}, timeoutMs);
+		child.stdout?.on("data", (chunk) => logs.push(String(chunk)));
+		child.stderr?.on("data", (chunk) => logs.push(String(chunk)));
+		child.on("error", (error) => {
+			clearTimeout(timeout);
+			rejectCommand(error);
+		});
+		child.on("close", (code) => {
+			clearTimeout(timeout);
+			if (code === 0) {
+				resolveCommand();
+			} else {
+				rejectCommand(new Error(`Command failed with exit code ${code}: ${trimmedCommand}`));
+			}
+		});
+	});
+}
+
+function buildPreviewUrl(config: StorageConfig, req: Connect.IncomingMessage, projectId: string): string {
+	const path = `${PREVIEW_PREFIX}/${encodeURIComponent(projectId)}/`;
+	if (config.previewBaseUrl) return `${config.previewBaseUrl}${path}`;
+	const host = req.headers.host || "localhost";
+	const forwardedProto = req.headers["x-forwarded-proto"];
+	const protocol = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto || "http";
+	return `${protocol}://${host}${path}`;
+}
+
+function readDeploymentLogs(config: StorageConfig, projectId: string): JsonObject {
+	const metadata = readDeploymentMetadata(config, projectId);
+	if (!metadata) return { error: "Project not found." };
+	return { projectId, status: metadata.status, logs: metadata.logs || [] };
+}
+
+function readDeploymentMetadata(config: StorageConfig, projectId: string): JsonObject | undefined {
+	const safeProjectId = sanitizePathComponent(projectId);
+	if (!safeProjectId) return undefined;
+	const metadataPath = join(config.deploymentsRootDir, safeProjectId, DEPLOYMENT_METADATA_FILE);
+	if (!existsSync(metadataPath)) return undefined;
+	return readJsonFile(metadataPath);
+}
+
+function servePreviewRequest(config: StorageConfig, req: Connect.IncomingMessage, res: Connect.ServerResponse): boolean {
+	if (!req.url) return false;
+	const url = new URL(req.url, "http://localhost");
+	const parts = url.pathname.slice(PREVIEW_PREFIX.length).split("/").filter(Boolean);
+	const projectId = parts.shift();
+	if (!projectId) return false;
+
+	const metadata = readDeploymentMetadata(config, decodeURIComponent(projectId));
+	if (!metadata || metadata.status !== "running") {
+		sendJson(res, { error: "Preview not found." }, 404);
+		return true;
+	}
+
+	const serveRoot = String(metadata.serveRoot || "");
+	if (!serveRoot || !existsSync(serveRoot)) {
+		sendJson(res, { error: "Preview output is missing." }, 404);
+		return true;
+	}
+
+	const requestedPath = parts.length > 0 ? safeRelativePreviewPath(parts.map((part) => decodeURIComponent(part))) : "index.html";
+	let targetPath = resolve(serveRoot, requestedPath);
+	assertInside(serveRoot, targetPath);
+
+	if (!existsSync(targetPath) || statSync(targetPath).isDirectory()) {
+		targetPath = resolve(serveRoot, "index.html");
+	}
+	if (!existsSync(targetPath) || !statSync(targetPath).isFile()) {
+		sendJson(res, { error: "Preview entry file is missing." }, 404);
+		return true;
+	}
+
+	res.statusCode = 200;
+	res.setHeader("Content-Type", mimeType(targetPath));
+	createReadStream(targetPath).pipe(res);
+	return true;
+}
+
+function mimeType(path: string): string {
+	const extension = extname(basename(path)).toLowerCase();
+	const types: Record<string, string> = {
+		".html": "text/html; charset=utf-8",
+		".js": "text/javascript; charset=utf-8",
+		".mjs": "text/javascript; charset=utf-8",
+		".css": "text/css; charset=utf-8",
+		".json": "application/json; charset=utf-8",
+		".svg": "image/svg+xml",
+		".png": "image/png",
+		".jpg": "image/jpeg",
+		".jpeg": "image/jpeg",
+		".gif": "image/gif",
+		".webp": "image/webp",
+		".ico": "image/x-icon",
+		".txt": "text/plain; charset=utf-8",
+	};
+	return types[extension] || "application/octet-stream";
+}
+
+function safeRelativePreviewPath(parts: string[]): string {
+	const cleaned = parts.filter((part) => part && part !== "." && part !== ".." && !part.includes("/") && !part.includes("\\"));
+	if (cleaned.length === 0) return "index.html";
+	return join(...cleaned);
 }
 
 function readJsonFile(path: string): JsonObject {

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "savedAt": "2026-05-11T15:24:23.983Z",
+  "data": {
+    "id": "223a40fd-11e0-4838-aec6-638e713db3e8",
+    "title": "帮我生成一个日历显示的纯静态网页",
+    "model": {
+      "id": "mimo-v2.5-pro",
+      "name": "MiMo-V2.5-Pro",
+      "api": "anthropic-messages",
+      "provider": "xiaomi-token-plan-cn",
+      "baseUrl": "https://token-plan-cn.xiaomimimo.com/anthropic",
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 1,
+        "output": 3,
+        "cacheRead": 0.2,
+        "cacheWrite": 0
+      },
+      "contextWindow": 1048576,
+      "maxTokens": 131072
+    },
+    "thinkingLevel": "off",
+    "messages": [],
+    "createdAt": "2026-05-11T15:24:23.895Z",
+    "lastModified": "2026-05-11T15:24:23.932Z"
+  },
+  "metadata": {
+    "id": "223a40fd-11e0-4838-aec6-638e713db3e8",
+    "title": "帮我生成一个日历显示的纯静态网页",
+    "createdAt": "2026-05-11T15:24:23.895Z",
+    "lastModified": "2026-05-11T15:24:23.932Z",
+    "messageCount": 0,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
+    "thinkingLevel": "off",
+    "preview": ""
+  }
+}

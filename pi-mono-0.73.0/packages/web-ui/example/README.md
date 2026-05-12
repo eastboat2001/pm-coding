@@ -23,6 +23,7 @@ This example demonstrates:
 - **ChatPanel** - The main chat interface component
 - **System Prompt** - Custom configuration for the AI assistant
 - **Tools** - JavaScript REPL and artifacts tool
+- **Deployment tool** - Generated artifacts can be published to a configured server directory and served by URL
 - **Session persistence** - Active and recent sessions are restored from browser storage
 - **Model persistence** - The selected model is remembered across refreshes and new sessions
 - **Configured local storage** - Sessions and generated project files are mirrored to fixed directories from `pi-storage.config.json`
@@ -94,7 +95,13 @@ Edit `pi-storage.config.json`:
 {
   "sessionsDir": "./data/sessions",
   "settingsFile": "./data/settings.json",
-  "projectsRootDir": "./data/generated_projects"
+  "projectsRootDir": "./data/generated_projects",
+  "deploymentsRootDir": "./data/deployments",
+  "previewBaseUrl": "",
+  "projectInstallCommand": "npm install",
+  "projectBuildCommand": "npm run build",
+  "projectInstallTimeoutMs": 120000,
+  "projectBuildTimeoutMs": 120000
 }
 ```
 
@@ -105,16 +112,46 @@ The example writes:
 - `<sessionsDir>/<session-id>.json`
 - `<settingsFile>`
 - one generated project directory per session under `projectsRootDir`
+- one deployment directory per published project under `deploymentsRootDir`
 
 With the default configuration, runtime data stays inside `packages/web-ui/example/data/` and remains decoupled from any PM application directory.
 
 Project directory names are generated from a sanitized session title plus a stable session-id suffix, so multiple generated projects do not collide.
+
+## Background Deployment
+
+The example registers a `deploy_project` tool for the assistant. No extra project panel, log panel, or preview button is added to the UI.
+
+Expected conversation flow:
+
+1. The assistant creates runnable project files with the `artifacts` tool.
+2. The assistant calls `deploy_project`.
+3. The server writes those files under `deploymentsRootDir`.
+4. If `package.json` exists, the server runs `projectInstallCommand` and then `projectBuildCommand` when a build script exists.
+5. The final assistant message includes the preview URL.
+
+Preview URLs are served from this PI server at:
+
+```text
+/preview/<project-id>/
+```
+
+Set `previewBaseUrl` in `pi-storage.config.json` when the server is behind a domain or reverse proxy, for example:
+
+```json
+{
+  "previewBaseUrl": "https://coding.example.com"
+}
+```
+
+This is currently optimized for generated frontend/static projects. Projects with a build output in `dist/` are served from `dist/`; otherwise the deployment directory itself is served.
 
 ### Limitations
 
 - The configured storage API is provided by this example's Vite dev/preview server.
 - If the app is served as static files without that server, the browser can still use IndexedDB, but disk mirroring and generated project file output are unavailable.
 - API keys are **not** mirrored to local files by this feature.
+- Generated code is executed during install/build. For production multi-user deployment, run the PI server inside an isolated environment and restrict filesystem, network, CPU, memory, and command timeout limits.
 
 ## Project Structure
 
@@ -125,6 +162,8 @@ example/
 │   ├── app.css                     # Tailwind CSS configuration
 │   ├── dialogs/
 │   │   ├── LocalSessionListDialog.ts
+│   ├── tools/
+│   │   ├── deploy-project.ts
 │   └── storage/
 │       ├── configured-server-storage.ts
 │       └── merged-session-index.ts

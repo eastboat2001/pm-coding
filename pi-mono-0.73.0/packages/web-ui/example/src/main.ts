@@ -30,6 +30,7 @@ import { createSystemNotification, customConvertToLlm, registerCustomMessageRend
 import { LocalSessionListDialog } from "./dialogs/LocalSessionListDialog.js";
 import { ConfiguredServerStorage } from "./storage/configured-server-storage.js";
 import { mergeSessionMetadata } from "./storage/merged-session-index.js";
+import { createDeployProjectTool } from "./tools/deploy-project.js";
 
 registerCustomMessageRenderers();
 
@@ -71,8 +72,17 @@ const DEFAULT_SYSTEM_PROMPT = `You are a helpful AI assistant with access to var
 Available tools:
 - JavaScript REPL: Execute JavaScript code in a sandboxed browser environment (can do calculations, get time, process data, create visualizations, etc.)
 - Artifacts: Create interactive HTML, SVG, Markdown, and text artifacts
+- Deploy Project: Publish generated artifact files to the configured server directory and return a preview URL
 
-Feel free to use these tools when needed to provide accurate and helpful responses.`;
+When the user asks you to create a runnable application or website, create the necessary artifact files first, then use Deploy Project so the final answer includes the preview URL.`;
+
+const PI_CODING_HANDOFF_INSTRUCTIONS = `平台执行要求：
+1. 你必须生成完整项目文件，不要只输出说明文档或零散代码片段。
+2. 使用 artifacts 工具创建或更新项目文件。
+3. 项目文件生成完成后，必须调用 Deploy Project / deploy_project 工具发布项目。
+4. 不要要求用户手动选择目录、下载文件、运行 npm install、运行 npm run dev 或手动部署。
+5. 最终回复必须包含后台返回的 Preview URL，并简要说明项目已生成和发布。
+6. 如果构建或部署失败，根据工具返回的日志修复问题后再次发布。`;
 
 let currentSessionId: string | undefined;
 let currentSessionCreatedAt: string | undefined;
@@ -152,6 +162,12 @@ const fetchPmHandoffPayload = async (token: string): Promise<PmHandoffPayload> =
 		throw new Error(data.error || `Failed to resolve handoff: ${response.status}`);
 	}
 	return data;
+};
+
+const buildCodingHandoffPrompt = (payload: PmHandoffPayload): string => {
+	const sourcePrompt = (payload.implementation_prompt || "").trim();
+	if (!sourcePrompt) return PI_CODING_HANDOFF_INSTRUCTIONS;
+	return `${sourcePrompt}\n\n---\n\n${PI_CODING_HANDOFF_INSTRUCTIONS}`;
 };
 
 const getSessionTitle = (messages: AgentMessage[]): string =>
@@ -350,7 +366,11 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		toolsFactory: (_agent, _agentInterface, _artifactsPanel, runtimeProvidersFactory) => {
 			const replTool = createJavaScriptReplTool();
 			replTool.runtimeProvidersFactory = runtimeProvidersFactory;
-			return [replTool];
+			const deployTool = createDeployProjectTool(_artifactsPanel, () => ({
+				sessionId: currentSessionId,
+				title: getSessionTitle(agent.state.messages),
+			}));
+			return [replTool, deployTool];
 		},
 	});
 };
@@ -403,7 +423,7 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 	if (payload.title) {
 		currentTitle = payload.title;
 	}
-	chatPanel.agentInterface?.setInput(payload.implementation_prompt || "", attachments);
+	chatPanel.agentInterface?.setInput(buildCodingHandoffPrompt(payload), attachments);
 	if (currentSessionId) {
 		await saveSession();
 	}

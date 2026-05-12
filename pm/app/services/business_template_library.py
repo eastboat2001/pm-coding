@@ -6,6 +6,15 @@ from typing import Any
 
 
 class BusinessTemplateLibrary:
+    LANGUAGE_ALIASES = {
+        "zh": "zh",
+        "zh-cn": "zh",
+        "zh_cn": "zh",
+        "en": "en",
+        "de": "de",
+        "ms": "ms",
+    }
+
     def __init__(self, templates_dir: str | Path) -> None:
         self.templates_dir = Path(templates_dir)
         self._templates = self._load_templates()
@@ -19,8 +28,18 @@ class BusinessTemplateLibrary:
             return None
         return self._to_detail(template)
 
-    def get_template_prompt_context(self, template_id: str) -> dict[str, Any] | None:
-        template = self._templates.get(str(template_id).strip())
+    def get_localized_template(self, template_id: str, language: str | None) -> dict[str, Any] | None:
+        template = self._resolve_template_variant(template_id, language)
+        if template is None:
+            return None
+        return self._to_detail(template)
+
+    def get_template_prompt_context(
+        self,
+        template_id: str,
+        language: str | None = None,
+    ) -> dict[str, Any] | None:
+        template = self._resolve_template_variant(template_id, language)
         if template is None:
             return None
 
@@ -44,8 +63,8 @@ class BusinessTemplateLibrary:
             ],
         }
 
-    def get_template_markdown(self, template_id: str) -> str:
-        template = self._templates.get(str(template_id).strip())
+    def get_template_markdown(self, template_id: str, language: str | None = None) -> str:
+        template = self._resolve_template_variant(template_id, language)
         if template is None:
             return ""
 
@@ -65,6 +84,42 @@ class BusinessTemplateLibrary:
             return template_path.read_text(encoding="utf-8")
         except OSError:
             return ""
+
+    def _resolve_template_variant(
+        self,
+        template_id: str,
+        language: str | None = None,
+    ) -> dict[str, Any] | None:
+        template = self._templates.get(str(template_id).strip())
+        if template is None:
+            return None
+
+        normalized_language = self._normalize_language(language)
+        if not normalized_language:
+            return template
+
+        template_key = str(template.get("template_key", "")).strip()
+        if not template_key:
+            return template
+
+        localized_template = self._find_template_by_key_and_language(
+            template_key,
+            normalized_language,
+        )
+        return localized_template or template
+
+    def _find_template_by_key_and_language(
+        self,
+        template_key: str,
+        language: str,
+    ) -> dict[str, Any] | None:
+        normalized_language = self._normalize_language(language)
+        for template in self._templates.values():
+            if str(template.get("template_key", "")).strip() != template_key:
+                continue
+            if self._normalize_language(template.get("language")) == normalized_language:
+                return template
+        return None
 
     def _load_templates(self) -> dict[str, dict[str, Any]]:
         templates: list[dict[str, Any]] = []
@@ -148,3 +203,9 @@ class BusinessTemplateLibrary:
         if isinstance(value, list):
             return [str(item).strip() for item in value if str(item).strip()]
         return []
+
+    def _normalize_language(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return ""
+        return self.LANGUAGE_ALIASES.get(normalized, normalized)

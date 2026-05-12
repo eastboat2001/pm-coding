@@ -43,7 +43,7 @@ def create_app() -> Flask:
 
     # CORS configuration
     app.config["CORS_ORIGINS"] = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:9530").split(",")
-    app.config["CORS_ALLOW_METHODS"] = "GET, POST, DELETE, OPTIONS"
+    app.config["CORS_ALLOW_METHODS"] = "GET, POST, PUT, DELETE, OPTIONS"
     app.config["SQLITE_DB_PATH"] = os.getenv(
         "SQLITE_DB_PATH",
         str(data_root / "rqmd.sqlite3"),

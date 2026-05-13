@@ -1,11 +1,10 @@
 {
-	"sessionsDir": "./data/sessions",
-	"settingsFile": "./data/settings.json",
-	"projectsRootDir": "./data/generated_projects",
-	"deploymentsRootDir": "./data/deployments",
-	"previewBaseUrl": "",
-	"projectInstallCommand": "npm install",
-	"projectBuildCommand": "npm run build",
-	"projectInstallTimeoutMs": 120000,
-	"projectBuildTimeoutMs": 120000
+  "sessionsDir": "./data/sessions",
+  "settingsFile": "./data/settings.json",
+  "projectsRootDir": "./data/projects",
+  "previewBaseUrl": "",
+  "projectInstallCommand": "npm install",
+  "projectBuildCommand": "npm run build",
+  "projectInstallTimeoutMs": 120000,
+  "projectBuildTimeoutMs": 120000
 }

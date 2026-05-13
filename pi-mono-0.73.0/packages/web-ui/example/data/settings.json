@@ -1,7 +1,6 @@
 {
   "version": 1,
-  "savedAt": "2026-05-12T01:33:14.459Z",
-  "currentSessionId": "a5135a30-17c3-470a-8652-d6af49acbe0c",
+  "savedAt": "2026-05-13T01:37:10.160Z",
   "selectedModel": {
     "id": "mimo-v2.5",
     "name": "MiMo-V2.5",
@@ -21,5 +20,6 @@
     },
     "contextWindow": 1048576,
     "maxTokens": 131072
-  }
+  },
+  "currentSessionId": "4eecfd7c-a109-4f85-91dc-54aca42d762d"
 }

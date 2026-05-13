@@ -30,8 +30,9 @@ The library itself provides browser-side storage primitives and UI hooks, but it
 - sessions are stored in browser IndexedDB
 - refresh restores the active or latest session
 - the selected model is remembered across sessions
-- the example app mirrors sessions and generated artifact projects to configured local directories through its Vite server
-- the example app can deploy generated artifacts in the background and return a preview URL in the chat conversation
+- the example app mirrors sessions and generated projects to configured local directories through its Vite server
+- the example app can disable built-in browser artifacts while still registering custom tools
+- the example app registers server workspace tools so the Web UI agent can write files, run short commands, build, and return a preview URL
 
 ```typescript
 import { Agent } from '@mariozechner/pi-agent-core';
@@ -145,6 +146,9 @@ await chatPanel.setAgent(agent, {
   // Handle cost display click
   onCostClick: () => { /* show cost breakdown */ },
 
+  // Disable the built-in artifacts panel/tool while keeping custom tools available
+  enableArtifacts: false,
+
   // Custom sandbox URL for browser extensions
   sandboxUrlProvider: () => chrome.runtime.getURL('sandbox.html'),
 
@@ -208,10 +212,12 @@ The example app is intentionally more opinionated than the library:
 - creating a new session no longer depends on a full page reload
 - session JSON files are mirrored to the configured `sessionsDir`
 - settings are mirrored to the configured `settingsFile`
-- generated artifact files are reconstructed under the configured `projectsRootDir`
-- deployed projects are written under the configured `deploymentsRootDir` and served from `/preview/<project-id>/`
+- generated project files are written under the configured `projectsRootDir`
+- projects are generated through Web UI agent server workspace tools, then built and served from a per-project directory under `projectsRootDir`
+- failed server workspace shell commands return output plus the PI server platform and shell so the agent can adjust and retry
+- preview URLs are served from `/preview/<project-id>/`
 
-Configured local disk mirroring and background deployment are implemented in the example app only. They are not part of the shared `StorageBackend` abstraction today. Edit `packages/web-ui/example/pi-storage.config.json` to change storage, generated-project, deployment, and preview URL settings.
+Configured local disk mirroring, server-side workspace tools, and background project build/preview are implemented in the example app only. They are not part of the shared `StorageBackend` abstraction today. Edit `packages/web-ui/example/pi-storage.config.json` to change session, project, build command, and preview URL settings.
 
 ### Agent (from pi-agent-core)
 

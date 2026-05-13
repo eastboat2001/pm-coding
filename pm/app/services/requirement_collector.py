@@ -291,7 +291,9 @@ PRD_TEMPLATE_FILE_BY_LANGUAGE = {
 PROMPT_TEMPLATE_PERSONAL_PROJECT = "personal_project"
 PROMPT_TEMPLATE_STANDARD = "standard"
 
-IMPLEMENTATION_PROMPT_TEMPLATE_EN = """You are a senior full-stack engineer responsible for implementing a runnable project strictly from the provided documents.
+IMPLEMENTATION_PROMPT_TEMPLATE_EN = """You are a senior software engineer responsible for implementing a runnable project according to the provided PM documents.
+
+The PM documents are the source of product requirements. Any downstream coding-platform instructions are only execution guidance and must not expand or replace the PM scope.
 
 Read these files fully before writing code:
 1. PRD document: {prd_path}
@@ -310,23 +312,24 @@ Execution rules:
    - If conflict still remains, choose the most conservative minimal runnable solution and record the assumption clearly in README or ASSUMPTIONS.md.
 4. Do not invent major features, integrations, infrastructure, or complex distributed components unless the documents explicitly require them.
 5. Do not output pseudo-code, TODO-only modules, empty handlers, or placeholder implementations for core flows.
+6. Match the implementation depth to the documents. If the requested project is a static page or Node frontend project, do not add a backend, database, authentication, or long-running service unless explicitly required.
 
 Implementation requirements:
-1. Before coding, extract a concrete implementation checklist covering pages, backend modules, APIs, data tables, background jobs if any, and acceptance criteria.
-2. Keep field names, enum values, API routes, request/response payloads, and database columns consistent across frontend, backend, and persistence.
+1. Before coding, extract a concrete implementation checklist covering the relevant pages, modules, APIs, data structures, and acceptance criteria.
+2. Keep field names, enum values, routes, request/response payloads, and persisted fields consistent across the layers that actually exist in the chosen implementation.
 3. Produce a project that can run locally end-to-end, not just isolated snippets.
 4. Prefer stable, mainstream, low-complexity libraries. Keep dependencies minimal and explicit.
-5. Provide all required setup assets, including dependency manifests, environment examples, database initialization or migrations, and seed/demo data when needed for the main flow.
-6. Handle the important error paths explicitly: invalid input, missing resources, duplicate actions, failed persistence constraints, authorization errors when the documents require permissions, and empty states.
+5. Provide all required setup assets, including dependency manifests, environment examples when needed, initialization steps, and seed/demo data when needed for the main flow.
+6. Handle the important error paths that apply to the selected implementation: invalid input, missing resources, duplicate actions, failed persistence constraints, authorization errors when the documents require permissions, and empty states.
 7. Avoid hard-coded secrets, machine-specific absolute paths, or environment-specific assumptions in the code.
 8. If the stack is not explicitly specified in the documents, choose the lightest stable stack that can satisfy the requirements with the least operational complexity.
 9. Keep the implementation aligned with the documented MVP; do not add speculative over-engineering.
-10. Ensure the main user journey is fully wired through UI, API, service logic, and database, rather than partially implemented in only one layer.
+10. Ensure the main user journey is fully wired through the layers present in the project. For frontend-only projects, this may mean UI state, local persistence, and demo data rather than a backend API.
 
 Quality gates:
-1. Verify imports, dependency declarations, configuration loading, database creation, API routing, and frontend-backend integration.
+1. Verify imports, dependency declarations, configuration loading, routing, build output, and any integration points required by the chosen stack.
 2. Add at least minimal automated verification for the critical path:
-   - backend: at least one or two meaningful API/service tests when the project has a test setup
+   - backend: at least one or two meaningful API/service tests when the project includes a backend and has a test setup
    - frontend: at minimum ensure the main page and key interaction path are implemented and runnable
 3. Fix obvious issues before finishing: missing imports, mismatched fields, broken routes, uncreated tables, invalid seed data, encoding issues, or startup failures.
 4. Provide a clear README with:
@@ -340,11 +343,11 @@ Quality gates:
 Suggested work sequence:
 1. Read both documents and derive the implementation checklist.
 2. Confirm the target stack and project structure from the documents.
-3. Implement data model and initialization first.
-4. Implement backend APIs and service logic.
-5. Implement frontend pages and integrate them with the APIs.
+3. Implement the smallest complete project structure that satisfies the PM scope.
+4. Implement frontend pages and interaction logic.
+5. Add backend APIs, data model, or initialization only when the documents require them.
 6. Add configuration, demo data, tests, and README.
-7. Run the project locally and validate the critical end-to-end flow.
+7. Run or build the project locally and validate the critical end-to-end flow.
 
 Output expectations:
 - Start by summarizing the implementation plan.
@@ -353,7 +356,9 @@ Output expectations:
 - Finish with a concise delivery note describing what was implemented, how to run it, how to verify it, and which assumptions remain.
 """
 
-IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深全栈工程师，现在需要严格依据提供的文档，直接实现一个可运行、可验证的完整项目。
+IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深软件工程师，现在需要依据 PM 提供的文档，直接实现一个可运行、可验证的完整项目。
+
+PM 文档是产品需求主依据。下游 Coding 平台的提示词只作为执行方式补充，不能替换、扩大或改写 PM 的产品范围。
 
 开始编码前，必须先完整阅读以下文件：
 1. PRD 文档：{prd_path}
@@ -372,41 +377,42 @@ IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深全栈工程师，现�
    - 仍无法消解时，选择“最保守、最小可运行”的方案，并把假设明确写入 README 或 ASSUMPTIONS.md。
 4. 不要擅自发明文档没有要求的大型功能、复杂集成、分布式中间件、微服务拆分或过度架构。
 5. 不要输出伪代码、仅有 TODO 的模块、空实现、占位接口，核心流程必须真实可用。
+6. 实现深度必须匹配文档范围。如果 PM 要求的是静态页面或 Node 前端项目，不要额外引入后端、数据库、登录鉴权或常驻服务，除非文档明确要求。
 
 实现要求：
-1. 写代码前，先提炼出明确的实现清单：页面/功能点、后端模块、API 列表、数据表/字段、关键验收点。
-2. 前端字段名、后端 DTO、接口路径、请求响应结构、数据库字段、状态枚举必须保持一致，避免命名漂移。
+1. 写代码前，先提炼出明确的实现清单：相关页面/功能点、模块、接口或数据结构、关键验收点。
+2. 字段名、状态枚举、路由、请求响应结构、持久化字段必须在实际存在的层之间保持一致，避免命名漂移。
 3. 交付结果必须是“本地可直接运行”的完整项目，而不是零散代码片段。
 4. 优先使用稳定、主流、低复杂度依赖，依赖项保持精简且显式声明。
-5. 补齐运行所需资产：依赖清单、环境变量示例、数据库初始化/迁移、必要种子数据或演示账号（如主流程需要）。
-6. 明确处理关键异常路径：参数错误、资源不存在、重复提交、数据库约束失败、空状态、以及文档要求的权限校验失败。
+5. 补齐运行所需资产：依赖清单、必要环境变量示例、初始化步骤、必要种子数据或演示数据（如主流程需要）。
+6. 明确处理适用于当前实现的关键异常路径：参数错误、资源不存在、重复提交、持久化失败、空状态、以及文档要求的权限校验失败。
 7. 不要把密钥、绝对本机路径、特定机器配置、硬编码端口假设写死在代码里。
 8. 如果文档没有明确技术栈，就选择最轻量、最稳定、最容易本地运行的方案，优先保证可实现和可验证。
 9. 实现应严格围绕文档中的 MVP 范围，不要为“看起来高级”而增加非必要复杂度。
-10. 主业务闭环必须真正串通 UI、API、服务层、数据库，不能只做静态页面或只写单侧逻辑。
+10. 主业务闭环必须在项目实际包含的层里完整可用。对于前端项目，可以是 UI 状态、本地持久化和演示数据，而不是强制后端 API。
 
 质量门禁：
-1. 完成前必须自查并修复：导入错误、缺失依赖、配置读取错误、数据库未初始化、接口路由不通、前后端字段不一致、编码问题、启动失败等明显问题。
+1. 完成前必须自查并修复：导入错误、缺失依赖、配置读取错误、路由不通、字段不一致、编码问题、启动或构建失败等明显问题。
 2. 至少补充关键路径的最小有效验证：
-   - 后端：如果项目已有测试基础，至少补 1 到 2 个有意义的 API/服务测试
+   - 后端：如果项目包含后端且已有测试基础，至少补 1 到 2 个有意义的 API/服务测试
    - 前端：至少保证主页面和关键交互路径已经实现且可运行
-3. 所有对外接口都要返回清晰、稳定、可预期的状态码和 JSON 结构。
+3. 如果项目包含对外接口，接口必须返回清晰、稳定、可预期的状态码和 JSON 结构。
 4. 提供清晰 README，至少包含：
    - 安装命令
    - 启动命令
    - 环境变量说明
-   - 数据库或初始化步骤
+   - 初始化步骤（如需要数据库则说明数据库步骤）
    - 测试/验证步骤
    - 已知假设与取舍说明
 
 建议执行顺序：
 1. 阅读两份文档并整理实现清单。
 2. 根据文档确认目标技术栈和目录结构。
-3. 优先实现数据模型和初始化逻辑。
-4. 实现后端 API 与服务层。
-5. 实现前端页面并完成接口联调。
+3. 实现满足 PM 范围的最小完整项目结构。
+4. 实现前端页面和交互逻辑。
+5. 仅在文档要求时实现后端 API、数据模型和初始化逻辑。
 6. 补充配置、演示数据、测试、README。
-7. 本地运行项目并验证关键端到端流程。
+7. 本地运行或构建项目并验证关键端到端流程。
 
 输出要求：
 - 先给出实现计划摘要，再开始编码。

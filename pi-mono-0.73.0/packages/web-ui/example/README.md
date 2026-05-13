@@ -22,8 +22,7 @@ This example demonstrates:
 
 - **ChatPanel** - The main chat interface component
 - **System Prompt** - Custom configuration for the AI assistant
-- **Tools** - JavaScript REPL and artifacts tool
-- **Deployment tool** - Generated artifacts can be published to a configured server directory and served by URL
+- **Server workspace tools** - The normal Web UI agent flow creates files, runs commands, and publishes previews in a fixed server project root
 - **Session persistence** - Active and recent sessions are restored from browser storage
 - **Model persistence** - The selected model is remembered across refreshes and new sessions
 - **Configured local storage** - Sessions and generated project files are mirrored to fixed directories from `pi-storage.config.json`
@@ -32,7 +31,7 @@ This example demonstrates:
 
 ### API Keys
 
-The example uses **Direct Mode** by default, which means it calls AI provider APIs directly from the browser.
+The example uses the browser-stored provider key for the Web UI agent. Server workspace tools do not call an AI provider; they only write files, run commands, and prepare previews.
 
 To use the chat:
 
@@ -43,7 +42,7 @@ To use the chat:
    - **OpenAI**: Get a key from [platform.openai.com](https://platform.openai.com/)
    - **Google**: Get a key from [makersuite.google.com](https://makersuite.google.com/)
 
-API keys are stored in your browser's localStorage and never sent to any server except the AI provider's API.
+API keys are stored in your browser's localStorage in this development example. In production, replace this with server-side credentials or a controlled proxy.
 
 ## Session Storage Behavior
 
@@ -57,7 +56,7 @@ By default, it persists:
 - the last selected model
 - a JSON mirror of sessions under the configured sessions directory
 - settings under the configured settings file
-- generated artifact files under the configured projects root directory
+- generated project files under the configured projects root directory
 
 Behavioral details:
 
@@ -85,7 +84,9 @@ The example mirrors sessions and generated project files through the Vite dev/pr
 - Every saved session is also written to a JSON file on disk.
 - The session list merges browser-backed and configured local records.
 - If a configured local session exists without a browser copy, it is imported back into browser storage when opened.
-- Files created through the `artifacts` tool are reconstructed into a per-session project directory.
+- The Web UI agent can call server workspace tools: `project_file`, `project_bash`, and `project_preview`.
+- Project files are written directly under the configured project root on the server.
+- Built-in browser artifacts are disabled for project generation in this example.
 
 ### Configuration
 
@@ -95,8 +96,7 @@ Edit `pi-storage.config.json`:
 {
   "sessionsDir": "./data/sessions",
   "settingsFile": "./data/settings.json",
-  "projectsRootDir": "./data/generated_projects",
-  "deploymentsRootDir": "./data/deployments",
+  "projectsRootDir": "./data/projects",
   "previewBaseUrl": "",
   "projectInstallCommand": "npm install",
   "projectBuildCommand": "npm run build",
@@ -111,24 +111,38 @@ The example writes:
 
 - `<sessionsDir>/<session-id>.json`
 - `<settingsFile>`
-- one generated project directory per session under `projectsRootDir`
-- one deployment directory per published project under `deploymentsRootDir`
+- one project root directory per generated project under `projectsRootDir`
 
 With the default configuration, runtime data stays inside `packages/web-ui/example/data/` and remains decoupled from any PM application directory.
 
 Project directory names are generated from a sanitized session title plus a stable session-id suffix, so multiple generated projects do not collide.
 
-## Background Deployment
+## PM Handoff
 
-The example registers a `deploy_project` tool for the assistant. No extra project panel, log panel, or preview button is added to the UI.
+The PM app can open this PI Web UI with a short-lived handoff token:
+
+```text
+/?handoff_token=<token>&pm_api_base_url=<pm-backend-base-url>
+```
+
+PI resolves the token through PM, downloads the PRD/design documents as attachments, and places the PM implementation prompt into the chat input. The PM prompt and documents are treated as the primary requirement source. PI's own handoff instructions only describe platform execution: write files into the configured project root, run short validation/build commands when useful, publish with `project_preview`, and return the Preview URL.
+
+For the current stage, PM demos should target static HTML/CSS/JS projects or Node frontend projects that can be built to static output such as Vite React/Vue. Backend services that require long-running Node processes, databases, or reverse-proxy routing need the later run-manager stage.
+
+## Server Workspace Flow
+
+The example keeps the regular Web UI agent conversation, model selector, API key flow, and tool-card rendering. No extra project panel, log panel, or preview button is added to the UI.
 
 Expected conversation flow:
 
-1. The assistant creates runnable project files with the `artifacts` tool.
-2. The assistant calls `deploy_project`.
-3. The server writes those files under `deploymentsRootDir`.
-4. If `package.json` exists, the server runs `projectInstallCommand` and then `projectBuildCommand` when a build script exists.
-5. The final assistant message includes the preview URL.
+1. The user sends a request in the chat input.
+2. The Web UI agent decides whether project execution is needed.
+3. For app/site/project work, it calls `project_file` repeatedly to create or update server-side files.
+4. When useful, it calls `project_bash` to run short checks or build commands in the server project root.
+5. After files are ready, it calls `project_preview`.
+6. If `package.json` exists, the server runs `projectInstallCommand` and then `projectBuildCommand` when a build script exists.
+7. The server serves `dist/` when present, otherwise the project root.
+8. The browser displays file, command, and preview tool cards plus the final assistant message with the preview URL.
 
 Preview URLs are served from this PI server at:
 
@@ -144,14 +158,15 @@ Set `previewBaseUrl` in `pi-storage.config.json` when the server is behind a dom
 }
 ```
 
-This is currently optimized for generated frontend/static projects. Projects with a build output in `dist/` are served from `dist/`; otherwise the deployment directory itself is served.
+This is currently optimized for generated frontend/static projects. Projects with a build output in `dist/` are served from `dist/`; otherwise the project root itself is served.
+
+`project_bash` runs on the same operating system as the PI server process. Failed commands return the command output plus the server platform and shell, so the agent can adjust and retry with an environment-compatible command.
 
 ### Limitations
 
 - The configured storage API is provided by this example's Vite dev/preview server.
 - If the app is served as static files without that server, the browser can still use IndexedDB, but disk mirroring and generated project file output are unavailable.
-- API keys are **not** mirrored to local files by this feature.
-- Generated code is executed during install/build. For production multi-user deployment, run the PI server inside an isolated environment and restrict filesystem, network, CPU, memory, and command timeout limits.
+- Generated code and model-requested commands may execute on the server. For production multi-user deployment, run the PI server inside an isolated environment and restrict filesystem, network, CPU, memory, and command timeout limits.
 
 ## Project Structure
 
@@ -162,11 +177,11 @@ example/
 │   ├── app.css                     # Tailwind CSS configuration
 │   ├── dialogs/
 │   │   ├── LocalSessionListDialog.ts
-│   ├── tools/
-│   │   ├── deploy-project.ts
-│   └── storage/
-│       ├── configured-server-storage.ts
-│       └── merged-session-index.ts
+│   ├── storage/
+│   │   ├── configured-server-storage.ts
+│   │   └── merged-session-index.ts
+│   └── tools/
+│       └── server-project.ts # Web UI agent tools for server files, commands, and preview
 ├── index.html        # HTML entry point
 ├── package.json      # Dependencies
 ├── pi-storage.config.json

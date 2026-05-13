@@ -26,6 +26,11 @@ export interface ConfiguredSettingsRecord {
 	selectedModel?: Model<any>;
 }
 
+type ConfiguredSettingsUpdate = {
+	currentSessionId?: string | null;
+	selectedModel?: Model<any>;
+};
+
 export class ConfiguredServerStorage {
 	private readonly baseUrl = "/api/pi-storage";
 
@@ -59,7 +64,7 @@ export class ConfiguredServerStorage {
 		return result?.sessions ?? [];
 	}
 
-	async writeSettings(settingsData: { currentSessionId?: string; selectedModel?: Model<any> }): Promise<void> {
+	async writeSettings(settingsData: ConfiguredSettingsUpdate): Promise<void> {
 		await this.request<ConfiguredSettingsRecord>("/settings", {
 			method: "PUT",
 			body: settingsData,

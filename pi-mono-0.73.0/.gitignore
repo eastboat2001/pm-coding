@@ -38,3 +38,7 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+
+
+packages/web-ui/example/data/projects/
+packages/web-ui/example/data/sessions/

@@ -16,6 +16,101 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
+## Docker
+
+Build the PI Web UI example from the repository root:
+
+```bash
+docker build -t pi-web-ui-example:0.73.0 -f packages/web-ui/example/Dockerfile .
+```
+
+Run it with a persistent data volume:
+
+```bash
+docker run -d --name pi-web-ui -p 5173:5173 -v pi-web-ui-data:/app/packages/web-ui/example/data pi-web-ui-example:0.73.0
+```
+
+Open [http://localhost:5173](http://localhost:5173) in your browser.
+
+This image runs Vite preview instead of a static nginx server because the example depends on Vite server middleware for session storage, server-side project files, project commands, and `/preview/<project-id>/` URLs.
+
+When deploying behind a domain or reverse proxy, set `previewBaseUrl` in `pi-storage.config.json` to the public PI origin, for example `https://pi.example.com`. Generated projects and sessions should stay in the mounted `data` volume, not inside the image.
+
+For server deployment with an offline image, use the deployment package under `docker/pi-web-ui`. Copy `docker-compose.yaml` and `pi-storage.config.json` from that directory to the same server directory, load the image, then start the service:
+
+```bash
+docker load -i pi-web-ui-0.73.0.tar
+docker compose up -d
+```
+
+The included compose file mounts `./data` as the persistent runtime directory and exposes PI on port `5173`.
+
+### Server Configuration
+
+PI uses three different address concepts during Docker deployment:
+
+1. **Container listen address**
+   - Configured in `Dockerfile`.
+   - Must stay as `0.0.0.0` so the Vite preview server listens on all container network interfaces.
+   - Example:
+
+```dockerfile
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]
+```
+
+2. **Docker host port**
+   - Configured in `docker-compose.yaml`.
+   - The default mapping exposes container port `5173` on server port `5173`.
+
+```yaml
+ports:
+  - "5173:5173"
+```
+
+3. **Public browser URL**
+   - Configured in `pi-storage.config.json` as `previewBaseUrl`.
+   - This must be the address that users can open from their own computers.
+   - Do **not** use `0.0.0.0` here. `0.0.0.0` is only a listen address, not a browser address.
+   - Use `localhost` only for local testing on the same machine.
+
+Local test:
+
+```json
+{
+  "previewBaseUrl": "http://localhost:5173"
+}
+```
+
+Server IP:
+
+```json
+{
+  "previewBaseUrl": "http://SERVER_IP:5173"
+}
+```
+
+Domain or reverse proxy:
+
+```json
+{
+  "previewBaseUrl": "https://pi.example.com"
+}
+```
+
+If PI is launched from PM, PM must point to the same public PI address:
+
+```env
+VITE_GO_CODING_URL=http://SERVER_IP:5173
+```
+
+The PM backend CORS configuration must also allow that PI origin:
+
+```env
+CORS_ORIGINS=http://SERVER_IP:5173
+```
+
+When using a domain, replace both values with the domain, for example `https://pi.example.com`.
+
 ## What's Included
 
 This example demonstrates:

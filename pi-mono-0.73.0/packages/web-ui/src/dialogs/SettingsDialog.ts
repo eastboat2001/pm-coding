@@ -1,13 +1,14 @@
-import { i18n } from "@mariozechner/mini-lit";
 import { Dialog, DialogContent, DialogHeader } from "@mariozechner/mini-lit/dist/Dialog.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
 import { Label } from "@mariozechner/mini-lit/dist/Label.js";
+import { Select } from "@mariozechner/mini-lit/dist/Select.js";
 import { Switch } from "@mariozechner/mini-lit/dist/Switch.js";
 import { getProviders } from "@mariozechner/pi-ai";
 import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import "../components/ProviderKeyInput.js";
 import { getAppStorage } from "../storage/app-storage.js";
+import { getCurrentLanguage, i18n, setLanguage } from "../utils/i18n.js";
 
 // Base class for settings tabs
 export abstract class SettingsTab extends LitElement {
@@ -15,6 +16,50 @@ export abstract class SettingsTab extends LitElement {
 
 	protected createRenderRoot() {
 		return this;
+	}
+}
+
+// Language Tab
+@customElement("language-tab")
+export class LanguageTab extends SettingsTab {
+	getTabName(): string {
+		return i18n("Language");
+	}
+
+	render(): TemplateResult {
+		const currentLanguage = getCurrentLanguage();
+
+		return html`
+			<div class="flex flex-col gap-4">
+				<div>
+					<h3 class="text-sm font-semibold text-foreground mb-2">${i18n("Display language")}</h3>
+					<p class="text-sm text-muted-foreground">
+						${i18n("Choose the interface language for this browser.")}
+					</p>
+				</div>
+
+				<div class="space-y-2 max-w-sm">
+					${Label({ children: i18n("Interface language") })}
+					${Select({
+						value: currentLanguage,
+						placeholder: i18n("Language"),
+						options: [
+							{ value: "zh", label: i18n("Simplified Chinese") },
+							{ value: "en", label: i18n("English") },
+							{ value: "de", label: i18n("German") },
+							{ value: "ms", label: i18n("Malay") },
+						],
+						onChange: (value: string) => {
+							if (value !== currentLanguage) setLanguage(value);
+						},
+						variant: "outline",
+					})}
+					<p class="text-xs text-muted-foreground">
+						${i18n("Language changes are saved locally in this browser.")}
+					</p>
+				</div>
+			</div>
+		`;
 	}
 }
 

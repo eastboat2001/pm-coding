@@ -42,3 +42,8 @@ collect.sh
 
 packages/web-ui/example/data/projects/
 packages/web-ui/example/data/sessions/
+packages/web-ui/example/data/settings.json
+docker/pi-web-ui/data/
+docker/pi-web-ui/*.tar
+docker/pi-web-ui/*.tar.gz
+docker/pi-web-ui/*.zip

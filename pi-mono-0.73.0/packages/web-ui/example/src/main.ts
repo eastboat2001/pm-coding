@@ -8,6 +8,7 @@ import {
 	ChatPanel,
 	CustomProvidersStore,
 	IndexedDBStorageBackend,
+	LanguageTab,
 	loadAttachment,
 	ModelSelector,
 	// PersistentStorageDialog, // TODO: Fix - currently broken
@@ -17,6 +18,8 @@ import {
 	SessionsStore,
 	SettingsDialog,
 	SettingsStore,
+	getCurrentLanguage,
+	i18n,
 	setAppStorage,
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
@@ -32,6 +35,7 @@ import { mergeSessionMetadata } from "./storage/merged-session-index.js";
 import { createServerProjectTools } from "./tools/server-project.js";
 
 registerCustomMessageRenderers();
+document.documentElement.lang = getCurrentLanguage();
 
 const settings = new SettingsStore();
 const providerKeys = new ProviderKeysStore();
@@ -65,7 +69,7 @@ const DEFAULT_MODEL_PROVIDER = "anthropic";
 const DEFAULT_MODEL_ID = "claude-sonnet-4-5-20250929";
 const CURRENT_SESSION_ID_KEY = "example.currentSessionId";
 const SELECTED_MODEL_KEY = "example.selectedModel";
-const DEFAULT_NEW_SESSION_TITLE = "New Session";
+const DEFAULT_NEW_SESSION_TITLES = new Set(["New Session", "新建会话", "Neue Sitzung", "Sesi baharu"]);
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful AI coding assistant that creates runnable projects directly in a configured server workspace.
 
 Available server project tools:
@@ -146,6 +150,10 @@ const generateTitle = (messages: AgentMessage[]): string => {
 	return text.length <= 50 ? text : `${text.substring(0, 47)}...`;
 };
 
+const isDefaultNewSessionTitle = (title?: string) => !title || DEFAULT_NEW_SESSION_TITLES.has(title.trim());
+
+const getDisplayTitle = () => isDefaultNewSessionTitle(currentTitle) ? i18n("New Session") : currentTitle;
+
 const updateUrl = (sessionId?: string) => {
 	const url = new URL(window.location.href);
 	url.searchParams.delete("handoff_token");
@@ -183,7 +191,7 @@ const buildCodingHandoffPrompt = (payload: PmHandoffPayload): string => {
 };
 
 const getSessionTitle = (messages: AgentMessage[]): string =>
-	currentTitle || generateTitle(messages) || DEFAULT_NEW_SESSION_TITLE;
+	(!isDefaultNewSessionTitle(currentTitle) ? currentTitle : "") || generateTitle(messages) || i18n("New Session");
 
 const getDefaultModel = async (): Promise<Model<any>> => {
 	const storedModel = await storage.settings.get<Model<any>>(SELECTED_MODEL_KEY);
@@ -322,7 +330,7 @@ const handleAgentEvent = async (event: AgentEvent) => {
 		case "message_end":
 		case "agent_end": {
 			const generatedTitle = generateTitle(agent.state.messages);
-			if ((!currentTitle || currentTitle === DEFAULT_NEW_SESSION_TITLE) && generatedTitle) {
+			if (isDefaultNewSessionTitle(currentTitle) && generatedTitle) {
 				currentTitle = generatedTitle;
 			}
 			if (currentSessionId) {
@@ -395,7 +403,7 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 
 	await setCurrentSessionId(sessionId);
 	currentSessionCreatedAt = sessionData.createdAt;
-	currentTitle = sessionData.title || DEFAULT_NEW_SESSION_TITLE;
+	currentTitle = isDefaultNewSessionTitle(sessionData.title) ? "" : sessionData.title || "";
 	await persistSelectedModel(sessionData.model);
 
 	await createAgent({
@@ -500,7 +508,10 @@ const renderApp = () => {
 		<div class="example-shell w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
 			<div class="example-header flex items-center justify-between border-b border-border shrink-0">
 				<div class="example-header__brand-row flex items-center gap-3 px-4 py-3 min-w-0">
-					<div class="example-header__logo" aria-label="AT&S logo">AT&amp;S</div>
+					<div class="example-header__logo" aria-label=${i18n("AITC platform logo")}>
+						<span class="example-header__logo-segment example-header__logo-segment--ats">AT&amp;S</span>
+						<span class="example-header__logo-segment example-header__logo-segment--aitc">AITC</span>
+					</div>
 					<div class="example-header__session flex items-center gap-2 min-w-0">
 					${Button({
 						variant: "ghost",
@@ -528,7 +539,7 @@ const renderApp = () => {
 								},
 							);
 						},
-						title: "Sessions",
+						title: i18n("Sessions"),
 					})}
 					${Button({
 						variant: "ghost",
@@ -537,16 +548,16 @@ const renderApp = () => {
 						onClick: () => {
 							void newSession();
 						},
-						title: "New Session",
+						title: i18n("New Session"),
 					})}
 
 					${
-						currentTitle
+						getDisplayTitle()
 							? isEditingTitle
 								? html`<div class="flex items-center gap-2 min-w-0">
 									${Input({
 										type: "text",
-										value: currentTitle,
+										value: getDisplayTitle(),
 										className: "text-sm w-64 max-w-full",
 										onChange: async (e: Event) => {
 											const newTitle = (e.target as HTMLInputElement).value.trim();
@@ -588,11 +599,11 @@ const renderApp = () => {
 											}
 										});
 									}}
-									title="Click to edit title"
+									title=${i18n("Click to edit title")}
 								>
-									${currentTitle}
+									${getDisplayTitle()}
 								</button>`
-							: html`<span class="example-header__title text-base font-semibold text-foreground">Pi Web UI Example</span>`
+							: html`<span class="example-header__title text-base font-semibold text-foreground">${i18n("AI Coding Platform")}</span>`
 					}
 					</div>
 				</div>
@@ -610,7 +621,7 @@ const renderApp = () => {
 								);
 							}
 						},
-						title: "Demo: Add Custom Notification",
+						title: i18n("Demo: Add Custom Notification"),
 					})}
 					<theme-toggle></theme-toggle>
 					${Button({
@@ -618,9 +629,9 @@ const renderApp = () => {
 						size: "sm",
 						children: icon(Settings, "sm"),
 						onClick: () => {
-							SettingsDialog.open([new ProvidersModelsTab(), new ProxyTab()]);
+							SettingsDialog.open([new LanguageTab(), new ProvidersModelsTab(), new ProxyTab()]);
 						},
-						title: "Settings",
+						title: i18n("Settings"),
 					})}
 				</div>
 			</div>
@@ -639,7 +650,7 @@ async function initApp() {
 	render(
 		html`
 			<div class="w-full h-screen flex items-center justify-center bg-background text-foreground">
-				<div class="text-muted-foreground">Loading...</div>
+				<div class="text-muted-foreground">${i18n("Loading...")}</div>
 			</div>
 		`,
 		app,

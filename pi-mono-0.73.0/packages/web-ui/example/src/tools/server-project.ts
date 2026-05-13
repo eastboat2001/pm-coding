@@ -1,7 +1,7 @@
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ToolResultMessage } from "@mariozechner/pi-ai";
-import { registerToolRenderer, renderCollapsibleHeader, renderHeader, type ToolRenderer, type ToolRenderResult } from "@mariozechner/pi-web-ui";
+import { i18n, registerToolRenderer, renderCollapsibleHeader, renderHeader, type ToolRenderer, type ToolRenderResult } from "@mariozechner/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { FileCode2, Play, Rocket } from "lucide";
@@ -222,14 +222,14 @@ class ProjectFileRenderer implements ToolRenderer<ProjectFileParams, ProjectFile
 		const command = details?.command || params?.command || "file";
 		const filename = details?.filename || params?.filename;
 		const labels: Record<string, { active: string; done: string }> = {
-			create: { active: "Creating file", done: details?.action === "updated" ? "Updated file" : "Created file" },
-			rewrite: { active: "Rewriting file", done: details?.action === "created" ? "Created file" : "Updated file" },
-			update: { active: "Updating file", done: "Updated file" },
-			get: { active: "Reading file", done: "Read file" },
-			delete: { active: "Deleting file", done: "Deleted file" },
-			list: { active: "Listing project files", done: "Listed project files" },
+			create: { active: i18n("Creating file"), done: details?.action === "updated" ? i18n("Updated file") : i18n("Created file") },
+			rewrite: { active: i18n("Rewriting file"), done: details?.action === "created" ? i18n("Created file") : i18n("Updated file") },
+			update: { active: i18n("Updating file"), done: i18n("Updated file") },
+			get: { active: i18n("Reading file"), done: i18n("Read file") },
+			delete: { active: i18n("Deleting file"), done: i18n("Deleted file") },
+			list: { active: i18n("Listing project files"), done: i18n("Listed project files") },
 		};
-		const label = state === "inprogress" ? labels[command]?.active || "Processing file" : labels[command]?.done || "Processed file";
+		const label = state === "inprogress" ? labels[command]?.active || i18n("Processing file") : labels[command]?.done || i18n("Processed file");
 		const contentRef = createRef<HTMLDivElement>();
 		const chevronRef = createRef<HTMLSpanElement>();
 		const code = params?.content || details?.content || getTextOutput(result);
@@ -263,7 +263,13 @@ class ProjectBashRenderer implements ToolRenderer<ProjectBashParams, ProjectBash
 			isCustom: false,
 			content: html`
 				<div>
-					${renderCollapsibleHeader(state, Play, state === "inprogress" ? `Running ${command}` : `Ran ${command}`, contentRef, chevronRef)}
+					${renderCollapsibleHeader(
+						state,
+						Play,
+						state === "inprogress" ? `${i18n("Running command")} ${command}` : `${i18n("Ran command")} ${command}`,
+						contentRef,
+						chevronRef,
+					)}
 					<div ${ref(contentRef)} class="max-h-0 overflow-hidden transition-all duration-300">
 						<code-block .code=${result?.details?.output || getTextOutput(result) || command} language="text"></code-block>
 					</div>
@@ -280,10 +286,10 @@ class ProjectPreviewRenderer implements ToolRenderer<ProjectPreviewParams, Proje
 		const contentRef = createRef<HTMLDivElement>();
 		const chevronRef = createRef<HTMLSpanElement>();
 		const header = details?.previewUrl
-			? html`<span>Preview ready <a class="underline" href=${details.previewUrl} target="_blank" rel="noreferrer">${details.previewUrl}</a></span>`
+			? html`<span>${i18n("Preview ready")} <a class="underline" href=${details.previewUrl} target="_blank" rel="noreferrer">${details.previewUrl}</a></span>`
 			: state === "inprogress"
-				? "Preparing preview"
-				: "Prepared preview";
+				? i18n("Preparing preview")
+				: i18n("Prepared preview");
 		return {
 			isCustom: false,
 			content: html`

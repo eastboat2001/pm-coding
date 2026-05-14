@@ -1841,7 +1841,7 @@ class RequirementCollectorService:
         collapsed = " ".join(user_message.split())
         if not collapsed:
             return ""
-        return collapsed[:39].rstrip() + "..." if len(collapsed) > 40 else collapsed
+        return collapsed[:160].rstrip()
 
     def _default_design_doc(self, language: str) -> str:
         language = self._normalize_language(language)

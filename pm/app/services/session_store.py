@@ -191,6 +191,18 @@ class SQLiteSessionStore:
                     COALESCE(
                         (
                             SELECT content
+                            FROM messages first_user
+                            WHERE first_user.session_id = s.id
+                              AND first_user.role = 'user'
+                              AND first_user.kind = 'chat'
+                            ORDER BY first_user.id ASC
+                            LIMIT 1
+                        ),
+                        ''
+                    ) AS first_user_message,
+                    COALESCE(
+                        (
+                            SELECT content
                             FROM messages latest_assistant
                             WHERE latest_assistant.session_id = s.id
                               AND latest_assistant.role = 'assistant'
@@ -224,6 +236,15 @@ class SQLiteSessionStore:
 
         sessions: list[dict[str, Any]] = []
         for row in rows:
+            title = row["title"] or ""
+            first_user_message = " ".join((row["first_user_message"] or "").split())
+            if title.endswith("...") and first_user_message:
+                title_prefix = title[:-3].rstrip()
+                if title_prefix and first_user_message.startswith(title_prefix):
+                    title = first_user_message
+            if len(title) > 160:
+                title = title[:160].rstrip()
+
             preview = " ".join((row["last_message_preview"] or "").split())
             if len(preview) > 88:
                 preview = f"{preview[:85].rstrip()}..."
@@ -231,7 +252,7 @@ class SQLiteSessionStore:
             sessions.append(
                 {
                     "session_id": row["session_id"],
-                    "title": row["title"] or "",
+                    "title": title,
                     "prompt_template": row["prompt_template"] or self.DEFAULT_PROMPT_TEMPLATE,
                     "applied_template_id": row["applied_template_id"] or self.DEFAULT_APPLIED_TEMPLATE_ID,
                     "applied_template_name": row["applied_template_name"] or self.DEFAULT_APPLIED_TEMPLATE_NAME,

@@ -68,7 +68,7 @@ const audioContext = ref<AudioContext | null>(null)
 const scriptProcessor = ref<ScriptProcessorNode | null>(null)
 
 const hasSession = computed(() => Boolean(sessionId.value))
-const currentLanguage = ref<LanguageCode>('zh')
+const currentLanguage = ref<LanguageCode>('en')
 const sidebarCollapsed = ref(false)
 const sending = computed(() => activeReplyCount.value > 0)
 const messagePipelineActive = computed(() => activeMessagePipelineCount.value > 0)
@@ -628,6 +628,24 @@ const templateFacetLabels: Record<string, Record<LanguageCode, string>> = {
     zh: '培训系统',
     ms: 'Sistem Latihan',
   },
+  forum_community: {
+    en: 'Forum Community',
+    de: 'Forum Community',
+    zh: '论坛社区',
+    ms: 'Komuniti Forum',
+  },
+  shopping_mall: {
+    en: 'Shopping Mall',
+    de: 'Online-Shop',
+    zh: '购物商城',
+    ms: 'Pusat Beli-belah',
+  },
+  logistics_warehouse: {
+    en: 'Logistics & Warehouse',
+    de: 'Logistik und Lager',
+    zh: '物流仓储',
+    ms: 'Logistik dan Gudang',
+  },
 }
 const templateTagLabels: Record<string, Record<LanguageCode, string>> = {
   finance: {
@@ -737,6 +755,114 @@ const templateTagLabels: Record<string, Record<LanguageCode, string>> = {
     de: 'Anmeldung',
     zh: '报名',
     ms: 'Pendaftaran',
+  },
+  forum: {
+    en: 'Forum',
+    de: 'Forum',
+    zh: '论坛',
+    ms: 'Forum',
+  },
+  community: {
+    en: 'Community',
+    de: 'Community',
+    zh: '社区',
+    ms: 'Komuniti',
+  },
+  thread: {
+    en: 'Thread',
+    de: 'Thread',
+    zh: '主题帖',
+    ms: 'Thread',
+  },
+  post: {
+    en: 'Post',
+    de: 'Beitrag',
+    zh: '帖子',
+    ms: 'Siaran',
+  },
+  comment: {
+    en: 'Comment',
+    de: 'Kommentar',
+    zh: '评论',
+    ms: 'Komen',
+  },
+  moderation: {
+    en: 'Moderation',
+    de: 'Moderation',
+    zh: '审核',
+    ms: 'Moderasi',
+  },
+  ecommerce: {
+    en: 'E-commerce',
+    de: 'E-Commerce',
+    zh: '电商',
+    ms: 'E-dagang',
+  },
+  product: {
+    en: 'Product',
+    de: 'Produkt',
+    zh: '商品',
+    ms: 'Produk',
+  },
+  order: {
+    en: 'Order',
+    de: 'Bestellung',
+    zh: '订单',
+    ms: 'Pesanan',
+  },
+  cart: {
+    en: 'Cart',
+    de: 'Warenkorb',
+    zh: '购物车',
+    ms: 'Troli',
+  },
+  promotion: {
+    en: 'Promotion',
+    de: 'Aktion',
+    zh: '促销',
+    ms: 'Promosi',
+  },
+  customer: {
+    en: 'Customer',
+    de: 'Kunde',
+    zh: '客户',
+    ms: 'Pelanggan',
+  },
+  logistics: {
+    en: 'Logistics',
+    de: 'Logistik',
+    zh: '物流',
+    ms: 'Logistik',
+  },
+  warehouse: {
+    en: 'Warehouse',
+    de: 'Lager',
+    zh: '仓储',
+    ms: 'Gudang',
+  },
+  inventory: {
+    en: 'Inventory',
+    de: 'Bestand',
+    zh: '库存',
+    ms: 'Inventori',
+  },
+  inbound: {
+    en: 'Inbound',
+    de: 'Inbound',
+    zh: '入库',
+    ms: 'Inbound',
+  },
+  outbound: {
+    en: 'Outbound',
+    de: 'Outbound',
+    zh: '出库',
+    ms: 'Outbound',
+  },
+  shipment: {
+    en: 'Shipment',
+    de: 'Sendung',
+    zh: '配送',
+    ms: 'Penghantaran',
   },
 }
 function selectLanguage(lang: LanguageCode) {
@@ -3119,18 +3245,21 @@ body {
 }
 
 .session-card-preview {
+  width: 100%;
+  max-width: 100%;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .session-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  position: relative;
+  display: block;
   padding: 0;
-  align-items: center;
   transition: background 0.2s ease, color 0.2s ease;
   border-radius: 14px;
 }
@@ -3140,13 +3269,16 @@ body {
 }
 
 .session-card-main {
+  width: 100%;
+  max-width: 100%;
   border: 0;
   background: transparent;
-  padding: 10px 10px 10px 12px;
+  padding: 10px 46px 10px 12px;
   text-align: left;
   color: inherit;
   cursor: pointer;
   min-width: 0;
+  justify-self: stretch;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 10px;
@@ -3154,23 +3286,38 @@ body {
 }
 
 .session-card-copy {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   display: grid;
   gap: 4px;
 }
 
 .session-card-top {
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
+  width: 100%;
+  max-width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 2px;
 }
 
 .session-card-title {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   font-size: 0.86rem;
   line-height: 1.3;
-  text-overflow: ellipsis;
+  display: block;
+  max-height: 2.6em;
   overflow: hidden;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.session-card-time {
+  justify-self: start;
   white-space: nowrap;
 }
 
@@ -3182,9 +3329,13 @@ body {
 }
 
 .session-card-delete {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 28px;
   height: 28px;
-  margin: 0 8px 0 0;
+  margin: 0;
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
@@ -3723,14 +3874,23 @@ body {
 }
 
 .bubble.user {
+  width: fit-content;
+  max-width: min(78%, 760px);
+  min-width: min(100%, 260px);
   align-self: flex-end;
   margin-left: auto;
-  background: linear-gradient(180deg, #edf4ff 0%, #e5efff 100%);
+  background: linear-gradient(135deg, #2f65d8 0%, #4f86f5 100%);
+  border-color: rgba(47, 101, 216, 0.5);
   border-top-right-radius: 10px;
+  color: #fff;
+  box-shadow: 0 18px 34px rgba(47, 101, 216, 0.22);
 }
 
 .bubble.assistant {
-  background: rgba(255, 255, 255, 0.94);
+  align-self: flex-start;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  border-color: #d9e5f5;
+  border-left: 4px solid #58b9c6;
   border-top-left-radius: 10px;
 }
 
@@ -3747,14 +3907,34 @@ body {
 }
 
 .role {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #eef3ff;
   font-size: 0.82rem;
   font-weight: 700;
   color: #486486;
 }
 
+.bubble.user .role {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.bubble.assistant .role {
+  background: #e9f7f8;
+  color: #26727d;
+}
+
 .timestamp {
   color: var(--muted);
   font-size: 0.74rem;
+}
+
+.bubble.user .timestamp {
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .content,
@@ -3763,6 +3943,14 @@ body {
   margin: 0;
   white-space: pre-wrap;
   line-height: 1.6;
+}
+
+.bubble.user .content {
+  color: #fff;
+}
+
+.bubble.assistant .content {
+  color: #2f405d;
 }
 
 .design-doc-card {

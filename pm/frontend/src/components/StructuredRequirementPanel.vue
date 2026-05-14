@@ -380,12 +380,12 @@ function summarizeText(value: string): string {
 
 <style scoped>
 .requirement-panel-stack {
-  min-height: 0;
+  width: 100%;
   height: auto;
   min-height: 100%;
-  display: grid;
-  grid-template-rows: auto auto;
-  align-content: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 12px;
   overflow: visible;
 }
@@ -395,20 +395,23 @@ function summarizeText(value: string): string {
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 12px 30px rgba(74, 104, 157, 0.1);
-  overflow: visible;
+  overflow: hidden;
   height: auto;
 }
 
 .table-card {
+  flex: 0 0 auto;
+  width: 100%;
   min-height: 0;
   height: auto;
   display: flex;
   flex-direction: column;
-  overflow: visible;
 }
 
 .progress-card {
+  flex: 0 0 auto;
   align-self: start;
+  width: 100%;
 }
 
 .card-head {
@@ -424,6 +427,7 @@ function summarizeText(value: string): string {
 }
 
 .card-title {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -432,6 +436,8 @@ function summarizeText(value: string): string {
 .card-title h3 {
   margin: 0;
   font-size: 0.92rem;
+  line-height: 1.25;
+  overflow-wrap: break-word;
 }
 
 .sync-badge {
@@ -642,7 +648,7 @@ function summarizeText(value: string): string {
   flex: 0 0 auto;
   min-height: auto;
   overflow: visible;
-  padding: 0 4px 14px 0;
+  padding: 0 16px 16px;
 }
 
 .requirement-list {
@@ -790,8 +796,9 @@ function summarizeText(value: string): string {
 
 @media (max-width: 768px) {
   .requirement-panel-stack {
-    height: min(88vh, 820px);
-    overflow: hidden;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
   }
 }
 

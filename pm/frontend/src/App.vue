@@ -1983,6 +1983,11 @@ function appendReactiveMessage(message: ChatMessage): ChatMessage {
 function autoResizeTextarea() {
   const textarea = textareaRef.value
   if (textarea) {
+    if (!textarea.value) {
+      textarea.style.height = ''
+      return
+    }
+
     textarea.style.height = 'auto'
     textarea.style.height = Math.min(textarea.scrollHeight, 300) + 'px'
   }
@@ -2035,6 +2040,11 @@ async function sendMessage() {
     createdAt: new Date().toISOString(),
   })
   inputText.value = ''
+  if (textareaRef.value) {
+    textareaRef.value.value = ''
+    textareaRef.value.style.height = ''
+  }
+  await nextTick()
   autoResizeTextarea()
   scrollToBottom()
 

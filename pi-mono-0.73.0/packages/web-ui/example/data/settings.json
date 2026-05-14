@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "savedAt": "2026-05-12T01:11:15.180Z",
-  "currentSessionId": "7468b404-0ceb-426c-b771-d8f7769cf1a0",
+  "savedAt": "2026-05-14T00:12:12.584Z",
+  "currentSessionId": "0a5644d1-912d-4feb-8391-2fb4dbb885be",
   "selectedModel": {
-    "id": "mimo-v2.5",
-    "name": "MiMo-V2.5",
+    "id": "mimo-v2.5-pro",
+    "name": "MiMo-V2.5-Pro",
     "api": "anthropic-messages",
     "provider": "xiaomi-token-plan-cn",
     "baseUrl": "https://token-plan-cn.xiaomimimo.com/anthropic",
@@ -14,9 +14,9 @@
       "image"
     ],
     "cost": {
-      "input": 0.4,
-      "output": 2,
-      "cacheRead": 0.08,
+      "input": 1,
+      "output": 3,
+      "cacheRead": 0.2,
       "cacheWrite": 0
     },
     "contextWindow": 1048576,

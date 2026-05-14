@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "savedAt": "2026-05-12T05:26:41.331Z",
+  "data": {
+    "id": "87b33401-3121-4eab-a775-f652199ff415",
+    "title": "New Session",
+    "model": {
+      "id": "mimo-v2.5",
+      "name": "MiMo-V2.5",
+      "api": "anthropic-messages",
+      "provider": "xiaomi-token-plan-cn",
+      "baseUrl": "https://token-plan-cn.xiaomimimo.com/anthropic",
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.4,
+        "output": 2,
+        "cacheRead": 0.08,
+        "cacheWrite": 0
+      },
+      "contextWindow": 1048576,
+      "maxTokens": 131072
+    },
+    "thinkingLevel": "off",
+    "messages": [],
+    "createdAt": "2026-05-12T05:26:41.289Z",
+    "lastModified": "2026-05-12T05:26:41.307Z"
+  },
+  "metadata": {
+    "id": "87b33401-3121-4eab-a775-f652199ff415",
+    "title": "New Session",
+    "createdAt": "2026-05-12T05:26:41.289Z",
+    "lastModified": "2026-05-12T05:26:41.307Z",
+    "messageCount": 0,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
+    "thinkingLevel": "off",
+    "preview": ""
+  }
+}

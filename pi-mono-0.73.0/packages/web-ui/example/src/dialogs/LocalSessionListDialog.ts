@@ -1,3 +1,4 @@
+import { i18n } from "@mariozechner/pi-web-ui";
 import { DialogContent, DialogHeader } from "@mariozechner/mini-lit/dist/Dialog.js";
 import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
 import { html } from "lit";
@@ -42,7 +43,7 @@ export class LocalSessionListDialog extends DialogBase {
 
 	private async handleDelete(sessionId: string, event: Event) {
 		event.stopPropagation();
-		if (!confirm("Delete this session?")) return;
+		if (!confirm(i18n("Delete this session?"))) return;
 		this.onDeleteCallback?.(sessionId);
 		await this.refresh();
 	}
@@ -52,13 +53,13 @@ export class LocalSessionListDialog extends DialogBase {
 			${DialogContent({
 				className: "h-full flex flex-col",
 				children: html`
-					${DialogHeader({ title: "Sessions", description: "Load a browser or configured local conversation" })}
+					${DialogHeader({ title: i18n("Sessions"), description: i18n("Load a browser or configured local conversation") })}
 					<div class="flex-1 overflow-y-auto mt-4 space-y-2">
 						${
 							this.loading
-								? html`<div class="text-center py-8 text-muted-foreground">Loading...</div>`
+								? html`<div class="text-center py-8 text-muted-foreground">${i18n("Loading...")}</div>`
 								: this.sessions.length === 0
-									? html`<div class="text-center py-8 text-muted-foreground">No sessions yet</div>`
+									? html`<div class="text-center py-8 text-muted-foreground">${i18n("No sessions yet")}</div>`
 									: this.sessions.map(
 											(session) => html`
 												<div
@@ -67,12 +68,12 @@ export class LocalSessionListDialog extends DialogBase {
 												>
 													<div class="flex-1 min-w-0">
 														<div class="font-medium text-sm text-foreground truncate">${session.title}</div>
-														<div class="text-xs text-muted-foreground mt-1">${session.messageCount} messages · ${session.preferredSource}</div>
+														<div class="text-xs text-muted-foreground mt-1">${session.messageCount} ${i18n("messages")} · ${session.preferredSource}</div>
 													</div>
 													<button
 														class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/10 text-destructive transition-opacity"
 														@click=${(e: Event) => this.handleDelete(session.id, e)}
-														title="Delete"
+														title=${i18n("Delete")}
 													>
 														✕
 													</button>

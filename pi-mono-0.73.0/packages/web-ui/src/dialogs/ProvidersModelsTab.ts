@@ -50,7 +50,7 @@ export class ProvidersModelsTab extends SettingsTab {
 	}
 
 	getTabName(): string {
-		return "Providers & Models";
+		return i18n("Providers & Models");
 	}
 
 	private async checkProviderStatus(provider: CustomProvider) {
@@ -77,9 +77,9 @@ export class ProvidersModelsTab extends SettingsTab {
 		return html`
 			<div class="flex flex-col gap-6">
 				<div>
-					<h3 class="text-sm font-semibold text-foreground mb-2">Cloud Providers</h3>
+					<h3 class="text-sm font-semibold text-foreground mb-2">${i18n("Cloud Providers")}</h3>
 					<p class="text-sm text-muted-foreground mb-4">
-						Cloud LLM providers with predefined models. API keys are stored locally in your browser.
+						${i18n("Cloud LLM providers with predefined models. API keys are stored locally in your browser.")}
 					</p>
 				</div>
 				<div class="flex flex-col gap-6">
@@ -97,9 +97,9 @@ export class ProvidersModelsTab extends SettingsTab {
 			<div class="flex flex-col gap-6">
 				<div class="flex items-center justify-between">
 					<div>
-						<h3 class="text-sm font-semibold text-foreground mb-2">Custom Providers</h3>
+						<h3 class="text-sm font-semibold text-foreground mb-2">${i18n("Custom Providers")}</h3>
 						<p class="text-sm text-muted-foreground">
-							User-configured servers with auto-discovered or manually defined models.
+							${i18n("User-configured servers with auto-discovered or manually defined models.")}
 						</p>
 					</div>
 					${Select({
@@ -123,7 +123,7 @@ export class ProvidersModelsTab extends SettingsTab {
 					this.customProviders.length === 0
 						? html`
 							<div class="text-sm text-muted-foreground text-center py-8">
-								No custom providers configured. Click 'Add Provider' to get started.
+								${i18n("No custom providers configured. Click 'Add Provider' to get started.")}
 							</div>
 						`
 						: html`

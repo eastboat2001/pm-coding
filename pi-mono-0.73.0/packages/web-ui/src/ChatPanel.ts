@@ -60,11 +60,12 @@ export class ChatPanel extends LitElement {
 			onBeforeSend?: () => void | Promise<void>;
 			onCostClick?: () => void;
 			onModelSelect?: () => void;
+			enableArtifacts?: boolean;
 			sandboxUrlProvider?: () => string;
 			toolsFactory?: (
 				agent: Agent,
 				agentInterface: AgentInterface,
-				artifactsPanel: ArtifactsPanel,
+				artifactsPanel: ArtifactsPanel | undefined,
 				runtimeProvidersFactory: () => SandboxRuntimeProvider[],
 			) => AgentTool<any>[];
 		},
@@ -82,6 +83,17 @@ export class ChatPanel extends LitElement {
 		this.agentInterface.onModelSelect = config?.onModelSelect;
 		this.agentInterface.onBeforeSend = config?.onBeforeSend;
 		this.agentInterface.onCostClick = config?.onCostClick;
+
+		if (config?.enableArtifacts === false) {
+			this.artifactsPanel = undefined;
+			this.hasArtifacts = false;
+			this.artifactCount = 0;
+			this.showArtifactsPanel = false;
+			const runtimeProvidersFactory = () => [] as SandboxRuntimeProvider[];
+			this.agent.state.tools = config?.toolsFactory?.(agent, this.agentInterface, undefined, runtimeProvidersFactory) || [];
+			this.requestUpdate();
+			return;
+		}
 
 		// Set up artifacts panel
 		this.artifactsPanel = new ArtifactsPanel();

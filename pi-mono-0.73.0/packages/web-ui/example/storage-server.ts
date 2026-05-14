@@ -9,7 +9,6 @@ interface StorageConfig {
 	sessionsDir: string;
 	settingsFile: string;
 	projectsRootDir: string;
-	deploymentsRootDir: string;
 	previewBaseUrl: string;
 	projectInstallCommand: string;
 	projectBuildCommand: string;
@@ -21,8 +20,8 @@ const API_PREFIX = "/api/pi-storage";
 const PROJECTS_API_PREFIX = "/api/pi-projects";
 const PREVIEW_PREFIX = "/preview";
 const CONFIG_FILE = "pi-storage.config.json";
-const DEPLOYMENT_MANIFEST_FILE = ".pi-deploy-files.json";
-const DEPLOYMENT_METADATA_FILE = ".pi-deployment.json";
+const PROJECT_MANIFEST_FILE = ".pi-project-files.json";
+const PROJECT_METADATA_FILE = ".pi-project.json";
 
 export function configuredStoragePlugin(): Plugin {
 	const rootDir = process.cwd();
@@ -32,7 +31,6 @@ export function configuredStoragePlugin(): Plugin {
 		mkdirSync(config.sessionsDir, { recursive: true });
 		mkdirSync(dirname(config.settingsFile), { recursive: true });
 		mkdirSync(config.projectsRootDir, { recursive: true });
-		mkdirSync(config.deploymentsRootDir, { recursive: true });
 	};
 
 	const handler: Connect.NextHandleFunction = async (req, res, next) => {
@@ -59,9 +57,23 @@ export function configuredStoragePlugin(): Plugin {
 			const method = req.method || "GET";
 
 			if (isProjectsApi) {
-				if (method === "POST" && route === "/deploy") {
+				if (method === "POST" && route === "/workspace/file") {
 					const body = await readJsonBody(req);
-					const result = await deployProject(config, body, req);
+					const result = handleWorkspaceFile(config, body);
+					sendJson(res, result);
+					return;
+				}
+
+				if (method === "POST" && route === "/workspace/bash") {
+					const body = await readJsonBody(req);
+					const result = await runWorkspaceCommand(config, body);
+					sendJson(res, result);
+					return;
+				}
+
+				if (method === "POST" && route === "/workspace/preview") {
+					const body = await readJsonBody(req);
+					const result = await previewWorkspace(config, body, req);
 					sendJson(res, result);
 					return;
 				}
@@ -69,7 +81,7 @@ export function configuredStoragePlugin(): Plugin {
 				const logsMatch = route.match(/^\/([^/]+)\/logs$/);
 				if (method === "GET" && logsMatch) {
 					const projectId = decodeURIComponent(logsMatch[1]);
-					sendJson(res, readDeploymentLogs(config, projectId));
+					sendJson(res, readProjectLogs(config, projectId));
 					return;
 				}
 
@@ -83,7 +95,6 @@ export function configuredStoragePlugin(): Plugin {
 					sessionsDir: config.sessionsDir,
 					settingsFile: config.settingsFile,
 					projectsRootDir: config.projectsRootDir,
-					deploymentsRootDir: config.deploymentsRootDir,
 					previewBaseUrl: config.previewBaseUrl,
 				});
 				return;
@@ -153,12 +164,23 @@ export function configuredStoragePlugin(): Plugin {
 
 				if (method === "PUT") {
 					const body = await readJsonBody(req);
+					const existing = existsSync(config.settingsFile) ? readJsonFile(config.settingsFile) : {};
 					const record = {
+						...(isObject(existing) ? existing : {}),
 						version: 1,
 						savedAt: new Date().toISOString(),
-						currentSessionId: body.currentSessionId,
-						selectedModel: body.selectedModel,
 					};
+					if (Object.prototype.hasOwnProperty.call(body, "currentSessionId")) {
+						const currentSessionId = body.currentSessionId;
+						if (typeof currentSessionId === "string" && currentSessionId.trim()) {
+							record.currentSessionId = currentSessionId;
+						} else {
+							delete record.currentSessionId;
+						}
+					}
+					if (Object.prototype.hasOwnProperty.call(body, "selectedModel")) {
+						record.selectedModel = body.selectedModel;
+					}
 					writeJsonFile(config.settingsFile, record);
 					sendJson(res, record);
 					return;
@@ -189,8 +211,7 @@ function loadStorageConfig(rootDir: string): StorageConfig {
 	return {
 		sessionsDir: resolveConfiguredPath(rootDir, raw.sessionsDir || (legacyStorageDir ? join(legacyStorageDir, "sessions") : "data/sessions")),
 		settingsFile: resolveConfiguredPath(rootDir, raw.settingsFile || (legacyStorageDir ? join(legacyStorageDir, "settings.json") : "data/settings.json")),
-		projectsRootDir: resolveConfiguredPath(rootDir, raw.projectsRootDir || "data/generated_projects"),
-		deploymentsRootDir: resolveConfiguredPath(rootDir, raw.deploymentsRootDir || "data/deployments"),
+		projectsRootDir: resolveConfiguredPath(rootDir, raw.projectsRootDir || "data/projects"),
 		previewBaseUrl: String(raw.previewBaseUrl || "").replace(/\/+$/, ""),
 		projectInstallCommand: String(raw.projectInstallCommand || "npm install"),
 		projectBuildCommand: String(raw.projectBuildCommand || "npm run build"),
@@ -229,7 +250,7 @@ function projectSummary(projectsRootDir: string, sessionData: JsonObject): JsonO
 	const projectDir = projectDirectory(projectsRootDir, String(sessionData.id || ""), String(sessionData.title || ""));
 	return {
 		projectRoot: projectDir,
-		fileCount: countFiles(projectDir),
+		fileCount: listProjectSourceFiles(projectDir).length,
 	};
 }
 
@@ -240,8 +261,15 @@ function persistProjectArtifacts(
 	metadata: JsonObject,
 ): JsonObject {
 	const projectDir = projectDirectory(projectsRootDir, sessionId, String(metadata.title || ""));
-	mkdirSync(projectDir, { recursive: true });
 	const artifacts = extractArtifactsFromMessages(sessionData.messages);
+	if (Object.keys(artifacts).length === 0) {
+		return {
+			projectRoot: projectDir,
+			fileCount: listProjectSourceFiles(projectDir).length,
+		};
+	}
+
+	mkdirSync(projectDir, { recursive: true });
 	syncProjectFiles(projectDir, artifacts);
 	removeSiblingProjectDirs(projectsRootDir, projectDir, sessionId);
 	return {
@@ -344,30 +372,48 @@ function extractArtifactsFromMessages(messages: unknown): Record<string, string>
 }
 
 function syncProjectFiles(projectDir: string, artifacts: Record<string, string>): void {
-	const allowedFiles = new Set<string>();
+	const manifestPath = join(projectDir, PROJECT_MANIFEST_FILE);
+	const previousFiles = readProjectManifest(manifestPath);
+	const nextFiles = new Set<string>();
+
 	for (const [filename, content] of Object.entries(artifacts)) {
-		const relativePath = safeRelativeArtifactPath(filename);
+		const relativePath = safeRelativeProjectPath(filename);
 		const targetPath = resolve(projectDir, relativePath);
 		assertInside(projectDir, targetPath);
 		mkdirSync(dirname(targetPath), { recursive: true });
 		writeFileSync(targetPath, content, "utf8");
-		allowedFiles.add(targetPath);
+		nextFiles.add(relativePath);
 	}
 
-	for (const file of listFiles(projectDir)) {
-		if (!allowedFiles.has(file)) rmSync(file, { force: true });
+	for (const previous of previousFiles) {
+		if (nextFiles.has(previous)) continue;
+		const targetPath = resolve(projectDir, previous);
+		assertInside(projectDir, targetPath);
+		if (existsSync(targetPath)) rmSync(targetPath, { force: true });
 	}
+
+	writeJsonFile(manifestPath, { files: Array.from(nextFiles).sort() });
 	pruneEmptyDirectories(projectDir);
 }
 
-function safeRelativeArtifactPath(filename: string): string {
-	const parts = filename
+function safeRelativeProjectPath(filename: string): string {
+	const rawParts = filename
 		.replace(/\\/g, "/")
 		.split("/")
-		.map((part) => sanitizePathComponent(part))
+		.map((part) => part.trim())
 		.filter(Boolean);
-	if (parts.length === 0) throw new Error("Artifact filename is empty.");
+	const parts = rawParts.map((part) => sanitizeProjectPathComponent(part));
+	if (parts.length === 0) throw new Error("Project filename is empty.");
 	return join(...parts);
+}
+
+function sanitizeProjectPathComponent(value: string): string {
+	if (value === "." || value === ".." || value.includes("/") || value.includes("\\") || value.includes(":")) {
+		throw new Error(`Invalid project path component: ${value}`);
+	}
+	const cleaned = value.replace(/[<>:"|?*\u0000-\u001f]/g, "-").replace(/^[-\s]+|[-\s]+$/g, "");
+	if (!cleaned) throw new Error("Project path component is empty.");
+	return cleaned;
 }
 
 function removeSiblingProjectDirs(projectsRootDir: string, currentProjectDir: string, sessionId: string): void {
@@ -398,97 +444,186 @@ function deleteSessionAndProjects(projectsRootDir: string, sessionPath: string, 
 	return deleted;
 }
 
-async function deployProject(config: StorageConfig, body: JsonObject, req: Connect.IncomingMessage): Promise<JsonObject> {
+function listProjectSourceFiles(root: string): string[] {
+	if (!existsSync(root)) return [];
+	const excludedDirs = new Set([".git", ".pi", "node_modules", ".next", ".nuxt", "dist", "build", "coverage"]);
+	const excludedFiles = new Set([PROJECT_METADATA_FILE, PROJECT_MANIFEST_FILE]);
+	const result: string[] = [];
+	for (const entry of readdirSync(root, { withFileTypes: true })) {
+		const path = join(root, entry.name);
+		if (entry.isDirectory()) {
+			if (excludedDirs.has(entry.name)) continue;
+			result.push(...listProjectSourceFiles(path));
+		}
+		if (entry.isFile() && !excludedFiles.has(entry.name)) result.push(path);
+	}
+	return result;
+}
+
+function workspaceContext(config: StorageConfig, body: JsonObject): { sessionId: string; title: string; projectId: string; projectDir: string } {
 	const sessionId = String(body.sessionId || "").trim();
 	const title = String(body.title || "").trim();
-	const files = normalizeProjectFiles(body.files);
 	if (!sessionId) throw new Error("Field `sessionId` is required.");
-	if (files.length === 0) throw new Error("No project files were provided.");
-
 	const projectId = projectSlug(sessionId, title);
-	const deploymentDir = join(config.deploymentsRootDir, projectId);
-	assertInside(config.deploymentsRootDir, deploymentDir);
-	mkdirSync(deploymentDir, { recursive: true });
-	syncDeploymentFiles(deploymentDir, files);
+	const projectDir = projectDirectory(config.projectsRootDir, sessionId, title);
+	assertInside(config.projectsRootDir, projectDir);
+	mkdirSync(projectDir, { recursive: true });
+	removeSiblingProjectDirs(config.projectsRootDir, projectDir, sessionId);
+	return { sessionId, title, projectId, projectDir };
+}
 
+function handleWorkspaceFile(config: StorageConfig, body: JsonObject): JsonObject {
+	const { projectDir } = workspaceContext(config, body);
+	const command = String(body.command || "").trim();
+	const filename = String(body.filename || "").trim();
+
+	if (command === "list") {
+		const files = listProjectSourceFiles(projectDir).map((file) => file.slice(projectDir.length + 1));
+		return { command, projectRoot: projectDir, files, fileCount: files.length };
+	}
+
+	if (!filename) throw new Error("Field `filename` is required.");
+	const relativePath = safeRelativeProjectPath(filename);
+	const targetPath = resolve(projectDir, relativePath);
+	assertInside(projectDir, targetPath);
+
+	if (command === "get") {
+		if (!existsSync(targetPath)) throw new Error(`File not found: ${relativePath}`);
+		return { command, filename: relativePath, content: readFileSync(targetPath, "utf8"), projectRoot: projectDir };
+	}
+
+	if (command === "delete") {
+		const existed = existsSync(targetPath);
+		if (existed) rmSync(targetPath, { force: true });
+		return { command, filename: relativePath, action: existed ? "deleted" : "missing", projectRoot: projectDir };
+	}
+
+	if (command === "create" || command === "rewrite") {
+		if (typeof body.content !== "string") throw new Error("Field `content` is required.");
+		const existed = existsSync(targetPath);
+		mkdirSync(dirname(targetPath), { recursive: true });
+		writeFileSync(targetPath, body.content, "utf8");
+		return {
+			command,
+			filename: relativePath,
+			action: existed ? "updated" : "created",
+			projectRoot: projectDir,
+			fileCount: listProjectSourceFiles(projectDir).length,
+		};
+	}
+
+	if (command === "update") {
+		if (!existsSync(targetPath)) throw new Error(`File not found: ${relativePath}`);
+		const oldStr = String(body.old_str ?? "");
+		const newStr = String(body.new_str ?? "");
+		if (!oldStr) throw new Error("Field `old_str` is required for update.");
+		const current = readFileSync(targetPath, "utf8");
+		if (!current.includes(oldStr)) throw new Error(`old_str was not found in ${relativePath}.`);
+		writeFileSync(targetPath, current.replace(oldStr, newStr), "utf8");
+		return { command, filename: relativePath, action: "updated", projectRoot: projectDir };
+	}
+
+	throw new Error(`Unsupported workspace file command: ${command}`);
+}
+
+async function runWorkspaceCommand(config: StorageConfig, body: JsonObject): Promise<JsonObject> {
+	const { projectDir } = workspaceContext(config, body);
+	const command = String(body.command || "").trim();
+	if (!command) throw new Error("Field `command` is required.");
+	const timeoutMs = Math.max(1000, Math.min(Number(body.timeoutMs || config.projectBuildTimeoutMs), 300000));
 	const logs: string[] = [];
-	const packageJsonPath = join(deploymentDir, "package.json");
-	let buildOutputDir = deploymentDir;
+	try {
+		await runCommand(command, projectDir, timeoutMs, logs);
+	} catch (error) {
+		throw new Error(formatCommandFailure(error, logs));
+	}
+	return {
+		command,
+		projectRoot: projectDir,
+		output: logs.join("").trim() || "Command completed successfully.",
+	};
+}
+
+function formatCommandFailure(error: unknown, logs: string[]): string {
+	const message = error instanceof Error ? error.message : String(error);
+	const output = logs.join("").trim();
+	const shell = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : process.env.SHELL || "sh";
+	return [
+		message,
+		output ? `Command output:\n${output}` : undefined,
+		`Server environment: platform=${process.platform}; shell=${shell}`,
+		"Use a command compatible with this environment and retry if needed.",
+	]
+		.filter((part): part is string => Boolean(part))
+		.join("\n\n");
+}
+
+async function previewWorkspace(config: StorageConfig, body: JsonObject, req: Connect.IncomingMessage): Promise<JsonObject> {
+	const { sessionId, title, projectId, projectDir } = workspaceContext(config, body);
+	const fileCount = listProjectSourceFiles(projectDir).length;
+	if (fileCount === 0) throw new Error("Cannot preview an empty project workspace.");
+	return await buildAndRecordProject(config, projectDir, {
+		projectId,
+		sessionId,
+		title,
+		req,
+		fileCount,
+	});
+}
+
+async function buildAndRecordProject(
+	config: StorageConfig,
+	projectDir: string,
+	options: { projectId: string; sessionId: string; title: string; req: Connect.IncomingMessage; fileCount: number },
+): Promise<JsonObject> {
+	const logs: string[] = [];
+	logs.push(`Project root: ${projectDir}\n`);
+	const packageJsonPath = join(projectDir, "package.json");
+	let serveRoot = projectDir;
 	let status = "running";
 
 	try {
 		if (existsSync(packageJsonPath)) {
-			await runCommand(config.projectInstallCommand, deploymentDir, config.projectInstallTimeoutMs, logs);
+			await runCommand(config.projectInstallCommand, projectDir, config.projectInstallTimeoutMs, logs);
 			const packageJson = readJsonFile(packageJsonPath);
 			if (isObject(packageJson.scripts) && typeof packageJson.scripts.build === "string") {
-				await runCommand(config.projectBuildCommand, deploymentDir, config.projectBuildTimeoutMs, logs);
-				const distDir = join(deploymentDir, "dist");
+				await runCommand(config.projectBuildCommand, projectDir, config.projectBuildTimeoutMs, logs);
+				const distDir = join(projectDir, "dist");
 				if (existsSync(distDir) && statSync(distDir).isDirectory()) {
-					buildOutputDir = distDir;
+					serveRoot = distDir;
+					logs.push(`Serving build output: ${serveRoot}\n`);
 				}
+			} else {
+				logs.push("package.json has no build script; serving project root.\n");
 			}
+		} else {
+			logs.push("No package.json found; serving project root without install/build.\n");
 		}
 	} catch (error) {
 		status = "failed";
 		logs.push(error instanceof Error ? error.message : String(error));
 	}
 
-	const previewUrl = buildPreviewUrl(config, req, projectId);
+	const previewUrl = buildPreviewUrl(config, options.req, options.projectId);
 	const metadata = {
 		version: 1,
-		projectId,
-		sessionId,
-		title,
+		projectId: options.projectId,
+		sessionId: options.sessionId,
+		title: options.title,
 		status,
 		previewUrl,
-		deploymentRoot: deploymentDir,
-		serveRoot: buildOutputDir,
-		fileCount: files.length,
+		projectRoot: projectDir,
+		serveRoot,
+		fileCount: options.fileCount,
 		updatedAt: new Date().toISOString(),
 		logs,
 	};
-	writeJsonFile(join(deploymentDir, DEPLOYMENT_METADATA_FILE), metadata);
+	writeJsonFile(join(projectDir, PROJECT_METADATA_FILE), metadata);
 
 	return metadata;
 }
 
-function normalizeProjectFiles(value: unknown): Array<{ filename: string; content: string }> {
-	if (!Array.isArray(value)) return [];
-	const files: Array<{ filename: string; content: string }> = [];
-	for (const item of value) {
-		if (!isObject(item)) continue;
-		const filename = String(item.filename || "").trim();
-		if (!filename || typeof item.content !== "string") continue;
-		files.push({ filename, content: item.content });
-	}
-	return files;
-}
-
-function syncDeploymentFiles(projectDir: string, files: Array<{ filename: string; content: string }>): void {
-	const manifestPath = join(projectDir, DEPLOYMENT_MANIFEST_FILE);
-	const previousFiles = readDeploymentManifest(manifestPath);
-	const nextFiles = new Set<string>();
-
-	for (const file of files) {
-		const relativePath = safeRelativeArtifactPath(file.filename);
-		const targetPath = resolve(projectDir, relativePath);
-		assertInside(projectDir, targetPath);
-		mkdirSync(dirname(targetPath), { recursive: true });
-		writeFileSync(targetPath, file.content, "utf8");
-		nextFiles.add(relativePath);
-	}
-
-	for (const previous of previousFiles) {
-		if (nextFiles.has(previous)) continue;
-		const targetPath = resolve(projectDir, previous);
-		assertInside(projectDir, targetPath);
-		if (existsSync(targetPath)) rmSync(targetPath, { force: true });
-	}
-
-	writeJsonFile(manifestPath, { files: Array.from(nextFiles).sort() });
-}
-
-function readDeploymentManifest(path: string): string[] {
+function readProjectManifest(path: string): string[] {
 	if (!existsSync(path)) return [];
 	try {
 		const record = readJsonFile(path);
@@ -514,8 +649,14 @@ function runCommand(command: string, cwd: string, timeoutMs: number, logs: strin
 			child.kill();
 			rejectCommand(new Error(`Command timed out after ${timeoutMs}ms: ${trimmedCommand}`));
 		}, timeoutMs);
-		child.stdout?.on("data", (chunk) => logs.push(String(chunk)));
-		child.stderr?.on("data", (chunk) => logs.push(String(chunk)));
+		child.stdout?.on("data", (chunk) => {
+			const text = String(chunk);
+			logs.push(text);
+		});
+		child.stderr?.on("data", (chunk) => {
+			const text = String(chunk);
+			logs.push(text);
+		});
 		child.on("error", (error) => {
 			clearTimeout(timeout);
 			rejectCommand(error);
@@ -540,16 +681,16 @@ function buildPreviewUrl(config: StorageConfig, req: Connect.IncomingMessage, pr
 	return `${protocol}://${host}${path}`;
 }
 
-function readDeploymentLogs(config: StorageConfig, projectId: string): JsonObject {
-	const metadata = readDeploymentMetadata(config, projectId);
+function readProjectLogs(config: StorageConfig, projectId: string): JsonObject {
+	const metadata = readProjectMetadata(config, projectId);
 	if (!metadata) return { error: "Project not found." };
 	return { projectId, status: metadata.status, logs: metadata.logs || [] };
 }
 
-function readDeploymentMetadata(config: StorageConfig, projectId: string): JsonObject | undefined {
+function readProjectMetadata(config: StorageConfig, projectId: string): JsonObject | undefined {
 	const safeProjectId = sanitizePathComponent(projectId);
 	if (!safeProjectId) return undefined;
-	const metadataPath = join(config.deploymentsRootDir, safeProjectId, DEPLOYMENT_METADATA_FILE);
+	const metadataPath = join(config.projectsRootDir, safeProjectId, PROJECT_METADATA_FILE);
 	if (!existsSync(metadataPath)) return undefined;
 	return readJsonFile(metadataPath);
 }
@@ -561,7 +702,7 @@ function servePreviewRequest(config: StorageConfig, req: Connect.IncomingMessage
 	const projectId = parts.shift();
 	if (!projectId) return false;
 
-	const metadata = readDeploymentMetadata(config, decodeURIComponent(projectId));
+	const metadata = readProjectMetadata(config, decodeURIComponent(projectId));
 	if (!metadata || metadata.status !== "running") {
 		sendJson(res, { error: "Preview not found." }, 404);
 		return true;
@@ -587,8 +728,23 @@ function servePreviewRequest(config: StorageConfig, req: Connect.IncomingMessage
 
 	res.statusCode = 200;
 	res.setHeader("Content-Type", mimeType(targetPath));
+	if (extname(targetPath).toLowerCase() === ".html") {
+		const previewBasePath = `${PREVIEW_PREFIX}/${encodeURIComponent(decodeURIComponent(projectId))}/`;
+		res.end(rewritePreviewHtml(readFileSync(targetPath, "utf8"), previewBasePath));
+		return true;
+	}
 	createReadStream(targetPath).pipe(res);
 	return true;
+}
+
+function rewritePreviewHtml(html: string, previewBasePath: string): string {
+	return html
+		.replace(/\b(src|href|action)=("|')\/(?!\/|preview\/)/g, (_match, attribute: string, quote: string) => {
+			return `${attribute}=${quote}${previewBasePath}`;
+		})
+		.replace(/\b(srcset)=("|')\/(?!\/|preview\/)/g, (_match, attribute: string, quote: string) => {
+			return `${attribute}=${quote}${previewBasePath}`;
+		});
 }
 
 function mimeType(path: string): string {
@@ -658,21 +814,6 @@ function isObject(value: unknown): value is JsonObject {
 
 function structuredCloneFallback<T>(value: T): T {
 	return JSON.parse(JSON.stringify(value));
-}
-
-function listFiles(root: string): string[] {
-	if (!existsSync(root)) return [];
-	const result: string[] = [];
-	for (const name of readdirSync(root, { withFileTypes: true })) {
-		const path = join(root, name.name);
-		if (name.isDirectory()) result.push(...listFiles(path));
-		if (name.isFile()) result.push(path);
-	}
-	return result;
-}
-
-function countFiles(root: string): number {
-	return listFiles(root).length;
 }
 
 function pruneEmptyDirectories(root: string): void {

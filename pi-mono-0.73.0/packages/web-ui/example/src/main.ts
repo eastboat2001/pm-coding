@@ -7,8 +7,8 @@ import {
 	AppStorage,
 	ChatPanel,
 	CustomProvidersStore,
-	createJavaScriptReplTool,
 	IndexedDBStorageBackend,
+	LanguageTab,
 	loadAttachment,
 	ModelSelector,
 	// PersistentStorageDialog, // TODO: Fix - currently broken
@@ -18,6 +18,8 @@ import {
 	SessionsStore,
 	SettingsDialog,
 	SettingsStore,
+	getCurrentLanguage,
+	i18n,
 	setAppStorage,
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
@@ -30,9 +32,10 @@ import { createSystemNotification, customConvertToLlm, registerCustomMessageRend
 import { LocalSessionListDialog } from "./dialogs/LocalSessionListDialog.js";
 import { ConfiguredServerStorage } from "./storage/configured-server-storage.js";
 import { mergeSessionMetadata } from "./storage/merged-session-index.js";
-import { createDeployProjectTool } from "./tools/deploy-project.js";
+import { createServerProjectTools } from "./tools/server-project.js";
 
 registerCustomMessageRenderers();
+document.documentElement.lang = getCurrentLanguage();
 
 const settings = new SettingsStore();
 const providerKeys = new ProviderKeysStore();
@@ -66,23 +69,36 @@ const DEFAULT_MODEL_PROVIDER = "anthropic";
 const DEFAULT_MODEL_ID = "claude-sonnet-4-5-20250929";
 const CURRENT_SESSION_ID_KEY = "example.currentSessionId";
 const SELECTED_MODEL_KEY = "example.selectedModel";
-const DEFAULT_NEW_SESSION_TITLE = "New Session";
-const DEFAULT_SYSTEM_PROMPT = `You are a helpful AI assistant with access to various tools.
+const DEFAULT_NEW_SESSION_TITLES = new Set(["New Session", "新建会话", "Neue Sitzung", "Sesi baharu"]);
+const DEFAULT_SYSTEM_PROMPT = `You are a helpful AI coding assistant that creates runnable projects directly in a configured server workspace.
 
-Available tools:
-- JavaScript REPL: Execute JavaScript code in a sandboxed browser environment (can do calculations, get time, process data, create visualizations, etc.)
-- Artifacts: Create interactive HTML, SVG, Markdown, and text artifacts
-- Deploy Project: Publish generated artifact files to the configured server directory and return a preview URL
+Available server project tools:
+- project_file: create, rewrite, update, read, delete, and list files in the server project root.
+- project_bash: run short non-interactive shell commands in the server project root.
+- project_preview: install/build if needed, serve the project, and return a Preview URL.
 
-When the user asks you to create a runnable application or website, create the necessary artifact files first, then use Deploy Project so the final answer includes the preview URL.`;
+When the user asks to create, update, run, or deploy an app/site/project:
+1. Use project_file to create complete project files. Prefer multiple files when appropriate, such as index.html, style.css, script.js, package.json, src files, and README.md.
+2. Use project_bash for quick validation or build commands when useful. Do not start long-running dev servers.
+3. project_bash runs on the PI server OS. If a command fails, read the returned error/output, adapt to the reported environment, and retry when useful.
+4. For simple static HTML/CSS/JS projects, project_bash is optional; project_preview is enough after files are ready.
+5. Use project_preview after the files are ready.
+6. Keep the user's language for app UI text unless the user asks otherwise.
+7. Do not ask the user to choose a directory, download files, run commands, or deploy manually.
+
+After the tool returns, summarize the result briefly and include the Preview URL.`;
 
 const PI_CODING_HANDOFF_INSTRUCTIONS = `平台执行要求：
-1. 你必须生成完整项目文件，不要只输出说明文档或零散代码片段。
-2. 使用 artifacts 工具创建或更新项目文件。
-3. 项目文件生成完成后，必须调用 Deploy Project / deploy_project 工具发布项目。
-4. 不要要求用户手动选择目录、下载文件、运行 npm install、运行 npm run dev 或手动部署。
-5. 最终回复必须包含后台返回的 Preview URL，并简要说明项目已生成和发布。
-6. 如果构建或部署失败，根据工具返回的日志修复问题后再次发布。`;
+1. PM 携带的实现提示词、PRD 文档、设计文档是需求主依据；以下内容只补充 PI 平台的执行方式，不改变或扩大 PM 的产品范围。
+2. 根据 PM 文档要求选择最小可运行实现；如果 PM 文档描述的是静态页面或 Node 前端项目，不要额外引入后端、数据库或常驻服务。
+3. 你必须使用 project_file 工具生成完整项目文件，不要只输出说明文档或零散代码片段。
+4. 需要验证或构建时，使用 project_bash 执行短命令；不要启动长期运行的 dev server。
+5. project_bash 运行在 PI 服务器操作系统上。如果命令失败，读取工具返回的错误和输出，根据返回的运行环境自行调整命令并在需要时重试。
+6. 对纯静态 HTML/CSS/JS 项目，文件完成后可以直接调用 project_preview；对 Vite/React/Vue 等 Node 前端项目，优先构建后预览 dist。
+7. 项目文件准备完成后，必须调用 project_preview 发布项目并返回 Preview URL。
+8. 必须保留 PM 携带的实现提示词原文语义和语言，不要翻译、替换或重新改写需求。
+9. 不要要求用户手动选择目录、下载文件、运行 npm install、运行 npm run dev 或手动部署。
+10. 最终回复必须包含工具返回的 Preview URL，并简要说明项目已生成和发布。`;
 
 let currentSessionId: string | undefined;
 let currentSessionCreatedAt: string | undefined;
@@ -134,6 +150,10 @@ const generateTitle = (messages: AgentMessage[]): string => {
 	return text.length <= 50 ? text : `${text.substring(0, 47)}...`;
 };
 
+const isDefaultNewSessionTitle = (title?: string) => !title || DEFAULT_NEW_SESSION_TITLES.has(title.trim());
+
+const getDisplayTitle = () => isDefaultNewSessionTitle(currentTitle) ? i18n("New Session") : currentTitle;
+
 const updateUrl = (sessionId?: string) => {
 	const url = new URL(window.location.href);
 	url.searchParams.delete("handoff_token");
@@ -171,7 +191,7 @@ const buildCodingHandoffPrompt = (payload: PmHandoffPayload): string => {
 };
 
 const getSessionTitle = (messages: AgentMessage[]): string =>
-	currentTitle || generateTitle(messages) || DEFAULT_NEW_SESSION_TITLE;
+	(!isDefaultNewSessionTitle(currentTitle) ? currentTitle : "") || generateTitle(messages) || i18n("New Session");
 
 const getDefaultModel = async (): Promise<Model<any>> => {
 	const storedModel = await storage.settings.get<Model<any>>(SELECTED_MODEL_KEY);
@@ -187,7 +207,7 @@ const getDefaultModel = async (): Promise<Model<any>> => {
 
 const persistSelectedModel = async (model: Model<any>) => {
 	await storage.settings.set(SELECTED_MODEL_KEY, model);
-	await configuredStorage.writeSettings({ currentSessionId, selectedModel: model });
+	await configuredStorage.writeSettings({ selectedModel: model });
 };
 
 const setCurrentSessionId = async (sessionId: string | undefined) => {
@@ -197,7 +217,7 @@ const setCurrentSessionId = async (sessionId: string | undefined) => {
 	} else {
 		await storage.settings.delete(CURRENT_SESSION_ID_KEY);
 	}
-	await configuredStorage.writeSettings({ currentSessionId: sessionId, selectedModel: agent?.state.model });
+	await configuredStorage.writeSettings({ currentSessionId: sessionId ?? null });
 	updateUrl(sessionId);
 };
 
@@ -310,7 +330,7 @@ const handleAgentEvent = async (event: AgentEvent) => {
 		case "message_end":
 		case "agent_end": {
 			const generatedTitle = generateTitle(agent.state.messages);
-			if ((!currentTitle || currentTitle === DEFAULT_NEW_SESSION_TITLE) && generatedTitle) {
+			if (isDefaultNewSessionTitle(currentTitle) && generatedTitle) {
 				currentTitle = generatedTitle;
 			}
 			if (currentSessionId) {
@@ -363,15 +383,12 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			await saveSession();
 		},
 		onModelSelect: handleModelSelect,
-		toolsFactory: (_agent, _agentInterface, _artifactsPanel, runtimeProvidersFactory) => {
-			const replTool = createJavaScriptReplTool();
-			replTool.runtimeProvidersFactory = runtimeProvidersFactory;
-			const deployTool = createDeployProjectTool(_artifactsPanel, () => ({
+		enableArtifacts: false,
+		toolsFactory: (toolAgent) =>
+			createServerProjectTools(() => ({
 				sessionId: currentSessionId,
-				title: getSessionTitle(agent.state.messages),
-			}));
-			return [replTool, deployTool];
-		},
+				title: getSessionTitle(toolAgent.state.messages),
+			})),
 	});
 };
 
@@ -386,7 +403,7 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 
 	await setCurrentSessionId(sessionId);
 	currentSessionCreatedAt = sessionData.createdAt;
-	currentTitle = sessionData.title || DEFAULT_NEW_SESSION_TITLE;
+	currentTitle = isDefaultNewSessionTitle(sessionData.title) ? "" : sessionData.title || "";
 	await persistSelectedModel(sessionData.model);
 
 	await createAgent({
@@ -491,7 +508,10 @@ const renderApp = () => {
 		<div class="example-shell w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
 			<div class="example-header flex items-center justify-between border-b border-border shrink-0">
 				<div class="example-header__brand-row flex items-center gap-3 px-4 py-3 min-w-0">
-					<div class="example-header__logo" aria-label="AT&S logo">AT&amp;S</div>
+					<div class="example-header__logo" aria-label=${i18n("AITC platform logo")}>
+						<span class="example-header__logo-segment example-header__logo-segment--ats">AT&amp;S</span>
+						<span class="example-header__logo-segment example-header__logo-segment--aitc">AITC</span>
+					</div>
 					<div class="example-header__session flex items-center gap-2 min-w-0">
 					${Button({
 						variant: "ghost",
@@ -519,7 +539,7 @@ const renderApp = () => {
 								},
 							);
 						},
-						title: "Sessions",
+						title: i18n("Sessions"),
 					})}
 					${Button({
 						variant: "ghost",
@@ -528,16 +548,16 @@ const renderApp = () => {
 						onClick: () => {
 							void newSession();
 						},
-						title: "New Session",
+						title: i18n("New Session"),
 					})}
 
 					${
-						currentTitle
+						getDisplayTitle()
 							? isEditingTitle
 								? html`<div class="flex items-center gap-2 min-w-0">
 									${Input({
 										type: "text",
-										value: currentTitle,
+										value: getDisplayTitle(),
 										className: "text-sm w-64 max-w-full",
 										onChange: async (e: Event) => {
 											const newTitle = (e.target as HTMLInputElement).value.trim();
@@ -579,11 +599,11 @@ const renderApp = () => {
 											}
 										});
 									}}
-									title="Click to edit title"
+									title=${i18n("Click to edit title")}
 								>
-									${currentTitle}
+									${getDisplayTitle()}
 								</button>`
-							: html`<span class="example-header__title text-base font-semibold text-foreground">Pi Web UI Example</span>`
+							: html`<span class="example-header__title text-base font-semibold text-foreground">${i18n("AI Coding Platform")}</span>`
 					}
 					</div>
 				</div>
@@ -601,7 +621,7 @@ const renderApp = () => {
 								);
 							}
 						},
-						title: "Demo: Add Custom Notification",
+						title: i18n("Demo: Add Custom Notification"),
 					})}
 					<theme-toggle></theme-toggle>
 					${Button({
@@ -609,9 +629,9 @@ const renderApp = () => {
 						size: "sm",
 						children: icon(Settings, "sm"),
 						onClick: () => {
-							SettingsDialog.open([new ProvidersModelsTab(), new ProxyTab()]);
+							SettingsDialog.open([new LanguageTab(), new ProvidersModelsTab(), new ProxyTab()]);
 						},
-						title: "Settings",
+						title: i18n("Settings"),
 					})}
 				</div>
 			</div>
@@ -630,7 +650,7 @@ async function initApp() {
 	render(
 		html`
 			<div class="w-full h-screen flex items-center justify-center bg-background text-foreground">
-				<div class="text-muted-foreground">Loading...</div>
+				<div class="text-muted-foreground">${i18n("Loading...")}</div>
 			</div>
 		`,
 		app,

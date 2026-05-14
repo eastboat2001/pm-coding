@@ -1,25 +1,24 @@
 {
   "version": 1,
-  "savedAt": "2026-05-14T00:12:12.584Z",
-  "currentSessionId": "0a5644d1-912d-4feb-8391-2fb4dbb885be",
+  "savedAt": "2026-05-13T06:45:27.302Z",
   "selectedModel": {
-    "id": "mimo-v2.5-pro",
-    "name": "MiMo-V2.5-Pro",
+    "id": "mimo-v2.5",
+    "name": "MiMo-V2.5",
     "api": "anthropic-messages",
     "provider": "xiaomi-token-plan-cn",
     "baseUrl": "https://token-plan-cn.xiaomimimo.com/anthropic",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
-      "input": 1,
-      "output": 3,
-      "cacheRead": 0.2,
+      "input": 0.4,
+      "output": 2,
+      "cacheRead": 0.08,
       "cacheWrite": 0
     },
     "contextWindow": 1048576,
     "maxTokens": 131072
-  }
+  },
+  "currentSessionId": "5ef98394-faa2-4b2c-9a9d-af38118d439e"
 }

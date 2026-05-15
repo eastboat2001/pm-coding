@@ -725,9 +725,9 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
   height: 100%;
   display: block;
   border: 1px solid var(--line);
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 12px 30px rgba(74, 104, 157, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow-soft, 0 8px 22px rgba(38, 55, 70, 0.08));
   overflow: auto;
   scrollbar-gutter: stable;
   scrollbar-width: none;
@@ -760,18 +760,18 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
   justify-content: space-between;
   gap: 12px;
   padding: 16px 16px 12px;
-  border-bottom: 1px solid #edf2fb;
+  border-bottom: 1px solid var(--line);
 }
 
 .document-preview-head h3 {
   margin: 0;
   font-size: 0.92rem;
-  color: #1d2a44;
+  color: var(--ink);
 }
 
 .document-preview-head p {
   margin: 6px 0 0;
-  color: #61718a;
+  color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.45;
 }
@@ -787,9 +787,9 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
   align-items: center;
   gap: 6px;
   padding: 5px 9px;
-  border-radius: 999px;
-  background: #eef3ff;
-  color: #43659f;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #173f9f;
   font-size: 0.72rem;
   font-weight: 700;
   white-space: nowrap;
@@ -808,17 +808,17 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
   display: inline-flex;
   align-items: center;
   padding: 3px;
-  border-radius: 14px;
-  background: #eef3ff;
-  box-shadow: inset 0 0 0 1px rgba(191, 210, 247, 0.7);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.16);
 }
 
 .document-preview-tab {
   border: 0;
   background: transparent;
-  color: #61718a;
+  color: var(--muted);
   padding: 8px 13px;
-  border-radius: 11px;
+  border-radius: 6px;
   font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
@@ -826,31 +826,31 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
 }
 
 .document-preview-tab:hover {
-  color: #1d2a44;
+  color: var(--ink);
 }
 
 .document-preview-tab.active {
-  background: linear-gradient(135deg, var(--accent) 0%, #5f8bf0 100%);
+  background: var(--accent);
   color: #fff;
-  box-shadow: 0 10px 18px rgba(65, 117, 234, 0.22);
+  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.22);
 }
 
 .document-preview-state {
   margin: 16px;
   padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px dashed #d6e1f3;
+  border-radius: 8px;
+  border: 1px dashed rgba(37, 99, 235, 0.34);
   color: var(--muted);
-  background: #f7faff;
+  background: #fbfdfe;
   line-height: 1.5;
   font-size: 0.82rem;
 }
 
 .document-preview-state.error {
   border-style: solid;
-  border-color: #efb7b7;
-  color: #8b2525;
-  background: #fff4f4;
+  border-color: rgba(220, 38, 38, 0.38);
+  color: #991b1b;
+  background: rgba(220, 38, 38, 0.13);
 }
 
 .document-preview-shell {
@@ -861,20 +861,20 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
 
 .document-preview-label {
   margin-bottom: 8px;
-  color: #61718a;
+  color: var(--muted);
   font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
 .document-preview-content {
   margin: 0;
   padding: 14px 16px;
-  border-radius: 16px;
-  border: 1px solid #dce6f7;
-  background: linear-gradient(180deg, #fbfcff 0%, #f4f8ff 100%);
-  color: #2f4362;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fbfdfe;
+  color: var(--ink);
   font-family: var(--mono);
   font-size: 0.8rem;
   line-height: 1.62;

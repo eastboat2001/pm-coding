@@ -12,7 +12,7 @@ Important rules:
 3) If something is unclear or missing, use empty strings or empty arrays.
 4) Do not invent facts. Put unresolved items into open_questions when they materially affect delivery.
 5) Keep the JSON keys exactly as specified below.
-6) Prefer concise, implementation-oriented statements.
+6) Prefer concise, requirement-oriented statements; do not generate implementation code or pseudo-code.
 7) feature_details should describe concrete features or requirement items, not vague themes.
 8) pages should list concrete pages or touchpoints only when the conversation supports them.
 9) copywriting should list concrete UI text, labels, or error messages only when they were mentioned.

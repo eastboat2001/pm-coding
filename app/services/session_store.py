@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,11 @@ class SQLiteSessionStore:
     DEFAULT_PROMPT_TEMPLATE = "personal_project"
     DEFAULT_APPLIED_TEMPLATE_ID = ""
     DEFAULT_APPLIED_TEMPLATE_NAME = ""
+    SESSION_TITLE_MAX_CHARS = 10
+    SESSION_TITLE_MAX_ENGLISH_WORDS = 5
+    SESSION_TITLE_ELLIPSIS = "..."
+    CJK_TEXT_RE = re.compile(r"[\u3400-\u9fff]")
+    LATIN_TEXT_RE = re.compile(r"[A-Za-z]")
 
     def __init__(self, db_path: str) -> None:
         self.db_path = Path(db_path)
@@ -72,6 +78,26 @@ class SQLiteSessionStore:
             )
             self._ensure_session_columns(conn)
             self._ensure_message_columns(conn)
+
+    @classmethod
+    def format_session_title(cls, title: str, language: str | None = None) -> str:
+        normalized_title = " ".join((title or "").split())
+        if cls._should_limit_title_by_english_words(normalized_title, language):
+            words = normalized_title.split()
+            if len(words) <= cls.SESSION_TITLE_MAX_ENGLISH_WORDS:
+                return normalized_title
+            return f"{' '.join(words[:cls.SESSION_TITLE_MAX_ENGLISH_WORDS]).rstrip()}{cls.SESSION_TITLE_ELLIPSIS}"
+
+        if len(normalized_title) <= cls.SESSION_TITLE_MAX_CHARS:
+            return normalized_title
+        return f"{normalized_title[:cls.SESSION_TITLE_MAX_CHARS].rstrip()}{cls.SESSION_TITLE_ELLIPSIS}"
+
+    @classmethod
+    def _should_limit_title_by_english_words(cls, title: str, language: str | None = None) -> bool:
+        normalized_language = (language or "").lower()
+        if normalized_language.startswith("en"):
+            return True
+        return bool(cls.LATIN_TEXT_RE.search(title)) and not cls.CJK_TEXT_RE.search(title)
 
     def _ensure_session_columns(self, conn: sqlite3.Connection) -> None:
         existing_columns = {
@@ -160,7 +186,7 @@ class SQLiteSessionStore:
                 """,
                 (
                     session_id,
-                    title,
+                    self.format_session_title(title),
                     prompt_template,
                     applied_template_id,
                     applied_template_name,
@@ -231,7 +257,7 @@ class SQLiteSessionStore:
             sessions.append(
                 {
                     "session_id": row["session_id"],
-                    "title": row["title"] or "",
+                    "title": self.format_session_title(row["title"] or ""),
                     "prompt_template": row["prompt_template"] or self.DEFAULT_PROMPT_TEMPLATE,
                     "applied_template_id": row["applied_template_id"] or self.DEFAULT_APPLIED_TEMPLATE_ID,
                     "applied_template_name": row["applied_template_name"] or self.DEFAULT_APPLIED_TEMPLATE_NAME,
@@ -293,7 +319,7 @@ class SQLiteSessionStore:
 
         return {
             "session_id": session_row["id"],
-            "title": session_row["title"] or "",
+            "title": self.format_session_title(session_row["title"] or ""),
             "prompt_template": session_row["prompt_template"] or self.DEFAULT_PROMPT_TEMPLATE,
             "applied_template_id": session_row["applied_template_id"] or self.DEFAULT_APPLIED_TEMPLATE_ID,
             "applied_template_name": session_row["applied_template_name"] or self.DEFAULT_APPLIED_TEMPLATE_NAME,
@@ -405,7 +431,7 @@ class SQLiteSessionStore:
                 SET title = ?
                 WHERE id = ?
                 """,
-                (title, session_id),
+                (self.format_session_title(title), session_id),
             )
             conn.commit()
 

@@ -21,7 +21,7 @@ from .structured_requirement_model import (
 
 
 PM_SYSTEM_PROMPT = """You are a principal Product Manager leading professional requirement discovery.
-Your mission is to turn ambiguous stakeholder input into implementation-ready requirement context for engineering and system design.
+Your mission is to turn ambiguous stakeholder input into handoff-ready requirement context for engineering and system design.
 
 You are not just collecting feature requests.
 You must uncover the business problem, user task, operating context, decision rules, data model implications, delivery constraints, and measurable success criteria behind each request.
@@ -72,6 +72,11 @@ Conversation rules:
 6) When enough detail exists for a topic, briefly summarize what is confirmed and move to the next biggest gap.
 7) If the user asks to move quickly or to make assumptions, use reasonable defaults but label them clearly as assumptions rather than facts.
 
+Code output boundary:
+- In ordinary PM conversation, you do not implement the product.
+- Do not output implementation code, fenced code blocks, file contents, SQL DDL, API handler code, frontend/backend components, or pseudo-code.
+- If the user asks for code, stay in the Product Manager role: clarify requirements, summarize acceptance criteria, or explain that implementation belongs in the Go Coding handoff flow.
+
 Preferred response pattern:
 - First, briefly synthesize what is now understood.
 - Second, if relevant, note the biggest risk, ambiguity, or assumption.
@@ -82,10 +87,11 @@ Do not:
 - ask generic multi-part questions
 - invent business facts
 - jump into architecture recommendations before the requirement is sufficiently clear
+- write or paste code in normal PM conversation
 """
 
 PM_SYSTEM_PROMPT_ZH = """你是一位资深且方法论扎实的产品经理，负责主导专业的需求采集。
-你的任务不是机械记录功能点，而是把模糊的业务想法转化为工程团队可落地的需求上下文，为后续系统设计文档提供高质量输入。
+你的任务不是机械记录功能点，而是把模糊的业务想法转化为工程团队可理解、可评审、可交接的需求上下文，为后续系统设计文档提供高质量输入。
 
 你要持续追问并澄清：
 - 业务为什么现在要做这件事
@@ -139,6 +145,11 @@ PM_SYSTEM_PROMPT_ZH = """你是一位资深且方法论扎实的产品经理，�
 6) 当某个主题已经足够清晰时，先简短总结已确认内容，再转向下一个最大缺口。
 7) 如果用户要求快速推进或允许你自行假设，可以给出合理默认假设，但必须明确标注“这是假设，不是已确认事实”。
 
+代码输出边界：
+- 在普通 PM 对话中，你不负责实现产品。
+- 不要输出实现代码、代码块、文件内容、SQL 建表语句、接口处理器代码、前后端组件代码或伪代码。
+- 如果用户要求写代码，仍以产品经理身份回应：澄清产品需求、整理验收标准，或说明实现代码应进入 Go Coding / 编码交接流程处理。
+
 建议的回答结构：
 - 先用一句话概括当前已明确的关键信息
 - 如有必要，再指出当前最大的风险、模糊点或假设
@@ -149,6 +160,7 @@ PM_SYSTEM_PROMPT_ZH = """你是一位资深且方法论扎实的产品经理，�
 - 提多个并列问题让用户一次回答
 - 臆造业务事实
 - 在需求还没清楚时，过早给出架构方案
+- 在普通 PM 对话中编写或粘贴代码
 """
 
 DESIGN_DOC_SYSTEM_PROMPT = """You are a senior Solution Architect and Technical Product Architect.
@@ -470,11 +482,29 @@ OUTPUT_LANGUAGE_INSTRUCTIONS = {
     "ms": "Output language requirement:\n- Respond entirely in Bahasa Melayu, including section headings, lists, and tables.",
 }
 
+DEFAULT_TECH_STACK_POLICY = """
+Default technology stack policy:
+- Applies to both Quick and Expert sessions when the user has not explicitly specified a stack.
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
+- Database: SQLite
+- Treat this as a requirement/design constraint. In normal PM conversation, discuss and record the stack only; do not write implementation code.
+"""
+
+DEFAULT_TECH_STACK_POLICY_ZH = """
+默认技术栈策略：
+- 当用户没有明确指定技术栈时，快速模式和专家模式都使用同一套默认技术栈。
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
+- 数据库：SQLite
+- 这只是需求/设计约束。在普通 PM 对话中只讨论和记录技术栈，不编写实现代码。
+"""
+
 PERSONAL_PROJECT_PM_ADDENDUM = """
 Project template: personal project demo.
 Assume the default implementation stack is:
-- Frontend: Vue
-- Backend: Flask
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
 - Database: SQLite
 
 Constraint profile for this template:
@@ -489,8 +519,8 @@ Constraint profile for this template:
 PERSONAL_PROJECT_PM_ADDENDUM_ZH = """
 项目模板：个人项目 Demo 版。
 默认实现技术栈假设为：
-- 前端：Vue
-- 后端：Flask
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
 - 数据库：SQLite
 
 该模板的约束偏好：
@@ -505,15 +535,15 @@ PERSONAL_PROJECT_PM_ADDENDUM_ZH = """
 PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM = """
 Solution template: personal project demo.
 Target implementation stack:
-- Frontend: Vue
-- Backend: Flask
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
 - Database: SQLite
 
 Document constraints:
 - Produce a design suitable for a personal project / demo / MVP.
 - Default to a simple monolithic structure unless the user explicitly asks otherwise.
 - Do not introduce high-concurrency architecture, distributed services, message queues, service mesh, read-write splitting, or other enterprise-scale mechanisms unless explicitly required.
-- API design should be pragmatic and lightweight, suitable for Flask REST endpoints.
+- API design should be pragmatic and lightweight, suitable for C# REST endpoints.
 - Database design should stay compatible with SQLite capabilities and limitations.
 - Deployment should favor local development and low-cost simple hosting.
 - Security, observability, and testing should be right-sized for a demo, while still calling out basic minimum good practices.
@@ -522,15 +552,15 @@ Document constraints:
 PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_ZH = """
 方案模板：个人项目 Demo 版。
 目标实现技术栈：
-- 前端：Vue
-- 后端：Flask
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
 - 数据库：SQLite
 
 文档约束：
 - 生成的设计文档应服务于个人项目 / Demo / MVP 落地。
 - 除非用户明确要求，否则默认采用简单单体结构。
 - 不要默认引入高并发架构、分布式服务、消息队列、服务网格、读写分离等企业级复杂机制。
-- API 设计应务实轻量，适合 Flask 风格 REST 接口实现。
+- API 设计应务实轻量，适合 C# REST 接口实现。
 - 数据库设计要兼容 SQLite 的能力和限制。
 - 部署方案优先本地开发与低成本、简单托管。
 - 安全、可观测性、测试方案要符合 Demo 尺度，但仍需给出基本的最低实践建议。
@@ -541,8 +571,8 @@ Project template: personal project demo.
 Do not treat the technology stack as fixed.
 If the user explicitly specifies a frontend, backend, or database stack, follow the user's choice.
 Only when the user does not specify a stack, default to a lightweight personal-project stack selected from:
-- Frontend: Vue
-- Backend: Flask
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
 - Database: SQLite
 
 Constraint profile for this template:
@@ -559,8 +589,8 @@ PERSONAL_PROJECT_PM_ADDENDUM_ZH_V2 = """
 不要把技术栈视为固定不变。
 如果用户明确指定了前端、后端或数据库技术栈，优先遵循用户选择。
 只有当用户没有指定技术栈时，才默认从以下轻量个人项目技术栈中选择：
-- 前端：Vue
-- 后端：Flask
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
 - 数据库：SQLite
 
 该模板的约束偏好：
@@ -577,15 +607,15 @@ Solution template: personal project demo.
 Do not hard-code the technology stack.
 If the user explicitly specifies the frontend, backend, or database stack, generate the design around that stack.
 Only when the user does not specify a stack, default to a lightweight implementation selected from:
-- Frontend: Vue
-- Backend: Flask
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
 - Database: SQLite
 
 Document constraints:
 - Produce a design suitable for a personal project / demo / MVP.
 - Default to a simple monolithic structure unless the user explicitly asks otherwise.
 - Do not introduce high-concurrency architecture, distributed services, message queues, service mesh, read-write splitting, or other enterprise-scale mechanisms unless explicitly required.
-- API design should match the chosen backend stack; if the default stack is used, prefer pragmatic Flask-style REST endpoints.
+- API design should match the chosen backend stack; if the default stack is used, prefer pragmatic C# REST endpoints.
 - Database design should match the chosen database stack; if the default stack is used, stay compatible with SQLite capabilities and limitations.
 - Deployment should favor local development and low-cost simple hosting.
 - Security, observability, and testing should be right-sized for a demo, while still calling out basic minimum good practices.
@@ -596,15 +626,15 @@ PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_ZH_V2 = """
 不要把技术栈写死。
 如果用户明确指定了前端、后端或数据库技术栈，生成设计文档时优先围绕用户指定技术栈展开。
 只有当用户没有指定技术栈时，才默认从以下轻量实现中选择：
-- 前端：Vue
-- 后端：Flask
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
 - 数据库：SQLite
 
 文档约束：
 - 生成的设计文档应服务于个人项目 / Demo / MVP 落地。
 - 除非用户明确要求，否则默认采用简单单体结构。
 - 不要默认引入高并发架构、分布式服务、消息队列、服务网格、读写分离等企业级复杂机制。
-- API 设计要和已选后端技术栈保持一致；如果使用默认栈，则优先用轻量、务实的 Flask 风格 REST 接口。
+- API 设计要和已选后端技术栈保持一致；如果使用默认栈，则优先用轻量、务实的 C# REST 接口。
 - 数据库设计要和已选数据库技术栈保持一致；如果使用默认栈，则优先兼容 SQLite 的能力和限制。
 - 部署方案优先本地开发与低成本、简单托管。
 - 安全、可观测性、测试方案要符合 Demo 尺度，但仍需给出基本的最低实践建议。
@@ -698,7 +728,7 @@ class RequirementCollectorService:
 
         self._append_message(session_id, "user", user_message)
         if not self._session_has_user_messages(session):
-            self._update_session_title_from_message(session_id, user_message)
+            self._update_session_title_from_message(session_id, user_message, language)
         session = self._require_session(session_id)
 
         system_prompt = self._pm_prompt(session, language)
@@ -727,7 +757,7 @@ class RequirementCollectorService:
 
         self._append_message(session_id, "user", user_message)
         if not self._session_has_user_messages(session):
-            self._update_session_title_from_message(session_id, user_message)
+            self._update_session_title_from_message(session_id, user_message, language)
         session = self._require_session(session_id)
 
         system_prompt = self._pm_prompt(session, language)
@@ -1721,16 +1751,14 @@ class RequirementCollectorService:
     def _session_has_user_messages(self, session: Session) -> bool:
         return any(item.get("role") == "user" for item in session.messages)
 
-    def _update_session_title_from_message(self, session_id: str, user_message: str) -> None:
-        title = self._derive_session_title(user_message)
+    def _update_session_title_from_message(self, session_id: str, user_message: str, language: str) -> None:
+        title = self._derive_session_title(user_message, language)
         if title:
             self.session_store.update_session_title(session_id, title)
 
-    def _derive_session_title(self, user_message: str) -> str:
+    def _derive_session_title(self, user_message: str, language: str) -> str:
         collapsed = " ".join(user_message.split())
-        if not collapsed:
-            return ""
-        return collapsed[:39].rstrip() + "..." if len(collapsed) > 40 else collapsed
+        return self.session_store.format_session_title(collapsed, language)
 
     def _default_design_doc(self, language: str) -> str:
         language = self._normalize_language(language)
@@ -2121,6 +2149,7 @@ class RequirementCollectorService:
         elif normalized == PROMPT_TEMPLATE_PERSONAL_PROJECT:
             addendum = PERSONAL_PROJECT_PM_ADDENDUM_ZH_V2 if language == "zh" else PERSONAL_PROJECT_PM_ADDENDUM_V2
             prompt_parts.append(addendum)
+        prompt_parts.append(DEFAULT_TECH_STACK_POLICY_ZH if language == "zh" else DEFAULT_TECH_STACK_POLICY)
         prompt_parts.append(self._language_output_instruction(language))
         return "\n\n".join(part for part in prompt_parts if part)
 
@@ -2143,6 +2172,7 @@ class RequirementCollectorService:
                 else PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_V2
             )
             prompt_parts.append(addendum)
+        prompt_parts.append(DEFAULT_TECH_STACK_POLICY_ZH if language == "zh" else DEFAULT_TECH_STACK_POLICY)
         prompt_parts.append(
             "Scaffold handling rules:\n"
             "- A design document scaffold will be provided in the user message.\n"

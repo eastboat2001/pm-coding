@@ -35,7 +35,6 @@ def create_app() -> Flask:
     _load_dotenv()
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     app = Flask(__name__)
-    data_root = Path(app.root_path).parent / "data"
 
     # Server configuration
     app.config["HOST"] = os.getenv("HOST", "0.0.0.0")
@@ -43,18 +42,10 @@ def create_app() -> Flask:
 
     # CORS configuration
     app.config["CORS_ORIGINS"] = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:9530").split(",")
-    app.config["CORS_ALLOW_METHODS"] = "GET, POST, PUT, DELETE, OPTIONS"
+    app.config["CORS_ALLOW_METHODS"] = "GET, POST, DELETE, OPTIONS"
     app.config["SQLITE_DB_PATH"] = os.getenv(
         "SQLITE_DB_PATH",
-        str(data_root / "rqmd.sqlite3"),
-    )
-    app.config["CODING_UI_STORAGE_DIR"] = os.getenv(
-        "CODING_UI_STORAGE_DIR",
-        str(data_root / "coding_ui"),
-    )
-    app.config["CODING_UI_PROJECTS_ROOT"] = os.getenv(
-        "CODING_UI_PROJECTS_ROOT",
-        str(data_root / "generated_projects"),
+        str(Path(__file__).resolve().parent.parent / "data" / "rqmd.sqlite3"),
     )
 
     # LLM configuration
@@ -96,12 +87,7 @@ def create_app() -> Flask:
             google_credentials_path=app.config["LLM_GCP_CREDENTIALS_PATH"],
         )
     )
-    app.extensions["requirement_collector"] = RequirementCollectorService(
-        llm_client,
-        session_store,
-        coding_ui_storage_dir=app.config["CODING_UI_STORAGE_DIR"],
-        coding_ui_projects_root=app.config["CODING_UI_PROJECTS_ROOT"],
-    )
+    app.extensions["requirement_collector"] = RequirementCollectorService(llm_client, session_store)
     
     # Initialize ASR client
     asr_client = DoubaoASRClient(

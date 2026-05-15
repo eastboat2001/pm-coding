@@ -94,4 +94,5 @@ export type ImplementationContextResponse = {
 export type CodingHandoffCreateResponse = {
   handoff_token: string
   expires_at: string
+  open_url?: string
 }

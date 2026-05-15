@@ -392,9 +392,9 @@ function summarizeText(value: string): string {
 
 .requirement-card {
   border: 1px solid var(--line);
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 12px 30px rgba(74, 104, 157, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow-soft, 0 8px 22px rgba(38, 55, 70, 0.08));
   overflow: hidden;
   height: auto;
 }
@@ -445,9 +445,9 @@ function summarizeText(value: string): string {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border-radius: 999px;
-  background: #eef3ff;
-  color: #43659f;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #173f9f;
   font-size: 0.76rem;
   font-weight: 700;
   white-space: nowrap;
@@ -465,26 +465,26 @@ function summarizeText(value: string): string {
 .card-icon {
   width: 22px;
   height: 22px;
-  color: #456389;
+  color: var(--accent-strong);
   flex-shrink: 0;
 }
 
 .card-state {
   margin: 0 16px 16px;
   padding: 12px;
-  border-radius: 16px;
-  border: 1px dashed #d6e1f3;
+  border-radius: 8px;
+  border: 1px dashed rgba(37, 99, 235, 0.34);
   color: var(--muted);
-  background: #f7faff;
+  background: #fbfdfe;
   line-height: 1.45;
   font-size: 0.84rem;
 }
 
 .card-state.error {
   border-style: solid;
-  border-color: #efb7b7;
-  color: #8b2525;
-  background: #fff4f4;
+  border-color: rgba(220, 38, 38, 0.38);
+  color: #991b1b;
+  background: rgba(220, 38, 38, 0.13);
 }
 
 .progress-body {
@@ -516,19 +516,19 @@ function summarizeText(value: string): string {
   background: #fff;
   display: grid;
   place-items: center;
-  box-shadow: inset 0 0 0 1px #edf2fb;
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 .progress-ring-inner span {
   font-size: 1.2rem;
   font-weight: 800;
-  letter-spacing: -0.04em;
-  color: #1d2a44;
+  letter-spacing: 0;
+  color: var(--ink);
 }
 
 .progress-caption {
   margin: 0;
-  color: #61718a;
+  color: var(--muted);
   font-size: 0.76rem;
   font-weight: 700;
 }
@@ -544,27 +544,28 @@ function summarizeText(value: string): string {
 
 .generate-prd-btn {
   width: 100%;
-  border: 1px solid #d7e1f3;
-  border-radius: 14px;
+  min-height: 40px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 8px;
   padding: 11px 14px;
-  background: #f7faff;
-  color: #1d2a44;
-  font-weight: 700;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-weight: 600;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
 }
 
 .generate-prd-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  border-color: #bfd2f7;
-  box-shadow: 0 10px 18px rgba(74, 104, 157, 0.12);
+  border-color: rgba(37, 99, 235, 0.34);
+  box-shadow: 0 10px 18px rgba(38, 55, 70, 0.08);
 }
 
 .generate-prd-btn.ready {
-  background: linear-gradient(135deg, var(--accent) 0%, #5f8bf0 100%);
+  background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-  box-shadow: 0 14px 22px rgba(65, 117, 234, 0.2);
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.22);
 }
 
 .generate-prd-btn:disabled {
@@ -582,20 +583,21 @@ function summarizeText(value: string): string {
 
 .document-download-btn {
   width: 100%;
-  border: 1px solid #d7e1f3;
-  border-radius: 12px;
+  min-height: 40px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 8px;
   padding: 10px 12px;
   background: #fff;
-  color: #1d2a44;
-  font-weight: 700;
+  color: var(--accent-strong);
+  font-weight: 600;
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .document-download-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  border-color: #bfd2f7;
-  box-shadow: 0 10px 18px rgba(74, 104, 157, 0.12);
+  border-color: rgba(37, 99, 235, 0.34);
+  box-shadow: 0 10px 18px rgba(38, 55, 70, 0.08);
 }
 
 .document-download-btn:disabled {
@@ -607,20 +609,22 @@ function summarizeText(value: string): string {
 
 .go-coding-btn {
   width: 100%;
-  border: 1px solid #2e60cf;
-  border-radius: 12px;
+  min-height: 40px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
   padding: 10px 12px;
-  background: linear-gradient(135deg, #2e60cf 0%, #4b89f0 100%);
+  background: var(--accent);
   color: #fff;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-  box-shadow: 0 14px 22px rgba(46, 96, 207, 0.22);
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.22);
 }
 
 .go-coding-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 16px 24px rgba(46, 96, 207, 0.26);
+  background: var(--accent-strong);
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.24);
 }
 
 .go-coding-btn:disabled {
@@ -635,12 +639,12 @@ function summarizeText(value: string): string {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  color: #4d607f;
+  color: var(--muted);
   font-size: 0.84rem;
 }
 
 .progress-row strong {
-  color: #1d2a44;
+  color: var(--ink);
   font-size: 0.92rem;
 }
 
@@ -658,34 +662,34 @@ function summarizeText(value: string): string {
 
 .requirement-item-card {
   padding: 12px;
-  border: 1px solid #e0e7f5;
-  border-radius: 16px;
-  background: linear-gradient(180deg, #ffffff 0%, #fafcff 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
 }
 
 .requirement-item-card.missing {
-  background: linear-gradient(180deg, #ffffff 0%, #f6f8fb 100%);
+  background: #ffffff;
 }
 
 .requirement-item-card.captured {
-  border-color: #d4e1fb;
-  background: linear-gradient(180deg, #ffffff 0%, #f4f8ff 100%);
+  border-color: rgba(37, 99, 235, 0.34);
+  background: rgba(37, 99, 235, 0.05);
 }
 
 .requirement-item-card.pending {
   border-color: #eadfb9;
-  background: linear-gradient(180deg, #fffef9 0%, #fcf8eb 100%);
+  background: rgba(178, 122, 0, 0.08);
 }
 
 .requirement-item-card.confirmed {
-  border-color: #cfe0ff;
-  background: linear-gradient(180deg, #fbfdff 0%, #eef4ff 100%);
+  border-color: rgba(37, 99, 235, 0.42);
+  background: rgba(37, 99, 235, 0.08);
 }
 
 .requirement-item-card.conflict {
   border-color: #efc7c7;
-  background: linear-gradient(180deg, #fffdfd 0%, #fff3f3 100%);
+  background: rgba(220, 38, 38, 0.06);
 }
 
 .requirement-item-head {
@@ -699,12 +703,12 @@ function summarizeText(value: string): string {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.35;
-  color: #1d2a44;
+  color: var(--ink);
 }
 
 .requirement-item-content {
   margin: 10px 0 0;
-  color: #42536c;
+  color: var(--ink);
   line-height: 1.55;
   font-size: 0.84rem;
   white-space: normal;
@@ -720,27 +724,27 @@ function summarizeText(value: string): string {
 
 .requirement-note {
   padding: 9px 10px;
-  border-radius: 12px;
-  background: rgba(245, 248, 255, 0.92);
-  border: 1px solid #dce6f7;
+  border-radius: 8px;
+  background: #fbfdfe;
+  border: 1px solid var(--line);
 }
 
 .requirement-note.question {
-  background: rgba(250, 246, 232, 0.9);
+  background: rgba(178, 122, 0, 0.08);
   border-color: #eadfb9;
 }
 
 .requirement-note-label {
   display: inline-block;
   margin-bottom: 5px;
-  color: #61718a;
+  color: var(--muted);
   font-size: 0.72rem;
   font-weight: 700;
 }
 
 .requirement-note p {
   margin: 0;
-  color: #42536c;
+  color: var(--ink);
   line-height: 1.5;
   font-size: 0.8rem;
 }
@@ -760,27 +764,27 @@ function summarizeText(value: string): string {
 
 .status-pill.missing {
   background: #f0f3f8;
-  color: #67768c;
+  color: #647280;
 }
 
 .status-pill.captured {
-  background: #edf3ff;
-  color: #4b6ba4;
+  background: rgba(59, 130, 246, 0.14);
+  color: #1e40af;
 }
 
 .status-pill.pending {
-  background: #f8f0d8;
-  color: #8b6414;
+  background: rgba(178, 122, 0, 0.16);
+  color: #674300;
 }
 
 .status-pill.confirmed {
-  background: #e8f0ff;
-  color: #2e60cf;
+  background: rgba(37, 99, 235, 0.16);
+  color: #1d4ed8;
 }
 
 .status-pill.conflict {
-  background: #fde7e7;
-  color: #922f2f;
+  background: rgba(220, 38, 38, 0.13);
+  color: #991b1b;
 }
 
 @media (max-width: 1200px) {

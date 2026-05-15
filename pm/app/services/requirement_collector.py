@@ -5,7 +5,6 @@ import re
 import secrets
 import threading
 import uuid
-from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,7 +21,7 @@ from .structured_requirement_model import (
 
 
 PM_SYSTEM_PROMPT = """You are a principal Product Manager leading professional requirement discovery.
-Your mission is to turn ambiguous stakeholder input into implementation-ready requirement context for engineering and system design.
+Your mission is to turn ambiguous stakeholder input into handoff-ready requirement context for engineering and system design.
 
 You are not just collecting feature requests.
 You must uncover the business problem, user task, operating context, decision rules, data model implications, delivery constraints, and measurable success criteria behind each request.
@@ -73,6 +72,11 @@ Conversation rules:
 6) When enough detail exists for a topic, briefly summarize what is confirmed and move to the next biggest gap.
 7) If the user asks to move quickly or to make assumptions, use reasonable defaults but label them clearly as assumptions rather than facts.
 
+Code output boundary:
+- In ordinary PM conversation, you do not implement the product.
+- Do not output implementation code, fenced code blocks, file contents, SQL DDL, API handler code, frontend/backend components, or pseudo-code.
+- If the user asks for code, stay in the Product Manager role: clarify requirements, summarize acceptance criteria, or explain that implementation belongs in the Go Coding handoff flow.
+
 Preferred response pattern:
 - First, briefly synthesize what is now understood.
 - Second, if relevant, note the biggest risk, ambiguity, or assumption.
@@ -83,10 +87,11 @@ Do not:
 - ask generic multi-part questions
 - invent business facts
 - jump into architecture recommendations before the requirement is sufficiently clear
+- write or paste code in normal PM conversation
 """
 
 PM_SYSTEM_PROMPT_ZH = """你是一位资深且方法论扎实的产品经理，负责主导专业的需求采集。
-你的任务不是机械记录功能点，而是把模糊的业务想法转化为工程团队可落地的需求上下文，为后续系统设计文档提供高质量输入。
+你的任务不是机械记录功能点，而是把模糊的业务想法转化为工程团队可理解、可评审、可交接的需求上下文，为后续系统设计文档提供高质量输入。
 
 你要持续追问并澄清：
 - 业务为什么现在要做这件事
@@ -140,6 +145,11 @@ PM_SYSTEM_PROMPT_ZH = """你是一位资深且方法论扎实的产品经理，�
 6) 当某个主题已经足够清晰时，先简短总结已确认内容，再转向下一个最大缺口。
 7) 如果用户要求快速推进或允许你自行假设，可以给出合理默认假设，但必须明确标注“这是假设，不是已确认事实”。
 
+代码输出边界：
+- 在普通 PM 对话中，你不负责实现产品。
+- 不要输出实现代码、代码块、文件内容、SQL 建表语句、接口处理器代码、前后端组件代码或伪代码。
+- 如果用户要求写代码，仍以产品经理身份回应：澄清产品需求、整理验收标准，或说明实现代码应进入 Go Coding / 编码交接流程处理。
+
 建议的回答结构：
 - 先用一句话概括当前已明确的关键信息
 - 如有必要，再指出当前最大的风险、模糊点或假设
@@ -150,6 +160,7 @@ PM_SYSTEM_PROMPT_ZH = """你是一位资深且方法论扎实的产品经理，�
 - 提多个并列问题让用户一次回答
 - 臆造业务事实
 - 在需求还没清楚时，过早给出架构方案
+- 在普通 PM 对话中编写或粘贴代码
 """
 
 DESIGN_DOC_SYSTEM_PROMPT = """You are a senior Solution Architect and Technical Product Architect.
@@ -291,9 +302,7 @@ PRD_TEMPLATE_FILE_BY_LANGUAGE = {
 PROMPT_TEMPLATE_PERSONAL_PROJECT = "personal_project"
 PROMPT_TEMPLATE_STANDARD = "standard"
 
-IMPLEMENTATION_PROMPT_TEMPLATE_EN = """You are a senior software engineer responsible for implementing a runnable project according to the provided PM documents.
-
-The PM documents are the source of product requirements. Any downstream coding-platform instructions are only execution guidance and must not expand or replace the PM scope.
+IMPLEMENTATION_PROMPT_TEMPLATE_EN = """You are a senior full-stack engineer responsible for implementing a runnable project strictly from the provided documents.
 
 Read these files fully before writing code:
 1. PRD document: {prd_path}
@@ -312,24 +321,23 @@ Execution rules:
    - If conflict still remains, choose the most conservative minimal runnable solution and record the assumption clearly in README or ASSUMPTIONS.md.
 4. Do not invent major features, integrations, infrastructure, or complex distributed components unless the documents explicitly require them.
 5. Do not output pseudo-code, TODO-only modules, empty handlers, or placeholder implementations for core flows.
-6. Match the implementation depth to the documents. If the requested project is a static page or Node frontend project, do not add a backend, database, authentication, or long-running service unless explicitly required.
 
 Implementation requirements:
-1. Before coding, extract a concrete implementation checklist covering the relevant pages, modules, APIs, data structures, and acceptance criteria.
-2. Keep field names, enum values, routes, request/response payloads, and persisted fields consistent across the layers that actually exist in the chosen implementation.
+1. Before coding, extract a concrete implementation checklist covering pages, backend modules, APIs, data tables, background jobs if any, and acceptance criteria.
+2. Keep field names, enum values, API routes, request/response payloads, and database columns consistent across frontend, backend, and persistence.
 3. Produce a project that can run locally end-to-end, not just isolated snippets.
 4. Prefer stable, mainstream, low-complexity libraries. Keep dependencies minimal and explicit.
-5. Provide all required setup assets, including dependency manifests, environment examples when needed, initialization steps, and seed/demo data when needed for the main flow.
-6. Handle the important error paths that apply to the selected implementation: invalid input, missing resources, duplicate actions, failed persistence constraints, authorization errors when the documents require permissions, and empty states.
+5. Provide all required setup assets, including dependency manifests, environment examples, database initialization or migrations, and seed/demo data when needed for the main flow.
+6. Handle the important error paths explicitly: invalid input, missing resources, duplicate actions, failed persistence constraints, authorization errors when the documents require permissions, and empty states.
 7. Avoid hard-coded secrets, machine-specific absolute paths, or environment-specific assumptions in the code.
 8. If the stack is not explicitly specified in the documents, choose the lightest stable stack that can satisfy the requirements with the least operational complexity.
 9. Keep the implementation aligned with the documented MVP; do not add speculative over-engineering.
-10. Ensure the main user journey is fully wired through the layers present in the project. For frontend-only projects, this may mean UI state, local persistence, and demo data rather than a backend API.
+10. Ensure the main user journey is fully wired through UI, API, service logic, and database, rather than partially implemented in only one layer.
 
 Quality gates:
-1. Verify imports, dependency declarations, configuration loading, routing, build output, and any integration points required by the chosen stack.
+1. Verify imports, dependency declarations, configuration loading, database creation, API routing, and frontend-backend integration.
 2. Add at least minimal automated verification for the critical path:
-   - backend: at least one or two meaningful API/service tests when the project includes a backend and has a test setup
+   - backend: at least one or two meaningful API/service tests when the project has a test setup
    - frontend: at minimum ensure the main page and key interaction path are implemented and runnable
 3. Fix obvious issues before finishing: missing imports, mismatched fields, broken routes, uncreated tables, invalid seed data, encoding issues, or startup failures.
 4. Provide a clear README with:
@@ -343,11 +351,11 @@ Quality gates:
 Suggested work sequence:
 1. Read both documents and derive the implementation checklist.
 2. Confirm the target stack and project structure from the documents.
-3. Implement the smallest complete project structure that satisfies the PM scope.
-4. Implement frontend pages and interaction logic.
-5. Add backend APIs, data model, or initialization only when the documents require them.
+3. Implement data model and initialization first.
+4. Implement backend APIs and service logic.
+5. Implement frontend pages and integrate them with the APIs.
 6. Add configuration, demo data, tests, and README.
-7. Run or build the project locally and validate the critical end-to-end flow.
+7. Run the project locally and validate the critical end-to-end flow.
 
 Output expectations:
 - Start by summarizing the implementation plan.
@@ -356,9 +364,7 @@ Output expectations:
 - Finish with a concise delivery note describing what was implemented, how to run it, how to verify it, and which assumptions remain.
 """
 
-IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深软件工程师，现在需要依据 PM 提供的文档，直接实现一个可运行、可验证的完整项目。
-
-PM 文档是产品需求主依据。下游 Coding 平台的提示词只作为执行方式补充，不能替换、扩大或改写 PM 的产品范围。
+IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深全栈工程师，现在需要严格依据提供的文档，直接实现一个可运行、可验证的完整项目。
 
 开始编码前，必须先完整阅读以下文件：
 1. PRD 文档：{prd_path}
@@ -377,42 +383,41 @@ PM 文档是产品需求主依据。下游 Coding 平台的提示词只作为执
    - 仍无法消解时，选择“最保守、最小可运行”的方案，并把假设明确写入 README 或 ASSUMPTIONS.md。
 4. 不要擅自发明文档没有要求的大型功能、复杂集成、分布式中间件、微服务拆分或过度架构。
 5. 不要输出伪代码、仅有 TODO 的模块、空实现、占位接口，核心流程必须真实可用。
-6. 实现深度必须匹配文档范围。如果 PM 要求的是静态页面或 Node 前端项目，不要额外引入后端、数据库、登录鉴权或常驻服务，除非文档明确要求。
 
 实现要求：
-1. 写代码前，先提炼出明确的实现清单：相关页面/功能点、模块、接口或数据结构、关键验收点。
-2. 字段名、状态枚举、路由、请求响应结构、持久化字段必须在实际存在的层之间保持一致，避免命名漂移。
+1. 写代码前，先提炼出明确的实现清单：页面/功能点、后端模块、API 列表、数据表/字段、关键验收点。
+2. 前端字段名、后端 DTO、接口路径、请求响应结构、数据库字段、状态枚举必须保持一致，避免命名漂移。
 3. 交付结果必须是“本地可直接运行”的完整项目，而不是零散代码片段。
 4. 优先使用稳定、主流、低复杂度依赖，依赖项保持精简且显式声明。
-5. 补齐运行所需资产：依赖清单、必要环境变量示例、初始化步骤、必要种子数据或演示数据（如主流程需要）。
-6. 明确处理适用于当前实现的关键异常路径：参数错误、资源不存在、重复提交、持久化失败、空状态、以及文档要求的权限校验失败。
+5. 补齐运行所需资产：依赖清单、环境变量示例、数据库初始化/迁移、必要种子数据或演示账号（如主流程需要）。
+6. 明确处理关键异常路径：参数错误、资源不存在、重复提交、数据库约束失败、空状态、以及文档要求的权限校验失败。
 7. 不要把密钥、绝对本机路径、特定机器配置、硬编码端口假设写死在代码里。
 8. 如果文档没有明确技术栈，就选择最轻量、最稳定、最容易本地运行的方案，优先保证可实现和可验证。
 9. 实现应严格围绕文档中的 MVP 范围，不要为“看起来高级”而增加非必要复杂度。
-10. 主业务闭环必须在项目实际包含的层里完整可用。对于前端项目，可以是 UI 状态、本地持久化和演示数据，而不是强制后端 API。
+10. 主业务闭环必须真正串通 UI、API、服务层、数据库，不能只做静态页面或只写单侧逻辑。
 
 质量门禁：
-1. 完成前必须自查并修复：导入错误、缺失依赖、配置读取错误、路由不通、字段不一致、编码问题、启动或构建失败等明显问题。
+1. 完成前必须自查并修复：导入错误、缺失依赖、配置读取错误、数据库未初始化、接口路由不通、前后端字段不一致、编码问题、启动失败等明显问题。
 2. 至少补充关键路径的最小有效验证：
-   - 后端：如果项目包含后端且已有测试基础，至少补 1 到 2 个有意义的 API/服务测试
+   - 后端：如果项目已有测试基础，至少补 1 到 2 个有意义的 API/服务测试
    - 前端：至少保证主页面和关键交互路径已经实现且可运行
-3. 如果项目包含对外接口，接口必须返回清晰、稳定、可预期的状态码和 JSON 结构。
+3. 所有对外接口都要返回清晰、稳定、可预期的状态码和 JSON 结构。
 4. 提供清晰 README，至少包含：
    - 安装命令
    - 启动命令
    - 环境变量说明
-   - 初始化步骤（如需要数据库则说明数据库步骤）
+   - 数据库或初始化步骤
    - 测试/验证步骤
    - 已知假设与取舍说明
 
 建议执行顺序：
 1. 阅读两份文档并整理实现清单。
 2. 根据文档确认目标技术栈和目录结构。
-3. 实现满足 PM 范围的最小完整项目结构。
-4. 实现前端页面和交互逻辑。
-5. 仅在文档要求时实现后端 API、数据模型和初始化逻辑。
+3. 优先实现数据模型和初始化逻辑。
+4. 实现后端 API 与服务层。
+5. 实现前端页面并完成接口联调。
 6. 补充配置、演示数据、测试、README。
-7. 本地运行或构建项目并验证关键端到端流程。
+7. 本地运行项目并验证关键端到端流程。
 
 输出要求：
 - 先给出实现计划摘要，再开始编码。
@@ -477,11 +482,29 @@ OUTPUT_LANGUAGE_INSTRUCTIONS = {
     "ms": "Output language requirement:\n- Respond entirely in Bahasa Melayu, including section headings, lists, and tables.",
 }
 
+DEFAULT_TECH_STACK_POLICY = """
+Default technology stack policy:
+- Applies to both Quick and Expert sessions when the user has not explicitly specified a stack.
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
+- Database: SQLite
+- Treat this as a requirement/design constraint. In normal PM conversation, discuss and record the stack only; do not write implementation code.
+"""
+
+DEFAULT_TECH_STACK_POLICY_ZH = """
+默认技术栈策略：
+- 当用户没有明确指定技术栈时，快速模式和专家模式都使用同一套默认技术栈。
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
+- 数据库：SQLite
+- 这只是需求/设计约束。在普通 PM 对话中只讨论和记录技术栈，不编写实现代码。
+"""
+
 PERSONAL_PROJECT_PM_ADDENDUM = """
 Project template: personal project demo.
 Assume the default implementation stack is:
-- Frontend: Vue
-- Backend: Flask
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
 - Database: SQLite
 
 Constraint profile for this template:
@@ -496,8 +519,8 @@ Constraint profile for this template:
 PERSONAL_PROJECT_PM_ADDENDUM_ZH = """
 项目模板：个人项目 Demo 版。
 默认实现技术栈假设为：
-- 前端：Vue
-- 后端：Flask
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
 - 数据库：SQLite
 
 该模板的约束偏好：
@@ -512,15 +535,15 @@ PERSONAL_PROJECT_PM_ADDENDUM_ZH = """
 PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM = """
 Solution template: personal project demo.
 Target implementation stack:
-- Frontend: Vue
-- Backend: Flask
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
 - Database: SQLite
 
 Document constraints:
 - Produce a design suitable for a personal project / demo / MVP.
 - Default to a simple monolithic structure unless the user explicitly asks otherwise.
 - Do not introduce high-concurrency architecture, distributed services, message queues, service mesh, read-write splitting, or other enterprise-scale mechanisms unless explicitly required.
-- API design should be pragmatic and lightweight, suitable for Flask REST endpoints.
+- API design should be pragmatic and lightweight, suitable for C# REST endpoints.
 - Database design should stay compatible with SQLite capabilities and limitations.
 - Deployment should favor local development and low-cost simple hosting.
 - Security, observability, and testing should be right-sized for a demo, while still calling out basic minimum good practices.
@@ -529,15 +552,15 @@ Document constraints:
 PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_ZH = """
 方案模板：个人项目 Demo 版。
 目标实现技术栈：
-- 前端：Vue
-- 后端：Flask
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
 - 数据库：SQLite
 
 文档约束：
 - 生成的设计文档应服务于个人项目 / Demo / MVP 落地。
 - 除非用户明确要求，否则默认采用简单单体结构。
 - 不要默认引入高并发架构、分布式服务、消息队列、服务网格、读写分离等企业级复杂机制。
-- API 设计应务实轻量，适合 Flask 风格 REST 接口实现。
+- API 设计应务实轻量，适合 C# REST 接口实现。
 - 数据库设计要兼容 SQLite 的能力和限制。
 - 部署方案优先本地开发与低成本、简单托管。
 - 安全、可观测性、测试方案要符合 Demo 尺度，但仍需给出基本的最低实践建议。
@@ -548,8 +571,8 @@ Project template: personal project demo.
 Do not treat the technology stack as fixed.
 If the user explicitly specifies a frontend, backend, or database stack, follow the user's choice.
 Only when the user does not specify a stack, default to a lightweight personal-project stack selected from:
-- Frontend: Vue
-- Backend: Flask
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
 - Database: SQLite
 
 Constraint profile for this template:
@@ -566,8 +589,8 @@ PERSONAL_PROJECT_PM_ADDENDUM_ZH_V2 = """
 不要把技术栈视为固定不变。
 如果用户明确指定了前端、后端或数据库技术栈，优先遵循用户选择。
 只有当用户没有指定技术栈时，才默认从以下轻量个人项目技术栈中选择：
-- 前端：Vue
-- 后端：Flask
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
 - 数据库：SQLite
 
 该模板的约束偏好：
@@ -584,15 +607,15 @@ Solution template: personal project demo.
 Do not hard-code the technology stack.
 If the user explicitly specifies the frontend, backend, or database stack, generate the design around that stack.
 Only when the user does not specify a stack, default to a lightweight implementation selected from:
-- Frontend: Vue
-- Backend: Flask
+- Frontend: static pages (HTML/CSS/vanilla JavaScript; no frontend framework by default)
+- Backend: C#
 - Database: SQLite
 
 Document constraints:
 - Produce a design suitable for a personal project / demo / MVP.
 - Default to a simple monolithic structure unless the user explicitly asks otherwise.
 - Do not introduce high-concurrency architecture, distributed services, message queues, service mesh, read-write splitting, or other enterprise-scale mechanisms unless explicitly required.
-- API design should match the chosen backend stack; if the default stack is used, prefer pragmatic Flask-style REST endpoints.
+- API design should match the chosen backend stack; if the default stack is used, prefer pragmatic C# REST endpoints.
 - Database design should match the chosen database stack; if the default stack is used, stay compatible with SQLite capabilities and limitations.
 - Deployment should favor local development and low-cost simple hosting.
 - Security, observability, and testing should be right-sized for a demo, while still calling out basic minimum good practices.
@@ -603,15 +626,15 @@ PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_ZH_V2 = """
 不要把技术栈写死。
 如果用户明确指定了前端、后端或数据库技术栈，生成设计文档时优先围绕用户指定技术栈展开。
 只有当用户没有指定技术栈时，才默认从以下轻量实现中选择：
-- 前端：Vue
-- 后端：Flask
+- 前端：静态页面（HTML/CSS/原生 JavaScript；默认不引入前端框架）
+- 后端：C#
 - 数据库：SQLite
 
 文档约束：
 - 生成的设计文档应服务于个人项目 / Demo / MVP 落地。
 - 除非用户明确要求，否则默认采用简单单体结构。
 - 不要默认引入高并发架构、分布式服务、消息队列、服务网格、读写分离等企业级复杂机制。
-- API 设计要和已选后端技术栈保持一致；如果使用默认栈，则优先用轻量、务实的 Flask 风格 REST 接口。
+- API 设计要和已选后端技术栈保持一致；如果使用默认栈，则优先用轻量、务实的 C# REST 接口。
 - 数据库设计要和已选数据库技术栈保持一致；如果使用默认栈，则优先兼容 SQLite 的能力和限制。
 - 部署方案优先本地开发与低成本、简单托管。
 - 安全、可观测性、测试方案要符合 Demo 尺度，但仍需给出基本的最低实践建议。
@@ -631,23 +654,11 @@ class Session:
 
 
 class RequirementCollectorService:
-    def __init__(
-        self,
-        llm_client: MiniMaxChatClient,
-        session_store: SQLiteSessionStore,
-        coding_ui_storage_dir: str | Path | None = None,
-        coding_ui_projects_root: str | Path | None = None,
-    ) -> None:
+    def __init__(self, llm_client: MiniMaxChatClient, session_store: SQLiteSessionStore) -> None:
         self.llm_client = llm_client
         self.session_store = session_store
         self.design_docs_dir = self.session_store.db_path.parent / "design_docs"
         self.prd_docs_dir = self.session_store.db_path.parent / "prd_docs"
-        default_coding_ui_root = self.session_store.db_path.parent / "coding_ui"
-        default_projects_root = self.session_store.db_path.parent / "generated_projects"
-        self.coding_ui_storage_dir = Path(coding_ui_storage_dir or default_coding_ui_root).resolve()
-        self.coding_ui_projects_root = Path(coding_ui_projects_root or default_projects_root).resolve()
-        self.coding_ui_sessions_dir = self.coding_ui_storage_dir / "sessions"
-        self.coding_ui_settings_path = self.coding_ui_storage_dir / "settings.json"
         self.prd_templates_dir = Path(__file__).resolve().parents[2] / "data" / "PRD_template"
         self.business_template_library = BusinessTemplateLibrary(self.prd_templates_dir)
         self._lock = threading.Lock()
@@ -717,7 +728,7 @@ class RequirementCollectorService:
 
         self._append_message(session_id, "user", user_message)
         if not self._session_has_user_messages(session):
-            self._update_session_title_from_message(session_id, user_message)
+            self._update_session_title_from_message(session_id, user_message, language)
         session = self._require_session(session_id)
 
         system_prompt = self._pm_prompt(session, language)
@@ -746,7 +757,7 @@ class RequirementCollectorService:
 
         self._append_message(session_id, "user", user_message)
         if not self._session_has_user_messages(session):
-            self._update_session_title_from_message(session_id, user_message)
+            self._update_session_title_from_message(session_id, user_message, language)
         session = self._require_session(session_id)
 
         system_prompt = self._pm_prompt(session, language)
@@ -1312,98 +1323,6 @@ class RequirementCollectorService:
             return None
         return payload
 
-    def get_coding_ui_storage_status(self) -> dict[str, Any]:
-        self.coding_ui_storage_dir.mkdir(parents=True, exist_ok=True)
-        self.coding_ui_projects_root.mkdir(parents=True, exist_ok=True)
-        self.coding_ui_sessions_dir.mkdir(parents=True, exist_ok=True)
-        return {
-            "configured": True,
-            "storageDir": str(self.coding_ui_storage_dir),
-            "projectsRootDir": str(self.coding_ui_projects_root),
-        }
-
-    def list_coding_ui_sessions(self) -> list[dict[str, Any]]:
-        sessions: list[dict[str, Any]] = []
-        if not self.coding_ui_sessions_dir.exists():
-            return sessions
-        for session_file in sorted(self.coding_ui_sessions_dir.glob("*.json")):
-            record = self._read_json_file(session_file)
-            metadata = record.get("metadata") if isinstance(record, dict) else None
-            if isinstance(metadata, dict):
-                sessions.append(metadata)
-        sessions.sort(key=lambda item: str(item.get("lastModified", "")), reverse=True)
-        return sessions
-
-    def get_coding_ui_session(self, session_id: str) -> dict[str, Any] | None:
-        path = self._coding_ui_session_path(session_id)
-        if not path.exists():
-            return None
-        record = self._read_json_file(path)
-        if not isinstance(record, dict):
-            return None
-        data = record.get("data")
-        metadata = record.get("metadata")
-        if not isinstance(data, dict) or not isinstance(metadata, dict):
-            return None
-        return {
-            "data": data,
-            "metadata": metadata,
-            "project": self._project_summary(data),
-        }
-
-    def save_coding_ui_session(self, session_id: str, data: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
-        if str(data.get("id", "")).strip() != session_id:
-            raise ValueError("Session ID mismatch.")
-        if str(metadata.get("id", "")).strip() != session_id:
-            raise ValueError("Session metadata ID mismatch.")
-
-        record = {
-            "version": 1,
-            "savedAt": datetime.now(timezone.utc).isoformat(),
-            "data": data,
-            "metadata": metadata,
-        }
-        self._write_json_file(self._coding_ui_session_path(session_id), record)
-        project_info = self._persist_project_artifacts(session_id, data, metadata)
-        return {
-            "data": data,
-            "metadata": metadata,
-            "project": project_info,
-        }
-
-    def delete_coding_ui_session(self, session_id: str) -> bool:
-        deleted = False
-        session_path = self._coding_ui_session_path(session_id)
-        if session_path.exists():
-            session_path.unlink()
-            deleted = True
-        project_dir = self._project_directory(session_id)
-        if project_dir.exists():
-            for child in sorted(project_dir.rglob("*"), reverse=True):
-                if child.is_file():
-                    child.unlink()
-                elif child.is_dir():
-                    child.rmdir()
-            project_dir.rmdir()
-            deleted = True
-        return deleted
-
-    def get_coding_ui_settings(self) -> dict[str, Any] | None:
-        if not self.coding_ui_settings_path.exists():
-            return None
-        data = self._read_json_file(self.coding_ui_settings_path)
-        return data if isinstance(data, dict) else None
-
-    def save_coding_ui_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
-        record = {
-            "version": 1,
-            "savedAt": datetime.now(timezone.utc).isoformat(),
-            "currentSessionId": payload.get("currentSessionId"),
-            "selectedModel": payload.get("selectedModel"),
-        }
-        self._write_json_file(self.coding_ui_settings_path, record)
-        return record
-
     def get_saved_message_document(self, session_id: str, message_id: int) -> tuple[Path, str] | None:
         session = self.get_session(session_id)
         if session is None:
@@ -1832,16 +1751,14 @@ class RequirementCollectorService:
     def _session_has_user_messages(self, session: Session) -> bool:
         return any(item.get("role") == "user" for item in session.messages)
 
-    def _update_session_title_from_message(self, session_id: str, user_message: str) -> None:
-        title = self._derive_session_title(user_message)
+    def _update_session_title_from_message(self, session_id: str, user_message: str, language: str) -> None:
+        title = self._derive_session_title(user_message, language)
         if title:
             self.session_store.update_session_title(session_id, title)
 
-    def _derive_session_title(self, user_message: str) -> str:
+    def _derive_session_title(self, user_message: str, language: str) -> str:
         collapsed = " ".join(user_message.split())
-        if not collapsed:
-            return ""
-        return collapsed[:160].rstrip()
+        return self.session_store.format_session_title(collapsed, language)
 
     def _default_design_doc(self, language: str) -> str:
         language = self._normalize_language(language)
@@ -2232,6 +2149,7 @@ class RequirementCollectorService:
         elif normalized == PROMPT_TEMPLATE_PERSONAL_PROJECT:
             addendum = PERSONAL_PROJECT_PM_ADDENDUM_ZH_V2 if language == "zh" else PERSONAL_PROJECT_PM_ADDENDUM_V2
             prompt_parts.append(addendum)
+        prompt_parts.append(DEFAULT_TECH_STACK_POLICY_ZH if language == "zh" else DEFAULT_TECH_STACK_POLICY)
         prompt_parts.append(self._language_output_instruction(language))
         return "\n\n".join(part for part in prompt_parts if part)
 
@@ -2254,6 +2172,7 @@ class RequirementCollectorService:
                 else PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_V2
             )
             prompt_parts.append(addendum)
+        prompt_parts.append(DEFAULT_TECH_STACK_POLICY_ZH if language == "zh" else DEFAULT_TECH_STACK_POLICY)
         prompt_parts.append(
             "Scaffold handling rules:\n"
             "- A design document scaffold will be provided in the user message.\n"
@@ -2437,165 +2356,6 @@ class RequirementCollectorService:
         if document_kind == PRD_MESSAGE_KIND:
             return self._prd_doc_path(session_id)
         return self._design_doc_path(session_id)
-
-    def _coding_ui_session_path(self, session_id: str) -> Path:
-        safe_session_id = self._sanitize_path_component(session_id) or session_id
-        return self.coding_ui_sessions_dir / f"{safe_session_id}.json"
-
-    def _project_directory(self, session_id: str, title: str | None = None) -> Path:
-        slug = self._project_slug(session_id, title)
-        return self.coding_ui_projects_root / slug
-
-    def _project_slug(self, session_id: str, title: str | None = None) -> str:
-        base = self._sanitize_path_component(title or "")
-        suffix = self._sanitize_path_component(session_id)[:8] or session_id[:8]
-        if not base:
-            return f"project-{suffix}"
-        return f"{base}-{suffix}"
-
-    def _sanitize_path_component(self, value: str) -> str:
-        normalized = re.sub(r"\s+", "-", value.strip().lower())
-        normalized = re.sub(r"[^a-z0-9._-]", "-", normalized)
-        normalized = re.sub(r"-+", "-", normalized).strip("-._")
-        reserved = {
-            "con", "prn", "aux", "nul",
-            "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
-            "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-        }
-        if normalized in reserved:
-            normalized = f"{normalized}-file"
-        return normalized[:80]
-
-    def _write_json_file(self, path: Path, payload: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(f"{path.suffix}.tmp")
-        temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp_path.replace(path)
-
-    def _read_json_file(self, path: Path) -> Any:
-        return json.loads(path.read_text(encoding="utf-8"))
-
-    def _project_summary(self, session_data: dict[str, Any]) -> dict[str, Any]:
-        project_dir = self._project_directory(str(session_data.get("id", "")), str(session_data.get("title", "")))
-        file_count = 0
-        if project_dir.exists():
-            file_count = sum(1 for item in project_dir.rglob("*") if item.is_file())
-        return {
-            "projectRoot": str(project_dir),
-            "fileCount": file_count,
-        }
-
-    def _persist_project_artifacts(
-        self,
-        session_id: str,
-        session_data: dict[str, Any],
-        metadata: dict[str, Any],
-    ) -> dict[str, Any]:
-        project_dir = self._project_directory(session_id, str(metadata.get("title", "")))
-        project_dir.mkdir(parents=True, exist_ok=True)
-        artifacts = self._extract_artifacts_from_messages(session_data.get("messages", []))
-        self._sync_project_files(project_dir, artifacts)
-        return {
-            "projectRoot": str(project_dir),
-            "fileCount": len(artifacts),
-        }
-
-    def _extract_artifacts_from_messages(self, messages: Any) -> dict[str, str]:
-        tool_calls: dict[str, dict[str, Any]] = {}
-        operations: list[dict[str, Any]] = []
-        if not isinstance(messages, list):
-            return {}
-
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
-            if message.get("role") == "assistant":
-                for block in message.get("content", []):
-                    if isinstance(block, dict) and block.get("type") == "toolCall" and block.get("name") == "artifacts":
-                        tool_calls[str(block.get("id", ""))] = deepcopy(block)
-
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
-            role = message.get("role")
-            if role == "artifact":
-                action = str(message.get("action", "")).strip()
-                filename = str(message.get("filename", "")).strip()
-                if not filename:
-                    continue
-                if action == "create":
-                    operations.append({"command": "create", "filename": filename, "content": message.get("content", "")})
-                elif action == "update":
-                    operations.append({"command": "rewrite", "filename": filename, "content": message.get("content", "")})
-                elif action == "delete":
-                    operations.append({"command": "delete", "filename": filename})
-            elif role == "toolResult" and message.get("toolName") == "artifacts" and message.get("isError") is False:
-                tool_call_id = str(message.get("toolCallId", ""))
-                call = tool_calls.get(tool_call_id)
-                if not call:
-                    continue
-                arguments = call.get("arguments")
-                if isinstance(arguments, dict):
-                    operations.append(deepcopy(arguments))
-
-        final_artifacts: dict[str, str] = {}
-        for operation in operations:
-            command = str(operation.get("command", "")).strip()
-            filename = str(operation.get("filename", "")).strip()
-            if not filename:
-                continue
-            if command in {"create", "rewrite"}:
-                content = operation.get("content")
-                if isinstance(content, str):
-                    final_artifacts[filename] = content
-            elif command == "update":
-                old_str = operation.get("old_str")
-                new_str = operation.get("new_str")
-                existing = final_artifacts.get(filename)
-                if isinstance(existing, str) and isinstance(old_str, str) and isinstance(new_str, str):
-                    final_artifacts[filename] = existing.replace(old_str, new_str)
-            elif command == "delete":
-                final_artifacts.pop(filename, None)
-        return final_artifacts
-
-    def _sync_project_files(self, project_dir: Path, artifacts: dict[str, str]) -> None:
-        allowed_files: set[Path] = set()
-        for relative_name, content in artifacts.items():
-            safe_relative = self._safe_relative_artifact_path(relative_name)
-            target_path = (project_dir / safe_relative).resolve()
-            if project_dir not in target_path.parents and target_path != project_dir:
-                raise ValueError("Artifact path escapes project root.")
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(content, encoding="utf-8")
-            allowed_files.add(target_path)
-
-        if not project_dir.exists():
-            return
-
-        existing_files = [item for item in project_dir.rglob("*") if item.is_file()]
-        for existing in existing_files:
-            if existing not in allowed_files:
-                existing.unlink()
-
-        for directory in sorted([item for item in project_dir.rglob("*") if item.is_dir()], reverse=True):
-            if directory == project_dir:
-                continue
-            if any(directory.iterdir()):
-                continue
-            directory.rmdir()
-
-    def _safe_relative_artifact_path(self, filename: str) -> Path:
-        raw_path = Path(filename.replace("\\", "/"))
-        safe_parts: list[str] = []
-        for part in raw_path.parts:
-            if part in {"", ".", ".."}:
-                continue
-            safe_part = self._sanitize_path_component(part)
-            if safe_part:
-                safe_parts.append(safe_part)
-        if not safe_parts:
-            raise ValueError("Artifact filename is empty.")
-        return Path(*safe_parts)
 
     def _design_doc_path(self, session_id: str) -> Path:
         return self.design_docs_dir / f"{session_id}.md"

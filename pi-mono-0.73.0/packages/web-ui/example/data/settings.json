@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "savedAt": "2026-05-13T06:45:27.302Z",
+  "savedAt": "2026-05-14T08:47:04.884Z",
   "selectedModel": {
     "id": "mimo-v2.5",
     "name": "MiMo-V2.5",
@@ -9,7 +9,8 @@
     "baseUrl": "https://token-plan-cn.xiaomimimo.com/anthropic",
     "reasoning": true,
     "input": [
-      "text"
+      "text",
+      "image"
     ],
     "cost": {
       "input": 0.4,
@@ -20,5 +21,5 @@
     "contextWindow": 1048576,
     "maxTokens": 131072
   },
-  "currentSessionId": "5ef98394-faa2-4b2c-9a9d-af38118d439e"
+  "currentSessionId": "78a41342-1798-4aba-8179-856fc3d6e476"
 }

@@ -6,6 +6,7 @@ import {
 	loadStorageConfig,
 	WorkspaceFileService,
 	WorkspacePreviewService,
+	WorkspaceSessionService,
 } from "../dist/index.js";
 
 function tempRoot() {
@@ -61,6 +62,38 @@ await test("loadStorageConfig supports legacy storageDir defaults", () => {
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "data/projects"));
+});
+
+await test("WorkspaceSessionService merges and deletes server-backed provider keys in settings", () => {
+	const root = tempRoot();
+	const service = new WorkspaceSessionService(testConfig(root));
+
+	service.writeSettings({ providerKeys: { anthropic: "sk-ant-test" } });
+	service.writeSettings({ providerKeys: { openai: "sk-openai-test" } });
+	service.writeSettings({ providerKeys: { anthropic: null } });
+
+	const settings = service.readSettings();
+	assert.deepEqual(settings.providerKeys, { openai: "sk-openai-test" });
+});
+
+await test("WorkspaceSessionService stores server-backed custom providers in settings", () => {
+	const root = tempRoot();
+	const service = new WorkspaceSessionService(testConfig(root));
+	const providers = [
+		{
+			id: "provider-1",
+			name: "Local Anthropic",
+			type: "anthropic-messages",
+			baseUrl: "http://localhost:3000",
+			apiKey: "test-key",
+			models: [{ id: "model-1", name: "Model 1", provider: "Local Anthropic" }],
+		},
+	];
+
+	service.writeSettings({ customProviders: providers });
+
+	const settings = service.readSettings();
+	assert.deepEqual(settings.customProviders, providers);
 });
 
 await test("WorkspaceFileService creates, rewrites, updates, lists, reads, and deletes files inside a session project", () => {

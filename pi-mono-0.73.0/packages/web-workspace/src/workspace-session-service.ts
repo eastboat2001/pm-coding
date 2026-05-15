@@ -74,6 +74,31 @@ export class WorkspaceSessionService {
 			}
 		}
 		if (Object.hasOwn(body, "selectedModel")) record.selectedModel = body.selectedModel;
+		if (Object.hasOwn(body, "providerKeys")) {
+			const existingProviderKeys = isObject(record.providerKeys) ? record.providerKeys : {};
+			const incomingProviderKeys = isObject(body.providerKeys) ? body.providerKeys : {};
+			const providerKeys: JsonObject = { ...existingProviderKeys };
+			for (const [provider, value] of Object.entries(incomingProviderKeys)) {
+				if (!provider.trim()) continue;
+				if (typeof value === "string" && value) {
+					providerKeys[provider] = value;
+				} else if (value === null) {
+					delete providerKeys[provider];
+				}
+			}
+			if (Object.keys(providerKeys).length > 0) {
+				record.providerKeys = providerKeys;
+			} else {
+				delete record.providerKeys;
+			}
+		}
+		if (Object.hasOwn(body, "customProviders")) {
+			if (Array.isArray(body.customProviders)) {
+				record.customProviders = body.customProviders;
+			} else {
+				delete record.customProviders;
+			}
+		}
 		writeJsonFile(this.config.settingsFile, record);
 		return record;
 	}

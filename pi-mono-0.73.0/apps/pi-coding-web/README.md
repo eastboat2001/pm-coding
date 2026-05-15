@@ -137,7 +137,7 @@ To use the chat:
    - **OpenAI**: Get a key from [platform.openai.com](https://platform.openai.com/)
    - **Google**: Get a key from [makersuite.google.com](https://makersuite.google.com/)
 
-API keys are stored in your browser's localStorage in this development example. In production, replace this with server-side credentials or a controlled proxy.
+API keys and custom providers are stored in the browser and mirrored to the configured PI server `settingsFile` so another browser can reuse the same model configuration. The mirrored API keys and custom provider credentials are stored as plaintext in `settings.json`; use this only for local or controlled deployments. For untrusted multi-user production, replace this with server-side credentials or a controlled proxy.
 
 ## Session Storage Behavior
 
@@ -149,6 +149,7 @@ By default, it persists:
 - session titles and history metadata
 - the current or most recent session pointer
 - the last selected model
+- provider API keys and custom providers
 - a JSON mirror of sessions under the configured sessions directory
 - settings under the configured settings file
 - generated project files under the configured projects root directory

@@ -1,5 +1,5 @@
 import type { Model } from "@mariozechner/pi-ai";
-import type { SessionData, SessionMetadata } from "@mariozechner/pi-web-ui";
+import type { CustomProvider, SessionData, SessionMetadata } from "@mariozechner/pi-web-ui";
 
 export interface ConfiguredStorageStatus {
 	configured: boolean;
@@ -24,11 +24,15 @@ export interface ConfiguredSettingsRecord {
 	savedAt: string;
 	currentSessionId?: string;
 	selectedModel?: Model<any>;
+	providerKeys?: Record<string, string>;
+	customProviders?: CustomProvider[];
 }
 
 type ConfiguredSettingsUpdate = {
 	currentSessionId?: string | null;
 	selectedModel?: Model<any>;
+	providerKeys?: Record<string, string | null>;
+	customProviders?: CustomProvider[] | null;
 };
 
 export class ConfiguredServerStorage {

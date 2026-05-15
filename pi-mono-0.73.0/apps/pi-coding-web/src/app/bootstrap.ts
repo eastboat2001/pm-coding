@@ -6,7 +6,6 @@ import {
 	ApiKeyPromptDialog,
 	AppStorage,
 	ChatPanel,
-	CustomProvidersStore,
 	defaultConvertToLlm,
 	getCurrentLanguage,
 	IndexedDBStorageBackend,
@@ -15,7 +14,6 @@ import {
 	loadAttachment,
 	ModelSelector,
 	// PersistentStorageDialog, // TODO: Fix - currently broken
-	ProviderKeysStore,
 	ProvidersModelsTab,
 	ProxyTab,
 	SessionsStore,
@@ -40,15 +38,21 @@ import { createServerProjectTools } from "../project-tools/tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../prompts/coding-system-prompt.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
 import { mergeSessionMetadata } from "../storage/merged-session-index.js";
+import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
+import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
 import { ModelController, SELECTED_MODEL_KEY } from "./model-controller.js";
 import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessionTitle } from "./session-controller.js";
 
 document.documentElement.lang = getCurrentLanguage();
 
+const configuredStorage = new ConfiguredServerStorage();
 const settings = new SettingsStore();
-const providerKeys = new ProviderKeysStore();
 const sessions = new SessionsStore();
-const customProviders = new CustomProvidersStore();
+const customProviders = new ServerBackedCustomProvidersStore(configuredStorage);
+const providerKeys = new ServerBackedProviderKeysStore(configuredStorage, async (providerName) => {
+	const customProvider = (await customProviders.getAll()).find((provider) => provider.name === providerName);
+	return customProvider?.apiKey || null;
+});
 
 const configs = [
 	settings.getConfig(),
@@ -71,7 +75,6 @@ sessions.setBackend(backend);
 
 const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 setAppStorage(storage);
-const configuredStorage = new ConfiguredServerStorage();
 const modelController = new ModelController(storage, configuredStorage);
 
 let currentSessionId: string | undefined;

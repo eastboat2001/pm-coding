@@ -39,6 +39,8 @@ export class ChatPanel extends LitElement {
 		window.addEventListener("resize", this.resizeHandler);
 		this.style.display = "flex";
 		this.style.flexDirection = "column";
+		this.style.flex = "1 1 auto";
+		this.style.width = "100%";
 		this.style.height = "100%";
 		this.style.minHeight = "0";
 		// Update width after initial render
@@ -90,7 +92,8 @@ export class ChatPanel extends LitElement {
 			this.artifactCount = 0;
 			this.showArtifactsPanel = false;
 			const runtimeProvidersFactory = () => [] as SandboxRuntimeProvider[];
-			this.agent.state.tools = config?.toolsFactory?.(agent, this.agentInterface, undefined, runtimeProvidersFactory) || [];
+			this.agent.state.tools =
+				config?.toolsFactory?.(agent, this.agentInterface, undefined, runtimeProvidersFactory) || [];
 			this.requestUpdate();
 			return;
 		}
@@ -184,8 +187,8 @@ export class ChatPanel extends LitElement {
 		}
 
 		return html`
-			<div class="relative w-full h-full overflow-hidden flex">
-				<div class="h-full" style="${!isMobile && this.showArtifactsPanel && this.hasArtifacts ? "width: 50%;" : "width: 100%;"}">
+			<div class="relative w-full h-full min-h-0 overflow-hidden flex">
+				<div class="h-full min-h-0 flex" style="${!isMobile && this.showArtifactsPanel && this.hasArtifacts ? "width: 50%;" : "width: 100%;"}">
 						${this.agentInterface}
 					</div>
 
@@ -212,7 +215,7 @@ export class ChatPanel extends LitElement {
 							: ""
 					}
 
-				<div class="h-full ${isMobile ? "absolute inset-0 pointer-events-none" : ""}" style="${!isMobile ? (!this.hasArtifacts || !this.showArtifactsPanel ? "display: none;" : "width: 50%;") : ""}">
+				<div class="h-full min-h-0 ${isMobile ? "absolute inset-0 pointer-events-none" : ""}" style="${!isMobile ? (!this.hasArtifacts || !this.showArtifactsPanel ? "display: none;" : "width: 50%;") : ""}">
 					${this.artifactsPanel}
 				</div>
 			</div>

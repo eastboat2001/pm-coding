@@ -40,6 +40,10 @@ plans/
 collect.sh
 
 
+apps/pi-coding-web/data/projects/
+apps/pi-coding-web/data/sessions/
+apps/pi-coding-web/data/settings.json
+apps/pi-coding-web/dist/
 packages/web-ui/example/data/projects/
 packages/web-ui/example/data/sessions/
 packages/web-ui/example/data/settings.json

@@ -11,7 +11,7 @@ This directory is the server deployment package for the PI Web UI container.
 The Docker image itself is built from the repository root with:
 
 ```bash
-docker build -t pi-web-ui:0.73.0 -f packages/web-ui/example/Dockerfile .
+docker build -t pi-web-ui:0.73.0 -f apps/pi-coding-web/Dockerfile .
 ```
 
 Export the offline image:
@@ -81,4 +81,3 @@ The PM backend CORS configuration must also allow this PI origin:
 ```env
 CORS_ORIGINS=http://SERVER_IP:5173
 ```
-

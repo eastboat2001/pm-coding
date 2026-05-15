@@ -18,6 +18,8 @@
 			"@mariozechner/pi-tui/*": ["./packages/tui/src/*"],
 			"@mariozechner/pi-web-ui": ["./packages/web-ui/src/index.ts"],
 			"@mariozechner/pi-web-ui/*": ["./packages/web-ui/src/*"],
+			"@mariozechner/pi-web-workspace": ["./packages/web-workspace/src/index.ts"],
+			"@mariozechner/pi-web-workspace/*": ["./packages/web-workspace/src/*"],
 			"@mariozechner/pi-agent-old": ["./packages/agent-old/src/index.ts"],
 			"@mariozechner/pi-agent-old/*": ["./packages/agent-old/src/*"]
 		}

@@ -23,7 +23,7 @@ npm install @mariozechner/pi-web-ui @mariozechner/pi-agent-core @mariozechner/pi
 
 ## Quick Start
 
-See the [example](./example) directory for a complete working application.
+See [apps/pi-coding-web](../../apps/pi-coding-web) for the productized PI coding web application built on these components.
 
 The library itself provides browser-side storage primitives and UI hooks, but it does not impose a single session persistence policy. The example app demonstrates one concrete policy built on top of these APIs:
 
@@ -200,7 +200,7 @@ The recommended pattern for robust web apps is:
 3. use `onBeforeSend` to create or save a draft session before the first network roundtrip
 4. persist selected model changes explicitly instead of assuming UI-only changes will be restored automatically
 
-The example app in `packages/web-ui/example/` follows this pattern and additionally demonstrates configured local disk mirroring.
+The app in `apps/pi-coding-web/` follows this pattern and additionally demonstrates configured local disk mirroring.
 
 ## Example App Storage Behavior
 
@@ -217,7 +217,7 @@ The example app is intentionally more opinionated than the library:
 - failed server workspace shell commands return output plus the PI server platform and shell so the agent can adjust and retry
 - preview URLs are served from `/preview/<project-id>/`
 
-Configured local disk mirroring, server-side workspace tools, and background project build/preview are implemented in the example app only. They are not part of the shared `StorageBackend` abstraction today. Edit `packages/web-ui/example/pi-storage.config.json` to change session, project, build command, and preview URL settings.
+Configured local disk mirroring, server-side workspace tools, and background project build/preview are implemented by `@mariozechner/pi-web-workspace` and wired into `apps/pi-coding-web`. Edit `apps/pi-coding-web/pi-storage.config.json` to change session, project, build command, and preview URL settings.
 
 ### Agent (from pi-agent-core)
 

@@ -209,10 +209,10 @@ declare module "@mariozechner/mini-lit" {
 		"Choose the interface language for this browser.": string;
 		"Language changes are saved locally in this browser.": string;
 		"Interface language": string;
-		"English": string;
+		English: string;
 		"Simplified Chinese": string;
-		"German": string;
-		"Malay": string;
+		German: string;
+		Malay: string;
 		"AI Coding Platform": string;
 		"New Session": string;
 		"Click to edit title": string;
@@ -714,7 +714,8 @@ export const translations = {
 		Language: "Sprache",
 		"Display language": "Anzeigesprache",
 		"Choose the interface language for this browser.": "Wählen Sie die Sprache der Oberfläche für diesen Browser.",
-		"Language changes are saved locally in this browser.": "Sprachänderungen werden lokal in diesem Browser gespeichert.",
+		"Language changes are saved locally in this browser.":
+			"Sprachänderungen werden lokal in diesem Browser gespeichert.",
 		"Interface language": "Oberflächensprache",
 		English: "Englisch",
 		"Simplified Chinese": "Vereinfachtes Chinesisch",
@@ -1172,7 +1173,8 @@ mutableTranslations.ms = {
 	"Without persistent storage, your browser may delete saved conversations when it needs disk space. Granting this permission ensures your chat history is preserved.":
 		"Tanpa storan kekal, pelayar mungkin memadam perbualan tersimpan apabila memerlukan ruang. Kebenaran ini memastikan sejarah chat dikekalkan.",
 	"What this means:": "Maksudnya:",
-	"Your conversations will be saved locally in your browser": "Perbualan anda akan disimpan secara setempat dalam pelayar",
+	"Your conversations will be saved locally in your browser":
+		"Perbualan anda akan disimpan secara setempat dalam pelayar",
 	"Data will not be deleted automatically to free up space":
 		"Data tidak akan dipadam secara automatik untuk mengosongkan ruang",
 	"You can still manually clear data at any time": "Anda masih boleh mengosongkan data secara manual bila-bila masa",
@@ -1230,7 +1232,8 @@ mutableTranslations.ms = {
 	Language: "Bahasa",
 	"Display language": "Bahasa paparan",
 	"Choose the interface language for this browser.": "Pilih bahasa antara muka untuk pelayar ini.",
-	"Language changes are saved locally in this browser.": "Perubahan bahasa disimpan secara setempat dalam pelayar ini.",
+	"Language changes are saved locally in this browser.":
+		"Perubahan bahasa disimpan secara setempat dalam pelayar ini.",
 	"Interface language": "Bahasa antara muka",
 	English: "Inggeris",
 	"Simplified Chinese": "Cina Ringkas",

@@ -79,6 +79,8 @@ export class AgentInterface extends LitElement {
 
 		this.style.display = "flex";
 		this.style.flexDirection = "column";
+		this.style.flex = "1 1 auto";
+		this.style.width = "100%";
 		this.style.height = "100%";
 		this.style.minHeight = "0";
 
@@ -355,9 +357,9 @@ export class AgentInterface extends LitElement {
 		const session = this.session;
 		const state = this.session.state;
 		return html`
-			<div class="flex flex-col h-full bg-background text-foreground">
+			<div class="flex flex-col h-full min-h-0 bg-background text-foreground">
 				<!-- Messages Area -->
-				<div class="flex-1 overflow-y-auto">
+				<div class="flex-1 min-h-0 overflow-y-auto">
 					<div class="max-w-3xl mx-auto p-4 pb-0">${this.renderMessages()}</div>
 				</div>
 

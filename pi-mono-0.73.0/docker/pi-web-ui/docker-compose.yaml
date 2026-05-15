@@ -6,6 +6,5 @@ services:
     ports:
       - "5173:5173"
     volumes:
-      - ./data:/app/packages/web-ui/example/data
-      - ./pi-storage.config.json:/app/packages/web-ui/example/pi-storage.config.json:ro
-
+      - ./data:/app/apps/pi-coding-web/data
+      - ./pi-storage.config.json:/app/apps/pi-coding-web/pi-storage.config.json:ro

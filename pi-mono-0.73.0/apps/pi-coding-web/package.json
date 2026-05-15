@@ -1,0 +1,27 @@
+{
+  "name": "pi-coding-web",
+  "version": "0.73.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "tsgo --noEmit",
+    "clean": "shx rm -rf dist"
+  },
+  "dependencies": {
+    "@mariozechner/mini-lit": "^0.2.0",
+    "@mariozechner/pi-agent-core": "file:../../packages/agent",
+    "@mariozechner/pi-ai": "file:../../packages/ai",
+    "@mariozechner/pi-web-ui": "file:../../packages/web-ui",
+    "@mariozechner/pi-web-workspace": "file:../../packages/web-workspace",
+    "@tailwindcss/vite": "^4.1.17",
+    "lit": "^3.3.1",
+    "lucide": "^0.544.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^7.1.6"
+  }
+}

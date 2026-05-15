@@ -1,0 +1,245 @@
+@import "@mariozechner/pi-web-ui/app.css";
+
+:root,
+:root[data-theme="light"] {
+	--color-background: #ffffff;
+	--color-foreground: #0f1f44;
+	--color-card: rgba(255, 255, 255, 0.78);
+	--color-popover: #f7faff;
+	--color-border: rgba(20, 44, 96, 0.14);
+	--color-input: rgba(255, 255, 255, 0.82);
+	--color-muted: rgba(216, 226, 255, 0.9);
+	--color-muted-foreground: #4f6399;
+	--color-secondary: rgba(14, 39, 89, 0.08);
+	--color-primary: #0d3b8c;
+	--color-primary-foreground: #f8fbff;
+	--color-accent: #1b56c4;
+	--color-accent-foreground: #ffffff;
+	--color-ring: rgba(27, 86, 196, 0.38);
+	--example-page-background: #f5f7fb;
+	--example-shell-top: #ffffff;
+	--example-shell-bottom: #ffffff;
+	--example-header-top: rgba(21, 62, 143, 0.96);
+	--example-header-bottom: rgba(12, 43, 104, 0.92);
+	--example-header-border: rgba(20, 44, 96, 0.14);
+	--example-header-shadow: rgba(10, 26, 61, 0.16);
+	--example-logo-top: #1f58c8;
+	--example-logo-bottom: #0a2d67;
+	--example-logo-border: rgba(255, 255, 255, 0.22);
+	--example-logo-shadow: rgba(10, 26, 61, 0.2);
+	--example-header-text: #ffffff;
+	--example-header-hover: rgba(13, 59, 140, 0.12);
+}
+
+:root[data-theme="dark"] {
+	--color-background: #06142e;
+	--color-foreground: #edf4ff;
+	--color-card: rgba(10, 27, 58, 0.88);
+	--color-popover: #0a1c3d;
+	--color-border: rgba(120, 163, 255, 0.18);
+	--color-input: rgba(13, 37, 77, 0.96);
+	--color-muted: rgba(15, 38, 79, 0.92);
+	--color-muted-foreground: #9fb5df;
+	--color-secondary: rgba(126, 167, 255, 0.12);
+	--color-primary: #3f7bff;
+	--color-primary-foreground: #f4f8ff;
+	--color-accent: #61a1ff;
+	--color-accent-foreground: #041226;
+	--color-ring: rgba(97, 161, 255, 0.4);
+	--example-page-background: #020817;
+	--example-shell-top: rgba(6, 20, 46, 0.98);
+	--example-shell-bottom: rgba(4, 14, 33, 1);
+	--example-header-top: rgba(9, 27, 60, 0.96);
+	--example-header-bottom: rgba(8, 23, 51, 0.9);
+	--example-header-border: rgba(126, 167, 255, 0.18);
+	--example-header-shadow: rgba(0, 8, 24, 0.28);
+	--example-logo-top: #1f58c8;
+	--example-logo-bottom: #0a2d67;
+	--example-logo-border: rgba(255, 255, 255, 0.18);
+	--example-logo-shadow: rgba(0, 0, 0, 0.2);
+	--example-header-text: #edf4ff;
+	--example-header-hover: rgba(126, 167, 255, 0.14);
+}
+
+body {
+	box-sizing: border-box;
+	min-height: 100vh;
+	margin: 0;
+	padding: 5px;
+	background: var(--example-page-background);
+	color: var(--color-foreground);
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: inherit;
+}
+
+#app {
+	min-height: calc(100vh - 10px);
+}
+
+.example-shell {
+	height: calc(100vh - 10px);
+	border: 1px solid var(--color-border);
+	border-radius: 12px;
+	background: linear-gradient(180deg, var(--example-shell-top) 0%, var(--example-shell-bottom) 100%);
+}
+
+.example-header {
+	padding: 0 0.75rem;
+	border-color: var(--example-header-border);
+	border-top-left-radius: inherit;
+	border-top-right-radius: inherit;
+	background: linear-gradient(180deg, var(--example-header-top) 0%, var(--example-header-bottom) 100%);
+	box-shadow: 0 18px 45px var(--example-header-shadow);
+	backdrop-filter: blur(18px);
+	gap: 0.75rem;
+	flex-wrap: wrap;
+}
+
+.example-header__brand-row {
+	flex: 1 1 auto;
+	overflow: hidden;
+}
+
+.example-header__logo {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+	border-radius: 0;
+	box-shadow: 0 8px 20px var(--example-logo-shadow);
+	color: #ffffff;
+	font-size: 1rem;
+	font-weight: 800;
+	letter-spacing: 0;
+	line-height: 1;
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.example-header__logo-segment {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 4.85rem;
+	height: 3.15rem;
+	padding: 0 1.1rem;
+}
+
+.example-header__logo-segment--ats {
+	background: #21558d;
+}
+
+.example-header__logo-segment--aitc {
+	background: #5eb1d8;
+}
+
+.example-header__session {
+	flex: 1 1 auto;
+	min-width: 0;
+	padding-left: 0.25rem;
+	border-left: 1px solid var(--example-header-border);
+}
+
+.example-header__title,
+.example-header__title-button {
+	max-width: min(36rem, 100%);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.example-header__title {
+	color: var(--example-header-text);
+	letter-spacing: 0.01em;
+}
+
+.example-header__title-button {
+	background: rgba(255, 255, 255, 0.03);
+}
+
+.example-header__title-button:hover {
+	background: var(--example-header-hover);
+}
+
+.example-header__actions {
+	border-left: 1px solid var(--example-header-border);
+	padding-left: 0.85rem;
+	align-self: stretch;
+}
+
+.example-header :is(button, theme-toggle) {
+	position: relative;
+	border-radius: 999px;
+}
+
+.example-header button {
+	color: var(--example-header-text);
+}
+
+.example-header button:hover {
+	background: var(--example-header-hover);
+}
+
+.example-content {
+	display: flex;
+	min-height: 0;
+	background: transparent;
+}
+
+.example-shell pi-chat-panel {
+	display: flex;
+	flex: 1 1 auto;
+	width: 100%;
+	height: 100%;
+	min-height: 0;
+	background: transparent;
+}
+
+.example-shell agent-interface {
+	min-height: 0;
+	background: transparent;
+}
+
+@media (max-width: 900px) {
+	.example-header {
+		padding-bottom: 0.35rem;
+	}
+
+	.example-header__brand-row,
+	.example-header__actions {
+		width: 100%;
+	}
+
+	.example-header__actions {
+		justify-content: flex-end;
+		border-left: 0;
+		border-top: 1px solid var(--example-header-border);
+		padding-top: 0.5rem;
+		padding-left: 0;
+	}
+}
+
+@media (max-width: 640px) {
+	.example-header__brand-row,
+	.example-header__session {
+		gap: 0.5rem;
+	}
+
+	.example-header__logo {
+		font-size: 0.9rem;
+	}
+
+	.example-header__logo-segment {
+		min-width: 4.15rem;
+		height: 2.65rem;
+		padding: 0 0.8rem;
+	}
+
+	.example-header__session {
+		padding-left: 0.5rem;
+	}
+}

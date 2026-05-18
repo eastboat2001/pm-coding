@@ -23,6 +23,9 @@ function testConfig(root, overrides = {}) {
 		projectBuildCommand: "npm run build",
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
+		serverSessionSyncEnabled: false,
+		defaultModelProvider: "anthropic",
+		defaultModelId: "claude-sonnet-4-5-20250929",
 		...overrides,
 	};
 }
@@ -41,6 +44,9 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 			settingsFile: "runtime/settings.json",
 			projectsRootDir: "runtime/projects",
 			previewBaseUrl: "http://localhost:5173/",
+			serverSessionSyncEnabled: true,
+			defaultModelProvider: "openai",
+			defaultModelId: "gpt-5.1",
 		}),
 		"utf8",
 	);
@@ -51,6 +57,9 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "runtime/projects"));
 	assert.equal(config.previewBaseUrl, "http://localhost:5173");
+	assert.equal(config.serverSessionSyncEnabled, true);
+	assert.equal(config.defaultModelProvider, "openai");
+	assert.equal(config.defaultModelId, "gpt-5.1");
 });
 
 await test("loadStorageConfig supports legacy storageDir defaults", () => {
@@ -62,6 +71,9 @@ await test("loadStorageConfig supports legacy storageDir defaults", () => {
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "data/projects"));
+	assert.equal(config.serverSessionSyncEnabled, false);
+	assert.equal(config.defaultModelProvider, "anthropic");
+	assert.equal(config.defaultModelId, "claude-sonnet-4-5-20250929");
 });
 
 await test("WorkspaceSessionService merges and deletes server-backed provider keys in settings", () => {

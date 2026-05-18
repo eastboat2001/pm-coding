@@ -1,4 +1,17 @@
-import { defaultEnglish, defaultGerman, type MiniLitRequiredMessages, setTranslations } from "@mariozechner/mini-lit";
+import {
+	defaultEnglish,
+	defaultGerman,
+	type LanguageCode,
+	type MiniLitRequiredMessages,
+	setTranslations,
+} from "@mariozechner/mini-lit";
+
+export const LANGUAGE_CHANGE_EVENT = "pi-language-change";
+
+export function setLanguage(code: LanguageCode) {
+	localStorage.setItem("language", code);
+	window.dispatchEvent(new CustomEvent(LANGUAGE_CHANGE_EVENT, { detail: { language: code } }));
+}
 
 declare module "@mariozechner/mini-lit" {
 	interface i18nMessages extends MiniLitRequiredMessages {
@@ -219,6 +232,7 @@ declare module "@mariozechner/mini-lit" {
 		"Demo: Add Custom Notification": string;
 		"AITC platform logo": string;
 		"Load a browser or configured local conversation": string;
+		"Load a browser conversation": string;
 		"Creating file": string;
 		"Created file": string;
 		"Rewriting file": string;
@@ -474,6 +488,7 @@ export const translations = {
 		"Demo: Add Custom Notification": "Demo: Add Custom Notification",
 		"AITC platform logo": "AITC platform logo",
 		"Load a browser or configured local conversation": "Load a browser or configured local conversation",
+		"Load a browser conversation": "Load a browser conversation",
 		"Creating file": "Creating file",
 		"Created file": "Created file",
 		"Rewriting file": "Rewriting file",
@@ -727,6 +742,7 @@ export const translations = {
 		"Demo: Add Custom Notification": "Demo: Benutzerdefinierte Benachrichtigung hinzufügen",
 		"AITC platform logo": "AITC-Plattformlogo",
 		"Load a browser or configured local conversation": "Browser- oder konfigurierte lokale Konversation laden",
+		"Load a browser conversation": "Browser-Konversation laden",
 		"Creating file": "Erstelle Datei",
 		"Created file": "Datei erstellt",
 		"Rewriting file": "Schreibe Datei neu",
@@ -986,6 +1002,7 @@ mutableTranslations.zh = {
 	"Demo: Add Custom Notification": "演示：添加自定义通知",
 	"AITC platform logo": "AITC 平台标识",
 	"Load a browser or configured local conversation": "加载浏览器或配置目录中的本地会话",
+	"Load a browser conversation": "加载当前浏览器中的会话",
 	"Creating file": "正在创建文件",
 	"Created file": "已创建文件",
 	"Rewriting file": "正在重写文件",
@@ -1245,6 +1262,7 @@ mutableTranslations.ms = {
 	"Demo: Add Custom Notification": "Demo: Tambah pemberitahuan tersuai",
 	"AITC platform logo": "Logo platform AITC",
 	"Load a browser or configured local conversation": "Muatkan perbualan pelayar atau tempatan yang dikonfigurasi",
+	"Load a browser conversation": "Muatkan perbualan pelayar",
 	"Creating file": "Mencipta fail",
 	"Created file": "Fail dicipta",
 	"Rewriting file": "Menulis semula fail",

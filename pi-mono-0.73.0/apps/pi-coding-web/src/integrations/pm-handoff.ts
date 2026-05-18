@@ -1,4 +1,4 @@
-import { PI_CODING_HANDOFF_INSTRUCTIONS } from "../prompts/coding-system-prompt.js";
+import { PI_CODING_HANDOFF_INSTRUCTIONS_BY_LANGUAGE } from "../prompts/coding-system-prompt.js";
 
 export type PmHandoffDocument = {
 	kind: string;
@@ -12,6 +12,7 @@ export type PmHandoffPayload = {
 	transport: string;
 	session_id: string;
 	title: string;
+	language?: string;
 	documents_ready: boolean;
 	implementation_prompt?: string;
 	documents?: PmHandoffDocument[];
@@ -32,8 +33,20 @@ export async function fetchPmHandoffPayload(token: string): Promise<PmHandoffPay
 	return data;
 }
 
+function normalizeHandoffLanguage(language?: string): keyof typeof PI_CODING_HANDOFF_INSTRUCTIONS_BY_LANGUAGE {
+	const normalized = String(language || "")
+		.trim()
+		.toLowerCase()
+		.replace("_", "-");
+	if (normalized === "zh" || normalized.startsWith("zh-")) return "zh";
+	if (normalized === "de" || normalized.startsWith("de-")) return "de";
+	if (normalized === "ms" || normalized.startsWith("ms-")) return "ms";
+	return "en";
+}
+
 export function buildCodingHandoffPrompt(payload: PmHandoffPayload): string {
 	const sourcePrompt = (payload.implementation_prompt || "").trim();
-	if (!sourcePrompt) return PI_CODING_HANDOFF_INSTRUCTIONS;
-	return `${sourcePrompt}\n\n---\n\n${PI_CODING_HANDOFF_INSTRUCTIONS}`;
+	const platformInstructions = PI_CODING_HANDOFF_INSTRUCTIONS_BY_LANGUAGE[normalizeHandoffLanguage(payload.language)];
+	if (!sourcePrompt) return platformInstructions;
+	return `${sourcePrompt}\n\n---\n\n${platformInstructions}`;
 }

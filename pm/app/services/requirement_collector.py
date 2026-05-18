@@ -364,7 +364,139 @@ Output expectations:
 - Finish with a concise delivery note describing what was implemented, how to run it, how to verify it, and which assumptions remain.
 """
 
-IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深全栈工程师，现在需要严格依据提供的文档，直接实现一个可运行、可验证的完整项目。
+IMPLEMENTATION_PROMPT_TEMPLATE_DE = """Du bist ein erfahrener Softwareentwickler und sollst anhand der von PM bereitgestellten Dokumente direkt ein lauffaehiges und pruefbares vollstaendiges Projekt implementieren.
+
+Die PM-Dokumente sind die Quelle der Produktanforderungen. Hinweise einer nachgelagerten Coding-Plattform sind nur Ausfuehrungshilfen und duerfen den PM-Scope nicht erweitern oder ersetzen.
+
+Lies diese Dateien vollstaendig, bevor du Code schreibst:
+1. PRD-Dokument: {prd_path}
+2. Systemdesign-Dokument: {design_path}
+
+Projektkontext:
+- Sitzungs-ID: {session_id}
+- Sitzungstitel: {session_title}
+
+Ausfuehrungsregeln:
+1. Nutze das PRD als Quelle fuer Produktscope, Rollen, User Flows, Geschaeftsregeln und Akzeptanzerwartungen.
+2. Nutze das Systemdesign-Dokument als Quelle fuer Architektur, Modulgrenzen, API-Vertraege und Datenmodelldetails.
+3. Wenn beide Dokumente einander widersprechen, loese den Konflikt mit dieser Prioritaet:
+   - Produktscope, Nutzerwert und Workflow-Absicht -> PRD
+   - Technische Architektur, API-Form, Persistenzmodell und Modulverantwortlichkeiten -> Systemdesign-Dokument
+   - Wenn der Konflikt weiter besteht, waehle die konservativste minimale lauffaehige Loesung und dokumentiere die Annahme klar in README oder ASSUMPTIONS.md.
+4. Erfinde keine grossen Features, Integrationen, Infrastruktur oder komplexen verteilten Komponenten, wenn sie nicht ausdruecklich in den Dokumenten gefordert sind.
+5. Gib keinen Pseudocode, keine TODO-only-Module, keine leeren Handler und keine Platzhalterimplementierungen fuer Kernablaeufe aus.
+6. Passe die Implementierungstiefe an die Dokumente an. Wenn ein statisches Projekt oder ein Node-Frontend gefordert ist, fuege kein Backend, keine Datenbank, keine Authentifizierung und keinen dauerhaft laufenden Dienst hinzu, ausser dies ist ausdruecklich gefordert.
+
+Implementierungsanforderungen:
+1. Extrahiere vor dem Coding eine konkrete Implementierungs-Checkliste fuer relevante Seiten, Module, APIs, Datenstrukturen und Akzeptanzkriterien.
+2. Halte Feldnamen, Enum-Werte, Routen, Request/Response-Payloads und persistierte Felder in allen tatsaechlich vorhandenen Schichten konsistent.
+3. Erzeuge ein Projekt, das lokal end-to-end lauffaehig ist, nicht nur einzelne Snippets.
+4. Bevorzuge stabile, verbreitete und einfache Bibliotheken. Halte Abhaengigkeiten minimal und explizit.
+5. Stelle alle notwendigen Setup-Assets bereit, einschliesslich Dependency-Manifests, Umgebungsbeispielen, Initialisierungsschritten sowie Seed- oder Demodaten, wenn sie fuer den Hauptablauf gebraucht werden.
+6. Behandle die wichtigen Fehlerpfade, die zur gewaehlten Implementierung passen: ungueltige Eingaben, fehlende Ressourcen, doppelte Aktionen, fehlgeschlagene Persistenz, Autorisierungsfehler bei geforderten Berechtigungen und Empty States.
+7. Vermeide hartcodierte Secrets, maschinenspezifische absolute Pfade und umgebungsspezifische Annahmen im Code.
+8. Wenn der Tech Stack nicht ausdruecklich vorgegeben ist, waehle den leichtesten stabilen Stack, der die Anforderungen mit der geringsten Betriebskomplexitaet erfuellt.
+9. Halte die Implementierung am dokumentierten MVP ausgerichtet und fuege keine spekulative Ueberarchitektur hinzu.
+10. Der zentrale Nutzerablauf muss in den tatsaechlich vorhandenen Schichten vollstaendig verdrahtet sein. Bei reinen Frontend-Projekten kann das UI-State, lokale Persistenz und Demodaten bedeuten statt einer Backend-API.
+
+Qualitaetspruefungen:
+1. Pruefe Imports, Dependency-Deklarationen, Konfigurationsladen, Routing, Build-Ausgabe und erforderliche Integrationspunkte.
+2. Fuege mindestens minimale automatisierte Pruefung fuer den kritischen Pfad hinzu:
+   - Backend: mindestens ein oder zwei sinnvolle API-/Service-Tests, wenn das Projekt ein Backend enthaelt und eine Testbasis vorhanden ist
+   - Frontend: mindestens sicherstellen, dass Hauptseite und wichtiger Interaktionspfad implementiert und lauffaehig sind
+3. Behebe offensichtliche Probleme vor Abschluss: fehlende Imports, abweichende Felder, defekte Routen, nicht angelegte Tabellen, ungueltige Seed-Daten, Encoding-Probleme oder Startfehler.
+4. Stelle ein klares README bereit mit:
+   - Installationsbefehlen
+   - Startbefehlen
+   - Umgebungsvariablen
+   - Datenbank-/Bootstrap-Schritten
+   - Test- oder Verifikationsschritten
+   - bekannten Annahmen und Trade-offs
+
+Empfohlene Arbeitsreihenfolge:
+1. Lies beide Dokumente und leite die Implementierungs-Checkliste ab.
+2. Bestaetige Ziel-Stack und Projektstruktur aus den Dokumenten.
+3. Implementiere die kleinste vollstaendige Projektstruktur, die den PM-Scope erfuellt.
+4. Implementiere Frontend-Seiten und Interaktionslogik.
+5. Fuege Backend-APIs, Datenmodell oder Initialisierung nur hinzu, wenn die Dokumente dies fordern.
+6. Fuege Konfiguration, Demodaten, Tests und README hinzu.
+7. Fuehre das Projekt lokal aus oder baue es und pruefe den kritischen End-to-End-Ablauf.
+
+Erwartete Ausgabe:
+- Beginne mit einer Zusammenfassung des Implementierungsplans.
+- Implementiere danach den Code.
+- Wenn Informationen fehlen, halte nicht an; triff die kleinste sinnvolle Annahme und dokumentiere sie explizit.
+- Schliesse mit einer kurzen Liefernotiz ab: was implementiert wurde, wie es gestartet wird, wie es geprueft wird und welche Annahmen bleiben.
+"""
+
+IMPLEMENTATION_PROMPT_TEMPLATE_MS = """Anda ialah jurutera perisian kanan yang bertanggungjawab melaksanakan projek lengkap yang boleh dijalankan dan disahkan berdasarkan dokumen PM yang diberikan.
+
+Dokumen PM ialah sumber utama keperluan produk. Sebarang arahan daripada platform coding hiliran hanyalah panduan pelaksanaan dan tidak boleh meluaskan atau menggantikan skop PM.
+
+Baca fail berikut sepenuhnya sebelum menulis kod:
+1. Dokumen PRD: {prd_path}
+2. Dokumen reka bentuk sistem: {design_path}
+
+Konteks projek:
+- ID sesi: {session_id}
+- Tajuk sesi: {session_title}
+
+Peraturan pelaksanaan:
+1. Gunakan PRD sebagai sumber kebenaran untuk skop produk, peranan, aliran pengguna, peraturan perniagaan dan jangkaan penerimaan.
+2. Gunakan dokumen reka bentuk sistem sebagai sumber kebenaran untuk seni bina, sempadan modul, kontrak API dan butiran model data.
+3. Jika kedua-dua dokumen bercanggah, selesaikan mengikut keutamaan ini:
+   - Skop produk, nilai pengguna dan niat aliran kerja -> PRD
+   - Seni bina teknikal, bentuk API, model persistensi dan tanggungjawab modul -> dokumen reka bentuk sistem
+   - Jika konflik masih kekal, pilih penyelesaian boleh jalan yang paling konservatif dan minimum, kemudian rekodkan andaian dengan jelas dalam README atau ASSUMPTIONS.md.
+4. Jangan cipta ciri besar, integrasi, infrastruktur atau komponen teragih yang kompleks melainkan dokumen memintanya dengan jelas.
+5. Jangan keluarkan pseudokod, modul TODO sahaja, handler kosong atau pelaksanaan placeholder untuk aliran teras.
+6. Padankan kedalaman pelaksanaan dengan dokumen. Jika projek yang diminta ialah halaman statik atau projek frontend Node, jangan tambah backend, pangkalan data, pengesahan atau servis jangka panjang melainkan diperlukan dengan jelas.
+
+Keperluan pelaksanaan:
+1. Sebelum menulis kod, ekstrak senarai semak pelaksanaan yang konkrit merangkumi halaman, modul, API, struktur data dan kriteria penerimaan yang berkaitan.
+2. Kekalkan nama medan, nilai enum, laluan, payload request/response dan medan persistensi secara konsisten merentas lapisan yang benar-benar wujud.
+3. Hasilkan projek yang boleh dijalankan secara end-to-end di tempatan, bukan sekadar cebisan kod.
+4. Utamakan pustaka yang stabil, arus perdana dan rendah kerumitan. Pastikan dependensi minimum dan dinyatakan dengan jelas.
+5. Sediakan semua aset setup yang diperlukan, termasuk manifest dependensi, contoh pemboleh ubah persekitaran jika perlu, langkah inisialisasi serta data seed/demo jika diperlukan untuk aliran utama.
+6. Tangani laluan ralat penting yang berkaitan dengan pelaksanaan yang dipilih: input tidak sah, sumber tidak ditemui, tindakan pendua, kegagalan persistensi, ralat autorisasi apabila dokumen memerlukan kebenaran dan keadaan kosong.
+7. Elakkan rahsia hard-coded, laluan mutlak khusus mesin atau andaian persekitaran khusus dalam kod.
+8. Jika stack teknologi tidak dinyatakan dengan jelas dalam dokumen, pilih stack stabil paling ringan yang boleh memenuhi keperluan dengan kerumitan operasi paling rendah.
+9. Kekalkan pelaksanaan sejajar dengan skop MVP yang didokumenkan; jangan tambah over-engineering spekulatif.
+10. Perjalanan pengguna utama mesti disambungkan sepenuhnya melalui lapisan yang benar-benar wujud dalam projek. Untuk projek frontend sahaja, ini boleh bermaksud state UI, persistensi tempatan dan data demo, bukannya API backend wajib.
+
+Pemeriksaan kualiti:
+1. Sahkan import, deklarasi dependensi, pemuatan konfigurasi, routing, output build dan titik integrasi yang diperlukan oleh stack yang dipilih.
+2. Tambah sekurang-kurangnya pengesahan automatik minimum untuk laluan kritikal:
+   - backend: sekurang-kurangnya satu atau dua ujian API/service yang bermakna apabila projek mengandungi backend dan mempunyai asas ujian
+   - frontend: sekurang-kurangnya pastikan halaman utama dan aliran interaksi penting telah dilaksanakan dan boleh dijalankan
+3. Betulkan isu jelas sebelum selesai: import hilang, medan tidak sepadan, route rosak, jadual belum dicipta, data seed tidak sah, isu encoding atau kegagalan startup.
+4. Sediakan README yang jelas dengan:
+   - arahan pemasangan
+   - arahan startup
+   - pemboleh ubah persekitaran
+   - langkah database/bootstrap
+   - langkah ujian atau pengesahan
+   - andaian dan trade-off yang diketahui
+
+Urutan kerja yang dicadangkan:
+1. Baca kedua-dua dokumen dan hasilkan senarai semak pelaksanaan.
+2. Sahkan stack sasaran dan struktur projek daripada dokumen.
+3. Laksanakan struktur projek lengkap paling kecil yang memenuhi skop PM.
+4. Laksanakan halaman frontend dan logik interaksi.
+5. Tambah API backend, model data atau inisialisasi hanya apabila dokumen memerlukannya.
+6. Tambah konfigurasi, data demo, ujian dan README.
+7. Jalankan atau bina projek secara tempatan dan sahkan aliran end-to-end kritikal.
+
+Jangkaan output:
+- Mulakan dengan ringkasan pelan pelaksanaan.
+- Kemudian laksanakan kod.
+- Jika maklumat tiada, jangan berhenti; buat andaian munasabah paling kecil dan rekodkan dengan jelas.
+- Akhiri dengan nota penghantaran ringkas yang menerangkan apa yang dilaksanakan, cara menjalankannya, cara mengesahkannya dan andaian yang masih tinggal.
+"""
+
+IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深软件工程师，现在需要依据 PM 提供的文档，直接实现一个可运行、可验证的完整项目。
+
+PM 文档是产品需求主依据。下游 Coding 平台的提示词只作为执行方式补充，不能替换、扩大或改写 PM 的产品范围。
 
 开始编码前，必须先完整阅读以下文件：
 1. PRD 文档：{prd_path}
@@ -426,6 +558,12 @@ IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深全栈工程师，现�
 """
 
 SUPPORTED_OUTPUT_LANGUAGES = {"en", "de", "zh", "ms"}
+IMPLEMENTATION_PROMPT_TEMPLATE_BY_LANGUAGE = {
+    "en": IMPLEMENTATION_PROMPT_TEMPLATE_EN,
+    "de": IMPLEMENTATION_PROMPT_TEMPLATE_DE,
+    "zh": IMPLEMENTATION_PROMPT_TEMPLATE_ZH,
+    "ms": IMPLEMENTATION_PROMPT_TEMPLATE_MS,
+}
 STRUCTURED_REQUIREMENT_CANONICAL_CACHE_KEY = "__canonical__"
 STRUCTURED_REQUIREMENT_CANONICAL_FALLBACK_LANGUAGES = ("zh", "en", "de", "ms")
 
@@ -650,6 +788,7 @@ class Session:
     prompt_template: str = PROMPT_TEMPLATE_PERSONAL_PROJECT
     applied_template_id: str = ""
     applied_template_name: str = ""
+    owner_client_id: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -663,7 +802,12 @@ class RequirementCollectorService:
         self.business_template_library = BusinessTemplateLibrary(self.prd_templates_dir)
         self._lock = threading.Lock()
 
-    def create_session(self, template_id: str | None = None, language: str = "zh") -> Session:
+    def create_session(
+        self,
+        template_id: str | None = None,
+        language: str = "zh",
+        owner_client_id: str = "",
+    ) -> Session:
         session_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
         applied_template_id = ""
@@ -687,6 +831,7 @@ class RequirementCollectorService:
             title=title,
             applied_template_id=applied_template_id,
             applied_template_name=applied_template_name,
+            owner_client_id=owner_client_id,
         )
         return self._session_from_record(record)
 
@@ -696,8 +841,8 @@ class RequirementCollectorService:
             return None
         return self._session_from_record(record)
 
-    def list_sessions(self) -> list[dict[str, Any]]:
-        return self.session_store.list_sessions()
+    def list_sessions(self, owner_client_id: str | None = None) -> list[dict[str, Any]]:
+        return self.session_store.list_sessions(owner_client_id)
 
     def list_business_templates(self) -> list[dict[str, Any]]:
         return self.business_template_library.list_templates()
@@ -1177,6 +1322,7 @@ class RequirementCollectorService:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
+        normalized_language = self._normalize_language(language)
 
         prd_result = self.get_saved_prd_document(session_id)
         design_result = self.get_saved_design_document(session_id)
@@ -1203,6 +1349,7 @@ class RequirementCollectorService:
         return {
             "session_id": session_id,
             "title": session.title,
+            "language": normalized_language,
             "documents_ready": True,
             "documents": {
                 "prd": {
@@ -1219,7 +1366,7 @@ class RequirementCollectorService:
                 session_title=session.title,
                 prd_path=prd_absolute_path,
                 design_path=design_absolute_path,
-                language=language,
+                language=normalized_language,
             ),
         }
 
@@ -1227,6 +1374,7 @@ class RequirementCollectorService:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError("Session not found.")
+        normalized_language = self._normalize_language(language)
 
         prd_result = self.get_saved_prd_document(session_id)
         design_result = self.get_saved_design_document(session_id)
@@ -1252,7 +1400,7 @@ class RequirementCollectorService:
             session_title=session.title,
             prd_path=prd_filename,
             design_path=design_filename,
-            language=language,
+            language=normalized_language,
         )
         now = datetime.now(timezone.utc)
         expires_at = (now + timedelta(minutes=DEFAULT_HANDOFF_TTL_MINUTES)).isoformat()
@@ -1262,6 +1410,7 @@ class RequirementCollectorService:
             "transport": "browser-handoff",
             "session_id": session_id,
             "title": session.title,
+            "language": normalized_language,
             "documents_ready": True,
             "implementation_prompt": implementation_prompt,
             "documents": [
@@ -1598,6 +1747,7 @@ class RequirementCollectorService:
             prompt_template=self._normalize_prompt_template(record.get("prompt_template", PROMPT_TEMPLATE_PERSONAL_PROJECT)),
             applied_template_id=str(record.get("applied_template_id", "")).strip(),
             applied_template_name=str(record.get("applied_template_name", "")).strip(),
+            owner_client_id=str(record.get("owner_client_id", "")).strip(),
             created_at=record["created_at"],
             updated_at=record.get("updated_at", record["created_at"]),
             messages=self._hydrate_message_payloads(
@@ -2205,7 +2355,7 @@ class RequirementCollectorService:
         language: str,
     ) -> str:
         normalized = self._normalize_language(language)
-        template = IMPLEMENTATION_PROMPT_TEMPLATE_ZH if normalized == "zh" else IMPLEMENTATION_PROMPT_TEMPLATE_EN
+        template = IMPLEMENTATION_PROMPT_TEMPLATE_BY_LANGUAGE.get(normalized, IMPLEMENTATION_PROMPT_TEMPLATE_EN)
         return template.format(
             session_id=session_id,
             session_title=session_title or "Untitled Session",

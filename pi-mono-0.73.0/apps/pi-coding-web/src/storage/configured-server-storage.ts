@@ -6,6 +6,10 @@ export interface ConfiguredStorageStatus {
 	sessionsDir: string;
 	settingsFile: string;
 	projectsRootDir: string;
+	previewBaseUrl?: string;
+	serverSessionSyncEnabled?: boolean;
+	defaultModelProvider?: string;
+	defaultModelId?: string;
 }
 
 export interface ConfiguredSessionRecord {

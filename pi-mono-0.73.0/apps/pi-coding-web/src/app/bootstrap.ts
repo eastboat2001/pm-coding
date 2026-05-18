@@ -10,6 +10,7 @@ import {
 	getCurrentLanguage,
 	IndexedDBStorageBackend,
 	i18n,
+	LANGUAGE_CHANGE_EVENT,
 	LanguageTab,
 	loadAttachment,
 	ModelSelector,
@@ -37,11 +38,15 @@ import {
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../prompts/coding-system-prompt.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
-import { mergeSessionMetadata } from "../storage/merged-session-index.js";
+import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
 import { ModelController, SELECTED_MODEL_KEY } from "./model-controller.js";
 import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessionTitle } from "./session-controller.js";
+
+const piRuntimeConfig = {
+	serverSessionSyncEnabled: false,
+};
 
 document.documentElement.lang = getCurrentLanguage();
 
@@ -77,6 +82,13 @@ const storage = new AppStorage(settings, providerKeys, sessions, customProviders
 setAppStorage(storage);
 const modelController = new ModelController(storage, configuredStorage);
 
+const loadPiRuntimeConfig = async () => {
+	const status = await configuredStorage.getStatus();
+	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
+};
+
+const isServerSessionSyncEnabled = () => piRuntimeConfig.serverSessionSyncEnabled;
+
 let currentSessionId: string | undefined;
 let currentSessionCreatedAt: string | undefined;
 let currentTitle = "";
@@ -107,7 +119,9 @@ const setCurrentSessionId = async (sessionId: string | undefined) => {
 	} else {
 		await storage.settings.delete(CURRENT_SESSION_ID_KEY);
 	}
-	await configuredStorage.writeSettings({ currentSessionId: sessionId ?? null });
+	if (isServerSessionSyncEnabled()) {
+		await configuredStorage.writeSettings({ currentSessionId: sessionId ?? null });
+	}
 	updateUrl(sessionId);
 };
 
@@ -170,49 +184,30 @@ const saveSession = async () => {
 		};
 
 		await storage.sessions.save(sessionData, metadata);
-		await configuredStorage.writeSession(sessionData, metadata);
+		if (isServerSessionSyncEnabled()) {
+			await configuredStorage.writeSession(sessionData, metadata);
+		}
 	} catch (err) {
 		console.error("Failed to save session:", err);
 	}
 };
 
-const loadConfiguredSession = async (sessionId: string): Promise<boolean> => {
-	const configuredRecord = await configuredStorage.readSession(sessionId);
-	if (!configuredRecord) {
-		return false;
-	}
-	await storage.sessions.save(configuredRecord.data, configuredRecord.metadata);
-	await loadSession(sessionId);
-	return true;
-};
-
-const loadMergedSession = async (sessionId: string): Promise<boolean> => {
-	const browserSession = await storage.sessions.get(sessionId);
-	const configuredSession = await configuredStorage.readSession(sessionId);
-	if (browserSession && configuredSession) {
-		if (configuredSession.data.lastModified > browserSession.lastModified) {
-			await storage.sessions.save(configuredSession.data, configuredSession.metadata);
-		}
-		return await loadSession(sessionId);
-	}
-	if (browserSession) {
-		return await loadSession(sessionId);
-	}
-	if (configuredSession) {
-		return await loadConfiguredSession(sessionId);
-	}
-	return false;
-};
-
-const getMergedSessions = async () => {
+const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
 	const browserSessions = await storage.sessions.getAllMetadata();
-	const configuredSessions = await configuredStorage.listSessionMetadata();
-	return mergeSessionMetadata(browserSessions, configuredSessions);
+	return browserSessions
+		.map((session) => ({
+			...session,
+			browser: session,
+			preferredSource: "browser" as const,
+		}))
+		.sort((a, b) => b.lastModified.localeCompare(a.lastModified));
 };
 
-const deleteMergedSession = async (sessionId: string) => {
+const deleteBrowserSession = async (sessionId: string) => {
 	await storage.sessions.deleteSession(sessionId);
-	await configuredStorage.deleteSession(sessionId);
+	if (isServerSessionSyncEnabled()) {
+		await configuredStorage.deleteSession(sessionId);
+	}
 };
 
 const handleAgentEvent = async (event: AgentEvent) => {
@@ -336,7 +331,25 @@ const startFreshSession = async (persistImmediately = false) => {
 	renderApp();
 };
 
+const normalizeHandoffLanguage = (language?: string) => {
+	const normalized = String(language || "")
+		.trim()
+		.toLowerCase()
+		.replace("_", "-");
+	if (normalized === "zh" || normalized.startsWith("zh-")) return "zh";
+	if (normalized === "de" || normalized.startsWith("de-")) return "de";
+	if (normalized === "ms" || normalized.startsWith("ms-")) return "ms";
+	return "en";
+};
+
+const applyHandoffLanguage = (language?: string) => {
+	const handoffLanguage = normalizeHandoffLanguage(language);
+	window.localStorage.setItem("language", handoffLanguage);
+	document.documentElement.lang = handoffLanguage;
+};
+
 const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
+	applyHandoffLanguage(payload.language);
 	const attachments = await Promise.all(
 		(payload.documents || []).map((document) =>
 			loadAttachment(buildPmApiUrl(document.download_url), document.filename),
@@ -367,13 +380,13 @@ const restoreInitialSession = async () => {
 
 	const sessionIdFromUrl = urlParams.get("session");
 	if (sessionIdFromUrl) {
-		const loaded = await loadMergedSession(sessionIdFromUrl);
+		const loaded = await loadSession(sessionIdFromUrl);
 		if (loaded) return;
 	}
 
 	const storedCurrentSessionId = await storage.settings.get<string>(CURRENT_SESSION_ID_KEY);
 	if (storedCurrentSessionId) {
-		const loaded = await loadMergedSession(storedCurrentSessionId);
+		const loaded = await loadSession(storedCurrentSessionId);
 		if (loaded) return;
 		await setCurrentSessionId(undefined);
 	}
@@ -382,20 +395,10 @@ const restoreInitialSession = async () => {
 	if (configuredSettings?.selectedModel) {
 		await storage.settings.set(SELECTED_MODEL_KEY, configuredSettings.selectedModel);
 	}
-	if (configuredSettings?.currentSessionId) {
-		const loaded = await loadMergedSession(configuredSettings.currentSessionId);
-		if (loaded) return;
-	}
 
 	const latestSessionId = await storage.sessions.getLatestSessionId();
 	if (latestSessionId) {
-		const loaded = await loadMergedSession(latestSessionId);
-		if (loaded) return;
-	}
-
-	const mergedSessions = await getMergedSessions();
-	if (mergedSessions.length > 0) {
-		const loaded = await loadMergedSession(mergedSessions[0].id);
+		const loaded = await loadSession(latestSessionId);
 		if (loaded) return;
 	}
 
@@ -425,18 +428,18 @@ const renderApp = () => {
 						children: icon(History, "sm"),
 						onClick: () => {
 							LocalSessionListDialog.open(
-								getMergedSessions,
+								getBrowserSessions,
 								async (sessionId) => {
-									await loadMergedSession(sessionId);
+									await loadSession(sessionId);
 								},
 								(deletedSessionId) => {
 									void (async () => {
-										await deleteMergedSession(deletedSessionId);
+										await deleteBrowserSession(deletedSessionId);
 										if (deletedSessionId === currentSessionId) {
 											await setCurrentSessionId(undefined);
-											const mergedSessions = await getMergedSessions();
-											if (mergedSessions.length > 0) {
-												const loaded = await loadMergedSession(mergedSessions[0].id);
+											const browserSessions = await getBrowserSessions();
+											if (browserSessions.length > 0) {
+												const loaded = await loadSession(browserSessions[0].id);
 												if (loaded) return;
 											}
 											await startFreshSession(true);
@@ -536,6 +539,16 @@ const renderApp = () => {
 	render(appHtml, app);
 };
 
+window.addEventListener(LANGUAGE_CHANGE_EVENT, () => {
+	document.documentElement.lang = getCurrentLanguage();
+	chatPanel?.requestUpdate();
+	chatPanel?.agentInterface?.requestUpdate();
+	(
+		chatPanel?.agentInterface?.querySelector("message-editor") as { requestUpdate?: () => void } | null
+	)?.requestUpdate?.();
+	renderApp();
+});
+
 export async function initApp() {
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App container not found");
@@ -550,6 +563,7 @@ export async function initApp() {
 	);
 
 	chatPanel = new ChatPanel();
+	await loadPiRuntimeConfig();
 	await restoreInitialSession();
 	renderApp();
 }

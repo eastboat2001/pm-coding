@@ -53,7 +53,7 @@ export class LocalSessionListDialog extends DialogBase {
 			${DialogContent({
 				className: "h-full flex flex-col",
 				children: html`
-					${DialogHeader({ title: i18n("Sessions"), description: i18n("Load a browser or configured local conversation") })}
+					${DialogHeader({ title: i18n("Sessions"), description: i18n("Load a browser conversation") })}
 					<div class="flex-1 overflow-y-auto mt-4 space-y-2">
 						${
 							this.loading

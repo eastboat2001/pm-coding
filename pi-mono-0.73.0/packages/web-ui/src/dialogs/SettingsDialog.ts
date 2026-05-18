@@ -8,7 +8,7 @@ import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import "../components/ProviderKeyInput.js";
 import { getAppStorage } from "../storage/app-storage.js";
-import { getCurrentLanguage, i18n, setLanguage } from "../utils/i18n.js";
+import { getCurrentLanguage, i18n, LANGUAGE_CHANGE_EVENT, setLanguage } from "../utils/i18n.js";
 
 // Base class for settings tabs
 export abstract class SettingsTab extends LitElement {
@@ -50,7 +50,10 @@ export class LanguageTab extends SettingsTab {
 							{ value: "ms", label: i18n("Malay") },
 						],
 						onChange: (value: string) => {
-							if (value !== currentLanguage) setLanguage(value);
+							if (value !== currentLanguage) {
+								setLanguage(value);
+								this.requestUpdate();
+							}
 						},
 						variant: "outline",
 					})}
@@ -163,6 +166,13 @@ export class SettingsDialog extends LitElement {
 	@state() private isOpen = false;
 	@state() private activeTabIndex = 0;
 
+	private handleLanguageChange = () => {
+		this.tabs.forEach((tab) => {
+			tab.requestUpdate();
+		});
+		this.requestUpdate();
+	};
+
 	protected createRenderRoot() {
 		return this;
 	}
@@ -175,6 +185,16 @@ export class SettingsDialog extends LitElement {
 		dialog.onCloseCallback = onClose;
 		dialog.isOpen = true;
 		document.body.appendChild(dialog);
+	}
+
+	override connectedCallback() {
+		super.connectedCallback();
+		window.addEventListener(LANGUAGE_CHANGE_EVENT, this.handleLanguageChange);
+	}
+
+	override disconnectedCallback() {
+		super.disconnectedCallback();
+		window.removeEventListener(LANGUAGE_CHANGE_EVENT, this.handleLanguageChange);
 	}
 
 	private setActiveTab(index: number) {

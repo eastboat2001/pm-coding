@@ -11,6 +11,9 @@ export interface StorageConfig {
 	projectBuildCommand: string;
 	projectInstallTimeoutMs: number;
 	projectBuildTimeoutMs: number;
+	serverSessionSyncEnabled: boolean;
+	defaultModelProvider: string;
+	defaultModelId: string;
 }
 
 export interface ProjectWorkspaceContext {

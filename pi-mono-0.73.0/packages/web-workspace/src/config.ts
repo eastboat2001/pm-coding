@@ -26,6 +26,9 @@ export function loadStorageConfig(rootDir: string, configFile = CONFIG_FILE): St
 		projectBuildCommand: stringValue(record.projectBuildCommand) || "npm run build",
 		projectInstallTimeoutMs: numberValue(record.projectInstallTimeoutMs) || 120000,
 		projectBuildTimeoutMs: numberValue(record.projectBuildTimeoutMs) || 120000,
+		serverSessionSyncEnabled: booleanValue(record.serverSessionSyncEnabled),
+		defaultModelProvider: stringValue(record.defaultModelProvider) || "anthropic",
+		defaultModelId: stringValue(record.defaultModelId) || "claude-sonnet-4-5-20250929",
 	};
 }
 
@@ -41,4 +44,8 @@ function stringValue(value: unknown): string {
 
 function numberValue(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function booleanValue(value: unknown): boolean {
+	return value === true;
 }

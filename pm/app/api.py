@@ -33,6 +33,30 @@ def _request_language(default: str = "zh") -> str:
     return language or default
 
 
+def _request_client_id() -> str:
+    header_value = request.headers.get("X-PM-Browser-Client-Id", "")
+    query_value = request.args.get("client_id", "")
+    return str(header_value or query_value).strip()
+
+
+@api.before_request
+def _enforce_browser_session_owner():
+    session_id = (request.view_args or {}).get("session_id")
+    if not session_id:
+        return None
+
+    client_id = _request_client_id()
+    if not client_id:
+        return jsonify({"error": "Browser client id is required."}), HTTPStatus.FORBIDDEN
+
+    session = _get_service().get_session(str(session_id))
+    if session is None:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    if session.owner_client_id != client_id:
+        return jsonify({"error": "Session not found."}), HTTPStatus.NOT_FOUND
+    return None
+
+
 def _structured_requirement_response(
     session_id: str,
     structured_requirement_model: dict[str, object],
@@ -52,8 +76,11 @@ def create_session():
     payload = request.get_json(silent=True) or {}
     template_id = str(payload.get("template_id", "")).strip() or None
     language = _request_language()
+    client_id = _request_client_id()
+    if not client_id:
+        return jsonify({"error": "Browser client id is required."}), HTTPStatus.FORBIDDEN
     try:
-        session = service.create_session(template_id=template_id, language=language)
+        session = service.create_session(template_id=template_id, language=language, owner_client_id=client_id)
     except KeyError:
         return jsonify({"error": "Business template not found."}), HTTPStatus.NOT_FOUND
     structured_requirement_snapshot = service.get_structured_requirement_snapshot(session.id, language)
@@ -80,7 +107,10 @@ def create_session():
 @api.get("/sessions")
 def list_sessions():
     service = _get_service()
-    return jsonify({"sessions": service.list_sessions()})
+    client_id = _request_client_id()
+    if not client_id:
+        return jsonify({"sessions": []})
+    return jsonify({"sessions": service.list_sessions(client_id)})
 
 
 @api.get("/templates")

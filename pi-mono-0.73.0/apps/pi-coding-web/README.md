@@ -34,7 +34,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 This image runs Vite preview instead of a static nginx server because the example depends on Vite server middleware for session storage, server-side project files, project commands, and `/preview/<project-id>/` URLs.
 
-When deploying behind a domain or reverse proxy, set `previewBaseUrl` in `pi-storage.config.json` to the public PI origin, for example `https://pi.example.com`. Generated projects and sessions should stay in the mounted `data` volume, not inside the image.
+When deploying behind a domain or reverse proxy, set `previewBaseUrl` in `pi-storage.config.json` to the public PI origin, for example `https://pi.example.com`. Generated projects and optional server-synced sessions should stay in the mounted `data` volume, not inside the image.
 
 For server deployment with an offline image, use the deployment package under `docker/pi-web-ui`. Copy `docker-compose.yaml` and `pi-storage.config.json` from that directory to the same server directory, load the image, then start the service:
 
@@ -118,9 +118,9 @@ This example demonstrates:
 - **ChatPanel** - The main chat interface component
 - **System Prompt** - Custom configuration for the AI assistant
 - **Server workspace tools** - The normal Web UI agent flow creates files, runs commands, and publishes previews in a fixed server project root
-- **Session persistence** - Active and recent sessions are restored from browser storage
+- **Browser-private session persistence** - Active and recent sessions are restored from browser IndexedDB only
 - **Model persistence** - The selected model is remembered across refreshes and new sessions
-- **Configured local storage** - Sessions and generated project files are mirrored to fixed directories from `pi-storage.config.json`
+- **Configured server storage** - Model configuration and generated project files use fixed paths from `pi-storage.config.json`
 
 ## Configuration
 
@@ -145,14 +145,21 @@ The example uses **browser IndexedDB as its primary runtime store**.
 
 By default, it persists:
 
-- conversation history
-- session titles and history metadata
-- the current or most recent session pointer
+- conversation history in the current browser only
+- session titles and history metadata in the current browser only
+- the current or most recent session pointer in the current browser only
 - the last selected model
 - provider API keys and custom providers
-- a JSON mirror of sessions under the configured sessions directory
 - settings under the configured settings file
 - generated project files under the configured projects root directory
+
+Temporary multi-user deployment behavior:
+
+- PI sessions are intentionally not written to or restored from the configured server `sessionsDir`.
+- The session list shows only sessions saved in the current browser.
+- A `session=<id>` URL only restores the session if that browser already has the session in IndexedDB.
+- This avoids exposing one user's chat history to another user on the same PI server.
+- The server-session sync code path is controlled by `serverSessionSyncEnabled` in `pi-storage.config.json` for a future authenticated deployment where sessions can be scoped by user.
 
 Behavioral details:
 
@@ -170,16 +177,15 @@ Behavioral details:
 4. **New session behavior**
    - Creating a new session resets the active conversation in memory without relying on a full page reload.
 
-## Configured Local Storage
+## Configured Server Storage
 
-The example mirrors sessions and generated project files through the Vite dev/preview server. The browser no longer asks the user to choose a local directory.
+The example uses the Vite dev/preview server for generated project files, preview hosting, and selected shared configuration. The browser no longer asks the user to choose a local directory.
 
 ### How it works
 
-- Browser IndexedDB remains the active runtime store.
-- Every saved session is also written to a JSON file on disk.
-- The session list merges browser-backed and configured local records.
-- If a configured local session exists without a browser copy, it is imported back into browser storage when opened.
+- Browser IndexedDB is the only active session store in the current temporary multi-user mode.
+- Saved chat sessions are not mirrored to disk while `serverSessionSyncEnabled` is `false`.
+- The session list only reads browser-backed records.
 - The Web UI agent can call server workspace tools: `project_file`, `project_bash`, and `project_preview`.
 - Project files are written directly under the configured project root on the server.
 - Built-in browser artifacts are disabled for project generation in this example.
@@ -194,6 +200,9 @@ Edit `pi-storage.config.json`:
   "settingsFile": "./data/settings.json",
   "projectsRootDir": "./data/projects",
   "previewBaseUrl": "",
+  "serverSessionSyncEnabled": false,
+  "defaultModelProvider": "anthropic",
+  "defaultModelId": "claude-sonnet-4-5-20250929",
   "projectInstallCommand": "npm install",
   "projectBuildCommand": "npm run build",
   "projectInstallTimeoutMs": 120000,
@@ -205,9 +214,10 @@ Relative paths are resolved from `apps/pi-coding-web/`. Absolute paths are also 
 
 The example writes:
 
-- `<sessionsDir>/<session-id>.json`
 - `<settingsFile>`
 - one project root directory per generated project under `projectsRootDir`
+
+`sessionsDir` is reserved for the future authenticated server-session mode. It is not used while browser-private sessions are enabled.
 
 With the default configuration, runtime data stays inside `apps/pi-coding-web/data/` and remains decoupled from any PM application directory.
 

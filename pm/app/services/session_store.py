@@ -34,6 +34,7 @@ class SQLiteSessionStore:
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
+                    owner_client_id TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL DEFAULT '',
                     prompt_template TEXT NOT NULL DEFAULT 'personal_project',
                     applied_template_id TEXT NOT NULL DEFAULT '',
@@ -111,6 +112,13 @@ class SQLiteSessionStore:
                 ADD COLUMN prompt_template TEXT NOT NULL DEFAULT 'personal_project'
                 """
             )
+        if "owner_client_id" not in existing_columns:
+            conn.execute(
+                """
+                ALTER TABLE sessions
+                ADD COLUMN owner_client_id TEXT NOT NULL DEFAULT ''
+                """
+            )
         if "structured_requirement_cache" not in existing_columns:
             conn.execute(
                 """
@@ -168,12 +176,14 @@ class SQLiteSessionStore:
         prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
         applied_template_id: str = DEFAULT_APPLIED_TEMPLATE_ID,
         applied_template_name: str = DEFAULT_APPLIED_TEMPLATE_NAME,
+        owner_client_id: str = "",
     ) -> dict[str, Any]:
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO sessions (
                     id,
+                    owner_client_id,
                     title,
                     prompt_template,
                     applied_template_id,
@@ -182,10 +192,11 @@ class SQLiteSessionStore:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
+                    owner_client_id,
                     self.format_session_title(title),
                     prompt_template,
                     applied_template_id,
@@ -201,12 +212,16 @@ class SQLiteSessionStore:
             raise RuntimeError("Failed to create session.")
         return created
 
-    def list_sessions(self) -> list[dict[str, Any]]:
+    def list_sessions(self, owner_client_id: str | None = None) -> list[dict[str, Any]]:
+        owner_filter = str(owner_client_id or "").strip()
+        where_clause = "WHERE s.owner_client_id = ?" if owner_filter else ""
+        params: tuple[str, ...] = (owner_filter,) if owner_filter else ()
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     s.id AS session_id,
+                    s.owner_client_id,
                     s.title,
                     s.prompt_template,
                     s.applied_template_id,
@@ -214,6 +229,18 @@ class SQLiteSessionStore:
                     s.created_at,
                     s.updated_at,
                     COUNT(m.id) AS message_count,
+                    COALESCE(
+                        (
+                            SELECT content
+                            FROM messages first_user
+                            WHERE first_user.session_id = s.id
+                              AND first_user.role = 'user'
+                              AND first_user.kind = 'chat'
+                            ORDER BY first_user.id ASC
+                            LIMIT 1
+                        ),
+                        ''
+                    ) AS first_user_message,
                     COALESCE(
                         (
                             SELECT content
@@ -236,8 +263,10 @@ class SQLiteSessionStore:
                     ) AS last_message_preview
                 FROM sessions s
                 LEFT JOIN messages m ON m.session_id = s.id
+                {where_clause}
                 GROUP BY
                     s.id,
+                    s.owner_client_id,
                     s.title,
                     s.prompt_template,
                     s.applied_template_id,
@@ -245,11 +274,19 @@ class SQLiteSessionStore:
                     s.created_at,
                     s.updated_at
                 ORDER BY s.updated_at DESC, s.created_at DESC
-                """
+                """,
+                params,
             ).fetchall()
 
         sessions: list[dict[str, Any]] = []
         for row in rows:
+            title = self.format_session_title(row["title"] or "")
+            first_user_message = " ".join((row["first_user_message"] or "").split())
+            if title.endswith("...") and first_user_message:
+                title_prefix = title[:-3].rstrip()
+                if title_prefix and first_user_message.startswith(title_prefix):
+                    title = self.format_session_title(first_user_message)
+
             preview = " ".join((row["last_message_preview"] or "").split())
             if len(preview) > 88:
                 preview = f"{preview[:85].rstrip()}..."
@@ -257,7 +294,8 @@ class SQLiteSessionStore:
             sessions.append(
                 {
                     "session_id": row["session_id"],
-                    "title": self.format_session_title(row["title"] or ""),
+                    "owner_client_id": row["owner_client_id"] or "",
+                    "title": title,
                     "prompt_template": row["prompt_template"] or self.DEFAULT_PROMPT_TEMPLATE,
                     "applied_template_id": row["applied_template_id"] or self.DEFAULT_APPLIED_TEMPLATE_ID,
                     "applied_template_name": row["applied_template_name"] or self.DEFAULT_APPLIED_TEMPLATE_NAME,
@@ -275,6 +313,7 @@ class SQLiteSessionStore:
                 """
                 SELECT
                     id,
+                    owner_client_id,
                     title,
                     prompt_template,
                     applied_template_id,
@@ -319,6 +358,7 @@ class SQLiteSessionStore:
 
         return {
             "session_id": session_row["id"],
+            "owner_client_id": session_row["owner_client_id"] or "",
             "title": self.format_session_title(session_row["title"] or ""),
             "prompt_template": session_row["prompt_template"] or self.DEFAULT_PROMPT_TEMPLATE,
             "applied_template_id": session_row["applied_template_id"] or self.DEFAULT_APPLIED_TEMPLATE_ID,

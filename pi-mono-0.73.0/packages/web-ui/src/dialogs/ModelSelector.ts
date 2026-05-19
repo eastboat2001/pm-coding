@@ -59,6 +59,7 @@ export class ModelSelector extends DialogBase {
 
 	private onSelectCallback?: (model: Model<any>) => void;
 	private allowedProviders?: Set<string>;
+	private includeKnownProviders = true;
 	private scrollContainerRef = createRef<HTMLDivElement>();
 	private searchInputRef = createRef<HTMLInputElement>();
 	private lastMousePosition = { x: 0, y: 0 };
@@ -69,10 +70,12 @@ export class ModelSelector extends DialogBase {
 		currentModel: Model<any> | null,
 		onSelect: (model: Model<any>) => void,
 		allowedProviders?: string[],
+		includeKnownProviders = true,
 	) {
 		const selector = new ModelSelector();
 		selector.currentModel = currentModel;
 		selector.onSelectCallback = onSelect;
+		selector.includeKnownProviders = includeKnownProviders;
 		if (allowedProviders) {
 			selector.allowedProviders = new Set(allowedProviders);
 		}
@@ -199,14 +202,15 @@ export class ModelSelector extends DialogBase {
 	}
 
 	private getFilteredModels(): Array<{ provider: string; id: string; model: any }> {
-		// Collect all models from known providers
 		const allModels: Array<{ provider: string; id: string; model: any }> = [];
-		const knownProviders = getProviders();
 
-		for (const provider of knownProviders) {
-			const models = getModels(provider as any);
-			for (const model of models) {
-				allModels.push({ provider, id: model.id, model });
+		if (this.includeKnownProviders) {
+			const knownProviders = getProviders();
+			for (const provider of knownProviders) {
+				const models = getModels(provider as any);
+				for (const model of models) {
+					allModels.push({ provider, id: model.id, model });
+				}
 			}
 		}
 
@@ -329,6 +333,15 @@ export class ModelSelector extends DialogBase {
 
 			<!-- Scrollable model list -->
 			<div class="flex-1 overflow-y-auto" ${ref(this.scrollContainerRef)}>
+				${
+					filteredModels.length === 0 && !this.customProvidersLoading
+						? html`
+							<div class="px-6 py-10 text-sm text-muted-foreground text-center">
+								${i18n("No custom models configured. Add a custom provider in Settings first.")}
+							</div>
+						`
+						: ""
+				}
 				${filteredModels.map(({ provider, id, model }, index) => {
 					const isCurrent = modelsAreEqual(this.currentModel, model);
 					const isSelected = index === this.selectedIndex;

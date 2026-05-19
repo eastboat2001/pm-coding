@@ -1,4 +1,4 @@
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@mariozechner/pi-ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/index.js";
 
@@ -36,6 +36,21 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
+function createTestModel(reasoning: boolean): Model<"openai-responses"> {
+	return {
+		id: reasoning ? "reasoning-model" : "non-reasoning-model",
+		name: reasoning ? "Reasoning Model" : "Non Reasoning Model",
+		api: "openai-responses",
+		provider: "test-provider",
+		baseUrl: "https://example.invalid",
+		reasoning,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 8192,
+		maxTokens: 2048,
+	};
+}
+
 function createDeferred(): {
 	promise: Promise<void>;
 	resolve: () => void;
@@ -64,7 +79,7 @@ describe("Agent", () => {
 	});
 
 	it("should create an agent instance with custom initial state", () => {
-		const customModel = getModel("openai", "gpt-4o-mini");
+		const customModel = createTestModel(false);
 		const agent = new Agent({
 			initialState: {
 				systemPrompt: "You are a helpful assistant.",
@@ -76,6 +91,50 @@ describe("Agent", () => {
 		expect(agent.state.systemPrompt).toBe("You are a helpful assistant.");
 		expect(agent.state.model).toBe(customModel);
 		expect(agent.state.thinkingLevel).toBe("low");
+	});
+
+	it("should not pass reasoning when the selected model does not support reasoning", async () => {
+		let capturedReasoning: unknown = "unset";
+		const agent = new Agent({
+			initialState: {
+				model: createTestModel(false),
+				thinkingLevel: "high",
+			},
+			streamFn: (_model, _context, options) => {
+				capturedReasoning = options?.reasoning;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("hello");
+
+		expect(capturedReasoning).toBeUndefined();
+	});
+
+	it("should pass reasoning when the selected model supports reasoning", async () => {
+		let capturedReasoning: unknown = "unset";
+		const agent = new Agent({
+			initialState: {
+				model: createTestModel(true),
+				thinkingLevel: "high",
+			},
+			streamFn: (_model, _context, options) => {
+				capturedReasoning = options?.reasoning;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("hello");
+
+		expect(capturedReasoning).toBe("high");
 	});
 
 	it("should subscribe to events", () => {

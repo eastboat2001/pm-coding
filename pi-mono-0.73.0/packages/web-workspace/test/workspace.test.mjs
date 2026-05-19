@@ -24,8 +24,8 @@ function testConfig(root, overrides = {}) {
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
 		serverSessionSyncEnabled: false,
-		defaultModelProvider: "anthropic",
-		defaultModelId: "claude-sonnet-4-5-20250929",
+		defaultModelProvider: "",
+		defaultModelId: "",
 		...overrides,
 	};
 }
@@ -72,8 +72,8 @@ await test("loadStorageConfig supports legacy storageDir defaults", () => {
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "data/projects"));
 	assert.equal(config.serverSessionSyncEnabled, false);
-	assert.equal(config.defaultModelProvider, "anthropic");
-	assert.equal(config.defaultModelId, "claude-sonnet-4-5-20250929");
+	assert.equal(config.defaultModelProvider, "");
+	assert.equal(config.defaultModelId, "");
 });
 
 await test("WorkspaceSessionService merges and deletes server-backed provider keys in settings", () => {

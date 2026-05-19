@@ -20,10 +20,12 @@ declare module "@mariozechner/mini-lit" {
 		Cancel: string;
 		Confirm: string;
 		"Select Model": string;
+		"Please select a model first.": string;
 		"Search models...": string;
 		Format: string;
 		Thinking: string;
 		Vision: string;
+		Reasoning: string;
 		You: string;
 		Assistant: string;
 		"Thinking...": string;
@@ -39,6 +41,7 @@ declare module "@mariozechner/mini-lit" {
 		Test: string;
 		Remove: string;
 		Save: string;
+		"Saving...": string;
 		"Update API key": string;
 		"Enter API key": string;
 		"Type a message...": string;
@@ -191,6 +194,7 @@ declare module "@mariozechner/mini-lit" {
 		"User-configured servers with auto-discovered or manually defined models.": string;
 		"Add Provider": string;
 		"No custom providers configured. Click 'Add Provider' to get started.": string;
+		"No custom models configured. Add a custom provider in Settings first.": string;
 		Models: string;
 		"auto-discovered": string;
 		Refresh: string;
@@ -210,7 +214,21 @@ declare module "@mariozechner/mini-lit" {
 		and: string;
 		more: string;
 		"For manual provider types, add models after saving the provider.": string;
+		"Enter one or more model IDs. Separate multiple models with new lines or commas.": string;
+		"Enter one model ID per row. Use the exact ID reported by your model service.": string;
+		"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.": string;
+		"Model IDs": string;
+		"Add Model": string;
+		"Remove model": string;
+		"e.g., gpt-oss-120b": string;
+		"Context window": string;
+		"Max output tokens": string;
+		"Max tokens field": string;
+		"Thinking protocol": string;
+		"Send reasoning effort": string;
+		"Replay reasoning_content": string;
 		"Please fill in all required fields": string;
+		"Please add at least one model ID": string;
 		"Failed to save provider": string;
 		"OpenAI Completions Compatible": string;
 		"OpenAI Responses Compatible": string;
@@ -262,10 +280,12 @@ export const translations = {
 		Cancel: "Cancel",
 		Confirm: "Confirm",
 		"Select Model": "Select Model",
+		"Please select a model first.": "Please select a model first.",
 		"Search models...": "Search models...",
 		Format: "Format",
 		Thinking: "Thinking",
 		Vision: "Vision",
+		Reasoning: "Reasoning",
 		You: "You",
 		Assistant: "Assistant",
 		"Thinking...": "Thinking...",
@@ -282,6 +302,7 @@ export const translations = {
 		Test: "Test",
 		Remove: "Remove",
 		Save: "Save",
+		"Saving...": "Saving...",
 		"Update API key": "Update API key",
 		"Enter API key": "Enter API key",
 		"Type a message...": "Type a message...",
@@ -446,6 +467,8 @@ export const translations = {
 		"Add Provider": "Add Provider",
 		"No custom providers configured. Click 'Add Provider' to get started.":
 			"No custom providers configured. Click 'Add Provider' to get started.",
+		"No custom models configured. Add a custom provider in Settings first.":
+			"No custom models configured. Add a custom provider in Settings first.",
 		"auto-discovered": "auto-discovered",
 		Refresh: "Refresh",
 		Edit: "Edit",
@@ -466,7 +489,24 @@ export const translations = {
 		more: "more",
 		"For manual provider types, add models after saving the provider.":
 			"For manual provider types, add models after saving the provider.",
+		"Enter one or more model IDs. Separate multiple models with new lines or commas.":
+			"Enter one or more model IDs. Separate multiple models with new lines or commas.",
+		"Enter one model ID per row. Use the exact ID reported by your model service.":
+			"Enter one model ID per row. Use the exact ID reported by your model service.",
+		"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.":
+			"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.",
+		"Model IDs": "Model IDs",
+		"Add Model": "Add Model",
+		"Remove model": "Remove model",
+		"e.g., gpt-oss-120b": "e.g., gpt-oss-120b",
+		"Context window": "Context window",
+		"Max output tokens": "Max output tokens",
+		"Max tokens field": "Max tokens field",
+		"Thinking protocol": "Thinking protocol",
+		"Send reasoning effort": "Send reasoning effort",
+		"Replay reasoning_content": "Replay reasoning_content",
 		"Please fill in all required fields": "Please fill in all required fields",
+		"Please add at least one model ID": "Please add at least one model ID",
 		"Failed to save provider": "Failed to save provider",
 		"OpenAI Completions Compatible": "OpenAI Completions Compatible",
 		"OpenAI Responses Compatible": "OpenAI Responses Compatible",
@@ -515,10 +555,12 @@ export const translations = {
 		Cancel: "Abbrechen",
 		Confirm: "Bestätigen",
 		"Select Model": "Modell auswählen",
+		"Please select a model first.": "Bitte wählen Sie zuerst ein Modell aus.",
 		"Search models...": "Modelle suchen...",
 		Format: "Formatieren",
 		Thinking: "Thinking",
 		Vision: "Vision",
+		Reasoning: "Reasoning",
 		You: "Sie",
 		Assistant: "Assistent",
 		"Thinking...": "Denkt nach...",
@@ -535,6 +577,7 @@ export const translations = {
 		Test: "Testen",
 		Remove: "Entfernen",
 		Save: "Speichern",
+		"Saving...": "Speichert...",
 		"Update API key": "API-Schlüssel aktualisieren",
 		"Enter API key": "API-Schlüssel eingeben",
 		"Type a message...": "Nachricht eingeben...",
@@ -699,6 +742,8 @@ export const translations = {
 		"Add Provider": "Anbieter hinzufügen",
 		"No custom providers configured. Click 'Add Provider' to get started.":
 			"Keine benutzerdefinierten Anbieter konfiguriert. Klicken Sie auf 'Anbieter hinzufügen', um zu beginnen.",
+		"No custom models configured. Add a custom provider in Settings first.":
+			"Keine benutzerdefinierten Modelle konfiguriert. Fügen Sie zuerst in den Einstellungen einen Anbieter hinzu.",
 		"auto-discovered": "automatisch erkannt",
 		Refresh: "Aktualisieren",
 		Edit: "Bearbeiten",
@@ -719,7 +764,24 @@ export const translations = {
 		more: "mehr",
 		"For manual provider types, add models after saving the provider.":
 			"Für manuelle Anbietertypen fügen Sie Modelle nach dem Speichern des Anbieters hinzu.",
+		"Enter one or more model IDs. Separate multiple models with new lines or commas.":
+			"Geben Sie eine oder mehrere Modell-IDs ein. Trennen Sie mehrere Modelle mit Zeilenumbrüchen oder Kommas.",
+		"Enter one model ID per row. Use the exact ID reported by your model service.":
+			"Geben Sie eine Modell-ID pro Zeile ein. Verwenden Sie die exakte ID Ihres Modelldienstes.",
+		"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.":
+			"Konfigurieren Sie jedes Modell separat. Verwenden Sie die exakte ID Ihres Modelldienstes und aktivieren Sie nur unterstützte Fähigkeiten.",
+		"Model IDs": "Modell-IDs",
+		"Add Model": "Modell hinzufügen",
+		"Remove model": "Modell entfernen",
+		"e.g., gpt-oss-120b": "z.B. gpt-oss-120b",
+		"Context window": "Kontextfenster",
+		"Max output tokens": "Max. Ausgabetokens",
+		"Max tokens field": "Max-Tokens-Feld",
+		"Thinking protocol": "Thinking-Protokoll",
+		"Send reasoning effort": "Reasoning effort senden",
+		"Replay reasoning_content": "reasoning_content wiedergeben",
 		"Please fill in all required fields": "Bitte füllen Sie alle erforderlichen Felder aus",
+		"Please add at least one model ID": "Bitte fügen Sie mindestens eine Modell-ID hinzu",
 		"Failed to save provider": "Fehler beim Speichern des Anbieters",
 		"OpenAI Completions Compatible": "OpenAI Completions Kompatibel",
 		"OpenAI Responses Compatible": "OpenAI Responses Kompatibel",
@@ -787,10 +849,12 @@ mutableTranslations.zh = {
 	Cancel: "取消",
 	Confirm: "确认",
 	"Select Model": "选择模型",
+	"Please select a model first.": "请先选择模型。",
 	"Search models...": "搜索模型...",
 	Format: "格式",
 	Thinking: "思考",
 	Vision: "视觉",
+	Reasoning: "思考",
 	You: "你",
 	Assistant: "助手",
 	"Thinking...": "思考中...",
@@ -807,6 +871,7 @@ mutableTranslations.zh = {
 	Test: "测试",
 	Remove: "移除",
 	Save: "保存",
+	"Saving...": "保存中...",
 	"Update API key": "更新 API Key",
 	"Enter API key": "输入 API Key",
 	"Type a message...": "输入消息...",
@@ -961,6 +1026,8 @@ mutableTranslations.zh = {
 		"用户配置的服务，可自动发现或手动定义模型。",
 	"Add Provider": "添加服务商",
 	"No custom providers configured. Click 'Add Provider' to get started.": "暂无自定义服务商。点击“添加服务商”开始。",
+	"No custom models configured. Add a custom provider in Settings first.":
+		"暂无自定义模型。请先在设置中添加自定义服务商。",
 	Models: "模型",
 	"auto-discovered": "自动发现",
 	Refresh: "刷新",
@@ -980,7 +1047,24 @@ mutableTranslations.zh = {
 	and: "和",
 	more: "更多",
 	"For manual provider types, add models after saving the provider.": "手动服务商类型需要保存后再添加模型。",
+	"Enter one or more model IDs. Separate multiple models with new lines or commas.":
+		"输入一个或多个模型 ID，多个模型可用换行或逗号分隔。",
+	"Enter one model ID per row. Use the exact ID reported by your model service.":
+		"每行输入一个模型 ID。请使用模型服务返回的准确 ID。",
+	"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.":
+		"分别配置每个模型。请使用模型服务返回的准确 ID，并且只开启该模型支持的能力。",
+	"Model IDs": "模型 ID",
+	"Add Model": "添加模型",
+	"Remove model": "移除模型",
+	"e.g., gpt-oss-120b": "例如：gpt-oss-120b",
+	"Context window": "上下文窗口",
+	"Max output tokens": "最大输出 tokens",
+	"Max tokens field": "最大 tokens 字段",
+	"Thinking protocol": "思考协议",
+	"Send reasoning effort": "发送思考等级",
+	"Replay reasoning_content": "回放 reasoning_content",
 	"Please fill in all required fields": "请填写所有必填字段",
+	"Please add at least one model ID": "请至少添加一个模型 ID",
 	"Failed to save provider": "保存服务商失败",
 	"OpenAI Completions Compatible": "兼容 OpenAI Completions",
 	"OpenAI Responses Compatible": "兼容 OpenAI Responses",
@@ -1041,10 +1125,12 @@ mutableTranslations.ms = {
 	Cancel: "Batal",
 	Confirm: "Sahkan",
 	"Select Model": "Pilih model",
+	"Please select a model first.": "Sila pilih model dahulu.",
 	"Search models...": "Cari model...",
 	Format: "Format",
 	Thinking: "Pemikiran",
 	Vision: "Visi",
+	Reasoning: "Pemikiran",
 	You: "Anda",
 	Assistant: "Pembantu",
 	"Thinking...": "Sedang berfikir...",
@@ -1061,6 +1147,7 @@ mutableTranslations.ms = {
 	Test: "Uji",
 	Remove: "Alih keluar",
 	Save: "Simpan",
+	"Saving...": "Menyimpan...",
 	"Update API key": "Kemas kini API Key",
 	"Enter API key": "Masukkan API Key",
 	"Type a message...": "Taip mesej...",
@@ -1219,6 +1306,8 @@ mutableTranslations.ms = {
 	"Add Provider": "Tambah penyedia",
 	"No custom providers configured. Click 'Add Provider' to get started.":
 		"Tiada penyedia tersuai dikonfigurasi. Klik 'Tambah penyedia' untuk bermula.",
+	"No custom models configured. Add a custom provider in Settings first.":
+		"Tiada model tersuai dikonfigurasi. Tambah penyedia tersuai dalam Tetapan dahulu.",
 	Models: "Model",
 	"auto-discovered": "auto-ditemui",
 	Refresh: "Segar semula",
@@ -1239,7 +1328,24 @@ mutableTranslations.ms = {
 	more: "lagi",
 	"For manual provider types, add models after saving the provider.":
 		"Untuk jenis penyedia manual, tambah model selepas menyimpan penyedia.",
+	"Enter one or more model IDs. Separate multiple models with new lines or commas.":
+		"Masukkan satu atau lebih ID model. Pisahkan beberapa model dengan baris baharu atau koma.",
+	"Enter one model ID per row. Use the exact ID reported by your model service.":
+		"Masukkan satu ID model bagi setiap baris. Gunakan ID tepat yang dilaporkan oleh servis model anda.",
+	"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.":
+		"Konfigurasikan setiap model secara berasingan. Gunakan ID tepat daripada servis model dan hanya aktifkan keupayaan yang disokong.",
+	"Model IDs": "ID model",
+	"Add Model": "Tambah model",
+	"Remove model": "Alih keluar model",
+	"e.g., gpt-oss-120b": "cth., gpt-oss-120b",
+	"Context window": "Tetingkap konteks",
+	"Max output tokens": "Token output maksimum",
+	"Max tokens field": "Medan token maksimum",
+	"Thinking protocol": "Protokol pemikiran",
+	"Send reasoning effort": "Hantar tahap pemikiran",
+	"Replay reasoning_content": "Main semula reasoning_content",
 	"Please fill in all required fields": "Sila isi semua medan wajib",
+	"Please add at least one model ID": "Sila tambah sekurang-kurangnya satu ID model",
 	"Failed to save provider": "Gagal menyimpan penyedia",
 	"OpenAI Completions Compatible": "Serasi OpenAI Completions",
 	"OpenAI Responses Compatible": "Serasi OpenAI Responses",

@@ -124,20 +124,19 @@ This example demonstrates:
 
 ## Configuration
 
-### API Keys
+### Model Providers
 
-The example uses the browser-stored provider key for the Web UI agent. Server workspace tools do not call an AI provider; they only write files, run commands, and prepare previews.
+PI is configured for custom providers first. The Web UI agent uses models from user-configured local or compatible providers such as Ollama, llama.cpp, vLLM, LM Studio, OpenAI Completions compatible endpoints, OpenAI Responses compatible endpoints, or Anthropic Messages compatible endpoints. Built-in cloud providers with predefined model lists are hidden in the PI settings and model selector.
 
 To use the chat:
 
 1. Click the settings icon (⚙️) in the chat interface
-2. Click "Manage API Keys"
-3. Add your API key for your preferred provider:
-   - **Anthropic**: Get a key from [console.anthropic.com](https://console.anthropic.com/)
-   - **OpenAI**: Get a key from [platform.openai.com](https://platform.openai.com/)
-   - **Google**: Get a key from [makersuite.google.com](https://makersuite.google.com/)
+2. Open "Providers & Models"
+3. Add a custom provider
+4. For auto-discovery providers, test the connection and select a discovered model
+5. For compatible manual providers, enter one or more model IDs while creating the provider
 
-API keys and custom providers are stored in the browser and mirrored to the configured PI server `settingsFile` so another browser can reuse the same model configuration. The mirrored API keys and custom provider credentials are stored as plaintext in `settings.json`; use this only for local or controlled deployments. For untrusted multi-user production, replace this with server-side credentials or a controlled proxy.
+Custom provider definitions, API keys, and the selected model are stored in the browser and mirrored to the configured PI server `settingsFile` so another browser can reuse the same model configuration. The mirrored API keys and custom provider credentials are stored as plaintext in `settings.json`; use this only for local or controlled deployments. For untrusted multi-user production, replace this with server-side credentials or a controlled proxy.
 
 ## Session Storage Behavior
 
@@ -201,8 +200,8 @@ Edit `pi-storage.config.json`:
   "projectsRootDir": "./data/projects",
   "previewBaseUrl": "",
   "serverSessionSyncEnabled": false,
-  "defaultModelProvider": "anthropic",
-  "defaultModelId": "claude-sonnet-4-5-20250929",
+  "defaultModelProvider": "",
+  "defaultModelId": "",
   "projectInstallCommand": "npm install",
   "projectBuildCommand": "npm run build",
   "projectInstallTimeoutMs": 120000,

@@ -20,6 +20,7 @@ import {
 	SessionsStore,
 	SettingsDialog,
 	SettingsStore,
+	setLanguage,
 	setAppStorage,
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
@@ -87,6 +88,13 @@ const loadPiRuntimeConfig = async () => {
 	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
 };
 
+const syncRuntimeConfigAfterRender = async () => {
+	await loadPiRuntimeConfig();
+	if (isServerSessionSyncEnabled() && currentSessionId) {
+		await configuredStorage.writeSettings({ currentSessionId });
+	}
+};
+
 const isServerSessionSyncEnabled = () => piRuntimeConfig.serverSessionSyncEnabled;
 
 let currentSessionId: string | undefined;
@@ -131,9 +139,9 @@ const ensureSessionIdentity = async () => {
 	await setCurrentSessionId(crypto.randomUUID());
 };
 
-const createInitialAgentState = (model: Model<any>): Partial<AgentState> => ({
+const createInitialAgentState = (model?: Model<any>): Partial<AgentState> => ({
 	systemPrompt: DEFAULT_SYSTEM_PROMPT,
-	model,
+	...(model ? { model } : {}),
 	thinkingLevel: "off",
 	messages: [],
 	tools: [],
@@ -228,17 +236,22 @@ const handleAgentEvent = async (event: AgentEvent) => {
 };
 
 const handleModelSelect = () => {
-	ModelSelector.open(agent.state.model ?? null, (model) => {
-		agent.state.model = model;
-		void (async () => {
-			await modelController.persistSelectedModel(model);
-			if (currentSessionId) {
-				await saveSession();
-			}
-			chatPanel.agentInterface?.requestUpdate();
-			renderApp();
-		})();
-	});
+	ModelSelector.open(
+		agent.state.model ?? null,
+		(model) => {
+			agent.state.model = model;
+			void (async () => {
+				await modelController.persistSelectedModel(model);
+				if (currentSessionId) {
+					await saveSession();
+				}
+				chatPanel.agentInterface?.requestUpdate();
+				renderApp();
+			})();
+		},
+		undefined,
+		false,
+	);
 };
 
 const resumeInterruptedSessionIfNeeded = () => {
@@ -271,7 +284,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		void handleAgentEvent(event);
 	});
 
-	await modelController.persistSelectedModel(agent.state.model!);
+	await modelController.persistSelectedModel(agent.state.model);
 
 	await chatPanel.setAgent(agent, {
 		onApiKeyRequired: async (provider: string) => {
@@ -279,7 +292,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		},
 		onBeforeSend: async () => {
 			await ensureSessionIdentity();
-			await modelController.persistSelectedModel(agent.state.model!);
+			await modelController.persistSelectedModel(agent.state.model);
 			await saveSession();
 		},
 		onModelSelect: handleModelSelect,
@@ -304,10 +317,13 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 	await setCurrentSessionId(sessionId);
 	currentSessionCreatedAt = sessionData.createdAt;
 	currentTitle = isDefaultNewSessionTitle(sessionData.title) ? "" : sessionData.title || "";
-	await modelController.persistSelectedModel(sessionData.model);
+	const sessionModel = await modelController.resolveCustomModel(sessionData.model);
+	if (sessionModel) {
+		await modelController.persistSelectedModel(sessionModel);
+	}
 
 	await createAgent({
-		model: sessionData.model,
+		...(sessionModel ? { model: sessionModel } : {}),
 		thinkingLevel: sessionData.thinkingLevel,
 		messages: sessionData.messages,
 		tools: [],
@@ -344,7 +360,7 @@ const normalizeHandoffLanguage = (language?: string) => {
 
 const applyHandoffLanguage = (language?: string) => {
 	const handoffLanguage = normalizeHandoffLanguage(language);
-	window.localStorage.setItem("language", handoffLanguage);
+	setLanguage(handoffLanguage);
 	document.documentElement.lang = handoffLanguage;
 };
 
@@ -523,7 +539,9 @@ const renderApp = () => {
 						size: "sm",
 						children: icon(Settings, "sm"),
 						onClick: () => {
-							SettingsDialog.open([new LanguageTab(), new ProvidersModelsTab(), new ProxyTab()]);
+							const providersTab = new ProvidersModelsTab();
+							providersTab.showKnownProviders = false;
+							SettingsDialog.open([new LanguageTab(), providersTab, new ProxyTab()]);
 						},
 						title: i18n("Settings"),
 					})}
@@ -563,7 +581,7 @@ export async function initApp() {
 	);
 
 	chatPanel = new ChatPanel();
-	await loadPiRuntimeConfig();
 	await restoreInitialSession();
 	renderApp();
+	void syncRuntimeConfigAfterRender();
 }

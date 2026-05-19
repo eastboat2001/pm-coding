@@ -11,6 +11,10 @@ import { i18n } from "../utils/i18n.js";
 import "./AttachmentTile.js";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 
+function isConfiguredModel(model: Model<any> | undefined): model is Model<any> {
+	return !!model && model.provider !== "unknown" && model.id !== "unknown";
+}
+
 @customElement("message-editor")
 export class MessageEditor extends LitElement {
 	private _value = "";
@@ -237,7 +241,7 @@ export class MessageEditor extends LitElement {
 
 	override render() {
 		// Check if current model supports thinking/reasoning
-		const model = this.currentModel;
+		const model = isConfiguredModel(this.currentModel) ? this.currentModel : undefined;
 		const supportsThinking = model?.reasoning === true; // Models with reasoning:true support thinking
 
 		return html`
@@ -353,7 +357,7 @@ export class MessageEditor extends LitElement {
 					<!-- Model selector and send on the right -->
 					<div class="flex gap-2 items-center">
 						${
-							this.showModelSelector && this.currentModel
+							this.showModelSelector
 								? html`
 									${Button({
 										variant: "ghost",
@@ -368,7 +372,7 @@ export class MessageEditor extends LitElement {
 										},
 										children: html`
 											${icon(Sparkles, "sm")}
-											<span class="ml-1">${this.currentModel.id}</span>
+											<span class="ml-1">${model?.id || i18n("Select Model")}</span>
 										`,
 										className: "h-8 text-xs truncate",
 									})}

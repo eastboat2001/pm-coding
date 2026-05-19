@@ -219,6 +219,11 @@ export class AgentInterface extends LitElement {
 		const session = this.session;
 		if (!session) throw new Error("No session set on AgentInterface");
 		if (!session.state.model) throw new Error("No model set on AgentInterface");
+		if (session.state.model.provider === "unknown" || session.state.model.id === "unknown") {
+			alert(i18n("Please select a model first."));
+			this.onModelSelect?.();
+			return;
+		}
 
 		// Check if API key exists for the provider (only needed in direct mode)
 		const provider = session.state.model.provider;

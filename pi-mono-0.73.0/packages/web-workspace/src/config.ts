@@ -27,8 +27,8 @@ export function loadStorageConfig(rootDir: string, configFile = CONFIG_FILE): St
 		projectInstallTimeoutMs: numberValue(record.projectInstallTimeoutMs) || 120000,
 		projectBuildTimeoutMs: numberValue(record.projectBuildTimeoutMs) || 120000,
 		serverSessionSyncEnabled: booleanValue(record.serverSessionSyncEnabled),
-		defaultModelProvider: stringValue(record.defaultModelProvider) || "anthropic",
-		defaultModelId: stringValue(record.defaultModelId) || "claude-sonnet-4-5-20250929",
+		defaultModelProvider: stringValue(record.defaultModelProvider),
+		defaultModelId: stringValue(record.defaultModelId),
 	};
 }
 

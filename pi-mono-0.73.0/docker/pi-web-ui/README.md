@@ -46,8 +46,8 @@ Before starting, edit `pi-storage.config.json`:
 {
   "previewBaseUrl": "http://SERVER_IP:5173",
   "serverSessionSyncEnabled": false,
-  "defaultModelProvider": "anthropic",
-  "defaultModelId": "claude-sonnet-4-5-20250929"
+  "defaultModelProvider": "",
+  "defaultModelId": ""
 }
 ```
 

@@ -30,6 +30,11 @@ export class WorkspaceCommandService {
 export function runCommand(command: string, cwd: string, timeoutMs: number, logs: string[]): Promise<void> {
 	const trimmedCommand = command.trim();
 	if (!trimmedCommand) return Promise.resolve();
+	if (isUnsafeProjectCommand(trimmedCommand)) {
+		throw new Error(
+			"Refusing to run a command that can stop the PI server. Use project_preview to manage preview services instead.",
+		);
+	}
 	logs.push(`$ ${trimmedCommand}`);
 	return new Promise((resolveCommand, rejectCommand) => {
 		const child = spawn(trimmedCommand, {
@@ -59,6 +64,21 @@ export function runCommand(command: string, cwd: string, timeoutMs: number, logs
 		});
 	});
 }
+
+export function isUnsafeProjectCommand(command: string): boolean {
+	const normalized = command.toLowerCase().replace(/\s+/g, " ");
+	return UNSAFE_PROJECT_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+const UNSAFE_PROJECT_COMMAND_PATTERNS = [
+	/\btaskkill\b(?=.*\/im\s+node(?:\.exe)?\b)/,
+	/\bstop-process\b(?=.*(?:-name|-processname)?\s*node(?:\.exe)?\b)/,
+	/\bget-process\s+node(?:\.exe)?\b.*\bstop-process\b/,
+	/\bpkill\b(?=.*\bnode\b)/,
+	/\bkillall\b(?=.*\bnode\b)/,
+	/\btskill\s+node(?:\.exe)?\b/,
+	/\bwmic\b(?=.*\bprocess\b)(?=.*node(?:\.exe)?)(?=.*\bdelete\b)/,
+];
 
 function formatCommandFailure(error: unknown, logs: string[]): string {
 	const message = error instanceof Error ? error.message : String(error);

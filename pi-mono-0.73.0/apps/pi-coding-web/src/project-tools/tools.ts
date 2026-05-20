@@ -49,7 +49,7 @@ function createProjectBashTool(
 		label: "Project Bash",
 		name: "project_bash",
 		description:
-			"Run a short non-interactive shell command in the configured server project root. Use it to inspect, test, install, or build. Never start a long-running dev server. Failed commands return their output and server environment so the next command can be adjusted.",
+			"Run a short non-interactive shell command in the configured server project root. Use it to inspect, test, install, or build. Never start a long-running dev server or kill global Node processes. Failed commands return their output and server environment so the next command can be adjusted.",
 		parameters: projectBashSchema,
 		executionMode: "sequential",
 		execute: async (_toolCallId, args, signal) => {
@@ -76,7 +76,7 @@ function createProjectPreviewTool(
 		label: "Project Preview",
 		name: "project_preview",
 		description:
-			"Install/build the current server project workspace if needed, serve it through PI Server, and return the Preview URL. Call this after project files are ready.",
+			"Install/build the current server project workspace if needed, serve static output or start one Node HTTP service behind the PI preview proxy, and return the final Preview URL. Call this after project files are ready.",
 		parameters: projectPreviewSchema,
 		executionMode: "sequential",
 		execute: async (_toolCallId, args, signal) => {
@@ -112,9 +112,12 @@ function formatProjectFileResult(result: ProjectFileDetails): string {
 export function formatPreviewResult(result: ProjectPreviewDetails): string {
 	return [
 		`Status: ${result.status}`,
-		`Preview URL: ${result.previewUrl}`,
+		result.mode ? `Mode: ${result.mode}` : "",
+		result.previewUrl ? `Preview URL: ${result.previewUrl}` : "",
 		`Project root: ${result.projectRoot}`,
 		`Serve root: ${result.serveRoot}`,
+		result.startCommand ? `Start command: ${result.startCommand}` : "",
+		result.servicePort ? `Internal service port: ${result.servicePort} (proxied by Preview URL)` : "",
 		`Files: ${result.fileCount}`,
 		result.logs?.length ? `\nLogs:\n${result.logs.join("").trim()}` : "",
 	]

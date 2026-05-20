@@ -65,9 +65,12 @@ function filePill(filename?: string): TemplateResult | string {
 function formatPreviewResult(result: ProjectPreviewDetails): string {
 	return [
 		`Status: ${result.status}`,
-		`Preview URL: ${result.previewUrl}`,
+		result.mode ? `Mode: ${result.mode}` : "",
+		result.previewUrl ? `Preview URL: ${result.previewUrl}` : "",
 		`Project root: ${result.projectRoot}`,
 		`Serve root: ${result.serveRoot}`,
+		result.startCommand ? `Start command: ${result.startCommand}` : "",
+		result.servicePort ? `Internal service port: ${result.servicePort} (proxied by Preview URL)` : "",
 		`Files: ${result.fileCount}`,
 		result.logs?.length ? `\nLogs:\n${result.logs.join("").trim()}` : "",
 	]
@@ -164,15 +167,23 @@ class ProjectPreviewRenderer implements ToolRenderer<ProjectPreviewParams, Proje
 		result: ToolResultMessage<ProjectPreviewDetails> | undefined,
 		isStreaming?: boolean,
 	): ToolRenderResult {
-		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
+		const state = result
+			? result.isError || result.details?.status === "failed"
+				? "error"
+				: "complete"
+			: isStreaming
+				? "inprogress"
+				: "complete";
 		const details = result?.details;
 		const contentRef = createRef<HTMLDivElement>();
 		const chevronRef = createRef<HTMLSpanElement>();
 		const header = details?.previewUrl
 			? html`<span>${i18n("Preview ready")} <a class="underline" href=${details.previewUrl} target="_blank" rel="noreferrer">${details.previewUrl}</a></span>`
-			: state === "inprogress"
-				? i18n("Preparing preview")
-				: i18n("Prepared preview");
+			: details?.status === "failed"
+				? "Preview failed"
+				: state === "inprogress"
+					? i18n("Preparing preview")
+					: i18n("Prepared preview");
 		return {
 			isCustom: false,
 			content: html`

@@ -233,7 +233,7 @@ The PM app can open this PI Web UI with a short-lived handoff token:
 
 PI resolves the token through PM, downloads the PRD/design documents as attachments, and places the PM implementation prompt into the chat input. The PM prompt and documents are treated as the primary requirement source. PI's own handoff instructions only describe platform execution: write files into the configured project root, run short validation/build commands when useful, publish with `project_preview`, and return the Preview URL.
 
-For the current stage, PM demos should target static HTML/CSS/JS projects or Node frontend projects that can be built to static output such as Vite React/Vue. Backend services that require long-running Node processes, databases, or reverse-proxy routing need the later run-manager stage.
+For the current stage, PM demos should target static HTML/CSS/JS projects, Node frontend projects that can be built to static output such as Vite React/Vue, or a single Node HTTP service with a `package.json` `start` script that respects the `PORT` environment variable. Node service projects are exposed through the PI `/preview/<project-id>/` URL and proxied internally, so generated apps should use relative asset, navigation, form, and API URLs instead of `http://localhost` or root-absolute paths like `/api/items`. Multi-service stacks, Docker, external databases, and custom reverse-proxy routing are outside the current preview scope.
 
 ## Server Workspace Flow
 
@@ -247,7 +247,7 @@ Expected conversation flow:
 4. When useful, it calls `project_bash` to run short checks or build commands in the server project root.
 5. After files are ready, it calls `project_preview`.
 6. If `package.json` exists, the server runs `projectInstallCommand` and then `projectBuildCommand` when a build script exists.
-7. The server serves `dist/` when present, otherwise the project root.
+7. The server serves `dist/` or `build/` when present, serves static roots directly, or starts one internal Node HTTP service and proxies it through `/preview/<project-id>/`.
 8. The browser displays file, command, and preview tool cards plus the final assistant message with the preview URL.
 
 Preview URLs are served from this PI server at:
@@ -264,9 +264,13 @@ Set `previewBaseUrl` in `pi-storage.config.json` when the server is behind a dom
 }
 ```
 
-This is currently optimized for generated frontend/static projects. Projects with a build output in `dist/` are served from `dist/`; otherwise the project root itself is served.
+This is optimized for generated static projects, built frontend projects, and one self-contained Node HTTP service. Projects with a static build output in `dist/` or `build/` are served from that directory. Static projects without `package.json` are served from the project root. Node service projects without static build output are started through `npm start` or a detected Node entry file, with `PORT` assigned by PI. The Node service listens only as an internal process; the returned Preview URL remains the PI `/preview/<project-id>/` URL and PI proxies browser traffic to the service.
+
+Because preview URLs may live under `/preview/<project-id>/`, generated Node service apps should use relative URLs such as `./style.css`, `./page.html`, and `./api/items`. Avoid `http://localhost:<port>` and root-absolute browser paths such as `/api/items`; those bypass the preview proxy when PI is deployed on a server.
 
 `project_bash` runs on the same operating system as the PI server process. Failed commands return the command output plus the server platform and shell, so the agent can adjust and retry with an environment-compatible command.
+
+`project_bash` refuses global Node process-kill commands such as `taskkill /IM node.exe`, `pkill node`, `killall node`, and `Stop-Process -Name node`. Generated projects should not start or stop long-running preview servers through `project_bash`; `project_preview` owns preview service lifecycle so the PI server process is not accidentally stopped.
 
 ### Limitations
 

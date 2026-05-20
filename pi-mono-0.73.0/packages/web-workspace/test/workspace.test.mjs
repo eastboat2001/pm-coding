@@ -1,9 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import {
+	isUnsafeProjectCommand,
 	loadStorageConfig,
+	WorkspaceCommandService,
 	WorkspaceFileService,
 	WorkspacePreviewService,
 	WorkspaceSessionService,
@@ -34,6 +37,25 @@ function testConfig(root, overrides = {}) {
 async function test(name, fn) {
 	await fn();
 	console.log(`ok - ${name}`);
+}
+
+function listen(server) {
+	return new Promise((resolveListen) => {
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			assert(address && typeof address === "object");
+			resolveListen(address.port);
+		});
+	});
+}
+
+function closeServer(server) {
+	return new Promise((resolveClose, rejectClose) => {
+		server.close((error) => {
+			if (error) rejectClose(error);
+			else resolveClose();
+		});
+	});
 }
 
 await test("loadStorageConfig resolves relative paths from the app root and strips preview trailing slash", () => {
@@ -151,6 +173,19 @@ await test("WorkspaceFileService rejects project paths that escape the workspace
 	/Project path component is empty\./);
 });
 
+await test("WorkspaceCommandService rejects commands that can stop the PI server", async () => {
+	const root = tempRoot();
+	const service = new WorkspaceCommandService(testConfig(root));
+	const context = { sessionId: "session-command-safety", title: "Command Safety" };
+	const command = "taskkill /F /IM node.exe 2>nul & echo Stopped";
+
+	assert.equal(isUnsafeProjectCommand(command), true);
+	await assert.rejects(
+		() => service.run({ ...context, command }),
+		/Refusing to run a command that can stop the PI server/,
+	);
+});
+
 await test("WorkspacePreviewService serves dist when a project was built", async () => {
 	const root = tempRoot();
 	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
@@ -170,7 +205,84 @@ await test("WorkspacePreviewService serves dist when a project was built", async
 	const result = await previewService.preview(context, { headers: { host: "localhost:5173" } });
 
 	assert.equal(result.status, "running");
+	assert.equal(result.mode, "static");
 	assert.equal(result.serveRoot, join(String(created.projectRoot), "dist"));
 	assert.equal(result.previewUrl, "http://localhost:5173/preview/built-app-session-/");
 	assert.match(readFileSync(join(String(created.projectRoot), ".pi-project.json"), "utf8"), /"status": "running"/);
+});
+
+await test("WorkspacePreviewService starts a single Node HTTP service when no static build output exists", async () => {
+	const root = tempRoot();
+	const config = testConfig(root, { previewBaseUrl: "", projectInstallCommand: "", projectBuildCommand: "" });
+	const fileService = new WorkspaceFileService(config);
+	const previewService = new WorkspacePreviewService(config);
+	const context = { sessionId: "session-node-service", title: "Node Service" };
+	const previewServer = createServer((req, res) => {
+		if (!previewService.servePreviewRequest(req, res)) {
+			res.statusCode = 404;
+			res.end("not found");
+		}
+	});
+	const previewPort = await listen(previewServer);
+
+	const created = fileService.handle({
+		...context,
+		command: "create",
+		filename: "package.json",
+		content: JSON.stringify({ scripts: { start: "node server.js" } }),
+	});
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "server.js",
+		content: [
+			"const http = require('node:http');",
+			"const port = Number(process.env.PORT);",
+			"if (!port) throw new Error('PORT is required');",
+			"const server = http.createServer((req, res) => {",
+			"  res.setHeader('content-type', 'text/html; charset=utf-8');",
+			"  res.end('<h1>Node service preview</h1>');",
+			"});",
+			"server.listen(port, '127.0.0.1');",
+		].join("\n"),
+	});
+
+	try {
+		const result = await previewService.preview(context, { headers: { host: `127.0.0.1:${previewPort}` } });
+
+		assert.equal(result.status, "running");
+		assert.equal(result.mode, "node-service");
+		assert.equal(result.previewUrl, `http://127.0.0.1:${previewPort}/preview/node-service-session-/`);
+		assert.equal(result.serveRoot, String(created.projectRoot));
+		assert.match(readFileSync(join(String(created.projectRoot), ".pi-project.json"), "utf8"), /"mode": "node-service"/);
+
+		const response = await fetch(result.previewUrl);
+		const body = await response.text();
+		assert.equal(response.status, 200, body);
+		assert.match(body, /Node service preview/);
+	} finally {
+		previewService.dispose?.();
+		await closeServer(previewServer);
+	}
+});
+
+await test("WorkspacePreviewService does not return a clickable URL for an unpreviewable project", async () => {
+	const root = tempRoot();
+	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
+	const fileService = new WorkspaceFileService(config);
+	const previewService = new WorkspacePreviewService(config);
+	const context = { sessionId: "session-unpreviewable", title: "Unpreviewable" };
+
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "package.json",
+		content: JSON.stringify({ scripts: { test: "node test.js" } }),
+	});
+
+	const result = await previewService.preview(context, { headers: { host: "localhost:5173" } });
+
+	assert.equal(result.status, "failed");
+	assert.equal(result.previewUrl, "");
+	assert.match(result.logs.join(""), /Project is not previewable/);
 });

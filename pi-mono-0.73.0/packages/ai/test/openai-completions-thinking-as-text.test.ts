@@ -136,6 +136,31 @@ describe("openai-completions thinking-as-text replay", () => {
 		});
 	});
 
+	it("replays legacy thinking text as reasoning_content when required", () => {
+		const deepseekCompat = {
+			...compat,
+			requiresThinkingAsText: false,
+			requiresReasoningContentOnAssistantMessages: true,
+			thinkingFormat: "deepseek",
+		} satisfies typeof compat;
+		const messages = convertMessages(
+			buildModel(),
+			buildContext(
+				buildAssistant([
+					{ type: "thinking", thinking: "legacy reasoning without signature" },
+					{ type: "text", text: "visible answer" },
+				]),
+			),
+			deepseekCompat,
+		);
+
+		expect(messages[1]).toMatchObject({
+			role: "assistant",
+			content: "visible answer",
+			reasoning_content: "legacy reasoning without signature",
+		});
+	});
+
 	it("reaches the endpoint when replay contains both thinking and text", async () => {
 		const requestBodies: ChatCompletionsRequestBody[] = [];
 		const server = http.createServer(async (req, res) => {

@@ -8,7 +8,7 @@ import "./MessageList.js";
 import "./Messages.js"; // Import for side effects to register the custom elements
 import { getAppStorage } from "../storage/app-storage.js";
 import "./StreamingMessageContainer.js";
-import type { Agent, AgentEvent } from "@mariozechner/pi-agent-core";
+import type { Agent, AgentEvent, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Attachment } from "../utils/attachment-utils.js";
 import { formatUsage } from "../utils/format.js";
 import { i18n } from "../utils/i18n.js";
@@ -34,6 +34,8 @@ export class AgentInterface extends LitElement {
 	@property({ attribute: false }) onCostClick?: () => void;
 	// Optional callback to override model selector behavior
 	@property({ attribute: false }) onModelSelect?: () => void;
+	// Optional callback called after the thinking level changes
+	@property({ attribute: false }) onThinkingChange?: (level: ThinkingLevel) => void | Promise<void>;
 
 	// References
 	@query("message-editor") private _messageEditor!: MessageEditor;
@@ -52,9 +54,12 @@ export class AgentInterface extends LitElement {
 			else {
 				this._messageEditor.value = text;
 				this._messageEditor.attachments = attachments || [];
+				this._messageEditor.thinkingLevel = this.session?.state.thinkingLevel || "off";
+				this._messageEditor.requestUpdate();
 			}
 		};
 		update();
+		this.requestUpdate();
 	}
 
 	public setAutoScroll(enabled: boolean) {
@@ -396,6 +401,7 @@ export class AgentInterface extends LitElement {
 						this.enableThinkingSelector
 							? (level: "off" | "minimal" | "low" | "medium" | "high") => {
 									session.state.thinkingLevel = level;
+									void this.onThinkingChange?.(level);
 									this.requestUpdate();
 								}
 							: undefined

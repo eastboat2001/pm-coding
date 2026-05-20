@@ -14,6 +14,7 @@ export interface StorageConfig {
 	serverSessionSyncEnabled: boolean;
 	defaultModelProvider: string;
 	defaultModelId: string;
+	handoffDefaultThinkingLevel: string;
 }
 
 export interface ProjectWorkspaceContext {

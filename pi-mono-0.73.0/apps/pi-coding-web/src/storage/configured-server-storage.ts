@@ -13,6 +13,7 @@ export interface ConfiguredStorageStatus {
 	serverSessionSyncEnabled?: boolean;
 	defaultModelProvider?: string;
 	defaultModelId?: string;
+	handoffDefaultThinkingLevel?: string;
 }
 
 export interface ConfiguredSessionRecord {

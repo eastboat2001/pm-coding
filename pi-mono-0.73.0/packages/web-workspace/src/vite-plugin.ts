@@ -122,6 +122,7 @@ async function handleStorageApi(
 			serverSessionSyncEnabled: config.serverSessionSyncEnabled,
 			defaultModelProvider: config.defaultModelProvider,
 			defaultModelId: config.defaultModelId,
+			handoffDefaultThinkingLevel: config.handoffDefaultThinkingLevel,
 		});
 		return;
 	}

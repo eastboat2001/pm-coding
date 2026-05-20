@@ -1,5 +1,6 @@
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import {
 	type AgentState,
@@ -47,6 +48,7 @@ import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessio
 
 const piRuntimeConfig = {
 	serverSessionSyncEnabled: false,
+	handoffDefaultThinkingLevel: "high" as ThinkingLevel,
 };
 
 document.documentElement.lang = getCurrentLanguage();
@@ -86,6 +88,7 @@ const modelController = new ModelController(storage, configuredStorage);
 const loadPiRuntimeConfig = async () => {
 	const status = await configuredStorage.getStatus();
 	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
+	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
 };
 
 const syncRuntimeConfigAfterRender = async () => {
@@ -96,6 +99,23 @@ const syncRuntimeConfigAfterRender = async () => {
 };
 
 const isServerSessionSyncEnabled = () => piRuntimeConfig.serverSessionSyncEnabled;
+
+const normalizeThinkingLevel = (value?: string): ThinkingLevel => {
+	const normalized = String(value || "")
+		.trim()
+		.toLowerCase();
+	if (
+		normalized === "off" ||
+		normalized === "minimal" ||
+		normalized === "low" ||
+		normalized === "medium" ||
+		normalized === "high" ||
+		normalized === "xhigh"
+	) {
+		return normalized;
+	}
+	return "high";
+};
 
 let currentSessionId: string | undefined;
 let currentSessionCreatedAt: string | undefined;
@@ -296,6 +316,10 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			await saveSession();
 		},
 		onModelSelect: handleModelSelect,
+		onThinkingChange: async () => {
+			await ensureSessionIdentity();
+			await saveSession();
+		},
 		enableArtifacts: false,
 		toolsFactory: (toolAgent) =>
 			createServerProjectTools(() => ({
@@ -364,6 +388,17 @@ const applyHandoffLanguage = (language?: string) => {
 	document.documentElement.lang = handoffLanguage;
 };
 
+const applyHandoffDefaultThinkingLevel = async () => {
+	if (agent.state.model?.reasoning !== true) return;
+	if (agent.state.thinkingLevel !== "off") return;
+	if (agent.state.messages.length > 0) return;
+
+	agent.state.thinkingLevel = piRuntimeConfig.handoffDefaultThinkingLevel;
+	if (currentSessionId) {
+		await saveSession();
+	}
+};
+
 const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 	applyHandoffLanguage(payload.language);
 	const attachments = await Promise.all(
@@ -375,6 +410,7 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 	if (payload.title) {
 		currentTitle = payload.title;
 	}
+	await applyHandoffDefaultThinkingLevel();
 	chatPanel.agentInterface?.setInput(buildCodingHandoffPrompt(payload), attachments);
 	if (currentSessionId) {
 		await saveSession();
@@ -386,6 +422,7 @@ const restoreInitialSession = async () => {
 	const urlParams = new URLSearchParams(window.location.search);
 	const handoffToken = urlParams.get("handoff_token");
 	if (handoffToken) {
+		await loadPiRuntimeConfig();
 		const payload = await fetchPmHandoffPayload(handoffToken);
 		if (!payload.documents_ready) {
 			throw new Error("PM handoff documents are not ready");
@@ -396,7 +433,14 @@ const restoreInitialSession = async () => {
 
 	const sessionIdFromUrl = urlParams.get("session");
 	if (sessionIdFromUrl) {
+		if (urlParams.get("source") === "rqmd") {
+			await loadPiRuntimeConfig();
+		}
 		const loaded = await loadSession(sessionIdFromUrl);
+		if (loaded && urlParams.get("source") === "rqmd") {
+			await applyHandoffDefaultThinkingLevel();
+			renderApp();
+		}
 		if (loaded) return;
 	}
 

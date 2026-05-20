@@ -202,6 +202,7 @@ Edit `pi-storage.config.json`:
   "serverSessionSyncEnabled": false,
   "defaultModelProvider": "",
   "defaultModelId": "",
+  "handoffDefaultThinkingLevel": "high",
   "projectInstallCommand": "npm install",
   "projectBuildCommand": "npm run build",
   "projectInstallTimeoutMs": 120000,

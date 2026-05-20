@@ -11,6 +11,7 @@ import {
 	completeSimple,
 	type Model,
 	type SimpleStreamOptions,
+	type Tool,
 } from "@mariozechner/pi-ai";
 import { html, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
@@ -19,12 +20,16 @@ import { getAppStorage } from "../storage/app-storage.js";
 import type { CustomProvider, CustomProviderType } from "../storage/stores/custom-providers-store.js";
 import { discoverModels } from "../utils/model-discovery.js";
 import {
+	type AnthropicMessagesProfile,
+	type AnthropicReasoningReplayFormat,
 	type CompatibleMaxTokensField,
 	type CompatibleThinkingFormat,
 	createManualModelsFromConfigs,
 	defaultManualModelConfig,
 	type ManualModelConfig,
 	manualModelConfigFromModel,
+	type OpenAICompletionsProfile,
+	type OpenAIResponsesProfile,
 } from "./custom-provider-model-config.js";
 
 export class CustomProviderDialog extends DialogBase {
@@ -171,6 +176,19 @@ export class CustomProviderDialog extends DialogBase {
 					{ maxTokens: 32, reasoning: "low" },
 					"reasoning replay test",
 				);
+				await this.runCompletionTest(
+					model,
+					this.createToolReplayTestContext(model),
+					{ maxTokens: 32, reasoning: "low" },
+					"reasoning tool replay test",
+				);
+			} else {
+				await this.runCompletionTest(
+					model,
+					this.createToolReplayTestContext(model),
+					{ maxTokens: 32 },
+					"tool replay test",
+				);
 			}
 		}
 	}
@@ -277,6 +295,61 @@ export class CustomProviderDialog extends DialogBase {
 		};
 	}
 
+	private createToolReplayTestContext(model: Model<any>): Context {
+		const now = Date.now();
+		const tool: Tool = {
+			name: "compat_lookup",
+			description: "Returns a fixed compatibility test value.",
+			parameters: {
+				type: "object",
+				properties: {
+					query: { type: "string" },
+				},
+				required: ["query"],
+			},
+		};
+
+		return {
+			messages: [
+				{ role: "user", content: "Use the compat_lookup tool once.", timestamp: now - 3 },
+				{
+					role: "assistant",
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					content: [
+						{
+							type: "toolCall",
+							id: "compat_lookup_call",
+							name: "compat_lookup",
+							arguments: { query: "ping" },
+						},
+					],
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: now - 2,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "compat_lookup_call",
+					toolName: "compat_lookup",
+					content: [{ type: "text", text: "ok" }],
+					isError: false,
+					timestamp: now - 1,
+				},
+				{ role: "user", content: "Reply with exactly: ok", timestamp: now },
+			],
+			tools: [tool],
+		};
+	}
+
 	private handleFieldChange(update: () => void) {
 		update();
 		this.testSuccess = false;
@@ -330,8 +403,138 @@ export class CustomProviderDialog extends DialogBase {
 		});
 	}
 
+	private updateOpenAICompletionsProfile(index: number, value: string) {
+		const profile = value as OpenAICompletionsProfile;
+		const patch: Partial<ManualModelConfig> = { openAICompletionsProfile: profile };
+
+		if (profile === "standard") {
+			Object.assign(patch, {
+				thinkingFormat: "openai",
+				requiresReasoningContentOnAssistantMessages: false,
+				supportsReasoningEffort: true,
+				maxTokensField: "max_completion_tokens",
+			});
+		} else if (profile === "local-basic") {
+			Object.assign(patch, {
+				thinkingFormat: "openai",
+				requiresReasoningContentOnAssistantMessages: false,
+				supportsReasoningEffort: false,
+				maxTokensField: "max_tokens",
+			});
+		} else if (profile === "deepseek-mimo") {
+			Object.assign(patch, {
+				thinkingFormat: "deepseek",
+				requiresReasoningContentOnAssistantMessages: true,
+				supportsReasoningEffort: true,
+				maxTokensField: "max_tokens",
+			});
+		} else if (profile === "openrouter") {
+			Object.assign(patch, {
+				thinkingFormat: "openrouter",
+				requiresReasoningContentOnAssistantMessages: false,
+				supportsReasoningEffort: true,
+				maxTokensField: "max_tokens",
+			});
+		} else if (profile === "qwen" || profile === "qwen-chat-template" || profile === "zai") {
+			Object.assign(patch, {
+				thinkingFormat: profile,
+				requiresReasoningContentOnAssistantMessages: false,
+				supportsReasoningEffort: false,
+				maxTokensField: "max_tokens",
+			});
+		}
+
+		this.updateManualModelConfig(index, patch);
+	}
+
+	private updateOpenAIResponsesProfile(index: number, value: string) {
+		const profile = value as OpenAIResponsesProfile;
+		this.updateManualModelConfig(index, {
+			openAIResponsesProfile: profile,
+			sendSessionIdHeader: profile !== "generic-gateway",
+			openAIResponsesSupportsLongCacheRetention: profile !== "generic-gateway",
+		});
+	}
+
+	private updateAnthropicMessagesProfile(index: number, value: string) {
+		const profile = value as AnthropicMessagesProfile;
+		const patch: Partial<ManualModelConfig> = { anthropicMessagesProfile: profile };
+
+		if (profile === "standard") {
+			Object.assign(patch, {
+				anthropicReasoningReplayFormat: "anthropic-signature",
+				supportsEagerToolInputStreaming: true,
+				anthropicSupportsLongCacheRetention: true,
+			});
+		} else if (profile === "mimo-deepseek") {
+			Object.assign(patch, {
+				anthropicReasoningReplayFormat: "deepseek-reasoning-content",
+				supportsEagerToolInputStreaming: true,
+				anthropicSupportsLongCacheRetention: true,
+			});
+		} else if (profile === "legacy-compatible") {
+			Object.assign(patch, {
+				anthropicReasoningReplayFormat: "anthropic-signature",
+				supportsEagerToolInputStreaming: false,
+				anthropicSupportsLongCacheRetention: true,
+			});
+		}
+
+		this.updateManualModelConfig(index, patch);
+	}
+
+	private openAICompletionsProfileDescription(config: ManualModelConfig): string {
+		switch (config.openAICompletionsProfile) {
+			case "standard":
+				return i18n("Use when the endpoint closely follows OpenAI Chat Completions.");
+			case "local-basic":
+				return i18n("Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.");
+			case "deepseek-mimo":
+				return i18n("Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.");
+			case "openrouter":
+				return i18n("Use for OpenRouter endpoints that configure thinking with the nested reasoning field.");
+			case "qwen":
+				return i18n("Use for Qwen endpoints that enable thinking with enable_thinking.");
+			case "qwen-chat-template":
+				return i18n("Use when the provider requires chat_template_kwargs.enable_thinking.");
+			case "zai":
+				return i18n("Use for Z.AI endpoints that enable thinking with enable_thinking.");
+			case "custom":
+				return i18n("Use only when you need to tune low-level compatibility switches manually.");
+		}
+	}
+
+	private openAIResponsesProfileDescription(config: ManualModelConfig): string {
+		switch (config.openAIResponsesProfile) {
+			case "standard":
+				return i18n("Use when the endpoint follows the official OpenAI Responses API.");
+			case "generic-gateway":
+				return i18n("Use for Responses-compatible gateways that reject session_id or long cache retention.");
+			case "custom":
+				return i18n("Use only when you need to tune low-level compatibility switches manually.");
+		}
+	}
+
+	private anthropicMessagesProfileDescription(config: ManualModelConfig): string {
+		switch (config.anthropicMessagesProfile) {
+			case "standard":
+				return i18n("Use for official Anthropic or compatible endpoints that replay signed thinking blocks.");
+			case "mimo-deepseek":
+				return i18n("Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.");
+			case "legacy-compatible":
+				return i18n("Use for Anthropic-compatible endpoints that reject eager tool input streaming.");
+			case "custom":
+				return i18n("Use only when you need to tune low-level compatibility switches manually.");
+		}
+	}
+
 	private renderManualModelConfig(config: ManualModelConfig, index: number): TemplateResult {
 		const showOpenAICompat = this.type === "openai-completions";
+		const showOpenAIResponsesCompat = this.type === "openai-responses";
+		const showAnthropicCompat = this.type === "anthropic-messages";
+		const showOpenAIAdvanced = showOpenAICompat && config.openAICompletionsProfile === "custom";
+		const showOpenAIResponsesAdvanced = showOpenAIResponsesCompat && config.openAIResponsesProfile === "custom";
+		const showAnthropicAdvanced = showAnthropicCompat && config.anthropicMessagesProfile === "custom";
 		return html`
 			<div class="rounded-md border border-border p-3 flex flex-col gap-3">
 				<div class="flex items-center gap-2">
@@ -392,62 +595,221 @@ export class CustomProviderDialog extends DialogBase {
 						? html`
 							<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 								<div class="flex flex-col gap-1">
-									${Label({ children: i18n("Max tokens field") })}
+									${Label({ children: i18n("Compatibility mode") })}
 									${Select({
-										value: config.maxTokensField,
+										value: config.openAICompletionsProfile,
 										options: [
-											{ value: "max_completion_tokens", label: "max_completion_tokens" },
-											{ value: "max_tokens", label: "max_tokens" },
+											{ value: "standard", label: "Standard OpenAI-compatible" },
+											{ value: "local-basic", label: "Local/basic compatible" },
+											{ value: "deepseek-mimo", label: "DeepSeek / MiMo reasoning_content" },
+											{ value: "openrouter", label: "OpenRouter reasoning" },
+											{ value: "qwen", label: "Qwen enable_thinking" },
+											{ value: "qwen-chat-template", label: "Qwen chat_template" },
+											{ value: "zai", label: "Z.AI enable_thinking" },
+											{ value: "custom", label: "Custom advanced" },
 										],
-										onChange: (value: string) =>
-											this.updateManualModelConfig(index, {
-												maxTokensField: value as CompatibleMaxTokensField,
-											}),
+										onChange: (value: string) => this.updateOpenAICompletionsProfile(index, value),
 										width: "100%",
 									})}
+									<p class="text-xs text-muted-foreground leading-relaxed">
+										${this.openAICompletionsProfileDescription(config)}
+									</p>
 								</div>
-								${
-									config.reasoning
-										? html`
+							</div>
+							${
+								showOpenAIAdvanced
+									? html`
+										<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 											<div class="flex flex-col gap-1">
-												${Label({ children: i18n("Thinking protocol") })}
+												${Label({ children: i18n("Max tokens field") })}
 												${Select({
-													value: config.thinkingFormat,
+													value: config.maxTokensField,
 													options: [
-														{ value: "openai", label: "OpenAI reasoning_effort" },
-														{ value: "openrouter", label: "OpenRouter reasoning" },
-														{ value: "deepseek", label: "DeepSeek reasoning_content" },
-														{ value: "qwen", label: "Qwen enable_thinking" },
-														{ value: "qwen-chat-template", label: "Qwen chat_template" },
-														{ value: "zai", label: "Z.AI enable_thinking" },
+														{ value: "max_completion_tokens", label: "max_completion_tokens" },
+														{ value: "max_tokens", label: "max_tokens" },
 													],
-													onChange: (value: string) => this.updateThinkingFormat(index, value),
+													onChange: (value: string) =>
+														this.updateManualModelConfig(index, {
+															maxTokensField: value as CompatibleMaxTokensField,
+														}),
 													width: "100%",
 												})}
 											</div>
-										`
-										: ""
-								}
+											${
+												config.reasoning
+													? html`
+														<div class="flex flex-col gap-1">
+															${Label({ children: i18n("Thinking protocol") })}
+															${Select({
+																value: config.thinkingFormat,
+																options: [
+																	{ value: "openai", label: "OpenAI reasoning_effort" },
+																	{ value: "openrouter", label: "OpenRouter reasoning" },
+																	{ value: "deepseek", label: "DeepSeek reasoning_content" },
+																	{ value: "qwen", label: "Qwen enable_thinking" },
+																	{ value: "qwen-chat-template", label: "Qwen chat_template" },
+																	{ value: "zai", label: "Z.AI enable_thinking" },
+																],
+																onChange: (value: string) => this.updateThinkingFormat(index, value),
+																width: "100%",
+															})}
+														</div>
+													`
+													: ""
+											}
+										</div>
+										${
+											config.reasoning
+												? html`
+													<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+														<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
+															<span class="text-sm text-foreground">${i18n("Send reasoning effort")}</span>
+															${Switch({
+																checked: config.supportsReasoningEffort,
+																onChange: (checked: boolean) =>
+																	this.updateManualModelConfig(index, {
+																		supportsReasoningEffort: checked,
+																	}),
+															})}
+														</div>
+														<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
+															<span class="text-sm text-foreground">${i18n("Replay reasoning_content")}</span>
+															${Switch({
+																checked: config.requiresReasoningContentOnAssistantMessages,
+																onChange: (checked: boolean) =>
+																	this.updateManualModelConfig(index, {
+																		requiresReasoningContentOnAssistantMessages: checked,
+																	}),
+															})}
+														</div>
+													</div>
+												`
+												: ""
+										}
+									`
+									: ""
+							}
+						`
+						: ""
+				}
+				${
+					showOpenAIResponsesCompat
+						? html`
+							<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+								<div class="flex flex-col gap-1">
+									${Label({ children: i18n("Compatibility mode") })}
+									${Select({
+										value: config.openAIResponsesProfile,
+										options: [
+											{ value: "standard", label: "Standard OpenAI Responses" },
+											{ value: "generic-gateway", label: "Generic Responses gateway" },
+											{ value: "custom", label: "Custom advanced" },
+										],
+										onChange: (value: string) => this.updateOpenAIResponsesProfile(index, value),
+										width: "100%",
+									})}
+									<p class="text-xs text-muted-foreground leading-relaxed">
+										${this.openAIResponsesProfileDescription(config)}
+									</p>
+								</div>
 							</div>
 							${
-								config.reasoning
+								showOpenAIResponsesAdvanced
 									? html`
 										<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 											<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
-												<span class="text-sm text-foreground">${i18n("Send reasoning effort")}</span>
+												<span class="text-sm text-foreground">${i18n("Send session_id header")}</span>
 												${Switch({
-													checked: config.supportsReasoningEffort,
+													checked: config.sendSessionIdHeader,
 													onChange: (checked: boolean) =>
-														this.updateManualModelConfig(index, { supportsReasoningEffort: checked }),
+														this.updateManualModelConfig(index, { sendSessionIdHeader: checked }),
 												})}
 											</div>
 											<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
-												<span class="text-sm text-foreground">${i18n("Replay reasoning_content")}</span>
+												<span class="text-sm text-foreground">${i18n("Long cache retention")}</span>
 												${Switch({
-													checked: config.requiresReasoningContentOnAssistantMessages,
+													checked: config.openAIResponsesSupportsLongCacheRetention,
 													onChange: (checked: boolean) =>
 														this.updateManualModelConfig(index, {
-															requiresReasoningContentOnAssistantMessages: checked,
+															openAIResponsesSupportsLongCacheRetention: checked,
+														}),
+												})}
+											</div>
+										</div>
+									`
+									: ""
+							}
+						`
+						: ""
+				}
+				${
+					showAnthropicCompat
+						? html`
+							<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+								<div class="flex flex-col gap-1">
+									${Label({ children: i18n("Compatibility mode") })}
+									${Select({
+										value: config.anthropicMessagesProfile,
+										options: [
+											{ value: "standard", label: "Standard Anthropic signed thinking" },
+											{ value: "mimo-deepseek", label: "MiMo / DeepSeek reasoning_content" },
+											{ value: "legacy-compatible", label: "Legacy Anthropic-compatible" },
+											{ value: "custom", label: "Custom advanced" },
+										],
+										onChange: (value: string) => this.updateAnthropicMessagesProfile(index, value),
+										width: "100%",
+									})}
+									<p class="text-xs text-muted-foreground leading-relaxed">
+										${this.anthropicMessagesProfileDescription(config)}
+									</p>
+								</div>
+							</div>
+							${
+								showAnthropicAdvanced
+									? html`
+										<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+											${
+												config.reasoning
+													? html`
+														<div class="flex flex-col gap-1">
+															${Label({ children: i18n("Reasoning replay") })}
+															${Select({
+																value: config.anthropicReasoningReplayFormat,
+																options: [
+																	{ value: "anthropic-signature", label: "Anthropic signed thinking" },
+																	{
+																		value: "deepseek-reasoning-content",
+																		label: "DeepSeek / MiMo reasoning_content",
+																	},
+																],
+																onChange: (value: string) =>
+																	this.updateManualModelConfig(index, {
+																		anthropicReasoningReplayFormat:
+																			value as AnthropicReasoningReplayFormat,
+																	}),
+																width: "100%",
+															})}
+														</div>
+													`
+													: ""
+											}
+											<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
+												<span class="text-sm text-foreground">${i18n("Eager tool input streaming")}</span>
+												${Switch({
+													checked: config.supportsEagerToolInputStreaming,
+													onChange: (checked: boolean) =>
+														this.updateManualModelConfig(index, {
+															supportsEagerToolInputStreaming: checked,
+														}),
+												})}
+											</div>
+											<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
+												<span class="text-sm text-foreground">${i18n("Long cache retention")}</span>
+												${Switch({
+													checked: config.anthropicSupportsLongCacheRetention,
+													onChange: (checked: boolean) =>
+														this.updateManualModelConfig(index, {
+															anthropicSupportsLongCacheRetention: checked,
 														}),
 												})}
 											</div>

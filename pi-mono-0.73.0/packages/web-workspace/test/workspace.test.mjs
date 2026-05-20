@@ -26,6 +26,7 @@ function testConfig(root, overrides = {}) {
 		serverSessionSyncEnabled: false,
 		defaultModelProvider: "",
 		defaultModelId: "",
+		handoffDefaultThinkingLevel: "high",
 		...overrides,
 	};
 }
@@ -47,6 +48,7 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 			serverSessionSyncEnabled: true,
 			defaultModelProvider: "openai",
 			defaultModelId: "gpt-5.1",
+			handoffDefaultThinkingLevel: "medium",
 		}),
 		"utf8",
 	);
@@ -60,6 +62,7 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 	assert.equal(config.serverSessionSyncEnabled, true);
 	assert.equal(config.defaultModelProvider, "openai");
 	assert.equal(config.defaultModelId, "gpt-5.1");
+	assert.equal(config.handoffDefaultThinkingLevel, "medium");
 });
 
 await test("loadStorageConfig supports legacy storageDir defaults", () => {
@@ -74,6 +77,7 @@ await test("loadStorageConfig supports legacy storageDir defaults", () => {
 	assert.equal(config.serverSessionSyncEnabled, false);
 	assert.equal(config.defaultModelProvider, "");
 	assert.equal(config.defaultModelId, "");
+	assert.equal(config.handoffDefaultThinkingLevel, "high");
 });
 
 await test("WorkspaceSessionService merges and deletes server-backed provider keys in settings", () => {

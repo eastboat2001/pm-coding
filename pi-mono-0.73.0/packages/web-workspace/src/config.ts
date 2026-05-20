@@ -29,6 +29,7 @@ export function loadStorageConfig(rootDir: string, configFile = CONFIG_FILE): St
 		serverSessionSyncEnabled: booleanValue(record.serverSessionSyncEnabled),
 		defaultModelProvider: stringValue(record.defaultModelProvider),
 		defaultModelId: stringValue(record.defaultModelId),
+		handoffDefaultThinkingLevel: thinkingLevelValue(record.handoffDefaultThinkingLevel),
 	};
 }
 
@@ -48,4 +49,9 @@ function numberValue(value: unknown): number {
 
 function booleanValue(value: unknown): boolean {
 	return value === true;
+}
+
+function thinkingLevelValue(value: unknown): string {
+	const normalized = stringValue(value).trim().toLowerCase();
+	return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(normalized) ? normalized : "high";
 }

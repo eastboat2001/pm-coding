@@ -341,6 +341,13 @@ export interface AnthropicMessagesCompat {
 	supportsEagerToolInputStreaming?: boolean;
 	/** Whether the provider supports Anthropic long cache retention (`cache_control.ttl: "1h"`). Default: true. */
 	supportsLongCacheRetention?: boolean;
+	/**
+	 * How prior assistant thinking should be replayed.
+	 * "anthropic-signature" keeps standard Anthropic signed thinking behavior.
+	 * "deepseek-reasoning-content" also sends non-standard `reasoning_content`
+	 * for MiMo/DeepSeek-style Anthropic-compatible endpoints.
+	 */
+	reasoningReplayFormat?: "anthropic-signature" | "deepseek-reasoning-content";
 }
 
 /**

@@ -227,6 +227,25 @@ declare module "@mariozechner/mini-lit" {
 		"Thinking protocol": string;
 		"Send reasoning effort": string;
 		"Replay reasoning_content": string;
+		"Compatibility profile": string;
+		"Compatibility mode": string;
+		"Use when the endpoint closely follows OpenAI Chat Completions.": string;
+		"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.": string;
+		"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.": string;
+		"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.": string;
+		"Use for Qwen endpoints that enable thinking with enable_thinking.": string;
+		"Use when the provider requires chat_template_kwargs.enable_thinking.": string;
+		"Use for Z.AI endpoints that enable thinking with enable_thinking.": string;
+		"Use only when you need to tune low-level compatibility switches manually.": string;
+		"Use when the endpoint follows the official OpenAI Responses API.": string;
+		"Use for Responses-compatible gateways that reject session_id or long cache retention.": string;
+		"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.": string;
+		"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.": string;
+		"Use for Anthropic-compatible endpoints that reject eager tool input streaming.": string;
+		"Send session_id header": string;
+		"Long cache retention": string;
+		"Reasoning replay": string;
+		"Eager tool input streaming": string;
 		"Please fill in all required fields": string;
 		"Please add at least one model ID": string;
 		"Failed to save provider": string;
@@ -505,6 +524,38 @@ export const translations = {
 		"Thinking protocol": "Thinking protocol",
 		"Send reasoning effort": "Send reasoning effort",
 		"Replay reasoning_content": "Replay reasoning_content",
+		"Compatibility profile": "Compatibility profile",
+		"Compatibility mode": "Compatibility mode",
+		"Use when the endpoint closely follows OpenAI Chat Completions.":
+			"Use when the endpoint closely follows OpenAI Chat Completions.",
+		"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.":
+			"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.",
+		"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.":
+			"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.",
+		"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.":
+			"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.",
+		"Use for Qwen endpoints that enable thinking with enable_thinking.":
+			"Use for Qwen endpoints that enable thinking with enable_thinking.",
+		"Use when the provider requires chat_template_kwargs.enable_thinking.":
+			"Use when the provider requires chat_template_kwargs.enable_thinking.",
+		"Use for Z.AI endpoints that enable thinking with enable_thinking.":
+			"Use for Z.AI endpoints that enable thinking with enable_thinking.",
+		"Use only when you need to tune low-level compatibility switches manually.":
+			"Use only when you need to tune low-level compatibility switches manually.",
+		"Use when the endpoint follows the official OpenAI Responses API.":
+			"Use when the endpoint follows the official OpenAI Responses API.",
+		"Use for Responses-compatible gateways that reject session_id or long cache retention.":
+			"Use for Responses-compatible gateways that reject session_id or long cache retention.",
+		"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.":
+			"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.",
+		"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.":
+			"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.",
+		"Use for Anthropic-compatible endpoints that reject eager tool input streaming.":
+			"Use for Anthropic-compatible endpoints that reject eager tool input streaming.",
+		"Send session_id header": "Send session_id header",
+		"Long cache retention": "Long cache retention",
+		"Reasoning replay": "Reasoning replay",
+		"Eager tool input streaming": "Eager tool input streaming",
 		"Please fill in all required fields": "Please fill in all required fields",
 		"Please add at least one model ID": "Please add at least one model ID",
 		"Failed to save provider": "Failed to save provider",
@@ -780,6 +831,38 @@ export const translations = {
 		"Thinking protocol": "Thinking-Protokoll",
 		"Send reasoning effort": "Reasoning effort senden",
 		"Replay reasoning_content": "reasoning_content wiedergeben",
+		"Compatibility profile": "Kompatibilitätsprofil",
+		"Compatibility mode": "Kompatibilitätsmodus",
+		"Use when the endpoint closely follows OpenAI Chat Completions.":
+			"Für Endpunkte, die OpenAI Chat Completions eng folgen.",
+		"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.":
+			"Für lokale oder einfache OpenAI-kompatible Server, die erweiterte OpenAI-Felder ablehnen.",
+		"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.":
+			"Für DeepSeek- oder MiMo-Chat-Completions-Endpunkte, die reasoning_content-Wiedergabe verlangen.",
+		"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.":
+			"Für OpenRouter-Endpunkte, die Denken über das verschachtelte reasoning-Feld konfigurieren.",
+		"Use for Qwen endpoints that enable thinking with enable_thinking.":
+			"Für Qwen-Endpunkte, die Denken mit enable_thinking aktivieren.",
+		"Use when the provider requires chat_template_kwargs.enable_thinking.":
+			"Verwenden, wenn der Anbieter chat_template_kwargs.enable_thinking verlangt.",
+		"Use for Z.AI endpoints that enable thinking with enable_thinking.":
+			"Für Z.AI-Endpunkte, die Denken mit enable_thinking aktivieren.",
+		"Use only when you need to tune low-level compatibility switches manually.":
+			"Nur verwenden, wenn Low-Level-Kompatibilitätsschalter manuell angepasst werden müssen.",
+		"Use when the endpoint follows the official OpenAI Responses API.":
+			"Für Endpunkte, die der offiziellen OpenAI Responses API folgen.",
+		"Use for Responses-compatible gateways that reject session_id or long cache retention.":
+			"Für Responses-kompatible Gateways, die session_id oder lange Cache-Aufbewahrung ablehnen.",
+		"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.":
+			"Für offizielle Anthropic- oder kompatible Endpunkte, die signierte Thinking-Blöcke wiedergeben.",
+		"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.":
+			"Für Anthropic-Endpunkte im MiMo- oder DeepSeek-Stil, die reasoning_content-Wiedergabe verlangen.",
+		"Use for Anthropic-compatible endpoints that reject eager tool input streaming.":
+			"Für Anthropic-kompatible Endpunkte, die Eager Tool Input Streaming ablehnen.",
+		"Send session_id header": "session_id-Header senden",
+		"Long cache retention": "Lange Cache-Aufbewahrung",
+		"Reasoning replay": "Reasoning-Wiedergabe",
+		"Eager tool input streaming": "Eager Tool Input Streaming",
 		"Please fill in all required fields": "Bitte füllen Sie alle erforderlichen Felder aus",
 		"Please add at least one model ID": "Bitte fügen Sie mindestens eine Modell-ID hinzu",
 		"Failed to save provider": "Fehler beim Speichern des Anbieters",
@@ -1063,6 +1146,35 @@ mutableTranslations.zh = {
 	"Thinking protocol": "思考协议",
 	"Send reasoning effort": "发送思考等级",
 	"Replay reasoning_content": "回放 reasoning_content",
+	"Compatibility profile": "兼容档案",
+	"Compatibility mode": "兼容协议",
+	"Use when the endpoint closely follows OpenAI Chat Completions.": "适用于严格兼容 OpenAI Chat Completions 的接口。",
+	"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.":
+		"适用于本地或简化的 OpenAI 兼容服务，这类服务可能不支持高级 OpenAI 字段。",
+	"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.":
+		"适用于要求在历史消息中回传 reasoning_content 的 DeepSeek 或 MiMo Chat Completions 接口。",
+	"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.":
+		"适用于通过嵌套 reasoning 字段配置思考的 OpenRouter 接口。",
+	"Use for Qwen endpoints that enable thinking with enable_thinking.":
+		"适用于通过 enable_thinking 开启思考的 Qwen 接口。",
+	"Use when the provider requires chat_template_kwargs.enable_thinking.":
+		"适用于要求通过 chat_template_kwargs.enable_thinking 开启思考的接口。",
+	"Use for Z.AI endpoints that enable thinking with enable_thinking.":
+		"适用于通过 enable_thinking 开启思考的 Z.AI 接口。",
+	"Use only when you need to tune low-level compatibility switches manually.": "仅在需要手动调整底层兼容开关时选择。",
+	"Use when the endpoint follows the official OpenAI Responses API.": "适用于遵循官方 OpenAI Responses API 的接口。",
+	"Use for Responses-compatible gateways that reject session_id or long cache retention.":
+		"适用于兼容 Responses 但不支持 session_id 或长缓存保留的网关。",
+	"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.":
+		"适用于官方 Anthropic 或支持回放签名 thinking block 的兼容接口。",
+	"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.":
+		"适用于要求回传 reasoning_content 的 MiMo 或 DeepSeek 风格 Anthropic 接口。",
+	"Use for Anthropic-compatible endpoints that reject eager tool input streaming.":
+		"适用于不支持 eager tool input streaming 的 Anthropic 兼容接口。",
+	"Send session_id header": "发送 session_id 请求头",
+	"Long cache retention": "长缓存保留",
+	"Reasoning replay": "思考回放",
+	"Eager tool input streaming": "Eager 工具输入流",
 	"Please fill in all required fields": "请填写所有必填字段",
 	"Please add at least one model ID": "请至少添加一个模型 ID",
 	"Failed to save provider": "保存服务商失败",
@@ -1344,6 +1456,38 @@ mutableTranslations.ms = {
 	"Thinking protocol": "Protokol pemikiran",
 	"Send reasoning effort": "Hantar tahap pemikiran",
 	"Replay reasoning_content": "Main semula reasoning_content",
+	"Compatibility profile": "Profil keserasian",
+	"Compatibility mode": "Mod keserasian",
+	"Use when the endpoint closely follows OpenAI Chat Completions.":
+		"Gunakan apabila endpoint rapat mengikuti OpenAI Chat Completions.",
+	"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.":
+		"Gunakan untuk pelayan tempatan atau ringkas yang serasi OpenAI tetapi menolak medan OpenAI lanjutan.",
+	"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.":
+		"Gunakan untuk endpoint DeepSeek atau MiMo Chat Completions yang memerlukan main semula reasoning_content.",
+	"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.":
+		"Gunakan untuk endpoint OpenRouter yang menetapkan pemikiran melalui medan reasoning bersarang.",
+	"Use for Qwen endpoints that enable thinking with enable_thinking.":
+		"Gunakan untuk endpoint Qwen yang mengaktifkan pemikiran dengan enable_thinking.",
+	"Use when the provider requires chat_template_kwargs.enable_thinking.":
+		"Gunakan apabila penyedia memerlukan chat_template_kwargs.enable_thinking.",
+	"Use for Z.AI endpoints that enable thinking with enable_thinking.":
+		"Gunakan untuk endpoint Z.AI yang mengaktifkan pemikiran dengan enable_thinking.",
+	"Use only when you need to tune low-level compatibility switches manually.":
+		"Gunakan hanya apabila anda perlu melaras suis keserasian tahap rendah secara manual.",
+	"Use when the endpoint follows the official OpenAI Responses API.":
+		"Gunakan apabila endpoint mengikuti API OpenAI Responses rasmi.",
+	"Use for Responses-compatible gateways that reject session_id or long cache retention.":
+		"Gunakan untuk gateway serasi Responses yang menolak session_id atau pengekalan cache panjang.",
+	"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.":
+		"Gunakan untuk Anthropic rasmi atau endpoint serasi yang memainkan semula blok thinking bertandatangan.",
+	"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.":
+		"Gunakan untuk endpoint Anthropic gaya MiMo atau DeepSeek yang memerlukan main semula reasoning_content.",
+	"Use for Anthropic-compatible endpoints that reject eager tool input streaming.":
+		"Gunakan untuk endpoint serasi Anthropic yang menolak penstriman input alat eager.",
+	"Send session_id header": "Hantar pengepala session_id",
+	"Long cache retention": "Pengekalan cache panjang",
+	"Reasoning replay": "Main semula pemikiran",
+	"Eager tool input streaming": "Penstriman input alat eager",
 	"Please fill in all required fields": "Sila isi semua medan wajib",
 	"Please add at least one model ID": "Sila tambah sekurang-kurangnya satu ID model",
 	"Failed to save provider": "Gagal menyimpan penyedia",

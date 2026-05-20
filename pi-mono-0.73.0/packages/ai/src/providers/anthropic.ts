@@ -163,11 +163,13 @@ export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
+const MISSING_TOOL_CALL_REASONING_CONTENT = "Reasoning content was not stored for this tool call.";
 
 function getAnthropicCompat(model: Model<"anthropic-messages">): Required<AnthropicMessagesCompat> {
 	return {
 		supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? true,
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+		reasoningReplayFormat: model.compat?.reasoningReplayFormat ?? "anthropic-signature",
 	};
 }
 
@@ -872,9 +874,11 @@ function buildParams(
 	options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention);
+	const compat = getAnthropicCompat(model);
+	const thinkingEnabled = options?.thinkingEnabled === true;
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
-		messages: convertMessages(context.messages, model, isOAuthToken, cacheControl),
+		messages: convertMessages(context.messages, model, isOAuthToken, compat, thinkingEnabled, cacheControl),
 		max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,
 		stream: true,
 	};
@@ -915,7 +919,7 @@ function buildParams(
 		params.tools = convertTools(
 			context.tools,
 			isOAuthToken,
-			getAnthropicCompat(model).supportsEagerToolInputStreaming,
+			compat.supportsEagerToolInputStreaming,
 			cacheControl,
 		);
 	}
@@ -979,9 +983,13 @@ function convertMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
+	compat: Required<AnthropicMessagesCompat>,
+	thinkingEnabled: boolean,
 	cacheControl?: CacheControlEphemeral,
 ): MessageParam[] {
 	const params: MessageParam[] = [];
+	const replayDeepSeekReasoningContent =
+		thinkingEnabled && compat.reasoningReplayFormat === "deepseek-reasoning-content";
 
 	// Transform messages for cross-provider compatibility
 	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
@@ -1029,6 +1037,7 @@ function convertMessages(
 			}
 		} else if (msg.role === "assistant") {
 			const blocks: ContentBlockParam[] = [];
+			const reasoningContent: string[] = [];
 
 			for (const block of msg.content) {
 				if (block.type === "text") {
@@ -1047,10 +1056,19 @@ function convertMessages(
 						continue;
 					}
 					if (block.thinking.trim().length === 0) continue;
+					reasoningContent.push(sanitizeSurrogates(block.thinking));
 					// If thinking signature is missing/empty (e.g., from aborted stream),
 					// convert to plain text block without <thinking> tags to avoid API rejection
 					// and prevent Claude from mimicking the tags in responses
 					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
+						if (replayDeepSeekReasoningContent) {
+							blocks.push({
+								type: "thinking",
+								thinking: sanitizeSurrogates(block.thinking),
+								signature: "",
+							});
+							continue;
+						}
 						blocks.push({
 							type: "text",
 							text: sanitizeSurrogates(block.thinking),
@@ -1071,11 +1089,28 @@ function convertMessages(
 					});
 				}
 			}
+			if (
+				replayDeepSeekReasoningContent &&
+				reasoningContent.length === 0 &&
+				blocks.some((block) => block.type === "tool_use")
+			) {
+				reasoningContent.push(MISSING_TOOL_CALL_REASONING_CONTENT);
+				blocks.unshift({
+					type: "thinking",
+					thinking: MISSING_TOOL_CALL_REASONING_CONTENT,
+					signature: "",
+				});
+			}
 			if (blocks.length === 0) continue;
-			params.push({
+			const assistantMessage = {
 				role: "assistant",
 				content: blocks,
-			});
+			} satisfies MessageParam;
+			if (replayDeepSeekReasoningContent) {
+				(assistantMessage as MessageParam & { reasoning_content?: string }).reasoning_content =
+					reasoningContent.join("\n");
+			}
+			params.push(assistantMessage);
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint
 			const toolResults: ContentBlockParam[] = [];

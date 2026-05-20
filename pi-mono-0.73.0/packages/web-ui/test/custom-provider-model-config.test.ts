@@ -22,10 +22,18 @@ describe("custom provider manual model config", () => {
 				id: "mimo-v2.5",
 				vision: true,
 				reasoning: true,
+				openAICompletionsProfile: "deepseek-mimo",
+				openAIResponsesProfile: "standard",
+				anthropicMessagesProfile: "standard",
 				thinkingFormat: "deepseek",
 				requiresReasoningContentOnAssistantMessages: true,
 				supportsReasoningEffort: true,
 				maxTokensField: "max_tokens",
+				sendSessionIdHeader: true,
+				openAIResponsesSupportsLongCacheRetention: true,
+				anthropicReasoningReplayFormat: "anthropic-signature",
+				supportsEagerToolInputStreaming: true,
+				anthropicSupportsLongCacheRetention: true,
 				contextWindow: "64000",
 				maxTokens: "4096",
 			},
@@ -73,12 +81,92 @@ describe("custom provider manual model config", () => {
 			id: "qwen3",
 			vision: true,
 			reasoning: true,
+			openAICompletionsProfile: "qwen",
+			openAIResponsesProfile: "standard",
+			anthropicMessagesProfile: "standard",
 			thinkingFormat: "qwen",
 			requiresReasoningContentOnAssistantMessages: false,
 			supportsReasoningEffort: false,
 			maxTokensField: "max_completion_tokens",
+			sendSessionIdHeader: true,
+			openAIResponsesSupportsLongCacheRetention: true,
+			anthropicReasoningReplayFormat: "anthropic-signature",
+			supportsEagerToolInputStreaming: true,
+			anthropicSupportsLongCacheRetention: true,
 			contextWindow: "32768",
 			maxTokens: "2048",
 		});
 	});
+
+	it("creates per-model Anthropic-compatible MiMo/DeepSeek reasoning replay settings", () => {
+		const anthropicProvider: Omit<CustomProvider, "models"> = {
+			...provider,
+			type: "anthropic-messages",
+			baseUrl: "https://token-plan-cn.xiaomimimo.com/anthropic",
+		};
+		const config = {
+			...defaultConfig("mimo-v2.5"),
+			vision: true,
+			reasoning: true,
+			anthropicMessagesProfile: "mimo-deepseek",
+			anthropicReasoningReplayFormat: "deepseek-reasoning-content",
+		} satisfies ManualModelConfig;
+
+		const [model] = createManualModelsFromConfigs(anthropicProvider, [config]);
+
+		expect(model).toMatchObject({
+			api: "anthropic-messages",
+			input: ["text", "image"],
+			reasoning: true,
+			compat: {
+				reasoningReplayFormat: "deepseek-reasoning-content",
+			},
+		});
+	});
+
+	it("creates per-model OpenAI Responses-compatible advanced settings", () => {
+		const responsesProvider: Omit<CustomProvider, "models"> = {
+			...provider,
+			type: "openai-responses",
+			baseUrl: "http://localhost:8000/v1",
+		};
+		const config = {
+			...defaultConfig("gpt-5-local"),
+			openAIResponsesProfile: "generic-gateway",
+			sendSessionIdHeader: false,
+			openAIResponsesSupportsLongCacheRetention: false,
+		} satisfies ManualModelConfig;
+
+		const [model] = createManualModelsFromConfigs(responsesProvider, [config]);
+
+		expect(model).toMatchObject({
+			api: "openai-responses",
+			compat: {
+				sendSessionIdHeader: false,
+				supportsLongCacheRetention: false,
+			},
+		});
+	});
 });
+
+function defaultConfig(id: string): ManualModelConfig {
+	return {
+		id,
+		vision: false,
+		reasoning: false,
+		openAICompletionsProfile: "standard",
+		openAIResponsesProfile: "standard",
+		anthropicMessagesProfile: "standard",
+		thinkingFormat: "openai",
+		requiresReasoningContentOnAssistantMessages: false,
+		supportsReasoningEffort: true,
+		maxTokensField: "max_completion_tokens",
+		sendSessionIdHeader: true,
+		openAIResponsesSupportsLongCacheRetention: true,
+		anthropicReasoningReplayFormat: "anthropic-signature",
+		supportsEagerToolInputStreaming: true,
+		anthropicSupportsLongCacheRetention: true,
+		contextWindow: "128000",
+		maxTokens: "8192",
+	};
+}

@@ -11,6 +11,10 @@ export interface StorageConfig {
 	projectBuildCommand: string;
 	projectInstallTimeoutMs: number;
 	projectBuildTimeoutMs: number;
+	serverSessionSyncEnabled: boolean;
+	defaultModelProvider: string;
+	defaultModelId: string;
+	handoffDefaultThinkingLevel: string;
 }
 
 export interface ProjectWorkspaceContext {
@@ -64,9 +68,12 @@ export interface ProjectPreviewResult extends JsonObject {
 	sessionId: string;
 	title: string;
 	status: string;
+	mode: "static" | "node-service";
 	previewUrl: string;
 	projectRoot: string;
 	serveRoot: string;
+	startCommand?: string;
+	servicePort?: number;
 	fileCount: number;
 	updatedAt: string;
 	logs: string[];

@@ -44,7 +44,11 @@ Before starting, edit `pi-storage.config.json`:
 
 ```json
 {
-  "previewBaseUrl": "http://SERVER_IP:5173"
+  "previewBaseUrl": "http://SERVER_IP:5173",
+  "serverSessionSyncEnabled": false,
+  "defaultModelProvider": "",
+  "defaultModelId": "",
+  "handoffDefaultThinkingLevel": "high"
 }
 ```
 

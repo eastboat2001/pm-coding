@@ -11,7 +11,7 @@ export type {
 	StorageConfig,
 } from "./types.js";
 export { configuredStoragePlugin } from "./vite-plugin.js";
-export { WorkspaceCommandService } from "./workspace-command-service.js";
+export { isUnsafeProjectCommand, WorkspaceCommandService } from "./workspace-command-service.js";
 export { WorkspaceFileService } from "./workspace-file-service.js";
 export { WorkspacePreviewService } from "./workspace-preview-service.js";
 export { WorkspaceSessionService } from "./workspace-session-service.js";

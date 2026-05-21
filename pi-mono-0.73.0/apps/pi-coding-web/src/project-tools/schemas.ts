@@ -23,9 +23,12 @@ export type ProjectBashDetails = {
 
 export type ProjectPreviewDetails = {
 	status: string;
+	mode?: "static" | "node-service";
 	previewUrl: string;
 	projectRoot: string;
 	serveRoot: string;
+	startCommand?: string;
+	servicePort?: number;
 	fileCount: number;
 	logs?: string[];
 };
@@ -58,7 +61,7 @@ export const projectFileSchema = Type.Object({
 export const projectBashSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Short non-interactive command to run in the server project root, such as npm test, npm run build, or node scripts. Do not start long-running dev servers. If a command fails, use the returned error/output to choose a compatible follow-up command.",
+			"Short non-interactive command to run in the server project root, such as npm test, npm run build, or node scripts. Do not start long-running dev servers or run global process-kill commands such as taskkill /IM node.exe, pkill node, killall node, or Stop-Process -Name node. If a command fails, use the returned error/output to choose a compatible follow-up command.",
 	}),
 	timeoutMs: Type.Optional(Type.Number({ description: "Optional timeout in milliseconds, max 300000." })),
 });

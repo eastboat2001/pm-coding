@@ -1,5 +1,6 @@
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import {
 	type AgentState,
@@ -10,6 +11,7 @@ import {
 	getCurrentLanguage,
 	IndexedDBStorageBackend,
 	i18n,
+	LANGUAGE_CHANGE_EVENT,
 	LanguageTab,
 	loadAttachment,
 	ModelSelector,
@@ -19,6 +21,7 @@ import {
 	SessionsStore,
 	SettingsDialog,
 	SettingsStore,
+	setLanguage,
 	setAppStorage,
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
@@ -37,11 +40,16 @@ import {
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../prompts/coding-system-prompt.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
-import { mergeSessionMetadata } from "../storage/merged-session-index.js";
+import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
 import { ModelController, SELECTED_MODEL_KEY } from "./model-controller.js";
 import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessionTitle } from "./session-controller.js";
+
+const piRuntimeConfig = {
+	serverSessionSyncEnabled: false,
+	handoffDefaultThinkingLevel: "high" as ThinkingLevel,
+};
 
 document.documentElement.lang = getCurrentLanguage();
 
@@ -77,6 +85,38 @@ const storage = new AppStorage(settings, providerKeys, sessions, customProviders
 setAppStorage(storage);
 const modelController = new ModelController(storage, configuredStorage);
 
+const loadPiRuntimeConfig = async () => {
+	const status = await configuredStorage.getStatus();
+	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
+	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
+};
+
+const syncRuntimeConfigAfterRender = async () => {
+	await loadPiRuntimeConfig();
+	if (isServerSessionSyncEnabled() && currentSessionId) {
+		await configuredStorage.writeSettings({ currentSessionId });
+	}
+};
+
+const isServerSessionSyncEnabled = () => piRuntimeConfig.serverSessionSyncEnabled;
+
+const normalizeThinkingLevel = (value?: string): ThinkingLevel => {
+	const normalized = String(value || "")
+		.trim()
+		.toLowerCase();
+	if (
+		normalized === "off" ||
+		normalized === "minimal" ||
+		normalized === "low" ||
+		normalized === "medium" ||
+		normalized === "high" ||
+		normalized === "xhigh"
+	) {
+		return normalized;
+	}
+	return "high";
+};
+
 let currentSessionId: string | undefined;
 let currentSessionCreatedAt: string | undefined;
 let currentTitle = "";
@@ -107,7 +147,9 @@ const setCurrentSessionId = async (sessionId: string | undefined) => {
 	} else {
 		await storage.settings.delete(CURRENT_SESSION_ID_KEY);
 	}
-	await configuredStorage.writeSettings({ currentSessionId: sessionId ?? null });
+	if (isServerSessionSyncEnabled()) {
+		await configuredStorage.writeSettings({ currentSessionId: sessionId ?? null });
+	}
 	updateUrl(sessionId);
 };
 
@@ -117,9 +159,9 @@ const ensureSessionIdentity = async () => {
 	await setCurrentSessionId(crypto.randomUUID());
 };
 
-const createInitialAgentState = (model: Model<any>): Partial<AgentState> => ({
+const createInitialAgentState = (model?: Model<any>): Partial<AgentState> => ({
 	systemPrompt: DEFAULT_SYSTEM_PROMPT,
-	model,
+	...(model ? { model } : {}),
 	thinkingLevel: "off",
 	messages: [],
 	tools: [],
@@ -170,49 +212,30 @@ const saveSession = async () => {
 		};
 
 		await storage.sessions.save(sessionData, metadata);
-		await configuredStorage.writeSession(sessionData, metadata);
+		if (isServerSessionSyncEnabled()) {
+			await configuredStorage.writeSession(sessionData, metadata);
+		}
 	} catch (err) {
 		console.error("Failed to save session:", err);
 	}
 };
 
-const loadConfiguredSession = async (sessionId: string): Promise<boolean> => {
-	const configuredRecord = await configuredStorage.readSession(sessionId);
-	if (!configuredRecord) {
-		return false;
-	}
-	await storage.sessions.save(configuredRecord.data, configuredRecord.metadata);
-	await loadSession(sessionId);
-	return true;
-};
-
-const loadMergedSession = async (sessionId: string): Promise<boolean> => {
-	const browserSession = await storage.sessions.get(sessionId);
-	const configuredSession = await configuredStorage.readSession(sessionId);
-	if (browserSession && configuredSession) {
-		if (configuredSession.data.lastModified > browserSession.lastModified) {
-			await storage.sessions.save(configuredSession.data, configuredSession.metadata);
-		}
-		return await loadSession(sessionId);
-	}
-	if (browserSession) {
-		return await loadSession(sessionId);
-	}
-	if (configuredSession) {
-		return await loadConfiguredSession(sessionId);
-	}
-	return false;
-};
-
-const getMergedSessions = async () => {
+const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
 	const browserSessions = await storage.sessions.getAllMetadata();
-	const configuredSessions = await configuredStorage.listSessionMetadata();
-	return mergeSessionMetadata(browserSessions, configuredSessions);
+	return browserSessions
+		.map((session) => ({
+			...session,
+			browser: session,
+			preferredSource: "browser" as const,
+		}))
+		.sort((a, b) => b.lastModified.localeCompare(a.lastModified));
 };
 
-const deleteMergedSession = async (sessionId: string) => {
+const deleteBrowserSession = async (sessionId: string) => {
 	await storage.sessions.deleteSession(sessionId);
-	await configuredStorage.deleteSession(sessionId);
+	if (isServerSessionSyncEnabled()) {
+		await configuredStorage.deleteSession(sessionId);
+	}
 };
 
 const handleAgentEvent = async (event: AgentEvent) => {
@@ -233,17 +256,22 @@ const handleAgentEvent = async (event: AgentEvent) => {
 };
 
 const handleModelSelect = () => {
-	ModelSelector.open(agent.state.model ?? null, (model) => {
-		agent.state.model = model;
-		void (async () => {
-			await modelController.persistSelectedModel(model);
-			if (currentSessionId) {
-				await saveSession();
-			}
-			chatPanel.agentInterface?.requestUpdate();
-			renderApp();
-		})();
-	});
+	ModelSelector.open(
+		agent.state.model ?? null,
+		(model) => {
+			agent.state.model = model;
+			void (async () => {
+				await modelController.persistSelectedModel(model);
+				if (currentSessionId) {
+					await saveSession();
+				}
+				chatPanel.agentInterface?.requestUpdate();
+				renderApp();
+			})();
+		},
+		undefined,
+		false,
+	);
 };
 
 const resumeInterruptedSessionIfNeeded = () => {
@@ -276,7 +304,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		void handleAgentEvent(event);
 	});
 
-	await modelController.persistSelectedModel(agent.state.model!);
+	await modelController.persistSelectedModel(agent.state.model);
 
 	await chatPanel.setAgent(agent, {
 		onApiKeyRequired: async (provider: string) => {
@@ -284,10 +312,14 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		},
 		onBeforeSend: async () => {
 			await ensureSessionIdentity();
-			await modelController.persistSelectedModel(agent.state.model!);
+			await modelController.persistSelectedModel(agent.state.model);
 			await saveSession();
 		},
 		onModelSelect: handleModelSelect,
+		onThinkingChange: async () => {
+			await ensureSessionIdentity();
+			await saveSession();
+		},
 		enableArtifacts: false,
 		toolsFactory: (toolAgent) =>
 			createServerProjectTools(() => ({
@@ -309,10 +341,13 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 	await setCurrentSessionId(sessionId);
 	currentSessionCreatedAt = sessionData.createdAt;
 	currentTitle = isDefaultNewSessionTitle(sessionData.title) ? "" : sessionData.title || "";
-	await modelController.persistSelectedModel(sessionData.model);
+	const sessionModel = await modelController.resolveCustomModel(sessionData.model);
+	if (sessionModel) {
+		await modelController.persistSelectedModel(sessionModel);
+	}
 
 	await createAgent({
-		model: sessionData.model,
+		...(sessionModel ? { model: sessionModel } : {}),
 		thinkingLevel: sessionData.thinkingLevel,
 		messages: sessionData.messages,
 		tools: [],
@@ -336,7 +371,36 @@ const startFreshSession = async (persistImmediately = false) => {
 	renderApp();
 };
 
+const normalizeHandoffLanguage = (language?: string) => {
+	const normalized = String(language || "")
+		.trim()
+		.toLowerCase()
+		.replace("_", "-");
+	if (normalized === "zh" || normalized.startsWith("zh-")) return "zh";
+	if (normalized === "de" || normalized.startsWith("de-")) return "de";
+	if (normalized === "ms" || normalized.startsWith("ms-")) return "ms";
+	return "en";
+};
+
+const applyHandoffLanguage = (language?: string) => {
+	const handoffLanguage = normalizeHandoffLanguage(language);
+	setLanguage(handoffLanguage);
+	document.documentElement.lang = handoffLanguage;
+};
+
+const applyHandoffDefaultThinkingLevel = async () => {
+	if (agent.state.model?.reasoning !== true) return;
+	if (agent.state.thinkingLevel !== "off") return;
+	if (agent.state.messages.length > 0) return;
+
+	agent.state.thinkingLevel = piRuntimeConfig.handoffDefaultThinkingLevel;
+	if (currentSessionId) {
+		await saveSession();
+	}
+};
+
 const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
+	applyHandoffLanguage(payload.language);
 	const attachments = await Promise.all(
 		(payload.documents || []).map((document) =>
 			loadAttachment(buildPmApiUrl(document.download_url), document.filename),
@@ -346,6 +410,7 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 	if (payload.title) {
 		currentTitle = payload.title;
 	}
+	await applyHandoffDefaultThinkingLevel();
 	chatPanel.agentInterface?.setInput(buildCodingHandoffPrompt(payload), attachments);
 	if (currentSessionId) {
 		await saveSession();
@@ -357,6 +422,7 @@ const restoreInitialSession = async () => {
 	const urlParams = new URLSearchParams(window.location.search);
 	const handoffToken = urlParams.get("handoff_token");
 	if (handoffToken) {
+		await loadPiRuntimeConfig();
 		const payload = await fetchPmHandoffPayload(handoffToken);
 		if (!payload.documents_ready) {
 			throw new Error("PM handoff documents are not ready");
@@ -367,13 +433,20 @@ const restoreInitialSession = async () => {
 
 	const sessionIdFromUrl = urlParams.get("session");
 	if (sessionIdFromUrl) {
-		const loaded = await loadMergedSession(sessionIdFromUrl);
+		if (urlParams.get("source") === "rqmd") {
+			await loadPiRuntimeConfig();
+		}
+		const loaded = await loadSession(sessionIdFromUrl);
+		if (loaded && urlParams.get("source") === "rqmd") {
+			await applyHandoffDefaultThinkingLevel();
+			renderApp();
+		}
 		if (loaded) return;
 	}
 
 	const storedCurrentSessionId = await storage.settings.get<string>(CURRENT_SESSION_ID_KEY);
 	if (storedCurrentSessionId) {
-		const loaded = await loadMergedSession(storedCurrentSessionId);
+		const loaded = await loadSession(storedCurrentSessionId);
 		if (loaded) return;
 		await setCurrentSessionId(undefined);
 	}
@@ -382,20 +455,10 @@ const restoreInitialSession = async () => {
 	if (configuredSettings?.selectedModel) {
 		await storage.settings.set(SELECTED_MODEL_KEY, configuredSettings.selectedModel);
 	}
-	if (configuredSettings?.currentSessionId) {
-		const loaded = await loadMergedSession(configuredSettings.currentSessionId);
-		if (loaded) return;
-	}
 
 	const latestSessionId = await storage.sessions.getLatestSessionId();
 	if (latestSessionId) {
-		const loaded = await loadMergedSession(latestSessionId);
-		if (loaded) return;
-	}
-
-	const mergedSessions = await getMergedSessions();
-	if (mergedSessions.length > 0) {
-		const loaded = await loadMergedSession(mergedSessions[0].id);
+		const loaded = await loadSession(latestSessionId);
 		if (loaded) return;
 	}
 
@@ -425,18 +488,18 @@ const renderApp = () => {
 						children: icon(History, "sm"),
 						onClick: () => {
 							LocalSessionListDialog.open(
-								getMergedSessions,
+								getBrowserSessions,
 								async (sessionId) => {
-									await loadMergedSession(sessionId);
+									await loadSession(sessionId);
 								},
 								(deletedSessionId) => {
 									void (async () => {
-										await deleteMergedSession(deletedSessionId);
+										await deleteBrowserSession(deletedSessionId);
 										if (deletedSessionId === currentSessionId) {
 											await setCurrentSessionId(undefined);
-											const mergedSessions = await getMergedSessions();
-											if (mergedSessions.length > 0) {
-												const loaded = await loadMergedSession(mergedSessions[0].id);
+											const browserSessions = await getBrowserSessions();
+											if (browserSessions.length > 0) {
+												const loaded = await loadSession(browserSessions[0].id);
 												if (loaded) return;
 											}
 											await startFreshSession(true);
@@ -520,7 +583,9 @@ const renderApp = () => {
 						size: "sm",
 						children: icon(Settings, "sm"),
 						onClick: () => {
-							SettingsDialog.open([new LanguageTab(), new ProvidersModelsTab(), new ProxyTab()]);
+							const providersTab = new ProvidersModelsTab();
+							providersTab.showKnownProviders = false;
+							SettingsDialog.open([new LanguageTab(), providersTab, new ProxyTab()]);
 						},
 						title: i18n("Settings"),
 					})}
@@ -535,6 +600,16 @@ const renderApp = () => {
 
 	render(appHtml, app);
 };
+
+window.addEventListener(LANGUAGE_CHANGE_EVENT, () => {
+	document.documentElement.lang = getCurrentLanguage();
+	chatPanel?.requestUpdate();
+	chatPanel?.agentInterface?.requestUpdate();
+	(
+		chatPanel?.agentInterface?.querySelector("message-editor") as { requestUpdate?: () => void } | null
+	)?.requestUpdate?.();
+	renderApp();
+});
 
 export async function initApp() {
 	const app = document.getElementById("app");
@@ -552,4 +627,5 @@ export async function initApp() {
 	chatPanel = new ChatPanel();
 	await restoreInitialSession();
 	renderApp();
+	void syncRuntimeConfigAfterRender();
 }

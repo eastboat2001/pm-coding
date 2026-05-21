@@ -1,4 +1,17 @@
-import { defaultEnglish, defaultGerman, type MiniLitRequiredMessages, setTranslations } from "@mariozechner/mini-lit";
+import {
+	defaultEnglish,
+	defaultGerman,
+	type LanguageCode,
+	type MiniLitRequiredMessages,
+	setTranslations,
+} from "@mariozechner/mini-lit";
+
+export const LANGUAGE_CHANGE_EVENT = "pi-language-change";
+
+export function setLanguage(code: LanguageCode) {
+	localStorage.setItem("language", code);
+	window.dispatchEvent(new CustomEvent(LANGUAGE_CHANGE_EVENT, { detail: { language: code } }));
+}
 
 declare module "@mariozechner/mini-lit" {
 	interface i18nMessages extends MiniLitRequiredMessages {
@@ -7,10 +20,12 @@ declare module "@mariozechner/mini-lit" {
 		Cancel: string;
 		Confirm: string;
 		"Select Model": string;
+		"Please select a model first.": string;
 		"Search models...": string;
 		Format: string;
 		Thinking: string;
 		Vision: string;
+		Reasoning: string;
 		You: string;
 		Assistant: string;
 		"Thinking...": string;
@@ -26,6 +41,7 @@ declare module "@mariozechner/mini-lit" {
 		Test: string;
 		Remove: string;
 		Save: string;
+		"Saving...": string;
 		"Update API key": string;
 		"Enter API key": string;
 		"Type a message...": string;
@@ -178,6 +194,7 @@ declare module "@mariozechner/mini-lit" {
 		"User-configured servers with auto-discovered or manually defined models.": string;
 		"Add Provider": string;
 		"No custom providers configured. Click 'Add Provider' to get started.": string;
+		"No custom models configured. Add a custom provider in Settings first.": string;
 		Models: string;
 		"auto-discovered": string;
 		Refresh: string;
@@ -197,7 +214,40 @@ declare module "@mariozechner/mini-lit" {
 		and: string;
 		more: string;
 		"For manual provider types, add models after saving the provider.": string;
+		"Enter one or more model IDs. Separate multiple models with new lines or commas.": string;
+		"Enter one model ID per row. Use the exact ID reported by your model service.": string;
+		"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.": string;
+		"Model IDs": string;
+		"Add Model": string;
+		"Remove model": string;
+		"e.g., gpt-oss-120b": string;
+		"Context window": string;
+		"Max output tokens": string;
+		"Max tokens field": string;
+		"Thinking protocol": string;
+		"Send reasoning effort": string;
+		"Replay reasoning_content": string;
+		"Compatibility profile": string;
+		"Compatibility mode": string;
+		"Use when the endpoint closely follows OpenAI Chat Completions.": string;
+		"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.": string;
+		"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.": string;
+		"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.": string;
+		"Use for Qwen endpoints that enable thinking with enable_thinking.": string;
+		"Use when the provider requires chat_template_kwargs.enable_thinking.": string;
+		"Use for Z.AI endpoints that enable thinking with enable_thinking.": string;
+		"Use only when you need to tune low-level compatibility switches manually.": string;
+		"Use when the endpoint follows the official OpenAI Responses API.": string;
+		"Use for Responses-compatible gateways that reject session_id or long cache retention.": string;
+		"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.": string;
+		"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.": string;
+		"Use for Anthropic-compatible endpoints that reject eager tool input streaming.": string;
+		"Send session_id header": string;
+		"Long cache retention": string;
+		"Reasoning replay": string;
+		"Eager tool input streaming": string;
 		"Please fill in all required fields": string;
+		"Please add at least one model ID": string;
 		"Failed to save provider": string;
 		"OpenAI Completions Compatible": string;
 		"OpenAI Responses Compatible": string;
@@ -219,6 +269,7 @@ declare module "@mariozechner/mini-lit" {
 		"Demo: Add Custom Notification": string;
 		"AITC platform logo": string;
 		"Load a browser or configured local conversation": string;
+		"Load a browser conversation": string;
 		"Creating file": string;
 		"Created file": string;
 		"Rewriting file": string;
@@ -248,10 +299,12 @@ export const translations = {
 		Cancel: "Cancel",
 		Confirm: "Confirm",
 		"Select Model": "Select Model",
+		"Please select a model first.": "Please select a model first.",
 		"Search models...": "Search models...",
 		Format: "Format",
 		Thinking: "Thinking",
 		Vision: "Vision",
+		Reasoning: "Reasoning",
 		You: "You",
 		Assistant: "Assistant",
 		"Thinking...": "Thinking...",
@@ -268,6 +321,7 @@ export const translations = {
 		Test: "Test",
 		Remove: "Remove",
 		Save: "Save",
+		"Saving...": "Saving...",
 		"Update API key": "Update API key",
 		"Enter API key": "Enter API key",
 		"Type a message...": "Type a message...",
@@ -432,6 +486,8 @@ export const translations = {
 		"Add Provider": "Add Provider",
 		"No custom providers configured. Click 'Add Provider' to get started.":
 			"No custom providers configured. Click 'Add Provider' to get started.",
+		"No custom models configured. Add a custom provider in Settings first.":
+			"No custom models configured. Add a custom provider in Settings first.",
 		"auto-discovered": "auto-discovered",
 		Refresh: "Refresh",
 		Edit: "Edit",
@@ -452,7 +508,56 @@ export const translations = {
 		more: "more",
 		"For manual provider types, add models after saving the provider.":
 			"For manual provider types, add models after saving the provider.",
+		"Enter one or more model IDs. Separate multiple models with new lines or commas.":
+			"Enter one or more model IDs. Separate multiple models with new lines or commas.",
+		"Enter one model ID per row. Use the exact ID reported by your model service.":
+			"Enter one model ID per row. Use the exact ID reported by your model service.",
+		"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.":
+			"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.",
+		"Model IDs": "Model IDs",
+		"Add Model": "Add Model",
+		"Remove model": "Remove model",
+		"e.g., gpt-oss-120b": "e.g., gpt-oss-120b",
+		"Context window": "Context window",
+		"Max output tokens": "Max output tokens",
+		"Max tokens field": "Max tokens field",
+		"Thinking protocol": "Thinking protocol",
+		"Send reasoning effort": "Send reasoning effort",
+		"Replay reasoning_content": "Replay reasoning_content",
+		"Compatibility profile": "Compatibility profile",
+		"Compatibility mode": "Compatibility mode",
+		"Use when the endpoint closely follows OpenAI Chat Completions.":
+			"Use when the endpoint closely follows OpenAI Chat Completions.",
+		"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.":
+			"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.",
+		"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.":
+			"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.",
+		"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.":
+			"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.",
+		"Use for Qwen endpoints that enable thinking with enable_thinking.":
+			"Use for Qwen endpoints that enable thinking with enable_thinking.",
+		"Use when the provider requires chat_template_kwargs.enable_thinking.":
+			"Use when the provider requires chat_template_kwargs.enable_thinking.",
+		"Use for Z.AI endpoints that enable thinking with enable_thinking.":
+			"Use for Z.AI endpoints that enable thinking with enable_thinking.",
+		"Use only when you need to tune low-level compatibility switches manually.":
+			"Use only when you need to tune low-level compatibility switches manually.",
+		"Use when the endpoint follows the official OpenAI Responses API.":
+			"Use when the endpoint follows the official OpenAI Responses API.",
+		"Use for Responses-compatible gateways that reject session_id or long cache retention.":
+			"Use for Responses-compatible gateways that reject session_id or long cache retention.",
+		"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.":
+			"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.",
+		"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.":
+			"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.",
+		"Use for Anthropic-compatible endpoints that reject eager tool input streaming.":
+			"Use for Anthropic-compatible endpoints that reject eager tool input streaming.",
+		"Send session_id header": "Send session_id header",
+		"Long cache retention": "Long cache retention",
+		"Reasoning replay": "Reasoning replay",
+		"Eager tool input streaming": "Eager tool input streaming",
 		"Please fill in all required fields": "Please fill in all required fields",
+		"Please add at least one model ID": "Please add at least one model ID",
 		"Failed to save provider": "Failed to save provider",
 		"OpenAI Completions Compatible": "OpenAI Completions Compatible",
 		"OpenAI Responses Compatible": "OpenAI Responses Compatible",
@@ -474,6 +579,7 @@ export const translations = {
 		"Demo: Add Custom Notification": "Demo: Add Custom Notification",
 		"AITC platform logo": "AITC platform logo",
 		"Load a browser or configured local conversation": "Load a browser or configured local conversation",
+		"Load a browser conversation": "Load a browser conversation",
 		"Creating file": "Creating file",
 		"Created file": "Created file",
 		"Rewriting file": "Rewriting file",
@@ -500,10 +606,12 @@ export const translations = {
 		Cancel: "Abbrechen",
 		Confirm: "Bestätigen",
 		"Select Model": "Modell auswählen",
+		"Please select a model first.": "Bitte wählen Sie zuerst ein Modell aus.",
 		"Search models...": "Modelle suchen...",
 		Format: "Formatieren",
 		Thinking: "Thinking",
 		Vision: "Vision",
+		Reasoning: "Reasoning",
 		You: "Sie",
 		Assistant: "Assistent",
 		"Thinking...": "Denkt nach...",
@@ -520,6 +628,7 @@ export const translations = {
 		Test: "Testen",
 		Remove: "Entfernen",
 		Save: "Speichern",
+		"Saving...": "Speichert...",
 		"Update API key": "API-Schlüssel aktualisieren",
 		"Enter API key": "API-Schlüssel eingeben",
 		"Type a message...": "Nachricht eingeben...",
@@ -684,6 +793,8 @@ export const translations = {
 		"Add Provider": "Anbieter hinzufügen",
 		"No custom providers configured. Click 'Add Provider' to get started.":
 			"Keine benutzerdefinierten Anbieter konfiguriert. Klicken Sie auf 'Anbieter hinzufügen', um zu beginnen.",
+		"No custom models configured. Add a custom provider in Settings first.":
+			"Keine benutzerdefinierten Modelle konfiguriert. Fügen Sie zuerst in den Einstellungen einen Anbieter hinzu.",
 		"auto-discovered": "automatisch erkannt",
 		Refresh: "Aktualisieren",
 		Edit: "Bearbeiten",
@@ -704,7 +815,56 @@ export const translations = {
 		more: "mehr",
 		"For manual provider types, add models after saving the provider.":
 			"Für manuelle Anbietertypen fügen Sie Modelle nach dem Speichern des Anbieters hinzu.",
+		"Enter one or more model IDs. Separate multiple models with new lines or commas.":
+			"Geben Sie eine oder mehrere Modell-IDs ein. Trennen Sie mehrere Modelle mit Zeilenumbrüchen oder Kommas.",
+		"Enter one model ID per row. Use the exact ID reported by your model service.":
+			"Geben Sie eine Modell-ID pro Zeile ein. Verwenden Sie die exakte ID Ihres Modelldienstes.",
+		"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.":
+			"Konfigurieren Sie jedes Modell separat. Verwenden Sie die exakte ID Ihres Modelldienstes und aktivieren Sie nur unterstützte Fähigkeiten.",
+		"Model IDs": "Modell-IDs",
+		"Add Model": "Modell hinzufügen",
+		"Remove model": "Modell entfernen",
+		"e.g., gpt-oss-120b": "z.B. gpt-oss-120b",
+		"Context window": "Kontextfenster",
+		"Max output tokens": "Max. Ausgabetokens",
+		"Max tokens field": "Max-Tokens-Feld",
+		"Thinking protocol": "Thinking-Protokoll",
+		"Send reasoning effort": "Reasoning effort senden",
+		"Replay reasoning_content": "reasoning_content wiedergeben",
+		"Compatibility profile": "Kompatibilitätsprofil",
+		"Compatibility mode": "Kompatibilitätsmodus",
+		"Use when the endpoint closely follows OpenAI Chat Completions.":
+			"Für Endpunkte, die OpenAI Chat Completions eng folgen.",
+		"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.":
+			"Für lokale oder einfache OpenAI-kompatible Server, die erweiterte OpenAI-Felder ablehnen.",
+		"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.":
+			"Für DeepSeek- oder MiMo-Chat-Completions-Endpunkte, die reasoning_content-Wiedergabe verlangen.",
+		"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.":
+			"Für OpenRouter-Endpunkte, die Denken über das verschachtelte reasoning-Feld konfigurieren.",
+		"Use for Qwen endpoints that enable thinking with enable_thinking.":
+			"Für Qwen-Endpunkte, die Denken mit enable_thinking aktivieren.",
+		"Use when the provider requires chat_template_kwargs.enable_thinking.":
+			"Verwenden, wenn der Anbieter chat_template_kwargs.enable_thinking verlangt.",
+		"Use for Z.AI endpoints that enable thinking with enable_thinking.":
+			"Für Z.AI-Endpunkte, die Denken mit enable_thinking aktivieren.",
+		"Use only when you need to tune low-level compatibility switches manually.":
+			"Nur verwenden, wenn Low-Level-Kompatibilitätsschalter manuell angepasst werden müssen.",
+		"Use when the endpoint follows the official OpenAI Responses API.":
+			"Für Endpunkte, die der offiziellen OpenAI Responses API folgen.",
+		"Use for Responses-compatible gateways that reject session_id or long cache retention.":
+			"Für Responses-kompatible Gateways, die session_id oder lange Cache-Aufbewahrung ablehnen.",
+		"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.":
+			"Für offizielle Anthropic- oder kompatible Endpunkte, die signierte Thinking-Blöcke wiedergeben.",
+		"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.":
+			"Für Anthropic-Endpunkte im MiMo- oder DeepSeek-Stil, die reasoning_content-Wiedergabe verlangen.",
+		"Use for Anthropic-compatible endpoints that reject eager tool input streaming.":
+			"Für Anthropic-kompatible Endpunkte, die Eager Tool Input Streaming ablehnen.",
+		"Send session_id header": "session_id-Header senden",
+		"Long cache retention": "Lange Cache-Aufbewahrung",
+		"Reasoning replay": "Reasoning-Wiedergabe",
+		"Eager tool input streaming": "Eager Tool Input Streaming",
 		"Please fill in all required fields": "Bitte füllen Sie alle erforderlichen Felder aus",
+		"Please add at least one model ID": "Bitte fügen Sie mindestens eine Modell-ID hinzu",
 		"Failed to save provider": "Fehler beim Speichern des Anbieters",
 		"OpenAI Completions Compatible": "OpenAI Completions Kompatibel",
 		"OpenAI Responses Compatible": "OpenAI Responses Kompatibel",
@@ -727,6 +887,7 @@ export const translations = {
 		"Demo: Add Custom Notification": "Demo: Benutzerdefinierte Benachrichtigung hinzufügen",
 		"AITC platform logo": "AITC-Plattformlogo",
 		"Load a browser or configured local conversation": "Browser- oder konfigurierte lokale Konversation laden",
+		"Load a browser conversation": "Browser-Konversation laden",
 		"Creating file": "Erstelle Datei",
 		"Created file": "Datei erstellt",
 		"Rewriting file": "Schreibe Datei neu",
@@ -771,10 +932,12 @@ mutableTranslations.zh = {
 	Cancel: "取消",
 	Confirm: "确认",
 	"Select Model": "选择模型",
+	"Please select a model first.": "请先选择模型。",
 	"Search models...": "搜索模型...",
 	Format: "格式",
 	Thinking: "思考",
 	Vision: "视觉",
+	Reasoning: "思考",
 	You: "你",
 	Assistant: "助手",
 	"Thinking...": "思考中...",
@@ -791,6 +954,7 @@ mutableTranslations.zh = {
 	Test: "测试",
 	Remove: "移除",
 	Save: "保存",
+	"Saving...": "保存中...",
 	"Update API key": "更新 API Key",
 	"Enter API key": "输入 API Key",
 	"Type a message...": "输入消息...",
@@ -945,6 +1109,8 @@ mutableTranslations.zh = {
 		"用户配置的服务，可自动发现或手动定义模型。",
 	"Add Provider": "添加服务商",
 	"No custom providers configured. Click 'Add Provider' to get started.": "暂无自定义服务商。点击“添加服务商”开始。",
+	"No custom models configured. Add a custom provider in Settings first.":
+		"暂无自定义模型。请先在设置中添加自定义服务商。",
 	Models: "模型",
 	"auto-discovered": "自动发现",
 	Refresh: "刷新",
@@ -964,7 +1130,53 @@ mutableTranslations.zh = {
 	and: "和",
 	more: "更多",
 	"For manual provider types, add models after saving the provider.": "手动服务商类型需要保存后再添加模型。",
+	"Enter one or more model IDs. Separate multiple models with new lines or commas.":
+		"输入一个或多个模型 ID，多个模型可用换行或逗号分隔。",
+	"Enter one model ID per row. Use the exact ID reported by your model service.":
+		"每行输入一个模型 ID。请使用模型服务返回的准确 ID。",
+	"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.":
+		"分别配置每个模型。请使用模型服务返回的准确 ID，并且只开启该模型支持的能力。",
+	"Model IDs": "模型 ID",
+	"Add Model": "添加模型",
+	"Remove model": "移除模型",
+	"e.g., gpt-oss-120b": "例如：gpt-oss-120b",
+	"Context window": "上下文窗口",
+	"Max output tokens": "最大输出 tokens",
+	"Max tokens field": "最大 tokens 字段",
+	"Thinking protocol": "思考协议",
+	"Send reasoning effort": "发送思考等级",
+	"Replay reasoning_content": "回放 reasoning_content",
+	"Compatibility profile": "兼容档案",
+	"Compatibility mode": "兼容协议",
+	"Use when the endpoint closely follows OpenAI Chat Completions.": "适用于严格兼容 OpenAI Chat Completions 的接口。",
+	"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.":
+		"适用于本地或简化的 OpenAI 兼容服务，这类服务可能不支持高级 OpenAI 字段。",
+	"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.":
+		"适用于要求在历史消息中回传 reasoning_content 的 DeepSeek 或 MiMo Chat Completions 接口。",
+	"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.":
+		"适用于通过嵌套 reasoning 字段配置思考的 OpenRouter 接口。",
+	"Use for Qwen endpoints that enable thinking with enable_thinking.":
+		"适用于通过 enable_thinking 开启思考的 Qwen 接口。",
+	"Use when the provider requires chat_template_kwargs.enable_thinking.":
+		"适用于要求通过 chat_template_kwargs.enable_thinking 开启思考的接口。",
+	"Use for Z.AI endpoints that enable thinking with enable_thinking.":
+		"适用于通过 enable_thinking 开启思考的 Z.AI 接口。",
+	"Use only when you need to tune low-level compatibility switches manually.": "仅在需要手动调整底层兼容开关时选择。",
+	"Use when the endpoint follows the official OpenAI Responses API.": "适用于遵循官方 OpenAI Responses API 的接口。",
+	"Use for Responses-compatible gateways that reject session_id or long cache retention.":
+		"适用于兼容 Responses 但不支持 session_id 或长缓存保留的网关。",
+	"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.":
+		"适用于官方 Anthropic 或支持回放签名 thinking block 的兼容接口。",
+	"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.":
+		"适用于要求回传 reasoning_content 的 MiMo 或 DeepSeek 风格 Anthropic 接口。",
+	"Use for Anthropic-compatible endpoints that reject eager tool input streaming.":
+		"适用于不支持 eager tool input streaming 的 Anthropic 兼容接口。",
+	"Send session_id header": "发送 session_id 请求头",
+	"Long cache retention": "长缓存保留",
+	"Reasoning replay": "思考回放",
+	"Eager tool input streaming": "Eager 工具输入流",
 	"Please fill in all required fields": "请填写所有必填字段",
+	"Please add at least one model ID": "请至少添加一个模型 ID",
 	"Failed to save provider": "保存服务商失败",
 	"OpenAI Completions Compatible": "兼容 OpenAI Completions",
 	"OpenAI Responses Compatible": "兼容 OpenAI Responses",
@@ -986,6 +1198,7 @@ mutableTranslations.zh = {
 	"Demo: Add Custom Notification": "演示：添加自定义通知",
 	"AITC platform logo": "AITC 平台标识",
 	"Load a browser or configured local conversation": "加载浏览器或配置目录中的本地会话",
+	"Load a browser conversation": "加载当前浏览器中的会话",
 	"Creating file": "正在创建文件",
 	"Created file": "已创建文件",
 	"Rewriting file": "正在重写文件",
@@ -1024,10 +1237,12 @@ mutableTranslations.ms = {
 	Cancel: "Batal",
 	Confirm: "Sahkan",
 	"Select Model": "Pilih model",
+	"Please select a model first.": "Sila pilih model dahulu.",
 	"Search models...": "Cari model...",
 	Format: "Format",
 	Thinking: "Pemikiran",
 	Vision: "Visi",
+	Reasoning: "Pemikiran",
 	You: "Anda",
 	Assistant: "Pembantu",
 	"Thinking...": "Sedang berfikir...",
@@ -1044,6 +1259,7 @@ mutableTranslations.ms = {
 	Test: "Uji",
 	Remove: "Alih keluar",
 	Save: "Simpan",
+	"Saving...": "Menyimpan...",
 	"Update API key": "Kemas kini API Key",
 	"Enter API key": "Masukkan API Key",
 	"Type a message...": "Taip mesej...",
@@ -1202,6 +1418,8 @@ mutableTranslations.ms = {
 	"Add Provider": "Tambah penyedia",
 	"No custom providers configured. Click 'Add Provider' to get started.":
 		"Tiada penyedia tersuai dikonfigurasi. Klik 'Tambah penyedia' untuk bermula.",
+	"No custom models configured. Add a custom provider in Settings first.":
+		"Tiada model tersuai dikonfigurasi. Tambah penyedia tersuai dalam Tetapan dahulu.",
 	Models: "Model",
 	"auto-discovered": "auto-ditemui",
 	Refresh: "Segar semula",
@@ -1222,7 +1440,56 @@ mutableTranslations.ms = {
 	more: "lagi",
 	"For manual provider types, add models after saving the provider.":
 		"Untuk jenis penyedia manual, tambah model selepas menyimpan penyedia.",
+	"Enter one or more model IDs. Separate multiple models with new lines or commas.":
+		"Masukkan satu atau lebih ID model. Pisahkan beberapa model dengan baris baharu atau koma.",
+	"Enter one model ID per row. Use the exact ID reported by your model service.":
+		"Masukkan satu ID model bagi setiap baris. Gunakan ID tepat yang dilaporkan oleh servis model anda.",
+	"Configure each model separately. Use the exact ID reported by your model service, and only enable capabilities supported by that model.":
+		"Konfigurasikan setiap model secara berasingan. Gunakan ID tepat daripada servis model dan hanya aktifkan keupayaan yang disokong.",
+	"Model IDs": "ID model",
+	"Add Model": "Tambah model",
+	"Remove model": "Alih keluar model",
+	"e.g., gpt-oss-120b": "cth., gpt-oss-120b",
+	"Context window": "Tetingkap konteks",
+	"Max output tokens": "Token output maksimum",
+	"Max tokens field": "Medan token maksimum",
+	"Thinking protocol": "Protokol pemikiran",
+	"Send reasoning effort": "Hantar tahap pemikiran",
+	"Replay reasoning_content": "Main semula reasoning_content",
+	"Compatibility profile": "Profil keserasian",
+	"Compatibility mode": "Mod keserasian",
+	"Use when the endpoint closely follows OpenAI Chat Completions.":
+		"Gunakan apabila endpoint rapat mengikuti OpenAI Chat Completions.",
+	"Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.":
+		"Gunakan untuk pelayan tempatan atau ringkas yang serasi OpenAI tetapi menolak medan OpenAI lanjutan.",
+	"Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.":
+		"Gunakan untuk endpoint DeepSeek atau MiMo Chat Completions yang memerlukan main semula reasoning_content.",
+	"Use for OpenRouter endpoints that configure thinking with the nested reasoning field.":
+		"Gunakan untuk endpoint OpenRouter yang menetapkan pemikiran melalui medan reasoning bersarang.",
+	"Use for Qwen endpoints that enable thinking with enable_thinking.":
+		"Gunakan untuk endpoint Qwen yang mengaktifkan pemikiran dengan enable_thinking.",
+	"Use when the provider requires chat_template_kwargs.enable_thinking.":
+		"Gunakan apabila penyedia memerlukan chat_template_kwargs.enable_thinking.",
+	"Use for Z.AI endpoints that enable thinking with enable_thinking.":
+		"Gunakan untuk endpoint Z.AI yang mengaktifkan pemikiran dengan enable_thinking.",
+	"Use only when you need to tune low-level compatibility switches manually.":
+		"Gunakan hanya apabila anda perlu melaras suis keserasian tahap rendah secara manual.",
+	"Use when the endpoint follows the official OpenAI Responses API.":
+		"Gunakan apabila endpoint mengikuti API OpenAI Responses rasmi.",
+	"Use for Responses-compatible gateways that reject session_id or long cache retention.":
+		"Gunakan untuk gateway serasi Responses yang menolak session_id atau pengekalan cache panjang.",
+	"Use for official Anthropic or compatible endpoints that replay signed thinking blocks.":
+		"Gunakan untuk Anthropic rasmi atau endpoint serasi yang memainkan semula blok thinking bertandatangan.",
+	"Use for MiMo or DeepSeek-style Anthropic endpoints that require reasoning_content replay.":
+		"Gunakan untuk endpoint Anthropic gaya MiMo atau DeepSeek yang memerlukan main semula reasoning_content.",
+	"Use for Anthropic-compatible endpoints that reject eager tool input streaming.":
+		"Gunakan untuk endpoint serasi Anthropic yang menolak penstriman input alat eager.",
+	"Send session_id header": "Hantar pengepala session_id",
+	"Long cache retention": "Pengekalan cache panjang",
+	"Reasoning replay": "Main semula pemikiran",
+	"Eager tool input streaming": "Penstriman input alat eager",
 	"Please fill in all required fields": "Sila isi semua medan wajib",
+	"Please add at least one model ID": "Sila tambah sekurang-kurangnya satu ID model",
 	"Failed to save provider": "Gagal menyimpan penyedia",
 	"OpenAI Completions Compatible": "Serasi OpenAI Completions",
 	"OpenAI Responses Compatible": "Serasi OpenAI Responses",
@@ -1245,6 +1512,7 @@ mutableTranslations.ms = {
 	"Demo: Add Custom Notification": "Demo: Tambah pemberitahuan tersuai",
 	"AITC platform logo": "Logo platform AITC",
 	"Load a browser or configured local conversation": "Muatkan perbualan pelayar atau tempatan yang dikonfigurasi",
+	"Load a browser conversation": "Muatkan perbualan pelayar",
 	"Creating file": "Mencipta fail",
 	"Created file": "Fail dicipta",
 	"Rewriting file": "Menulis semula fail",

@@ -370,6 +370,130 @@ Output expectations:
 - Finish with a concise delivery note describing what was implemented, how to run it, how to verify it, and which assumptions remain.
 """
 
+IMPLEMENTATION_PROMPT_TEMPLATE_DE = """Du bist ein erfahrener Full-Stack-Engineer und sollst streng anhand der bereitgestellten Dokumente ein lauffaehiges Projekt implementieren.
+
+Lies diese Dateien vollstaendig, bevor du Code schreibst:
+1. PRD-Dokument: {prd_path}
+2. Systemdesign-Dokument: {design_path}
+
+Projektkontext:
+- Sitzungs-ID: {session_id}
+- Sitzungstitel: {session_title}
+
+Ausfuehrungsregeln:
+1. Nutze das PRD als Quelle fuer Produktscope, Rollen, User Flows, Geschaeftsregeln und Akzeptanzerwartungen.
+2. Nutze das Systemdesign-Dokument als Quelle fuer Architektur, Modulgrenzen, API-Vertraege und Datenmodelldetails.
+3. Wenn beide Dokumente einander widersprechen, loese den Konflikt mit dieser Prioritaet:
+   - Produktscope, Nutzerwert und Workflow-Absicht -> PRD
+   - Technische Architektur, API-Form, Persistenzmodell und Modulverantwortlichkeiten -> Systemdesign-Dokument
+   - Wenn der Konflikt weiter besteht, waehle die konservativste minimale lauffaehige Loesung und dokumentiere die Annahme klar in README oder ASSUMPTIONS.md.
+4. Erfinde keine grossen Features, Integrationen, Infrastruktur oder komplexen verteilten Komponenten, wenn sie nicht ausdruecklich in den Dokumenten gefordert sind.
+5. Gib keinen Pseudocode, keine TODO-only-Module, keine leeren Handler und keine Platzhalterimplementierungen fuer Kernablaeufe aus.
+
+Implementierungsanforderungen:
+1. Extrahiere vor dem Coding eine konkrete Implementierungs-Checkliste fuer Seiten, Backend-Module, APIs, Datentabellen, Hintergrundjobs falls vorhanden und Akzeptanzkriterien.
+2. Halte Feldnamen, Enum-Werte, API-Routen, Request/Response-Payloads und Datenbankspalten ueber Frontend, Backend und Persistenz hinweg konsistent.
+3. Erzeuge ein Projekt, das lokal end-to-end lauffaehig ist, nicht nur einzelne Snippets.
+4. Bevorzuge stabile, verbreitete und einfache Bibliotheken. Halte Abhaengigkeiten minimal und explizit.
+5. Stelle alle notwendigen Setup-Assets bereit, einschliesslich Dependency-Manifests, Umgebungsbeispielen, Datenbankinitialisierung oder Migrationen sowie Seed- oder Demodaten, wenn sie fuer den Hauptablauf gebraucht werden.
+6. Behandle wichtige Fehlerpfade explizit: ungueltige Eingaben, fehlende Ressourcen, doppelte Aktionen, fehlgeschlagene Persistenz, Autorisierungsfehler bei geforderten Berechtigungen und Empty States.
+7. Vermeide hartcodierte Secrets, maschinenspezifische absolute Pfade und umgebungsspezifische Annahmen im Code.
+8. Wenn der Tech Stack nicht ausdruecklich vorgegeben ist, waehle den leichtesten stabilen Stack, der die Anforderungen mit der geringsten Betriebskomplexitaet erfuellt.
+9. Halte die Implementierung am dokumentierten MVP ausgerichtet und fuege keine spekulative Ueberarchitektur hinzu.
+10. Der zentrale Nutzerablauf muss vollstaendig durch UI, API, Servicelogik und Datenbank verdrahtet sein, statt nur in einer Schicht teilweise implementiert zu sein.
+
+Qualitaetspruefungen:
+1. Pruefe Imports, Dependency-Deklarationen, Konfigurationsladen, Datenbankerstellung, API-Routing und Frontend-Backend-Integration.
+2. Fuege mindestens minimale automatisierte Pruefung fuer den kritischen Pfad hinzu:
+   - Backend: mindestens ein oder zwei sinnvolle API-/Service-Tests, wenn eine Testbasis vorhanden ist
+   - Frontend: mindestens sicherstellen, dass Hauptseite und wichtiger Interaktionspfad implementiert und lauffaehig sind
+3. Behebe offensichtliche Probleme vor Abschluss: fehlende Imports, abweichende Felder, defekte Routen, nicht angelegte Tabellen, ungueltige Seed-Daten, Encoding-Probleme oder Startfehler.
+4. Stelle ein klares README bereit mit:
+   - Installationsbefehlen
+   - Startbefehlen
+   - Umgebungsvariablen
+   - Datenbank-/Bootstrap-Schritten
+   - Test- oder Verifikationsschritten
+   - bekannten Annahmen und Trade-offs
+
+Empfohlene Arbeitsreihenfolge:
+1. Lies beide Dokumente und leite die Implementierungs-Checkliste ab.
+2. Bestaetige Ziel-Stack und Projektstruktur aus den Dokumenten.
+3. Implementiere zuerst Datenmodell und Initialisierung.
+4. Implementiere Backend-APIs und Servicelogik.
+5. Implementiere Frontend-Seiten und integriere sie mit den APIs.
+6. Fuege Konfiguration, Demodaten, Tests und README hinzu.
+7. Fuehre das Projekt lokal aus und pruefe den kritischen End-to-End-Ablauf.
+
+Erwartete Ausgabe:
+- Beginne mit einer Zusammenfassung des Implementierungsplans.
+- Implementiere danach den Code.
+- Wenn Informationen fehlen, halte nicht an; triff die kleinste sinnvolle Annahme und dokumentiere sie explizit.
+- Schliesse mit einer kurzen Liefernotiz ab: was implementiert wurde, wie es gestartet wird, wie es geprueft wird und welche Annahmen bleiben.
+"""
+
+IMPLEMENTATION_PROMPT_TEMPLATE_MS = """Anda ialah jurutera full-stack kanan yang bertanggungjawab melaksanakan projek boleh jalan secara ketat berdasarkan dokumen yang diberikan.
+
+Baca fail berikut sepenuhnya sebelum menulis kod:
+1. Dokumen PRD: {prd_path}
+2. Dokumen reka bentuk sistem: {design_path}
+
+Konteks projek:
+- ID sesi: {session_id}
+- Tajuk sesi: {session_title}
+
+Peraturan pelaksanaan:
+1. Gunakan PRD sebagai sumber kebenaran untuk skop produk, peranan, aliran pengguna, peraturan perniagaan dan jangkaan penerimaan.
+2. Gunakan dokumen reka bentuk sistem sebagai sumber kebenaran untuk seni bina, sempadan modul, kontrak API dan butiran model data.
+3. Jika kedua-dua dokumen bercanggah, selesaikan mengikut keutamaan ini:
+   - Skop produk, nilai pengguna dan niat aliran kerja -> PRD
+   - Seni bina teknikal, bentuk API, model persistensi dan tanggungjawab modul -> dokumen reka bentuk sistem
+   - Jika konflik masih kekal, pilih penyelesaian boleh jalan yang paling konservatif dan minimum, kemudian rekodkan andaian dengan jelas dalam README atau ASSUMPTIONS.md.
+4. Jangan cipta ciri besar, integrasi, infrastruktur atau komponen teragih yang kompleks melainkan dokumen memintanya dengan jelas.
+5. Jangan keluarkan pseudokod, modul TODO sahaja, handler kosong atau pelaksanaan placeholder untuk aliran teras.
+
+Keperluan pelaksanaan:
+1. Sebelum menulis kod, ekstrak senarai semak pelaksanaan yang konkrit merangkumi halaman, modul backend, API, jadual data, background job jika ada dan kriteria penerimaan.
+2. Kekalkan nama medan, nilai enum, laluan API, payload request/response dan lajur pangkalan data secara konsisten merentas frontend, backend dan persistensi.
+3. Hasilkan projek yang boleh dijalankan secara end-to-end di tempatan, bukan sekadar cebisan kod.
+4. Utamakan pustaka yang stabil, arus perdana dan rendah kerumitan. Pastikan dependensi minimum dan dinyatakan dengan jelas.
+5. Sediakan semua aset setup yang diperlukan, termasuk manifest dependensi, contoh pemboleh ubah persekitaran, inisialisasi atau migrasi pangkalan data serta data seed/demo jika diperlukan untuk aliran utama.
+6. Tangani laluan ralat penting secara eksplisit: input tidak sah, sumber tidak ditemui, tindakan pendua, kegagalan persistensi, ralat autorisasi apabila dokumen memerlukan kebenaran dan keadaan kosong.
+7. Elakkan rahsia hard-coded, laluan mutlak khusus mesin atau andaian persekitaran khusus dalam kod.
+8. Jika stack teknologi tidak dinyatakan dengan jelas dalam dokumen, pilih stack stabil paling ringan yang boleh memenuhi keperluan dengan kerumitan operasi paling rendah.
+9. Kekalkan pelaksanaan sejajar dengan skop MVP yang didokumenkan; jangan tambah over-engineering spekulatif.
+10. Perjalanan pengguna utama mesti disambungkan sepenuhnya melalui UI, API, logik servis dan pangkalan data, bukannya dilaksanakan sebahagian pada satu lapisan sahaja.
+
+Pemeriksaan kualiti:
+1. Sahkan import, deklarasi dependensi, pemuatan konfigurasi, penciptaan pangkalan data, routing API dan integrasi frontend-backend.
+2. Tambah sekurang-kurangnya pengesahan automatik minimum untuk laluan kritikal:
+   - backend: sekurang-kurangnya satu atau dua ujian API/service yang bermakna apabila projek mempunyai asas ujian
+   - frontend: sekurang-kurangnya pastikan halaman utama dan aliran interaksi penting telah dilaksanakan dan boleh dijalankan
+3. Betulkan isu jelas sebelum selesai: import hilang, medan tidak sepadan, route rosak, jadual belum dicipta, data seed tidak sah, isu encoding atau kegagalan startup.
+4. Sediakan README yang jelas dengan:
+   - arahan pemasangan
+   - arahan startup
+   - pemboleh ubah persekitaran
+   - langkah database/bootstrap
+   - langkah ujian atau pengesahan
+   - andaian dan trade-off yang diketahui
+
+Urutan kerja yang dicadangkan:
+1. Baca kedua-dua dokumen dan hasilkan senarai semak pelaksanaan.
+2. Sahkan stack sasaran dan struktur projek daripada dokumen.
+3. Laksanakan model data dan inisialisasi terlebih dahulu.
+4. Laksanakan API backend dan logik servis.
+5. Laksanakan halaman frontend dan integrasikan dengan API.
+6. Tambah konfigurasi, data demo, ujian dan README.
+7. Jalankan projek secara tempatan dan sahkan aliran end-to-end kritikal.
+
+Jangkaan output:
+- Mulakan dengan ringkasan pelan pelaksanaan.
+- Kemudian laksanakan kod.
+- Jika maklumat tiada, jangan berhenti; buat andaian munasabah paling kecil dan rekodkan dengan jelas.
+- Akhiri dengan nota penghantaran ringkas yang menerangkan apa yang dilaksanakan, cara menjalankannya, cara mengesahkannya dan andaian yang masih tinggal.
+"""
+
 IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深全栈工程师，现在需要严格依据提供的文档，直接实现一个可运行、可验证的完整项目。
 
 开始编码前，必须先完整阅读以下文件：
@@ -432,6 +556,12 @@ IMPLEMENTATION_PROMPT_TEMPLATE_ZH = """你是一名资深全栈工程师，现�
 """
 
 SUPPORTED_OUTPUT_LANGUAGES = {"en", "de", "zh", "ms"}
+IMPLEMENTATION_PROMPT_TEMPLATE_BY_LANGUAGE = {
+    "en": IMPLEMENTATION_PROMPT_TEMPLATE_EN,
+    "de": IMPLEMENTATION_PROMPT_TEMPLATE_DE,
+    "zh": IMPLEMENTATION_PROMPT_TEMPLATE_ZH,
+    "ms": IMPLEMENTATION_PROMPT_TEMPLATE_MS,
+}
 STRUCTURED_REQUIREMENT_CANONICAL_CACHE_KEY = "__canonical__"
 STRUCTURED_REQUIREMENT_CANONICAL_FALLBACK_LANGUAGES = ("zh", "en", "de", "ms")
 
@@ -1277,10 +1407,12 @@ class RequirementCollectorService:
             return {
                 "session_id": session_id,
                 "title": session.title,
+                "language": self._normalize_language(language),
                 "documents_ready": False,
                 "missing_documents": missing_documents,
             }
 
+        normalized_language = self._normalize_language(language)
         prd_path, prd_filename = prd_result
         design_path, design_filename = design_result
         implementation_prompt = self._build_implementation_prompt(
@@ -1288,7 +1420,7 @@ class RequirementCollectorService:
             session_title=session.title,
             prd_path=prd_filename,
             design_path=design_filename,
-            language=language,
+            language=normalized_language,
         )
         now = datetime.now(timezone.utc)
         expires_at = (now + timedelta(minutes=DEFAULT_HANDOFF_TTL_MINUTES)).isoformat()
@@ -1298,6 +1430,7 @@ class RequirementCollectorService:
             "transport": "browser-handoff",
             "session_id": session_id,
             "title": session.title,
+            "language": normalized_language,
             "documents_ready": True,
             "implementation_prompt": implementation_prompt,
             "documents": [
@@ -2241,7 +2374,7 @@ class RequirementCollectorService:
         language: str,
     ) -> str:
         normalized = self._normalize_language(language)
-        template = IMPLEMENTATION_PROMPT_TEMPLATE_ZH if normalized == "zh" else IMPLEMENTATION_PROMPT_TEMPLATE_EN
+        template = IMPLEMENTATION_PROMPT_TEMPLATE_BY_LANGUAGE.get(normalized, IMPLEMENTATION_PROMPT_TEMPLATE_EN)
         return template.format(
             session_id=session_id,
             session_title=session_title or "Untitled Session",

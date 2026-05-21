@@ -5,7 +5,7 @@ import type { Connect, Plugin } from "vite";
 import { loadStorageConfig } from "./config.js";
 import { API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX } from "./constants.js";
 import { isObject, readJsonBody, sendJson } from "./json.js";
-import type { ProjectFileRequest } from "./types.js";
+import type { ProjectFileRequest, StorageConfig } from "./types.js";
 import { WorkspaceCommandService } from "./workspace-command-service.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
@@ -109,7 +109,7 @@ async function handleStorageApi(
 	route: string,
 	req: Connect.IncomingMessage,
 	res: ServerResponse,
-	config: { sessionsDir: string; settingsFile: string; projectsRootDir: string; previewBaseUrl: string },
+	config: StorageConfig,
 	sessions: WorkspaceSessionService,
 ): Promise<void> {
 	if (method === "GET" && route === "/status") {
@@ -119,6 +119,10 @@ async function handleStorageApi(
 			settingsFile: config.settingsFile,
 			projectsRootDir: config.projectsRootDir,
 			previewBaseUrl: config.previewBaseUrl,
+			serverSessionSyncEnabled: config.serverSessionSyncEnabled,
+			defaultModelProvider: config.defaultModelProvider,
+			defaultModelId: config.defaultModelId,
+			handoffDefaultThinkingLevel: config.handoffDefaultThinkingLevel,
 		});
 		return;
 	}

@@ -26,6 +26,10 @@ export function loadStorageConfig(rootDir: string, configFile = CONFIG_FILE): St
 		projectBuildCommand: stringValue(record.projectBuildCommand) || "npm run build",
 		projectInstallTimeoutMs: numberValue(record.projectInstallTimeoutMs) || 120000,
 		projectBuildTimeoutMs: numberValue(record.projectBuildTimeoutMs) || 120000,
+		serverSessionSyncEnabled: booleanValue(record.serverSessionSyncEnabled),
+		defaultModelProvider: stringValue(record.defaultModelProvider),
+		defaultModelId: stringValue(record.defaultModelId),
+		handoffDefaultThinkingLevel: thinkingLevelValue(record.handoffDefaultThinkingLevel),
 	};
 }
 
@@ -41,4 +45,13 @@ function stringValue(value: unknown): string {
 
 function numberValue(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function booleanValue(value: unknown): boolean {
+	return value === true;
+}
+
+function thinkingLevelValue(value: unknown): string {
+	const normalized = stringValue(value).trim().toLowerCase();
+	return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(normalized) ? normalized : "high";
 }

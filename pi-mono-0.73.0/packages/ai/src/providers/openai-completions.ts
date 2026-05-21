@@ -798,12 +798,10 @@ export function convertMessages(
 			const nonEmptyThinkingBlocks = msg.content
 				.filter(isThinkingContentBlock)
 				.filter((block) => block.thinking.trim().length > 0);
+			const thinkingText = nonEmptyThinkingBlocks.map((block) => sanitizeSurrogates(block.thinking)).join("\n");
 			if (nonEmptyThinkingBlocks.length > 0) {
 				if (compat.requiresThinkingAsText) {
 					// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
-					const thinkingText = nonEmptyThinkingBlocks
-						.map((block) => sanitizeSurrogates(block.thinking))
-						.join("\n\n");
 					assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
 				} else {
 					// Always send assistant content as a plain string (OpenAI Chat Completions
@@ -819,6 +817,9 @@ export function convertMessages(
 					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
 					if (signature && signature.length > 0) {
 						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map((block) => block.thinking).join("\n");
+					}
+					if (compat.requiresReasoningContentOnAssistantMessages) {
+						(assistantMsg as { reasoning_content?: string }).reasoning_content = thinkingText;
 					}
 				}
 			} else if (assistantText.length > 0) {

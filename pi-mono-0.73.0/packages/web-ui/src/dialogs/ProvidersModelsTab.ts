@@ -2,7 +2,7 @@ import { i18n } from "@mariozechner/mini-lit";
 import { Select } from "@mariozechner/mini-lit/dist/Select.js";
 import { getProviders } from "@mariozechner/pi-ai";
 import { html, type TemplateResult } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import "../components/CustomProviderCard.js";
 import "../components/ProviderKeyInput.js";
 import { getAppStorage } from "../storage/app-storage.js";
@@ -17,6 +17,7 @@ import { SettingsTab } from "./SettingsDialog.js";
 
 @customElement("providers-models-tab")
 export class ProvidersModelsTab extends SettingsTab {
+	@property({ type: Boolean }) showKnownProviders = true;
 	@state() private customProviders: CustomProvider[] = [];
 	@state() private providerStatus: Map<
 		string,
@@ -203,8 +204,7 @@ export class ProvidersModelsTab extends SettingsTab {
 	render(): TemplateResult {
 		return html`
 			<div class="flex flex-col gap-8">
-				${this.renderKnownProviders()}
-				<div class="border-t border-border"></div>
+				${this.showKnownProviders ? html`${this.renderKnownProviders()} <div class="border-t border-border"></div>` : ""}
 				${this.renderCustomProviders()}
 			</div>
 		`;

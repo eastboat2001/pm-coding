@@ -5,19 +5,19 @@ import type { Connect, Plugin } from "vite";
 import { loadStorageConfig } from "./config.js";
 import { API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX } from "./constants.js";
 import { isObject, readJsonBody, sendJson } from "./json.js";
-import type { ProjectFileRequest, StorageConfig } from "./types.js";
-import { WorkspaceCommandService } from "./workspace-command-service.js";
+import type { ProjectFileRequest, ProjectTaskRequest, StorageConfig } from "./types.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 import { WorkspaceSessionService } from "./workspace-session-service.js";
+import { WorkspaceTaskService } from "./workspace-task-service.js";
 
 export function configuredStoragePlugin(configFile?: string): Plugin {
 	const rootDir = process.cwd();
 	const config = loadStorageConfig(rootDir, configFile);
 	const sessions = new WorkspaceSessionService(config);
 	const files = new WorkspaceFileService(config);
-	const commands = new WorkspaceCommandService(config);
 	const previews = new WorkspacePreviewService(config);
+	const tasks = new WorkspaceTaskService(config, previews);
 
 	const ensureStorageDirs = () => {
 		sessions.ensureDirs();
@@ -48,7 +48,7 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 			const method = req.method || "GET";
 
 			if (isProjectsApi) {
-				await handleProjectsApi(method, route, req, res, files, commands, previews);
+				await handleProjectsApi(method, route, req, res, files, previews, tasks);
 				return;
 			}
 
@@ -60,6 +60,15 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 
 	return {
 		name: "pi-web-ui-configured-storage",
+		config() {
+			return {
+				server: {
+					watch: {
+						ignored: storageWatchIgnoredPaths(config),
+					},
+				},
+			};
+		},
 		configureServer(server) {
 			server.middlewares.use(handler);
 		},
@@ -69,25 +78,40 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 	};
 }
 
+function storageWatchIgnoredPaths(config: StorageConfig): string[] {
+	return [
+		`${normalizeWatchPath(config.sessionsDir)}/**`,
+		`${normalizeWatchPath(config.projectsRootDir)}/**`,
+		normalizeWatchPath(config.settingsFile),
+	];
+}
+
+function normalizeWatchPath(path: string): string {
+	return path.replace(/\\/g, "/");
+}
+
 async function handleProjectsApi(
 	method: string,
 	route: string,
 	req: Connect.IncomingMessage,
 	res: ServerResponse,
 	files: WorkspaceFileService,
-	commands: WorkspaceCommandService,
 	previews: WorkspacePreviewService,
+	tasks: WorkspaceTaskService,
 ): Promise<void> {
 	if (method === "POST" && route === "/workspace/file") {
 		const body = await readJsonBody(req);
 		sendJson(res, files.handle(body as unknown as ProjectFileRequest));
 		return;
 	}
-	if (method === "POST" && route === "/workspace/bash") {
+	if (method === "POST" && route === "/workspace/task") {
 		const body = await readJsonBody(req);
 		sendJson(
 			res,
-			await commands.run({ ...body, command: String(body.command || ""), sessionId: String(body.sessionId || "") }),
+			await tasks.run(
+				{ ...body, task: String(body.task || ""), sessionId: String(body.sessionId || "") } as ProjectTaskRequest,
+				req,
+			),
 		);
 		return;
 	}

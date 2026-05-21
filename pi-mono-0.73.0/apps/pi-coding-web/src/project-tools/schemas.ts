@@ -15,22 +15,23 @@ export type ProjectFileDetails = {
 	projectRoot?: string;
 };
 
-export type ProjectBashDetails = {
-	command: string;
-	output: string;
-	projectRoot: string;
-};
-
-export type ProjectPreviewDetails = {
+export type ProjectTaskDetails = {
+	task: "inspect" | "validate" | "build_static" | "preview" | "logs";
 	status: string;
-	mode?: "static" | "node-service";
-	previewUrl: string;
-	projectRoot: string;
-	serveRoot: string;
-	startCommand?: string;
-	servicePort?: number;
-	fileCount: number;
+	projectId?: string;
+	sessionId?: string;
+	title?: string;
+	projectRoot?: string;
+	fileCount?: number;
+	files?: string[];
+	hasPackageJson?: boolean;
+	valid?: boolean;
+	errors?: string[];
+	mode?: "static";
+	previewUrl?: string;
+	serveRoot?: string;
 	logs?: string[];
+	updatedAt?: string;
 };
 
 export const projectFileSchema = Type.Object({
@@ -58,18 +59,21 @@ export const projectFileSchema = Type.Object({
 	new_str: Type.Optional(Type.String({ description: "Replacement text for update." })),
 });
 
-export const projectBashSchema = Type.Object({
-	command: Type.String({
-		description:
-			"Short non-interactive command to run in the server project root, such as npm test, npm run build, or node scripts. Do not start long-running dev servers or run global process-kill commands such as taskkill /IM node.exe, pkill node, killall node, or Stop-Process -Name node. If a command fails, use the returned error/output to choose a compatible follow-up command.",
-	}),
-	timeoutMs: Type.Optional(Type.Number({ description: "Optional timeout in milliseconds, max 300000." })),
-});
-
-export const projectPreviewSchema = Type.Object({
-	note: Type.Optional(Type.String({ description: "Brief note describing what is ready to preview." })),
+export const projectTaskSchema = Type.Object({
+	task: Type.Union(
+		[
+			Type.Literal("inspect"),
+			Type.Literal("validate"),
+			Type.Literal("build_static"),
+			Type.Literal("preview"),
+			Type.Literal("logs"),
+		],
+		{
+			description:
+				"Controlled static project task. Use inspect to list workspace state, validate to check static preview readiness, build_static to run the server-configured static frontend build, preview to publish the static app and get the Preview URL, and logs to read the last preview logs.",
+		},
+	),
 });
 
 export type ProjectFileParams = Static<typeof projectFileSchema>;
-export type ProjectBashParams = Static<typeof projectBashSchema>;
-export type ProjectPreviewParams = Static<typeof projectPreviewSchema>;
+export type ProjectTaskParams = Static<typeof projectTaskSchema>;

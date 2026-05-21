@@ -9,15 +9,8 @@ import {
 } from "@mariozechner/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
-import { FileCode2, Play, Rocket } from "lucide";
-import type {
-	ProjectBashDetails,
-	ProjectBashParams,
-	ProjectFileDetails,
-	ProjectFileParams,
-	ProjectPreviewDetails,
-	ProjectPreviewParams,
-} from "./schemas.js";
+import { FileCode2, Rocket } from "lucide";
+import type { ProjectFileDetails, ProjectFileParams, ProjectTaskDetails, ProjectTaskParams } from "./schemas.js";
 
 let registered = false;
 
@@ -25,8 +18,7 @@ export function registerProjectToolRenderers(): void {
 	if (registered) return;
 	registered = true;
 	registerToolRenderer("project_file", new ProjectFileRenderer());
-	registerToolRenderer("project_bash", new ProjectBashRenderer());
-	registerToolRenderer("project_preview", new ProjectPreviewRenderer());
+	registerToolRenderer("project_task", new ProjectTaskRenderer());
 }
 
 function getTextOutput(result: ToolResultMessage<unknown> | undefined): string {
@@ -62,16 +54,18 @@ function filePill(filename?: string): TemplateResult | string {
 	return html`<span class="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-mono bg-background">${filename}</span>`;
 }
 
-function formatPreviewResult(result: ProjectPreviewDetails): string {
+function formatProjectTaskResult(result: ProjectTaskDetails): string {
 	return [
+		`Task: ${result.task}`,
 		`Status: ${result.status}`,
 		result.mode ? `Mode: ${result.mode}` : "",
 		result.previewUrl ? `Preview URL: ${result.previewUrl}` : "",
-		`Project root: ${result.projectRoot}`,
-		`Serve root: ${result.serveRoot}`,
-		result.startCommand ? `Start command: ${result.startCommand}` : "",
-		result.servicePort ? `Internal service port: ${result.servicePort} (proxied by Preview URL)` : "",
-		`Files: ${result.fileCount}`,
+		result.projectRoot ? `Project root: ${result.projectRoot}` : "",
+		result.serveRoot ? `Serve root: ${result.serveRoot}` : "",
+		typeof result.fileCount === "number" ? `Files: ${result.fileCount}` : "",
+		typeof result.valid === "boolean" ? `Valid: ${result.valid ? "yes" : "no"}` : "",
+		result.errors?.length ? `Errors:\n${result.errors.join("\n")}` : "",
+		result.files?.length ? `Project files:\n${result.files.join("\n")}` : "",
 		result.logs?.length ? `\nLogs:\n${result.logs.join("").trim()}` : "",
 	]
 		.filter(Boolean)
@@ -129,42 +123,10 @@ class ProjectFileRenderer implements ToolRenderer<ProjectFileParams, ProjectFile
 	}
 }
 
-class ProjectBashRenderer implements ToolRenderer<ProjectBashParams, ProjectBashDetails> {
+class ProjectTaskRenderer implements ToolRenderer<ProjectTaskParams, ProjectTaskDetails> {
 	render(
-		params: ProjectBashParams | undefined,
-		result: ToolResultMessage<ProjectBashDetails> | undefined,
-		isStreaming?: boolean,
-	): ToolRenderResult {
-		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
-		const command = result?.details?.command || params?.command || "";
-		const contentRef = createRef<HTMLDivElement>();
-		const chevronRef = createRef<HTMLSpanElement>();
-		return {
-			isCustom: false,
-			content: html`
-				<div>
-					${renderCollapsibleHeader(
-						state,
-						Play,
-						state === "inprogress"
-							? `${i18n("Running command")} ${command}`
-							: `${i18n("Ran command")} ${command}`,
-						contentRef,
-						chevronRef,
-					)}
-					<div ${ref(contentRef)} class="max-h-0 overflow-hidden transition-all duration-300">
-						<code-block .code=${result?.details?.output || getTextOutput(result) || command} language="text"></code-block>
-					</div>
-				</div>
-			`,
-		};
-	}
-}
-
-class ProjectPreviewRenderer implements ToolRenderer<ProjectPreviewParams, ProjectPreviewDetails> {
-	render(
-		_params: ProjectPreviewParams | undefined,
-		result: ToolResultMessage<ProjectPreviewDetails> | undefined,
+		params: ProjectTaskParams | undefined,
+		result: ToolResultMessage<ProjectTaskDetails> | undefined,
 		isStreaming?: boolean,
 	): ToolRenderResult {
 		const state = result
@@ -180,17 +142,17 @@ class ProjectPreviewRenderer implements ToolRenderer<ProjectPreviewParams, Proje
 		const header = details?.previewUrl
 			? html`<span>${i18n("Preview ready")} <a class="underline" href=${details.previewUrl} target="_blank" rel="noreferrer">${details.previewUrl}</a></span>`
 			: details?.status === "failed"
-				? "Preview failed"
+				? "Project task failed"
 				: state === "inprogress"
-					? i18n("Preparing preview")
-					: i18n("Prepared preview");
+					? `Running project task ${params?.task || ""}`
+					: `Completed project task ${details?.task || params?.task || ""}`;
 		return {
 			isCustom: false,
 			content: html`
 				<div>
 					${renderCollapsibleHeader(state, Rocket, header, contentRef, chevronRef)}
 					<div ${ref(contentRef)} class="max-h-0 overflow-hidden transition-all duration-300">
-						${details ? html`<code-block .code=${formatPreviewResult(details)} language="text"></code-block>` : ""}
+						${details ? html`<code-block .code=${formatProjectTaskResult(details)} language="text"></code-block>` : ""}
 					</div>
 				</div>
 			`,

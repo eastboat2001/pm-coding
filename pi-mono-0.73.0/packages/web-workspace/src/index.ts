@@ -7,6 +7,9 @@ export type {
 	ProjectFileResult,
 	ProjectPreviewRequest,
 	ProjectPreviewResult,
+	ProjectTaskName,
+	ProjectTaskRequest,
+	ProjectTaskResult,
 	ProjectWorkspaceContext,
 	StorageConfig,
 } from "./types.js";
@@ -15,3 +18,4 @@ export { isUnsafeProjectCommand, WorkspaceCommandService } from "./workspace-com
 export { WorkspaceFileService } from "./workspace-file-service.js";
 export { WorkspacePreviewService } from "./workspace-preview-service.js";
 export { WorkspaceSessionService } from "./workspace-session-service.js";
+export { WorkspaceTaskService } from "./workspace-task-service.js";

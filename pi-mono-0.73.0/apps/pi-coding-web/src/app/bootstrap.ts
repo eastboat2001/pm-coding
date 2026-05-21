@@ -7,6 +7,7 @@ import {
 	ApiKeyPromptDialog,
 	AppStorage,
 	ChatPanel,
+	createStreamFn,
 	defaultConvertToLlm,
 	getCurrentLanguage,
 	IndexedDBStorageBackend,
@@ -84,6 +85,15 @@ sessions.setBackend(backend);
 const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 setAppStorage(storage);
 const modelController = new ModelController(storage, configuredStorage);
+
+const getProviderApiKey = async (provider: string): Promise<string | undefined> => {
+	return (await storage.providerKeys.get(provider)) ?? undefined;
+};
+
+const getProxyUrl = async (): Promise<string | undefined> => {
+	const enabled = await storage.settings.get<boolean>("proxy.enabled");
+	return enabled ? (await storage.settings.get<string>("proxy.url")) || undefined : undefined;
+};
 
 const loadPiRuntimeConfig = async () => {
 	const status = await configuredStorage.getStatus();
@@ -298,6 +308,8 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	agent = new Agent({
 		initialState: initialState || createInitialAgentState(defaultModel),
 		convertToLlm: defaultConvertToLlm,
+		streamFn: createStreamFn(getProxyUrl),
+		getApiKey: getProviderApiKey,
 	});
 
 	agentUnsubscribe = agent.subscribe((event: AgentEvent) => {

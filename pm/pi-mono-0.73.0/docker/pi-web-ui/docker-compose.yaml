@@ -1,0 +1,10 @@
+services:
+  pi-web-ui:
+    image: pi-web-ui:0.73.0
+    container_name: pi-web-ui
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./data:/app/apps/pi-coding-web/data
+      - ./pi-storage.config.json:/app/apps/pi-coding-web/pi-storage.config.json:ro

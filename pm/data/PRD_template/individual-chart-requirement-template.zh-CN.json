@@ -1,0 +1,268 @@
+{
+  "template_id": "individual_chart_requirement_template_zh_cn",
+  "template_key": "individual_chart_requirement",
+  "template_name": "单图表需求模板",
+  "template_category": "business_requirement",
+  "business_domain": "data_visualization",
+  "language": "zh-CN",
+  "version": "1.0.0",
+  "status": "enabled",
+  "description": "适用于单个图表或看板组件的需求模板，覆盖业务目标、数据契约、图表规格、筛选、明细表、交互、权限、开发要求和 UAT。",
+  "tags": [
+    "chart",
+    "dashboard",
+    "visualization",
+    "data-contract",
+    "uat"
+  ],
+  "applicable_scenarios": [
+    "单个图表或看板组件",
+    "带筛选条件的指标可视化",
+    "图表数据契约确认",
+    "图表下钻和明细表",
+    "图表导出和权限规则"
+  ],
+  "render_config": {
+    "format": "markdown",
+    "markdown_relative_path": "data/PRD_template/individual-chart-requirement-template.zh-CN.md"
+  },
+  "storage_model": "structured_requirement_template.v1",
+  "sections": [
+    {
+      "section_key": "document_info",
+      "section_title": "基础文档信息",
+      "sort_order": 1,
+      "fields": [
+        {
+          "field_key": "document_info.chart_name",
+          "label": "图表 / 页面名称",
+          "component": "input",
+          "data_type": "string",
+          "required": true,
+          "placeholder": "输入图表或页面名称"
+        },
+        {
+          "field_key": "document_info.business_owner",
+          "label": "业务负责人",
+          "component": "input",
+          "data_type": "string",
+          "required": true,
+          "placeholder": "负责业务审批的姓名或团队"
+        }
+      ]
+    },
+    {
+      "section_key": "background_objectives",
+      "section_title": "背景与目标",
+      "sort_order": 2,
+      "fields": [
+        {
+          "field_key": "background_objectives.background",
+          "label": "背景",
+          "component": "textarea",
+          "data_type": "string",
+          "required": true,
+          "placeholder": "描述业务背景、痛点和决策场景"
+        },
+        {
+          "field_key": "background_objectives.objectives",
+          "label": "目标",
+          "component": "list",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "描述图表目标和成功标准"
+        }
+      ]
+    },
+    {
+      "section_key": "scope",
+      "section_title": "范围",
+      "sort_order": 3,
+      "fields": [
+        {
+          "field_key": "scope.items",
+          "label": "范围",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "本次范围、非本次范围、假设、依赖、约束"
+        }
+      ]
+    },
+    {
+      "section_key": "stakeholders",
+      "section_title": "责任方与干系人",
+      "sort_order": 4,
+      "fields": [
+        {
+          "field_key": "stakeholders.roles",
+          "label": "干系人角色",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "业务负责人、数据负责人、BA、UI/UX、开发、QA、批准人"
+        }
+      ]
+    },
+    {
+      "section_key": "data_description",
+      "section_title": "数据说明",
+      "sort_order": 5,
+      "fields": [
+        {
+          "field_key": "data_description.sources",
+          "label": "数据来源",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "来源/表/API、负责人、刷新频率、数据粒度"
+        },
+        {
+          "field_key": "data_description.fields",
+          "label": "关键字段与业务定义",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "字段名、业务定义、类型、是否必填、来源逻辑"
+        },
+        {
+          "field_key": "data_description.logic_rules",
+          "label": "计算与逻辑规则",
+          "component": "list",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "指标公式、筛选逻辑、日期逻辑、空值处理、去重规则"
+        }
+      ]
+    },
+    {
+      "section_key": "chart_presentation",
+      "section_title": "页面与图表呈现",
+      "sort_order": 6,
+      "fields": [
+        {
+          "field_key": "chart_presentation.layout",
+          "label": "页面布局",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "查询区、图表展示区、明细区"
+        },
+        {
+          "field_key": "chart_presentation.chart_spec",
+          "label": "图表规格",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "图表类型、指标、坐标轴、图例、tooltip、下钻、状态"
+        }
+      ]
+    },
+    {
+      "section_key": "filters_detail",
+      "section_title": "查询条件与明细表",
+      "sort_order": 7,
+      "fields": [
+        {
+          "field_key": "filters_detail.filters",
+          "label": "查询条件与筛选",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "筛选字段、控件类型、默认值、是否必填、依赖"
+        },
+        {
+          "field_key": "filters_detail.detail_columns",
+          "label": "明细表字段",
+          "component": "table",
+          "data_type": "array",
+          "required": false,
+          "placeholder": "列名、来源字段、展示格式、是否可排序、备注"
+        }
+      ]
+    },
+    {
+      "section_key": "interactions_permissions",
+      "section_title": "交互、权限与导出要求",
+      "sort_order": 8,
+      "fields": [
+        {
+          "field_key": "interactions_permissions.requirements",
+          "label": "交互和权限要求",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "响应式、悬浮/点击、导出、权限、审计、可访问性"
+        }
+      ]
+    },
+    {
+      "section_key": "development",
+      "section_title": "开发要求",
+      "sort_order": 9,
+      "fields": [
+        {
+          "field_key": "development.technical_specs",
+          "label": "技术规格",
+          "component": "list",
+          "data_type": "array",
+          "required": false,
+          "placeholder": "HTML、Bootstrap、JavaScript、jQuery、API 契约、响应结构"
+        },
+        {
+          "field_key": "development.performance_security",
+          "label": "性能与安全",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "性能、安全、兼容性、错误处理"
+        }
+      ]
+    },
+    {
+      "section_key": "color_system",
+      "section_title": "色彩系统",
+      "sort_order": 10,
+      "fields": [
+        {
+          "field_key": "color_system.tokens",
+          "label": "色彩 Token",
+          "component": "table",
+          "data_type": "array",
+          "required": false,
+          "placeholder": "已批准的色彩 token 和取值"
+        }
+      ]
+    },
+    {
+      "section_key": "acceptance",
+      "section_title": "验收标准与 UAT 清单",
+      "sort_order": 11,
+      "fields": [
+        {
+          "field_key": "acceptance.criteria",
+          "label": "验收标准",
+          "component": "table",
+          "data_type": "array",
+          "required": true,
+          "placeholder": "图表数值、筛选、状态、明细表、导出、响应式、权限"
+        }
+      ]
+    },
+    {
+      "section_key": "open_questions",
+      "section_title": "待确认问题与变更记录",
+      "sort_order": 12,
+      "fields": [
+        {
+          "field_key": "open_questions.questions",
+          "label": "待确认问题",
+          "component": "table",
+          "data_type": "array",
+          "required": false,
+          "placeholder": "问题、负责人、截止日期、结论"
+        }
+      ]
+    }
+  ]
+}

@@ -116,6 +116,41 @@ If the requirement involves pages or user flows, describe them here.
 - Page elements:
 - Button actions:
 
+### 7.1.1 Chart Requirement Notes (if single or multiple charts are needed)
+
+- Chart name:
+- Chart type: line / bar / pie / table chart / other
+- Data source:
+- Key fields:
+- Field logic:
+- Dimension / metric / axis notes:
+- Query filters:
+- Detail data display:
+- Multi-chart relationships:
+- Chart interactions: linked filtering / drill-down / tab switching / tooltip / click filtering, etc.
+
+### 7.1.2 Multi-Chart Layout Reference (if multiple charts are needed)
+
+If a page includes one or more charts, choose a layout based on data hierarchy, comparison needs, and available space:
+
+1. **Uniform Grid**: chart containers share the same size and align like a chessboard; suitable for monitoring dashboards, peer-level data cards, and status overview pages.
+2. **Primary-Detail / Hero Layout**: one main chart occupies 50%-70% of the top or left area, with supporting charts beside or below it; suitable for analysis pages such as one large trend chart plus composition charts and a detail table.
+3. **Nested / Drill-down Layout**: one chart contains, links to, or updates another chart; suitable for exploratory and drill-down analysis.
+4. **Tabbed Layout**: multiple homogeneous charts share one container and switch via tabs; suitable for Day/Week/Month views where space is limited.
+5. **Masonry / Waterfall Layout**: cards share a consistent width but vary in height and fill gaps sequentially; suitable for mixed media reports, mobile H5 pages, and feeds, but use cautiously in dashboards to avoid clutter.
+
+### 7.1.3 Business Process Page Notes (if a process is involved)
+
+- Process name:
+- Process trigger:
+- Participating roles:
+- Process nodes:
+- Node actions and status changes:
+- Exception / return / termination paths:
+- Flowchart notes:
+- Related pages: initiation page / to-do list / process detail and history page / configuration page / permission management
+- Permission rules:
+
 ### 7.2 Interaction Flow
 
 You can describe the flow in text and optionally add a flowchart.

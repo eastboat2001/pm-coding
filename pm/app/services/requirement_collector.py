@@ -283,6 +283,12 @@ Writing rules:
 - Use TBD only when neither confirmed facts nor a small, clearly labeled assumption is appropriate.
 - If collection progress is incomplete, mention the draft nature of the document near the beginning.
 - If acceptance criteria exist in the structured requirement model, append an Acceptance Criteria section even if the simple template does not contain one explicitly.
+
+Optional module handling:
+- If the requirement involves one chart, fill the chart requirement notes with chart type, data source, key fields, field logic, dimensions/metrics/axes, filters, detail data, and chart interactions where known.
+- If the requirement involves multiple charts, additionally describe data-source relationships, chart-to-chart relationships, linked filtering/drill-down/tab behavior, and choose a suitable layout from the provided layout reference.
+- If the requirement involves a business process, workflow, approval, task queue, status flow, or permissioned handoff, fill the business process notes with trigger, roles, process nodes, node actions, status changes, exception/return/termination paths, related pages, and permission rules.
+- Treat technical specifications, visual constraints, color systems, and implementation stack preferences as requirements only when they are explicitly provided by the user or the applied template.
 """
 
 PRD_EMPTY_BY_LANGUAGE = {
@@ -514,6 +520,11 @@ Constraint profile for this template:
 - Prefer a single deployable application shape with simple REST APIs and straightforward module boundaries.
 - Focus requirement discovery on pages, core flows, data tables, API contracts, and minimal deployment/testing needs.
 - Only raise advanced concerns such as caching, queues, horizontal scaling, complex permissions, or heavy observability when the user explicitly needs them.
+
+Scenario discovery modules:
+- For chart, dashboard, report, or visualization requirements, collect chart type, data source, key fields, field logic, dimensions/metrics/axes, filters, detail data, and chart interactions.
+- For multiple-chart requirements, also collect chart relationships, data-source correlations, linked filtering, drill-down, tab switching, and the intended layout pattern.
+- For process, workflow, approval, to-do, history, configuration, or permission-management requirements, collect triggers, roles, process nodes, node actions, status changes, exception paths, related pages, and permission rules.
 """
 
 PERSONAL_PROJECT_PM_ADDENDUM_ZH = """
@@ -530,6 +541,11 @@ PERSONAL_PROJECT_PM_ADDENDUM_ZH = """
 - 优先采用单体、易部署、REST API 清晰、模块边界简单直接的方案。
 - 需求采集重点放在页面、核心流程、数据表、接口约定，以及最小可用的部署/测试方式上。
 - 只有当用户明确提出时，才深入追问缓存、消息队列、水平扩展、复杂权限体系、重型可观测性等高级能力。
+
+场景采集模块：
+- 遇到图表、看板、报表或可视化需求时，采集图表类型、数据来源、关键字段、字段逻辑、维度/指标/坐标轴、筛选条件、明细数据和图表交互。
+- 遇到多图表需求时，额外采集图表关系、数据源关联、联动筛选、下钻、标签切换和期望布局模式。
+- 遇到流程、工作流、审批、待办、历史记录、配置或权限管理需求时，采集触发条件、角色、流程节点、节点操作、状态变化、异常路径、相关页面和权限规则。
 """
 
 PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM = """
@@ -582,6 +598,11 @@ Constraint profile for this template:
 - Prefer a single deployable application shape with simple REST APIs and straightforward module boundaries.
 - Focus requirement discovery on pages, core flows, data tables, API contracts, and minimal deployment/testing needs.
 - Only raise advanced concerns such as caching, queues, horizontal scaling, complex permissions, or heavy observability when the user explicitly needs them.
+
+Scenario discovery modules:
+- For chart, dashboard, report, or visualization requirements, collect chart type, data source, key fields, field logic, dimensions/metrics/axes, filters, detail data, and chart interactions.
+- For multiple-chart requirements, also collect chart relationships, data-source correlations, linked filtering, drill-down, tab switching, and the intended layout pattern.
+- For process, workflow, approval, to-do, history, configuration, or permission-management requirements, collect triggers, roles, process nodes, node actions, status changes, exception paths, related pages, and permission rules.
 """
 
 PERSONAL_PROJECT_PM_ADDENDUM_ZH_V2 = """
@@ -600,6 +621,11 @@ PERSONAL_PROJECT_PM_ADDENDUM_ZH_V2 = """
 - 优先采用单体、易部署、REST API 清晰、模块边界简单直接的方案。
 - 需求采集重点放在页面、核心流程、数据表、接口约定，以及最小可用的部署/测试方式上。
 - 只有当用户明确提出时，才深入追问缓存、消息队列、水平扩展、复杂权限体系、重型可观测性等高级能力。
+
+场景采集模块：
+- 遇到图表、看板、报表或可视化需求时，采集图表类型、数据来源、关键字段、字段逻辑、维度/指标/坐标轴、筛选条件、明细数据和图表交互。
+- 遇到多图表需求时，额外采集图表关系、数据源关联、联动筛选、下钻、标签切换和期望布局模式。
+- 遇到流程、工作流、审批、待办、历史记录、配置或权限管理需求时，采集触发条件、角色、流程节点、节点操作、状态变化、异常路径、相关页面和权限规则。
 """
 
 PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_V2 = """
@@ -619,6 +645,11 @@ Document constraints:
 - Database design should match the chosen database stack; if the default stack is used, stay compatible with SQLite capabilities and limitations.
 - Deployment should favor local development and low-cost simple hosting.
 - Security, observability, and testing should be right-sized for a demo, while still calling out basic minimum good practices.
+
+Chart and process guidance:
+- If the requirement includes charts, define the chart data contract: data source, key fields, field logic, dimensions/metrics/axes, filters, detail data, and interactions.
+- For multiple charts, recommend an appropriate page layout from these examples: Uniform Grid for peer-level dashboard cards; Primary-Detail / Hero for one key chart plus supporting charts; Nested / Drill-down for linked exploratory analysis; Tabbed for homogeneous chart views such as Day/Week/Month; Masonry / Waterfall for mixed reports or mobile feed-style pages, used cautiously in dashboards.
+- If the requirement includes a business process, include the process trigger, roles, nodes, node actions, status changes, exception/return/termination paths, initiation page, to-do list, detail/history page, configuration, and permission management.
 """
 
 PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_ZH_V2 = """
@@ -638,6 +669,11 @@ PERSONAL_PROJECT_DESIGN_DOC_ADDENDUM_ZH_V2 = """
 - 数据库设计要和已选数据库技术栈保持一致；如果使用默认栈，则优先兼容 SQLite 的能力和限制。
 - 部署方案优先本地开发与低成本、简单托管。
 - 安全、可观测性、测试方案要符合 Demo 尺度，但仍需给出基本的最低实践建议。
+
+图表与流程指导：
+- 如果需求包含图表，请明确图表数据契约：数据来源、关键字段、字段逻辑、维度/指标/坐标轴、筛选条件、明细数据和交互方式。
+- 如果需求包含多个图表，请根据数据层级、对比关系和页面空间推荐合适布局：同级看板卡片优先 Uniform Grid / 统一网格；一个核心指标或趋势优先 Primary-Detail / Hero 主次布局；联动探索分析优先 Nested / Drill-down 嵌套下钻；日/周/月等同质视图优先 Tabbed 标签页；混合报告、移动 H5 或资讯流可参考 Masonry / Waterfall 瀑布流，但数据看板中需谨慎使用以避免杂乱。
+- 如果需求包含业务流程，请补充流程触发条件、角色、节点、节点操作、状态变化、异常/退回/终止路径、发起页、待办列表、详情与历史页、配置和权限管理。
 """
 
 

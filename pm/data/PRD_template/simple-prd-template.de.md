@@ -116,6 +116,41 @@ Wenn die Anforderung Seiten oder Bedienabläufe betrifft, beschreiben Sie diese 
 - Seitenelemente:
 - Schaltflächenaktionen:
 
+### 7.1.1 Diagramm-Anforderungen (falls ein oder mehrere Diagramme benötigt werden)
+
+- Diagrammname:
+- Diagrammtyp: Linie / Balken / Kreis / Tabellendiagramm / Sonstiges
+- Datenquelle:
+- Schlüsselfelder:
+- Feldlogik:
+- Dimensionen / Kennzahlen / Achsenbeschreibung:
+- Such- oder Filterbedingungen:
+- Detaildatenanzeige:
+- Beziehungen zwischen mehreren Diagrammen:
+- Diagramminteraktionen: Verknüpfung / Drill-down / Tab-Wechsel / Tooltip / Klickfilter usw.
+
+### 7.1.2 Mehrdiagramm-Layout-Referenz (falls mehrere Diagramme benötigt werden)
+
+Wenn eine Seite ein oder mehrere Diagramme enthält, kann das Layout anhand von Datenhierarchie, Vergleichsbedarf und verfügbarem Platz gewählt werden:
+
+1. **Uniform Grid / Einheitliches Raster**: Alle Diagrammcontainer haben die gleiche Größe und sind sauber wie ein Schachbrett angeordnet; geeignet für Monitoring-Dashboards, gleichrangige Datenkarten und Statusübersichten.
+2. **Primary-Detail / Hero Layout**: Ein Hauptdiagramm belegt oben oder links 50%-70% der Fläche, unterstützende Diagramme stehen daneben oder darunter; geeignet für Analyse-Seiten, z. B. großer Trendchart plus Kompositionscharts und Detailtabelle.
+3. **Nested / Drill-down Layout**: Ein Diagramm enthält, verlinkt oder aktualisiert ein anderes Diagramm; geeignet für explorative Analysen und Drill-down-Szenarien.
+4. **Tabbed Layout**: Mehrere homogene Diagramme teilen sich einen Container und werden über Tabs umgeschaltet; geeignet für Tag/Woche/Monat-Ansichten mit begrenztem Platz.
+5. **Masonry / Waterfall Layout**: Elemente haben eine einheitliche Breite, aber unterschiedliche Höhen und füllen Lücken nacheinander; geeignet für Mixed-Media-Berichte, mobile H5-Seiten und Feeds, in Dashboards jedoch vorsichtig verwenden.
+
+### 7.1.3 Prozessseiten-Beschreibung (falls ein Geschäftsprozess betroffen ist)
+
+- Prozessname:
+- Auslöser des Prozesses:
+- Beteiligte Rollen:
+- Prozessknoten:
+- Aktionen je Knoten und Statusänderungen:
+- Ausnahme- / Rückgabe- / Abbruchpfade:
+- Hinweise zum Flussdiagramm:
+- Zugehörige Seiten: Startseite / Aufgabenliste / Prozessdetails und Historie / Konfiguration / Berechtigungsverwaltung
+- Berechtigungsregeln:
+
 ### 7.2 Interaktionsablauf
 
 Der Ablauf kann in Textform beschrieben und bei Bedarf durch ein Flussdiagramm ergänzt werden.

@@ -116,6 +116,41 @@ Jika keperluan ini melibatkan halaman atau aliran penggunaan, terangkan di sini.
 - Elemen halaman:
 - Tindakan butang:
 
+### 7.1.1 Nota Keperluan Carta (jika satu atau beberapa carta diperlukan)
+
+- Nama carta:
+- Jenis carta: garis / bar / pai / carta jadual / lain-lain
+- Sumber data:
+- Medan utama:
+- Logik medan:
+- Nota dimensi / metrik / paksi:
+- Syarat carian atau penapis:
+- Paparan data terperinci:
+- Hubungan antara beberapa carta:
+- Interaksi carta: penapisan berkait / drill-down / pertukaran tab / tooltip / penapisan klik dan sebagainya
+
+### 7.1.2 Rujukan Susun Atur Pelbagai Carta (jika beberapa carta diperlukan)
+
+Jika halaman mengandungi satu atau lebih carta, pilih susun atur berdasarkan hierarki data, keperluan perbandingan dan ruang yang tersedia:
+
+1. **Uniform Grid / Grid Seragam**: Semua bekas carta bersaiz sama dan tersusun kemas seperti papan catur; sesuai untuk papan pemantauan, kad data setara dan halaman ringkasan status.
+2. **Primary-Detail / Hero Layout**: Satu carta utama menggunakan 50%-70% ruang atas atau kiri, dengan carta sokongan di sisi atau bawah; sesuai untuk halaman analisis seperti carta trend besar bersama carta komposisi dan jadual terperinci.
+3. **Nested / Drill-down Layout**: Satu carta mengandungi, memaut atau mengemas kini carta lain; sesuai untuk analisis penerokaan dan drill-down.
+4. **Tabbed Layout**: Beberapa carta homogen berkongsi satu bekas dan ditukar melalui tab; sesuai untuk paparan Hari/Minggu/Bulan apabila ruang terhad.
+5. **Masonry / Waterfall Layout**: Item mempunyai lebar konsisten tetapi tinggi berbeza dan mengisi ruang kosong secara berturutan; sesuai untuk laporan media campuran, halaman H5 mudah alih dan suapan, tetapi gunakan dengan berhati-hati dalam dashboard.
+
+### 7.1.3 Nota Halaman Proses Perniagaan (jika proses terlibat)
+
+- Nama proses:
+- Pencetus proses:
+- Peranan yang terlibat:
+- Nod proses:
+- Tindakan nod dan perubahan status:
+- Laluan pengecualian / pemulangan / penamatan:
+- Nota carta alir:
+- Halaman berkaitan: halaman permulaan / senarai tugasan / halaman butiran dan sejarah proses / konfigurasi / pengurusan kebenaran
+- Peraturan kebenaran:
+
 ### 7.2 Aliran Interaksi
 
 Aliran boleh diterangkan dalam bentuk teks dan, jika perlu, ditambah dengan carta alir.

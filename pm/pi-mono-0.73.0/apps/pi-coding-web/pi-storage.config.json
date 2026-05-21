@@ -1,0 +1,14 @@
+{
+  "sessionsDir": "./data/sessions",
+  "settingsFile": "./data/settings.json",
+  "projectsRootDir": "./data/projects",
+  "previewBaseUrl": "",
+  "serverSessionSyncEnabled": false,
+  "defaultModelProvider": "",
+  "defaultModelId": "",
+  "handoffDefaultThinkingLevel": "high",
+  "projectInstallCommand": "npm install",
+  "projectBuildCommand": "npm run build",
+  "projectInstallTimeoutMs": 120000,
+  "projectBuildTimeoutMs": 120000
+}

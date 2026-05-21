@@ -1,0 +1,53 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+*.tsbuildinfo
+# packages/*/node_modules/
+packages/*/dist/
+packages/*/dist-chrome/
+packages/*/dist-firefox/
+*.cpuprofile
+
+# Environment
+.env
+
+# Editor files
+.vscode/
+.zed/
+.idea/
+*.swp
+*.swo
+*~
+
+# Package specific
+.npm/
+coverage/
+.nyc_output/
+.pi_config/
+tui-debug.log
+compaction-results/
+.opencode/
+syntax.jsonl
+out.jsonl
+pi-*.html
+out.html
+packages/coding-agent/binaries/
+todo.md
+plans/
+.pi/hf-sessions/
+.pi/hf-sessions-backup/
+collect.sh
+
+
+apps/pi-coding-web/data/projects/
+apps/pi-coding-web/data/sessions/
+apps/pi-coding-web/data/settings.json
+apps/pi-coding-web/dist/
+packages/web-ui/example/data/projects/
+packages/web-ui/example/data/sessions/
+packages/web-ui/example/data/settings.json
+docker/pi-web-ui/data/
+docker/pi-web-ui/*.tar
+docker/pi-web-ui/*.tar.gz
+docker/pi-web-ui/*.zip

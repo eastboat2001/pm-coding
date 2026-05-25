@@ -17,10 +17,14 @@ dist
 .DS_Store
 *.tar
 *.tar.gz
+**/*.tar
+**/*.tar.gz
 
 apps/pi-coding-web/data
 packages/web-ui/example/data
 docker/**/data
+docker/**/*.tar
+docker/**/*.tar.gz
 packages/coding-agent/binaries
 .pi
 .pi_config

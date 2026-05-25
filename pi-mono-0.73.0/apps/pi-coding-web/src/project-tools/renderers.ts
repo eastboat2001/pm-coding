@@ -54,6 +54,20 @@ function filePill(filename?: string): TemplateResult | string {
 	return html`<span class="inline-flex items-center rounded border px-1.5 py-0.5 text-xs font-mono bg-background">${filename}</span>`;
 }
 
+export function selectProjectFileDisplay(
+	params: ProjectFileParams | undefined,
+	result: ToolResultMessage<ProjectFileDetails> | undefined,
+): { code: string; language: string } {
+	const details = result?.details;
+	const filename = details?.filename || (params && "filename" in params ? params.filename : undefined);
+	if (result?.isError) {
+		return { code: getTextOutput(result), language: "text" };
+	}
+	const code =
+		(params && "content" in params ? params.content : undefined) || details?.content || getTextOutput(result);
+	return { code, language: getLanguageFromFilename(filename) };
+}
+
 function formatProjectTaskResult(result: ProjectTaskDetails): string {
 	return [
 		`Task: ${result.task}`,
@@ -104,8 +118,7 @@ class ProjectFileRenderer implements ToolRenderer<ProjectFileParams, ProjectFile
 					: labels[command]?.done || i18n("Processed file");
 		const contentRef = createRef<HTMLDivElement>();
 		const chevronRef = createRef<HTMLSpanElement>();
-		const code =
-			(params && "content" in params ? params.content : undefined) || details?.content || getTextOutput(result);
+		const display = selectProjectFileDisplay(params, result);
 		return {
 			isCustom: false,
 			content: html`
@@ -113,8 +126,8 @@ class ProjectFileRenderer implements ToolRenderer<ProjectFileParams, ProjectFile
 					${renderCollapsibleHeader(state, FileCode2, html`<span>${label} ${filePill(filename)}</span>`, contentRef, chevronRef)}
 					<div ${ref(contentRef)} class="max-h-0 overflow-hidden transition-all duration-300 space-y-3">
 						${
-							code
-								? html`<code-block .code=${code} language=${getLanguageFromFilename(filename)}></code-block>`
+							display.code
+								? html`<code-block .code=${display.code} language=${display.language}></code-block>`
 								: details?.files
 									? html`<code-block .code=${details.files.join("\n")} language="text"></code-block>`
 									: ""

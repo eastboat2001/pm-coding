@@ -227,6 +227,7 @@ declare module "@mariozechner/mini-lit" {
 		"Thinking protocol": string;
 		"Send reasoning effort": string;
 		"Replay reasoning_content": string;
+		"Non-streaming tool calls": string;
 		"Compatibility profile": string;
 		"Compatibility mode": string;
 		"Use when the endpoint closely follows OpenAI Chat Completions.": string;
@@ -281,6 +282,7 @@ declare module "@mariozechner/mini-lit" {
 		"Deleted file": string;
 		"Listing project files": string;
 		"Listed project files": string;
+		"File operation failed": string;
 		"Processing file": string;
 		"Processed file": string;
 		"Running command": string;
@@ -524,6 +526,7 @@ export const translations = {
 		"Thinking protocol": "Thinking protocol",
 		"Send reasoning effort": "Send reasoning effort",
 		"Replay reasoning_content": "Replay reasoning_content",
+		"Non-streaming tool calls": "Non-streaming tool calls",
 		"Compatibility profile": "Compatibility profile",
 		"Compatibility mode": "Compatibility mode",
 		"Use when the endpoint closely follows OpenAI Chat Completions.":
@@ -591,6 +594,7 @@ export const translations = {
 		"Deleted file": "Deleted file",
 		"Listing project files": "Listing project files",
 		"Listed project files": "Listed project files",
+		"File operation failed": "File operation failed",
 		"Processing file": "Processing file",
 		"Processed file": "Processed file",
 		"Running command": "Running command",
@@ -831,6 +835,7 @@ export const translations = {
 		"Thinking protocol": "Thinking-Protokoll",
 		"Send reasoning effort": "Reasoning effort senden",
 		"Replay reasoning_content": "reasoning_content wiedergeben",
+		"Non-streaming tool calls": "Nicht-streamende Tool Calls",
 		"Compatibility profile": "Kompatibilitätsprofil",
 		"Compatibility mode": "Kompatibilitätsmodus",
 		"Use when the endpoint closely follows OpenAI Chat Completions.":
@@ -899,6 +904,7 @@ export const translations = {
 		"Deleted file": "Datei gelöscht",
 		"Listing project files": "Liste Projektdateien auf",
 		"Listed project files": "Projektdateien aufgelistet",
+		"File operation failed": "Dateivorgang fehlgeschlagen",
 		"Processing file": "Verarbeite Datei",
 		"Processed file": "Datei verarbeitet",
 		"Running command": "Führe Befehl aus",
@@ -1146,6 +1152,7 @@ mutableTranslations.zh = {
 	"Thinking protocol": "思考协议",
 	"Send reasoning effort": "发送思考等级",
 	"Replay reasoning_content": "回放 reasoning_content",
+	"Non-streaming tool calls": "非流式工具调用",
 	"Compatibility profile": "兼容档案",
 	"Compatibility mode": "兼容协议",
 	"Use when the endpoint closely follows OpenAI Chat Completions.": "适用于严格兼容 OpenAI Chat Completions 的接口。",
@@ -1210,6 +1217,7 @@ mutableTranslations.zh = {
 	"Deleted file": "已删除文件",
 	"Listing project files": "正在列出项目文件",
 	"Listed project files": "已列出项目文件",
+	"File operation failed": "文件操作失败",
 	"Processing file": "正在处理文件",
 	"Processed file": "已处理文件",
 	"Running command": "正在运行命令",
@@ -1456,6 +1464,7 @@ mutableTranslations.ms = {
 	"Thinking protocol": "Protokol pemikiran",
 	"Send reasoning effort": "Hantar tahap pemikiran",
 	"Replay reasoning_content": "Main semula reasoning_content",
+	"Non-streaming tool calls": "Panggilan alat bukan penstriman",
 	"Compatibility profile": "Profil keserasian",
 	"Compatibility mode": "Mod keserasian",
 	"Use when the endpoint closely follows OpenAI Chat Completions.":
@@ -1524,6 +1533,7 @@ mutableTranslations.ms = {
 	"Deleted file": "Fail dipadam",
 	"Listing project files": "Menyenaraikan fail projek",
 	"Listed project files": "Fail projek disenaraikan",
+	"File operation failed": "Operasi fail gagal",
 	"Processing file": "Memproses fail",
 	"Processed file": "Fail diproses",
 	"Running command": "Menjalankan arahan",

@@ -17,8 +17,8 @@
 - PM 平台通过 handoff token 打开 PI。
 - 自动读取 PM 传入的 PRD、设计文档和实现提示词。
 - 在服务端固定 workspace 中生成项目文件。
-- 运行短命令做验证或构建。
-- 发布 `/preview/<project-id>/` 预览地址。
+- 通过受控任务做静态应用验证、构建和预览。
+- 发布 `/preview/<project-id>/` 静态预览地址。
 - 持久化会话、模型选择和生成项目文件。
 - 支持 Docker 部署和数据目录挂载。
 
@@ -35,7 +35,7 @@
 - 初始化浏览器端 PI Chat 应用。
 - 管理 IndexedDB 与服务端 JSON 镜像存储。
 - 处理 PM handoff 流程。
-- 注册 `project_file`、`project_bash`、`project_preview` 工具。
+- 注册 `project_file`、`project_task` 工具。
 - 提供 Dockerfile、Vite 配置和产品应用 README。
 
 关键子目录：
@@ -56,8 +56,8 @@
 - 解析 session、settings、projects 等数据目录。
 - 提供会话 JSON 存储。
 - 提供服务端 project 文件操作。
-- 提供短命令执行能力。
-- 构建并发布 preview。
+- 提供受控 project task 能力。
+- 构建静态前端产物并发布静态 preview。
 - 暴露 Vite plugin：`configuredStoragePlugin()`。
 
 公开入口：
@@ -65,11 +65,22 @@
 - `loadStorageConfig`
 - `WorkspaceSessionService`
 - `WorkspaceFileService`
+- `WorkspaceTaskService`
 - `WorkspaceCommandService`
 - `WorkspacePreviewService`
 - `configuredStoragePlugin`
 
-该包使服务端 workspace 能力脱离具体 Web 应用，后续如果需要独立服务、权限隔离、多用户队列或运行管理，可以继续在这里演进。
+说明：
+
+- 当前 Agent 对外只暴露 `project_file` 和 `project_task`。
+- `WorkspaceCommandService` 仍保留在包内，主要用于历史兼容和内部构建执行支撑，不应理解为 AI 可以直接运行任意 shell 命令。
+- `WorkspacePreviewService` 当前只负责静态预览，不启动 Node HTTP 服务。
+- Agent 工具到服务端 API 的主要映射是：
+  - `project_file` -> `POST /api/pi-projects/workspace/file`
+  - `project_task` -> `POST /api/pi-projects/workspace/task`
+- `/api/pi-projects/workspace/preview` 仍存在于 middleware 中，用于兼容或内部调用，不应重新暴露为 Agent 工具。
+
+该包使服务端 workspace 能力脱离具体 Web 应用，后续如果需要独立服务、权限隔离、多用户队列、沙箱或运行管理，可以继续在这里演进。
 
 ### `packages/web-ui`
 
@@ -101,7 +112,12 @@
 - 新增 `packages/web-workspace`，拆分原服务端 middleware 的职责。
 - `apps/pi-coding-web/src/main.ts` 缩减为应用入口。
 - 浏览器应用逻辑拆分到 `app/`、`integrations/`、`prompts/`、`project-tools/`。
-- `project_file`、`project_bash`、`project_preview` 的工具名和 API 路径保持不变。
+- Agent 工具从 `project_file`、`project_bash`、`project_preview` 收敛为 `project_file`、`project_task`。
+- `project_task` 只支持受控任务：`inspect`、`validate`、`build_static`、`preview`、`logs`。
+- `project_task` 不接收原始 shell 命令；只有 `build_static` 会运行服务端配置的安装/构建命令。
+- preview 改为静态预览模式，只服务 `index.html` 或 `dist/`、`build/`、`public/` 等静态产物，不再启动 Node 服务。
+- Vite watcher 已忽略 sessions、projects、settings 等运行数据路径，避免 Agent 写文件时触发 Web 应用刷新。
+- Agent 初始化时直接注入模型 API key 读取函数，避免页面刷新后恢复会话时出现 `No API key for provider`。
 - Dockerfile 和 compose 挂载路径改为 `apps/pi-coding-web/data`。
 - 原 `packages/web-ui/example/data/*` 运行数据从仓库结构中移除。
 - 原生成项目 `packages/web-ui/example/kanban` 从产品代码路径中移除。
@@ -151,6 +167,14 @@ http://localhost:5173
 docker build -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
 ```
 
+生成离线部署包：
+
+```bash
+docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.0
+```
+
+离线部署文件位于 `docker/pi-coding-web`。
+
 运行时数据目录应挂载到：
 
 ```text
@@ -171,12 +195,19 @@ apps/pi-coding-web/pi-storage.config.json
 - `settingsFile`：服务端镜像设置文件。
 - `projectsRootDir`：生成项目根目录。
 - `previewBaseUrl`：对浏览器可访问的 PI 公开地址。
-- `projectInstallCommand`：项目预览前安装依赖的命令。
-- `projectBuildCommand`：项目预览前构建命令。
+- `projectInstallCommand`：`project_task build_static` 执行时使用的安装命令，默认 `npm install`。
+- `projectBuildCommand`：`project_task build_static` 执行时使用的构建命令，默认 `npm run build`。
 - `projectInstallTimeoutMs`：安装超时时间。
 - `projectBuildTimeoutMs`：构建超时时间。
 
 相对路径基于 `apps/pi-coding-web/` 解析。
+
+注意：
+
+- `project_task preview` 不会运行 `npm install`、`npm run build`、`npm run dev` 或 Node 服务。
+- 构建型静态前端必须先通过 `project_task build_static` 生成 `dist/` 或 `build/` 等浏览器可直接运行的静态产物。
+- 如果项目根目录的 `index.html` 仍引用 `src/main.tsx`、`src/main.jsx` 等构建源码，`preview` 会返回错误和日志，不应返回一个看似可点击但实际空白的 URL。
+- 当前实现没有沙箱隔离；`build_static` 的风险由固定命令、超时和部分危险命令检查降低，但仍不等同于生产级安全隔离。
 
 ## 6. PM Handoff 流程
 
@@ -193,21 +224,34 @@ PI 会执行以下流程：
 3. 下载 PRD、设计文档等附件。
 4. 将 PM 实现提示词和 PI 平台执行说明合并后填入聊天输入框。
 5. 用户发送后，Agent 使用 project 工具在服务端 workspace 生成项目。
-6. 文件准备完成后调用 `project_preview` 返回预览地址。
+6. 如果是构建型静态前端，Agent 先调用 `project_task build_static`。
+7. Agent 调用 `project_task validate` 检查静态预览条件。
+8. 修复验证发现的问题后，Agent 调用 `project_task preview` 返回预览地址。
 
 PM 文档是需求主依据；PI 自身提示词只补充执行方式，不应扩大或改写 PM 的产品范围。
+
+当前 PI 只要求交付静态应用：
+
+- 优先生成纯静态 HTML/CSS/JavaScript 应用。
+- 也支持 Vite、React、Vue 等构建型静态前端，但最终必须通过 `build_static` 产出静态目录。
+- PM 文档中出现的后端服务、数据库、认证、队列、第三方 API、部署拓扑等内容，应作为目标系统背景，在静态前端中用示例数据、本地状态、mock 响应和清晰 UI 状态模拟。
+- 不支持由 Agent 生成并运行真实后端服务、数据库、Docker、多进程服务或长驻开发服务器。
 
 ## 7. 后续建议
 
 ### 运行安全隔离
 
-当前 `project_bash` 在 PI 服务端进程所在系统执行短命令。后续生产化需要重点补齐：
+当前已经不再向 Agent 暴露可执行任意命令的 `project_bash`。Agent 只能通过 `project_task` 触发固定任务，其中 `build_static` 会运行服务端配置的安装/构建命令。这个方案比开放 bash 风险更低，但仍不是完整安全边界。
 
-- 命令白名单或策略限制。
+后续生产化需要重点补齐：
+
+- 构建任务沙箱隔离。
+- 依赖安装和构建命令的策略限制。
 - 单项目 CPU、内存、磁盘限制。
 - 网络访问限制。
 - 超时与日志截断策略。
 - 每个用户或每个项目的隔离目录。
+- 运行产物清理和可审计日志。
 
 ### 多用户与任务队列
 
@@ -226,7 +270,7 @@ PM 文档是需求主依据；PI 自身提示词只补充执行方式，不应�
 - 独立 Node 服务。
 - PM 后端直接调用的 workspace 服务。
 - Docker sandbox runner。
-- 支持多 preview worker 的运行管理器。
+- 支持多构建 worker 的任务管理器。
 
 ### 上游同步策略
 

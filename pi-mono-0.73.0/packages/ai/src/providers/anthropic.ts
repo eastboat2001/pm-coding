@@ -916,12 +916,7 @@ function buildParams(
 	}
 
 	if (context.tools && context.tools.length > 0) {
-		params.tools = convertTools(
-			context.tools,
-			isOAuthToken,
-			compat.supportsEagerToolInputStreaming,
-			cacheControl,
-		);
+		params.tools = convertTools(context.tools, isOAuthToken, compat.supportsEagerToolInputStreaming, cacheControl);
 	}
 
 	// Configure thinking mode: adaptive (Opus 4.6+ and Sonnet 4.6),

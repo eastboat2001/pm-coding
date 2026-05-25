@@ -1,8 +1,14 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model, OpenAICompletionsCompat } from "@mariozechner/pi-ai";
 import type { AppStorage } from "@mariozechner/pi-web-ui";
 import type { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
 
 export const SELECTED_MODEL_KEY = "example.selectedModel";
+type CustomProviderModelSource = {
+	name: string;
+	type: string;
+	baseUrl: string;
+	useNonStreamingToolCalls?: boolean;
+};
 
 export class ModelController {
 	constructor(
@@ -48,7 +54,7 @@ export class ModelController {
 			return customProvider.models.find((item) => item.id === model.id);
 		}
 
-		if (isCompleteModel(model)) return model as Model<any>;
+		if (isCompleteModel(model)) return applyCustomProviderCompat(customProvider, model as Model<any>);
 		return createCustomProviderModel(customProvider, model.id);
 	}
 
@@ -74,10 +80,7 @@ function isCompleteModel(model: Partial<Model<any>>): boolean {
 	);
 }
 
-function createCustomProviderModel(
-	provider: { name: string; type: string; baseUrl: string },
-	modelId: string,
-): Model<any> | undefined {
+function createCustomProviderModel(provider: CustomProviderModelSource, modelId: string): Model<any> | undefined {
 	const api =
 		provider.type === "anthropic-messages"
 			? "anthropic-messages"
@@ -91,7 +94,7 @@ function createCustomProviderModel(
 		provider.type === "lmstudio"
 			? `${provider.baseUrl.replace(/\/+$/, "")}/v1`
 			: provider.baseUrl;
-	return {
+	const model: Model<any> = {
 		id: modelId,
 		name: modelId,
 		api,
@@ -102,5 +105,30 @@ function createCustomProviderModel(
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128000,
 		maxTokens: 8192,
+	};
+	return applyCustomProviderCompat(provider, model);
+}
+
+function applyCustomProviderCompat(provider: CustomProviderModelSource, model: Model<any>): Model<any> {
+	if (model.api !== "openai-completions" || !["ollama", "llama.cpp", "vllm", "lmstudio"].includes(provider.type)) {
+		return model;
+	}
+
+	const compat: OpenAICompletionsCompat & { useNonStreamingToolCalls?: boolean } = {
+		...(model.compat as OpenAICompletionsCompat | undefined),
+		supportsStore: false,
+		supportsDeveloperRole: false,
+		supportsReasoningEffort: false,
+		maxTokensField: "max_tokens",
+	};
+	if (provider.useNonStreamingToolCalls) {
+		compat.useNonStreamingToolCalls = true;
+	} else {
+		delete compat.useNonStreamingToolCalls;
+	}
+
+	return {
+		...model,
+		compat: compat as Model<any>["compat"],
 	};
 }

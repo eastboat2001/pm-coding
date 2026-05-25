@@ -1,4 +1,10 @@
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel, type Model } from "@mariozechner/pi-ai";
+import {
+	type AssistantMessage,
+	type AssistantMessageEvent,
+	EventStream,
+	getModel,
+	type Model,
+} from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/index.js";
 

@@ -5,6 +5,7 @@ import {
 	type ProjectFileDetails,
 	type ProjectTaskDetails,
 	type ProjectToolContext,
+	prepareProjectFileArguments,
 	projectFileSchema,
 	projectTaskSchema,
 } from "./schemas.js";
@@ -21,8 +22,9 @@ function createProjectFileTool(
 		label: "Project File",
 		name: "project_file",
 		description:
-			"Create, rewrite, update, read, delete, or list files in the configured server project root. Use this instead of browser artifacts when generating runnable apps.",
+			"Create, rewrite, update, get, delete, or list files in the configured server project root. create/rewrite require filename and content in the same call. Use this instead of browser artifacts when generating runnable apps.",
 		parameters: projectFileSchema,
+		prepareArguments: prepareProjectFileArguments,
 		execute: async (_toolCallId, args, signal) => {
 			const result = await requestProjectApi<ProjectFileDetails>(
 				"/api/pi-projects/workspace/file",

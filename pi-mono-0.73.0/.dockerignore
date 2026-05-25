@@ -15,9 +15,12 @@ dist
 *.tsbuildinfo
 *.cpuprofile
 .DS_Store
+*.tar
+*.tar.gz
 
+apps/pi-coding-web/data
 packages/web-ui/example/data
+docker/**/data
 packages/coding-agent/binaries
 .pi
 .pi_config
-

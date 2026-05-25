@@ -1,6 +1,6 @@
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
-import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import {
 	type AgentState,
@@ -22,8 +22,8 @@ import {
 	SessionsStore,
 	SettingsDialog,
 	SettingsStore,
-	setLanguage,
 	setAppStorage,
+	setLanguage,
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
 import { History, Plus, Settings } from "lucide";
@@ -38,6 +38,7 @@ import {
 	fetchPmHandoffPayload,
 	type PmHandoffPayload,
 } from "../integrations/pm-handoff.js";
+import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../prompts/coding-system-prompt.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
@@ -308,9 +309,11 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	agent = new Agent({
 		initialState: initialState || createInitialAgentState(defaultModel),
 		convertToLlm: defaultConvertToLlm,
+		transformContext: (messages) => compactProjectToolHistory(messages),
 		streamFn: createStreamFn(getProxyUrl),
 		getApiKey: getProviderApiKey,
 	});
+	(agent as Agent & { repairToolCalls: boolean }).repairToolCalls = true;
 
 	agentUnsubscribe = agent.subscribe((event: AgentEvent) => {
 		void handleAgentEvent(event);

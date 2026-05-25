@@ -7,6 +7,7 @@ import {
 	type AssistantMessage,
 	type Context,
 	EventStream,
+	parseJsonWithRepair,
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
@@ -203,7 +204,7 @@ async function runLoop(
 			const toolResults: ToolResultMessage[] = [];
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
-				const executedToolBatch = await executeToolCalls(currentContext, message, config, signal, emit);
+				const executedToolBatch = await executeToolCalls(currentContext, message, config, signal, emit, streamFn);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
 
@@ -353,15 +354,16 @@ async function executeToolCalls(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	streamFn?: StreamFn,
 ): Promise<ExecutedToolCallBatch> {
 	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
 	const hasSequentialToolCall = toolCalls.some(
 		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
 	);
 	if (config.toolExecution === "sequential" || hasSequentialToolCall) {
-		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
+		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit, streamFn);
 	}
-	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit);
+	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit, streamFn);
 }
 
 type ExecutedToolCallBatch = {
@@ -376,6 +378,7 @@ async function executeToolCallsSequential(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	streamFn?: StreamFn,
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallOutcome[] = [];
 	const messages: ToolResultMessage[] = [];
@@ -388,7 +391,7 @@ async function executeToolCallsSequential(
 			args: toolCall.arguments,
 		});
 
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal, streamFn);
 		let finalized: FinalizedToolCallOutcome;
 		if (preparation.kind === "immediate") {
 			finalized = {
@@ -428,6 +431,7 @@ async function executeToolCallsParallel(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	streamFn?: StreamFn,
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
@@ -439,7 +443,7 @@ async function executeToolCallsParallel(
 			args: toolCall.arguments,
 		});
 
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal, streamFn);
 		if (preparation.kind === "immediate") {
 			const finalized = {
 				toolCall,
@@ -532,6 +536,7 @@ async function prepareToolCall(
 	toolCall: AgentToolCall,
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
+	streamFn?: StreamFn,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
 	if (!tool) {
@@ -543,13 +548,28 @@ async function prepareToolCall(
 	}
 
 	try {
-		const preparedToolCall = prepareToolCallArguments(tool, toolCall);
-		const validatedArgs = validateToolArguments(tool, preparedToolCall);
+		let preparedToolCall = prepareToolCallArguments(tool, toolCall);
+		let validatedArgs: unknown;
+		try {
+			validatedArgs = validateToolArguments(tool, preparedToolCall);
+		} catch (error) {
+			const repairedArguments = await repairToolCallArguments(
+				tool,
+				preparedToolCall,
+				error instanceof Error ? error : new Error(String(error)),
+				config,
+				signal,
+				streamFn,
+			);
+			if (!repairedArguments) throw error;
+			preparedToolCall = { ...preparedToolCall, arguments: repairedArguments };
+			validatedArgs = validateToolArguments(tool, preparedToolCall);
+		}
 		if (config.beforeToolCall) {
 			const beforeResult = await config.beforeToolCall(
 				{
 					assistantMessage,
-					toolCall,
+					toolCall: preparedToolCall,
 					args: validatedArgs,
 					context: currentContext,
 				},
@@ -565,7 +585,7 @@ async function prepareToolCall(
 		}
 		return {
 			kind: "prepared",
-			toolCall,
+			toolCall: preparedToolCall,
 			tool,
 			args: validatedArgs,
 		};
@@ -576,6 +596,114 @@ async function prepareToolCall(
 			isError: true,
 		};
 	}
+}
+
+async function repairToolCallArguments(
+	tool: AgentTool<any>,
+	toolCall: AgentToolCall,
+	error: Error,
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	streamFn?: StreamFn,
+): Promise<Record<string, any> | undefined> {
+	if (!config.repairToolCalls || signal?.aborted) {
+		return undefined;
+	}
+
+	const streamFunction = streamFn || streamSimple;
+	const resolvedApiKey =
+		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
+	const repairPrompt = [
+		"The following tool call failed validation. Fix only the JSON arguments.",
+		`Tool name: ${tool.name}`,
+		`Validation error:\n${error.message}`,
+		`Original arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`,
+		`Correct JSON schema:\n${JSON.stringify(tool.parameters, null, 2)}`,
+		'Respond with ONLY the corrected JSON arguments object, for example: {"field":"value"}',
+	].join("\n\n");
+
+	try {
+		const response = await streamFunction(
+			config.model,
+			{
+				systemPrompt: "You repair malformed tool-call arguments. Return only valid JSON and no prose.",
+				messages: [{ role: "user", content: repairPrompt, timestamp: Date.now() }],
+				tools: undefined,
+			},
+			{
+				apiKey: resolvedApiKey,
+				signal,
+				temperature: 0,
+				maxTokens: Math.min(config.maxTokens ?? 2048, 2048),
+				reasoning: config.reasoning,
+				thinkingBudgets: config.thinkingBudgets,
+				sessionId: config.sessionId,
+				cacheRetention: "none",
+				headers: config.headers,
+				timeoutMs: config.timeoutMs,
+				maxRetries: config.maxRetries,
+				maxRetryDelayMs: config.maxRetryDelayMs,
+			},
+		);
+		const message = await response.result();
+		if (message.stopReason === "error" || message.stopReason === "aborted") {
+			return undefined;
+		}
+		return parseRepairedToolArguments(tool.name, message);
+	} catch {
+		return undefined;
+	}
+}
+
+function parseRepairedToolArguments(toolName: string, message: AssistantMessage): Record<string, any> | undefined {
+	for (const block of message.content) {
+		if (block.type === "toolCall" && block.name === toolName) {
+			return block.arguments;
+		}
+	}
+
+	const text = message.content
+		.filter((block) => block.type === "text")
+		.map((block) => block.text)
+		.join("\n")
+		.trim();
+	if (!text) return undefined;
+
+	try {
+		const parsed = parseJsonWithRepair<unknown>(extractRepairJson(text));
+		if (isRecord(parsed)) {
+			if (parsed.name === toolName && isRecord(parsed.arguments)) return parsed.arguments;
+			if (isRecord(parsed.arguments)) return parsed.arguments;
+			if (isRecord(parsed.function) && parsed.function.name === toolName) {
+				if (typeof parsed.function.arguments === "string") {
+					const nested = parseJsonWithRepair<unknown>(parsed.function.arguments);
+					return isRecord(nested) ? nested : undefined;
+				}
+				if (isRecord(parsed.function.arguments)) return parsed.function.arguments;
+			}
+			if (isRecord(parsed.args)) return parsed.args;
+			return parsed;
+		}
+	} catch {
+		return undefined;
+	}
+
+	return undefined;
+}
+
+function stripJsonFence(text: string): string {
+	const match = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
+	return match ? match[1].trim() : text;
+}
+
+function extractRepairJson(text: string): string {
+	const stripped = stripJsonFence(text);
+	const toolCallMatch = stripped.match(/^<tool[_-]?call>\s*([\s\S]*?)\s*<\/tool[_-]?call>$/i);
+	return toolCallMatch ? toolCallMatch[1].trim() : stripped;
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function executePreparedToolCall(

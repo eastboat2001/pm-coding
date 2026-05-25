@@ -21,7 +21,9 @@ const emptyUsage: Usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const compat = {
+const compat: Required<Omit<OpenAICompletionsCompat, "cacheControlFormat">> & {
+	cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+} = {
 	supportsStore: true,
 	supportsDeveloperRole: true,
 	supportsReasoningEffort: true,
@@ -39,8 +41,7 @@ const compat = {
 	cacheControlFormat: undefined,
 	sendSessionAffinityHeaders: false,
 	supportsLongCacheRetention: true,
-} satisfies Required<Omit<OpenAICompletionsCompat, "cacheControlFormat">> & {
-	cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+	useNonStreamingToolCalls: false,
 };
 
 function buildModel(baseUrl = "http://127.0.0.1:1"): Model<"openai-completions"> {
@@ -142,7 +143,9 @@ describe("openai-completions thinking-as-text replay", () => {
 			requiresThinkingAsText: false,
 			requiresReasoningContentOnAssistantMessages: true,
 			thinkingFormat: "deepseek",
-		} satisfies typeof compat;
+		} satisfies Required<Omit<OpenAICompletionsCompat, "cacheControlFormat">> & {
+			cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+		};
 		const messages = convertMessages(
 			buildModel(),
 			buildContext(

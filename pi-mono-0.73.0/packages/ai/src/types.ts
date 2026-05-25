@@ -319,6 +319,8 @@ export interface OpenAICompletionsCompat {
 	sendSessionAffinityHeaders?: boolean;
 	/** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true. */
 	supportsLongCacheRetention?: boolean;
+	/** Use a non-streaming chat completion request when tools are present, so OpenAI-compatible backends return complete tool-call arguments in one response. Default: false. */
+	useNonStreamingToolCalls?: boolean;
 }
 
 /** Compatibility settings for OpenAI Responses APIs. */

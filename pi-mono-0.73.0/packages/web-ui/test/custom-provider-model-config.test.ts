@@ -2,6 +2,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
 	createManualModelsFromConfigs,
+	defaultManualModelConfig,
 	type ManualModelConfig,
 	manualModelConfigFromModel,
 } from "../src/dialogs/custom-provider-model-config.js";
@@ -16,6 +17,10 @@ const provider: Omit<CustomProvider, "models"> = {
 };
 
 describe("custom provider manual model config", () => {
+	it("keeps non-streaming tool calls off by default", () => {
+		expect(defaultManualModelConfig().useNonStreamingToolCalls).toBe(false);
+	});
+
 	it("creates per-model OpenAI-compatible reasoning and vision settings", () => {
 		const configs: ManualModelConfig[] = [
 			{
@@ -34,6 +39,7 @@ describe("custom provider manual model config", () => {
 				anthropicReasoningReplayFormat: "anthropic-signature",
 				supportsEagerToolInputStreaming: true,
 				anthropicSupportsLongCacheRetention: true,
+				useNonStreamingToolCalls: false,
 				contextWindow: "64000",
 				maxTokens: "4096",
 			},
@@ -93,9 +99,29 @@ describe("custom provider manual model config", () => {
 			anthropicReasoningReplayFormat: "anthropic-signature",
 			supportsEagerToolInputStreaming: true,
 			anthropicSupportsLongCacheRetention: true,
+			useNonStreamingToolCalls: false,
 			contextWindow: "32768",
 			maxTokens: "2048",
 		});
+	});
+
+	it("only enables non-streaming tool calls when manually requested", () => {
+		const qwenConfig = {
+			...defaultConfig("qwen3"),
+			reasoning: true,
+			openAICompletionsProfile: "qwen",
+			thinkingFormat: "qwen",
+			supportsReasoningEffort: false,
+			maxTokensField: "max_tokens",
+		} satisfies ManualModelConfig;
+
+		const [streamingModel] = createManualModelsFromConfigs(provider, [qwenConfig]);
+		expect((streamingModel.compat as { useNonStreamingToolCalls?: boolean }).useNonStreamingToolCalls).toBe(false);
+
+		const [nonStreamingModel] = createManualModelsFromConfigs(provider, [
+			{ ...qwenConfig, useNonStreamingToolCalls: true },
+		]);
+		expect((nonStreamingModel.compat as { useNonStreamingToolCalls?: boolean }).useNonStreamingToolCalls).toBe(true);
 	});
 
 	it("creates per-model Anthropic-compatible MiMo/DeepSeek reasoning replay settings", () => {
@@ -166,6 +192,7 @@ function defaultConfig(id: string): ManualModelConfig {
 		anthropicReasoningReplayFormat: "anthropic-signature",
 		supportsEagerToolInputStreaming: true,
 		anthropicSupportsLongCacheRetention: true,
+		useNonStreamingToolCalls: false,
 		contextWindow: "128000",
 		maxTokens: "8192",
 	};

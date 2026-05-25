@@ -47,6 +47,7 @@ export class CustomProviderDialog extends DialogBase {
 	@state() private saving = false;
 	@state() private saveError = "";
 	@state() private discoveredModels: Model<any>[] = [];
+	@state() private useNonStreamingToolCalls = false;
 	@state() private manualModelConfigs: ManualModelConfig[] = [defaultManualModelConfig()];
 
 	protected modalWidth = "min(800px, 90vw)";
@@ -74,6 +75,7 @@ export class CustomProviderDialog extends DialogBase {
 			this.baseUrl = this.provider.baseUrl;
 			this.apiKey = this.provider.apiKey || "";
 			this.discoveredModels = this.provider.models || [];
+			this.useNonStreamingToolCalls = this.provider.useNonStreamingToolCalls ?? false;
 			this.manualModelConfigs = (this.provider.models || []).map((model) => manualModelConfigFromModel(model));
 			if (this.manualModelConfigs.length === 0) this.manualModelConfigs = [defaultManualModelConfig()];
 		} else {
@@ -83,6 +85,7 @@ export class CustomProviderDialog extends DialogBase {
 			this.updateDefaultBaseUrl();
 			this.apiKey = "";
 			this.discoveredModels = [];
+			this.useNonStreamingToolCalls = false;
 			this.manualModelConfigs = [defaultManualModelConfig()];
 		}
 		this.testError = "";
@@ -209,13 +212,16 @@ export class CustomProviderDialog extends DialogBase {
 			this.saveError = "";
 			this.requestUpdate();
 			const storage = getAppStorage();
-			const baseProvider = {
+			const baseProvider: Omit<CustomProvider, "models"> = {
 				id: this.provider?.id || crypto.randomUUID(),
 				name: this.name,
 				type: this.type,
 				baseUrl: this.baseUrl,
 				apiKey: this.apiKey || undefined,
 			};
+			if (this.isAutoDiscoveryType()) {
+				baseProvider.useNonStreamingToolCalls = this.useNonStreamingToolCalls;
+			}
 
 			const provider: CustomProvider = {
 				...baseProvider,
@@ -689,6 +695,18 @@ export class CustomProviderDialog extends DialogBase {
 									`
 									: ""
 							}
+							<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+								<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
+									<span class="text-sm text-foreground">${i18n("Non-streaming tool calls")}</span>
+									${Switch({
+										checked: config.useNonStreamingToolCalls,
+										onChange: (checked: boolean) =>
+											this.updateManualModelConfig(index, {
+												useNonStreamingToolCalls: checked,
+											}),
+									})}
+								</div>
+							</div>
 						`
 						: ""
 				}
@@ -908,6 +926,16 @@ export class CustomProviderDialog extends DialogBase {
 							this.isAutoDiscoveryType()
 								? html`
 									<div class="flex flex-col gap-2">
+										<div class="flex items-center justify-between rounded-md border border-border px-3 py-2">
+											<span class="text-sm text-foreground">${i18n("Non-streaming tool calls")}</span>
+											${Switch({
+												checked: this.useNonStreamingToolCalls,
+												onChange: (checked: boolean) =>
+													this.handleFieldChange(() => {
+														this.useNonStreamingToolCalls = checked;
+													}),
+											})}
+										</div>
 										${Button({
 											onClick: () => this.testConnection(),
 											variant: "outline",

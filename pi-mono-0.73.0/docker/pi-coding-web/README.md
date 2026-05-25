@@ -1,6 +1,6 @@
-# PI Web UI Docker Deployment
+# PI Coding Web Docker Deployment
 
-This directory is the server deployment package for the PI Web UI container.
+This directory is the server deployment package for the PI Coding Web container.
 
 ## Files
 
@@ -11,13 +11,13 @@ This directory is the server deployment package for the PI Web UI container.
 The Docker image itself is built from the repository root with:
 
 ```bash
-docker build -t pi-web-ui:0.73.0 -f apps/pi-coding-web/Dockerfile .
+docker build -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
 ```
 
 Export the offline image:
 
 ```bash
-docker save -o pi-web-ui-0.73.0.tar pi-web-ui:0.73.0
+docker save -o pi-coding-web-0.73.0.tar pi-coding-web:0.73.0
 ```
 
 ## Server Usage
@@ -25,7 +25,7 @@ docker save -o pi-web-ui-0.73.0.tar pi-web-ui:0.73.0
 Copy these files to the server:
 
 ```text
-pi-web-ui-0.73.0.tar
+pi-coding-web-0.73.0.tar
 docker-compose.yaml
 pi-storage.config.json
 ```
@@ -33,8 +33,8 @@ pi-storage.config.json
 Recommended server layout:
 
 ```text
-/opt/pi-web-ui/
-  pi-web-ui-0.73.0.tar
+/opt/pi-coding-web/
+  pi-coding-web-0.73.0.tar
   docker-compose.yaml
   pi-storage.config.json
   data/
@@ -44,23 +44,31 @@ Before starting, edit `pi-storage.config.json`:
 
 ```json
 {
+  "sessionsDir": "./data/sessions",
+  "settingsFile": "./data/settings.json",
+  "projectsRootDir": "./data/projects",
   "previewBaseUrl": "http://SERVER_IP:5173",
   "serverSessionSyncEnabled": false,
   "defaultModelProvider": "",
   "defaultModelId": "",
-  "handoffDefaultThinkingLevel": "high"
+  "handoffDefaultThinkingLevel": "high",
+  "projectInstallCommand": "npm install",
+  "projectBuildCommand": "npm run build",
+  "projectInstallTimeoutMs": 300000,
+  "projectBuildTimeoutMs": 300000
 }
 ```
 
 Use `http://localhost:5173` only when the browser is running on the same machine as Docker.
 For remote access, use the server IP or public domain. Do not use `0.0.0.0` as `previewBaseUrl`.
+If `previewBaseUrl` is left empty, PI builds preview links from the incoming request host and `x-forwarded-proto` header.
 
 Load and start:
 
 ```bash
-cd /opt/pi-web-ui
+cd /opt/pi-coding-web
 mkdir -p data
-docker load -i pi-web-ui-0.73.0.tar
+docker load -i pi-coding-web-0.73.0.tar
 docker compose up -d
 ```
 

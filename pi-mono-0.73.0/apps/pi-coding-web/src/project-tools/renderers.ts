@@ -81,7 +81,7 @@ class ProjectFileRenderer implements ToolRenderer<ProjectFileParams, ProjectFile
 		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
 		const details = result?.details;
 		const command = details?.command || params?.command || "file";
-		const filename = details?.filename || params?.filename;
+		const filename = details?.filename || (params && "filename" in params ? params.filename : undefined);
 		const labels: Record<string, { active: string; done: string }> = {
 			create: {
 				active: i18n("Creating file"),
@@ -97,12 +97,15 @@ class ProjectFileRenderer implements ToolRenderer<ProjectFileParams, ProjectFile
 			list: { active: i18n("Listing project files"), done: i18n("Listed project files") },
 		};
 		const label =
-			state === "inprogress"
-				? labels[command]?.active || i18n("Processing file")
-				: labels[command]?.done || i18n("Processed file");
+			state === "error"
+				? "File operation failed"
+				: state === "inprogress"
+					? labels[command]?.active || i18n("Processing file")
+					: labels[command]?.done || i18n("Processed file");
 		const contentRef = createRef<HTMLDivElement>();
 		const chevronRef = createRef<HTMLSpanElement>();
-		const code = params?.content || details?.content || getTextOutput(result);
+		const code =
+			(params && "content" in params ? params.content : undefined) || details?.content || getTextOutput(result);
 		return {
 			isCustom: false,
 			content: html`

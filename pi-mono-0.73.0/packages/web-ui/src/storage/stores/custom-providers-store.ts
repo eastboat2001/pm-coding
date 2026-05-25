@@ -16,6 +16,7 @@ export interface CustomProvider {
 	type: CustomProviderType;
 	baseUrl: string;
 	apiKey?: string; // Optional, applies to all models
+	useNonStreamingToolCalls?: boolean; // Auto-discovery OpenAI-compatible providers only
 
 	// For manual types ONLY - models stored directly on provider
 	// Auto-discovery types: models fetched on-demand, never stored

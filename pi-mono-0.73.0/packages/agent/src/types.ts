@@ -245,6 +245,11 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * The hook receives the agent abort signal and is responsible for honoring it.
 	 */
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+	/**
+	 * When true, invalid tool-call arguments are sent through one bounded model
+	 * repair request before the loop emits a validation error tool result.
+	 */
+	repairToolCalls?: boolean;
 }
 
 /**

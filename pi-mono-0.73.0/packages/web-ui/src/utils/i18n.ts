@@ -526,7 +526,7 @@ export const translations = {
 		"Thinking protocol": "Thinking protocol",
 		"Send reasoning effort": "Send reasoning effort",
 		"Replay reasoning_content": "Replay reasoning_content",
-		"Non-streaming tool calls": "Non-streaming tool calls",
+		"Non-streaming tool calls": "Non-streaming output",
 		"Compatibility profile": "Compatibility profile",
 		"Compatibility mode": "Compatibility mode",
 		"Use when the endpoint closely follows OpenAI Chat Completions.":
@@ -835,7 +835,7 @@ export const translations = {
 		"Thinking protocol": "Thinking-Protokoll",
 		"Send reasoning effort": "Reasoning effort senden",
 		"Replay reasoning_content": "reasoning_content wiedergeben",
-		"Non-streaming tool calls": "Nicht-streamende Tool Calls",
+		"Non-streaming tool calls": "Nicht-streamende Ausgabe",
 		"Compatibility profile": "Kompatibilitätsprofil",
 		"Compatibility mode": "Kompatibilitätsmodus",
 		"Use when the endpoint closely follows OpenAI Chat Completions.":
@@ -1152,7 +1152,7 @@ mutableTranslations.zh = {
 	"Thinking protocol": "思考协议",
 	"Send reasoning effort": "发送思考等级",
 	"Replay reasoning_content": "回放 reasoning_content",
-	"Non-streaming tool calls": "非流式工具调用",
+	"Non-streaming tool calls": "非流式输出",
 	"Compatibility profile": "兼容档案",
 	"Compatibility mode": "兼容协议",
 	"Use when the endpoint closely follows OpenAI Chat Completions.": "适用于严格兼容 OpenAI Chat Completions 的接口。",
@@ -1464,7 +1464,7 @@ mutableTranslations.ms = {
 	"Thinking protocol": "Protokol pemikiran",
 	"Send reasoning effort": "Hantar tahap pemikiran",
 	"Replay reasoning_content": "Main semula reasoning_content",
-	"Non-streaming tool calls": "Panggilan alat bukan penstriman",
+	"Non-streaming tool calls": "Output bukan penstriman",
 	"Compatibility profile": "Profil keserasian",
 	"Compatibility mode": "Mod keserasian",
 	"Use when the endpoint closely follows OpenAI Chat Completions.":

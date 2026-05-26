@@ -118,7 +118,14 @@
 - preview 改为静态预览模式，只服务 `index.html` 或 `dist/`、`build/`、`public/` 等静态产物，不再启动 Node 服务。
 - Vite watcher 已忽略 sessions、projects、settings 等运行数据路径，避免 Agent 写文件时触发 Web 应用刷新。
 - Agent 初始化时直接注入模型 API key 读取函数，避免页面刷新后恢复会话时出现 `No API key for provider`。
+- 自定义服务商存储改为服务端 JSON 与浏览器 IndexedDB 双层同步；当服务端 `customProviders` 为空数组但本地仍有服务商时，不再用空数组反向清空本地配置，而是优先把本地配置写回服务端。
+- 小模型工具调用兼容增强：支持工具参数别名归一、缺参时报出更明确的工具调用格式提示，并增加手动可选的非流式工具调用兼容模式。
+- 非流式工具调用兼容模式不是 vLLM 自动默认开启；需要在对应自定义服务商配置中手动开启，避免后续更强模型默认失去流式输出。
+- Agent 发送上下文前会对旧的 `project_file.content` 做确定性裁剪，只保留最近一次完整工具调用，旧的大文件内容替换为 `[project_file content omitted: ...]` 占位符，减少多文件生成后的上下文污染。
+- 系统提示词已要求：如果历史中出现 `project_file content omitted`，或需要修改已有文件但最新上下文没有完整当前内容，必须先调用 `project_file get` 读取文件。
+- `project_file` 失败卡片渲染已调整：失败或中断时优先显示真实错误信息，不再展示模型尝试写入的完整文件正文，避免误判为“文件已成功创建”。
 - Dockerfile 和 compose 挂载路径改为 `apps/pi-coding-web/data`。
+- `.dockerignore` 已排除递归 `*.tar`、`*.tar.gz`，避免离线镜像包被再次加入 Docker build context。
 - 原 `packages/web-ui/example/data/*` 运行数据从仓库结构中移除。
 - 原生成项目 `packages/web-ui/example/kanban` 从产品代码路径中移除。
 
@@ -175,6 +182,12 @@ docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.
 
 离线部署文件位于 `docker/pi-coding-web`。
 
+注意：
+
+- Docker 离线包 `*.tar`、`*.tar.gz` 不应提交到 GitHub。
+- 这些离线包可以临时放在 `docker/pi-coding-web` 下，但必须被 `.dockerignore` 排除，否则下次 `docker build` 会把旧镜像包再次发送进 build context，导致 `transferring context` 接近 2GB。
+- 如果 `docker build` 显示 build context 异常变大，优先检查仓库内是否有未排除的镜像 tar、运行数据目录或生成项目依赖目录。
+
 运行时数据目录应挂载到：
 
 ```text
@@ -208,6 +221,55 @@ apps/pi-coding-web/pi-storage.config.json
 - 构建型静态前端必须先通过 `project_task build_static` 生成 `dist/` 或 `build/` 等浏览器可直接运行的静态产物。
 - 如果项目根目录的 `index.html` 仍引用 `src/main.tsx`、`src/main.jsx` 等构建源码，`preview` 会返回错误和日志，不应返回一个看似可点击但实际空白的 URL。
 - 当前实现没有沙箱隔离；`build_static` 的风险由固定命令、超时和部分危险命令检查降低，但仍不等同于生产级安全隔离。
+
+### 模型与服务商配置
+
+模型配置涉及三类数据，不应混为一谈：
+
+- `customProviders`：自定义服务商定义，包含服务商名称、类型、base URL、可选 API key、模型列表，以及本地 OpenAI-compatible 服务商的兼容开关。
+- `selectedModel`：最近选择的模型对象，只表示“上次选中了哪个模型”，不等同于完整服务商配置。
+- `providerKeys`：按 provider 名称保存的 API key。
+
+如果 `settings.json` 里只有 `selectedModel`，但 `customProviders` 是空数组或不存在，设置页不会显示自定义服务商。这不是 UI 没读到文件，而是服务商列表本身缺失。
+
+当前同步策略：
+
+- 新增或修改服务商时，优先写入服务端 `settings.json`，同时镜像到浏览器 IndexedDB。
+- 读取服务商时，如果服务端存在非空 `customProviders`，以服务端为准并同步到本地。
+- 如果服务端 `customProviders` 是空数组，但浏览器本地仍有服务商，会把本地服务商写回服务端，避免旧版本中“空数组反向清空本地配置”的问题。
+- 如果服务端和浏览器本地都已经没有服务商定义，则无法只靠 `selectedModel` 自动恢复完整配置，需要重新添加服务商。
+
+### 模型工具调用兼容
+
+当前自定义服务商主要分为：
+
+- `openai-completions`
+- `openai-responses`
+- `anthropic-messages`
+- `vllm`、`lmstudio`、`ollama`、`llama.cpp` 等本地 OpenAI-compatible 自动发现服务商
+
+其中 `vllm`、`lmstudio` 等本地模型部署工具通常通过 OpenAI Chat Completions 兼容接口接入，因此在内部会走 `openai-completions` 兼容路径。
+
+非流式工具调用兼容模式是手动开关，主要用于小模型或部分 vLLM 服务端在流式 tool call 参数输出不稳定时降级使用。它不是 vLLM 默认值，后续如果内网升级到更强模型，可以保持关闭以继续获得流式输出。
+
+已知经验：
+
+- `qwen3.5-27b` 在当前内网测试中可以正常创建文件。
+- `qwen3.6-27b` 在旧版本和新版本 PI 中都出现工具调用不稳定，倾向于模型或 vLLM tool calling 兼容问题，不建议为此回退 PI 代码。
+- 对小模型，应优先使用明确的工具 schema、参数别名兼容、缺参修复提示和必要时的非流式工具调用模式。
+
+### Agent 上下文压缩
+
+`compactProjectToolHistory` 只在发送给模型前处理上下文，不会修改磁盘 session 原文，也不会影响 UI 历史展示。
+
+实现方式是纯代码规则，不调用当前配置的模型做总结：
+
+- 默认只保留最近 1 次完整 `project_file` 工具调用内容。
+- 更早的 `project_file.arguments.content` 如果超过默认长度，会替换为 `[project_file content omitted: <chars> chars, <lines> lines from <filename>]`。
+- 这样可以避免多文件生成后，旧的大文件内容长期污染模型上下文。
+- 代价是模型看不到很早之前写入文件的完整内容；因此系统提示词要求模型在需要修改旧文件时先调用 `project_file get`。
+
+该机制是上下文裁剪，不是智能代码摘要。后续如果要进一步提升小模型稳定性，可以考虑把压缩占位符变得更强约束，或者在编辑已有文件前由工具层强制读取当前文件。
 
 ## 6. PM Handoff 流程
 

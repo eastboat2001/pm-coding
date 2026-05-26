@@ -20,6 +20,9 @@ Export the offline image:
 docker save -o pi-coding-web-0.73.0.tar pi-coding-web:0.73.0
 ```
 
+The exported `*.tar` image is deployment output, not source code. Do not commit it to Git.
+The repository `.dockerignore` excludes recursive `*.tar` and `*.tar.gz` files so an old offline image is not sent back into the next `docker build` context. If `docker build` reports a very large `transferring context` size, check for unignored image tar files, runtime data directories, or generated project dependencies.
+
 ## Server Usage
 
 Copy these files to the server:

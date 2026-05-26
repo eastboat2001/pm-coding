@@ -15,6 +15,7 @@ import { i18n } from "../utils/i18n.js";
 import { createStreamFn } from "../utils/proxy-utils.js";
 import type { UserMessageWithAttachments } from "./Messages.js";
 import type { StreamingMessageContainer } from "./StreamingMessageContainer.js";
+import type { SlashSuggestionItem } from "./slash-suggestions.js";
 
 @customElement("agent-interface")
 export class AgentInterface extends LitElement {
@@ -36,6 +37,7 @@ export class AgentInterface extends LitElement {
 	@property({ attribute: false }) onModelSelect?: () => void;
 	// Optional callback called after the thinking level changes
 	@property({ attribute: false }) onThinkingChange?: (level: ThinkingLevel) => void | Promise<void>;
+	@property({ attribute: false }) slashSuggestions: SlashSuggestionItem[] = [];
 
 	// References
 	@query("message-editor") private _messageEditor!: MessageEditor;
@@ -383,6 +385,7 @@ export class AgentInterface extends LitElement {
 							.showAttachmentButton=${this.enableAttachments}
 							.showModelSelector=${this.enableModelSelector}
 							.showThinkingSelector=${this.enableThinkingSelector}
+							.slashSuggestions=${this.slashSuggestions}
 							.onSend=${(input: string, attachments: Attachment[]) => {
 								this.sendMessage(input, attachments);
 							}}

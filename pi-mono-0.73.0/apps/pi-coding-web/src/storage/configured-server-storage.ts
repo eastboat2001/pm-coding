@@ -9,6 +9,7 @@ export interface ConfiguredStorageStatus {
 	sessionsDir: string;
 	settingsFile: string;
 	projectsRootDir: string;
+	skillsDir?: string;
 	previewBaseUrl?: string;
 	serverSessionSyncEnabled?: boolean;
 	defaultModelProvider?: string;

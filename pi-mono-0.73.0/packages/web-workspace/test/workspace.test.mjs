@@ -10,6 +10,7 @@ import {
 	WorkspaceFileService,
 	WorkspacePreviewService,
 	WorkspaceSessionService,
+	WorkspaceSkillService,
 	WorkspaceTaskService,
 } from "../dist/index.js";
 
@@ -22,6 +23,7 @@ function testConfig(root, overrides = {}) {
 		sessionsDir: join(root, "data", "sessions"),
 		settingsFile: join(root, "data", "settings.json"),
 		projectsRootDir: join(root, "data", "projects"),
+		skillsDir: join(root, "data", "skills"),
 		previewBaseUrl: "http://localhost:5173",
 		projectInstallCommand: "npm install",
 		projectBuildCommand: "npm run build",
@@ -48,6 +50,7 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 			sessionsDir: "runtime/sessions",
 			settingsFile: "runtime/settings.json",
 			projectsRootDir: "runtime/projects",
+			skillsDir: "runtime/skills",
 			previewBaseUrl: "http://localhost:5173/",
 			serverSessionSyncEnabled: true,
 			defaultModelProvider: "openai",
@@ -62,6 +65,7 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "runtime/projects"));
+	assert.equal(config.skillsDir, resolve(root, "runtime/skills"));
 	assert.equal(config.previewBaseUrl, "http://localhost:5173");
 	assert.equal(config.serverSessionSyncEnabled, true);
 	assert.equal(config.defaultModelProvider, "openai");
@@ -78,10 +82,91 @@ await test("loadStorageConfig supports legacy storageDir defaults", () => {
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "data/projects"));
+	assert.equal(config.skillsDir, resolve(root, "data/skills"));
 	assert.equal(config.serverSessionSyncEnabled, false);
 	assert.equal(config.defaultModelProvider, "");
 	assert.equal(config.defaultModelId, "");
 	assert.equal(config.handoffDefaultThinkingLevel, "high");
+});
+
+await test("WorkspaceSkillService loads global skills and hides disabled skills from prompt metadata", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const skillDir = join(config.skillsDir, "ui-polish");
+	mkdirSync(skillDir, { recursive: true });
+	writeFileSync(
+		join(skillDir, "SKILL.md"),
+		`---
+name: ui-polish
+description: Improve generated UI spacing, visual hierarchy, and responsive polish.
+---
+
+# UI Polish
+
+Use stronger layout hierarchy.
+`,
+		"utf8",
+	);
+	mkdirSync(join(config.skillsDir, "private-skill"), { recursive: true });
+	writeFileSync(
+		join(config.skillsDir, "private-skill", "SKILL.md"),
+		`---
+name: private-skill
+description: Hidden skill.
+disable-model-invocation: true
+---
+
+# Private
+`,
+		"utf8",
+	);
+
+	const service = new WorkspaceSkillService(config);
+	const list = service.list();
+
+	assert.deepEqual(
+		list.skills.map((skill) => skill.name),
+		["private-skill", "ui-polish"],
+	);
+	assert.deepEqual(
+		list.promptSkills.map((skill) => skill.name),
+		["ui-polish"],
+	);
+	assert.equal(list.diagnostics.length, 0);
+
+	const loaded = service.load({ name: "ui-polish" });
+	assert.equal(loaded.name, "ui-polish");
+	assert.match(loaded.content, /Use stronger layout hierarchy/);
+	assert.equal(loaded.location, "skill://ui-polish/SKILL.md");
+});
+
+await test("WorkspaceSkillService reads only text resources inside a skill directory", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const skillDir = join(config.skillsDir, "ui-polish");
+	mkdirSync(join(skillDir, "references"), { recursive: true });
+	writeFileSync(
+		join(skillDir, "SKILL.md"),
+		`---
+name: ui-polish
+description: Improve generated UI spacing.
+---
+
+# UI Polish
+`,
+		"utf8",
+	);
+	writeFileSync(join(skillDir, "references", "rules.md"), "# Rules\n\nUse clear spacing.", "utf8");
+	writeFileSync(join(skillDir, "image.png"), "not really an image", "utf8");
+
+	const service = new WorkspaceSkillService(config);
+	const resource = service.readResource({ name: "ui-polish", path: "references/rules.md" });
+
+	assert.equal(resource.name, "ui-polish");
+	assert.equal(resource.path, "references/rules.md");
+	assert.match(resource.content, /Use clear spacing/);
+	assert.throws(() => service.readResource({ name: "ui-polish", path: "../outside.md" }), /escapes skill root/);
+	assert.throws(() => service.readResource({ name: "ui-polish", path: "image.png" }), /not an allowed text resource/);
 });
 
 await test("WorkspaceSessionService merges and deletes server-backed provider keys in settings", () => {
@@ -177,6 +262,7 @@ await test("configuredStoragePlugin ignores generated storage directories in the
 			sessionsDir: join(root, "runtime", "sessions"),
 			settingsFile: join(root, "runtime", "settings.json"),
 			projectsRootDir: join(root, "runtime", "projects"),
+			skillsDir: join(root, "runtime", "skills"),
 		}),
 		"utf8",
 	);
@@ -188,6 +274,7 @@ await test("configuredStoragePlugin ignores generated storage directories in the
 	assert.ok(Array.isArray(ignored));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "sessions")) + "/**"));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "projects")) + "/**"));
+	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "skills")) + "/**"));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "settings.json"))));
 });
 

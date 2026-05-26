@@ -185,7 +185,9 @@ The application uses the Vite dev/preview server for generated project files, pr
 - Browser IndexedDB is the only active session store in the current temporary multi-user mode.
 - Saved chat sessions are not mirrored to disk while `serverSessionSyncEnabled` is `false`.
 - The session list only reads browser-backed records.
+- The Web UI agent can call read-only global skill tools: `skill_load` and `skill_resource`.
 - The Web UI agent can call server workspace tools: `project_file` and `project_task`.
+- Global skills are loaded from the configured `skillsDir`; they provide instructions and reference text only, not script execution or arbitrary filesystem access.
 - Project files are written directly under the configured project root on the server.
 - `project_task` supports only controlled static tasks: `inspect`, `validate`, `build_static`, `preview`, and `logs`.
 - Built-in browser artifacts are disabled for project generation in this application.
@@ -199,6 +201,7 @@ Edit `pi-storage.config.json`:
   "sessionsDir": "./data/sessions",
   "settingsFile": "./data/settings.json",
   "projectsRootDir": "./data/projects",
+  "skillsDir": "./data/skills",
   "previewBaseUrl": "",
   "serverSessionSyncEnabled": false,
   "defaultModelProvider": "",
@@ -219,6 +222,14 @@ The application writes:
 - one project root directory per generated project under `projectsRootDir`
 
 `sessionsDir` is reserved for the future authenticated server-session mode. It is not used while browser-private sessions are enabled.
+
+`skillsDir` stores server-configured global skills. The first version supports directory-style skills only:
+
+```text
+data/skills/<skill-name>/SKILL.md
+```
+
+Each `SKILL.md` should include `name` and `description` frontmatter. The agent sees skill names and descriptions in the system prompt, loads full instructions with `skill_load`, and reads referenced text files under the same skill directory with `skill_resource`. Users can type `/skill` in the chat input to open the global skill picker; selecting an item inserts `/skill:<name>`, which is expanded to that skill's `SKILL.md` before the message is sent. Skills do not grant shell access and PI does not execute skill scripts.
 
 With the default configuration, runtime data stays inside `apps/pi-coding-web/data/` and remains decoupled from any PM application directory.
 
@@ -244,12 +255,13 @@ Expected conversation flow:
 
 1. The user sends a request in the chat input.
 2. The Web UI agent decides whether project execution is needed.
-3. For app/site/project work, it calls `project_file` repeatedly to create or update server-side files.
-4. For dependency-free static projects, it calls `project_task validate` and then `project_task preview`.
-5. For build-based static frontend projects, it calls `project_task build_static`, then `project_task validate`, and finally `project_task preview`.
-6. `build_static` runs only the server-configured `projectInstallCommand` and `projectBuildCommand`; `preview` never runs package scripts.
-7. The server serves `dist/`, `build/`, `public/`, or a root static `index.html` when present.
-8. The browser displays file and task tool cards plus the final assistant message with the preview URL.
+3. If a configured global skill matches the task, it calls `skill_load`, then optionally `skill_resource` for referenced text resources.
+4. For app/site/project work, it calls `project_file` repeatedly to create or update server-side files.
+5. For dependency-free static projects, it calls `project_task validate` and then `project_task preview`.
+6. For build-based static frontend projects, it calls `project_task build_static`, then `project_task validate`, and finally `project_task preview`.
+7. `build_static` runs only the server-configured `projectInstallCommand` and `projectBuildCommand`; `preview` never runs package scripts.
+8. The server serves `dist/`, `build/`, `public/`, or a root static `index.html` when present.
+9. The browser displays skill, file, and task tool cards plus the final assistant message with the preview URL.
 
 Preview URLs are served from this PI server at:
 
@@ -294,6 +306,7 @@ apps/pi-coding-web/
 │   │   ├── configured-server-storage.ts
 │   │   └── merged-session-index.ts
 │   ├── project-tools/              # Browser-side tool schemas, API client, and renderers
+│   ├── skill-tools/                # Browser-side global skill tools, picker, and slash expansion
 │   └── prompts/                    # PI coding system prompt and PM handoff instructions
 ├── index.html        # HTML entry point
 ├── package.json      # Dependencies

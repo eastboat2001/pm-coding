@@ -6,6 +6,7 @@ export interface StorageConfig {
 	sessionsDir: string;
 	settingsFile: string;
 	projectsRootDir: string;
+	skillsDir: string;
 	previewBaseUrl: string;
 	projectInstallCommand: string;
 	projectBuildCommand: string;
@@ -103,3 +104,54 @@ export interface ProjectTaskResult extends JsonObject {
 }
 
 export type PreviewRequestLike = Pick<IncomingMessage, "headers">;
+
+export interface ResourceDiagnostic {
+	type: "warning" | "collision";
+	message: string;
+	path?: string;
+	collision?: {
+		resourceType: "skill";
+		name: string;
+		winnerPath: string;
+		loserPath: string;
+	};
+}
+
+export interface SkillSummary extends JsonObject {
+	name: string;
+	description: string;
+	location: string;
+	disableModelInvocation: boolean;
+}
+
+export interface SkillListResult extends JsonObject {
+	skills: SkillSummary[];
+	promptSkills: SkillSummary[];
+	diagnostics: ResourceDiagnostic[];
+}
+
+export interface SkillLoadRequest extends JsonObject {
+	name?: string;
+}
+
+export interface SkillLoadResult extends SkillSummary {
+	content: string;
+	resources: SkillResourceSummary[];
+}
+
+export interface SkillResourceRequest extends JsonObject {
+	name?: string;
+	path?: string;
+}
+
+export interface SkillResourceSummary extends JsonObject {
+	path: string;
+	size: number;
+}
+
+export interface SkillResourceResult extends JsonObject {
+	name: string;
+	path: string;
+	content: string;
+	size: number;
+}

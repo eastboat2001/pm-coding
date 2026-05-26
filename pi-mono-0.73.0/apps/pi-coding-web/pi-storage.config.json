@@ -2,6 +2,7 @@
   "sessionsDir": "./data/sessions",
   "settingsFile": "./data/settings.json",
   "projectsRootDir": "./data/projects",
+  "skillsDir": "./data/skills",
   "previewBaseUrl": "",
   "serverSessionSyncEnabled": false,
   "defaultModelProvider": "",

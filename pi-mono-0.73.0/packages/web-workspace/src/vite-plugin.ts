@@ -3,12 +3,19 @@ import type { ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import type { Connect, Plugin } from "vite";
 import { loadStorageConfig } from "./config.js";
-import { API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX } from "./constants.js";
+import { API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, SKILLS_API_PREFIX } from "./constants.js";
 import { isObject, readJsonBody, sendJson } from "./json.js";
-import type { ProjectFileRequest, ProjectTaskRequest, StorageConfig } from "./types.js";
+import type {
+	ProjectFileRequest,
+	ProjectTaskRequest,
+	SkillLoadRequest,
+	SkillResourceRequest,
+	StorageConfig,
+} from "./types.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 import { WorkspaceSessionService } from "./workspace-session-service.js";
+import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 
 export function configuredStoragePlugin(configFile?: string): Plugin {
@@ -18,10 +25,12 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 	const files = new WorkspaceFileService(config);
 	const previews = new WorkspacePreviewService(config);
 	const tasks = new WorkspaceTaskService(config, previews);
+	const skills = new WorkspaceSkillService(config);
 
 	const ensureStorageDirs = () => {
 		sessions.ensureDirs();
 		mkdirSync(dirname(config.settingsFile), { recursive: true });
+		mkdirSync(config.skillsDir, { recursive: true });
 	};
 
 	const handler: Connect.NextHandleFunction = async (req, res, next) => {
@@ -35,7 +44,11 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 			}
 		}
 
-		if (!req.url?.startsWith(API_PREFIX) && !req.url?.startsWith(PROJECTS_API_PREFIX)) {
+		if (
+			!req.url?.startsWith(API_PREFIX) &&
+			!req.url?.startsWith(PROJECTS_API_PREFIX) &&
+			!req.url?.startsWith(SKILLS_API_PREFIX)
+		) {
 			next();
 			return;
 		}
@@ -44,11 +57,17 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 			ensureStorageDirs();
 			const url = new URL(req.url, "http://localhost");
 			const isProjectsApi = url.pathname.startsWith(PROJECTS_API_PREFIX);
-			const route = url.pathname.slice(isProjectsApi ? PROJECTS_API_PREFIX.length : API_PREFIX.length) || "/";
+			const isSkillsApi = url.pathname.startsWith(SKILLS_API_PREFIX);
+			const prefix = isProjectsApi ? PROJECTS_API_PREFIX : isSkillsApi ? SKILLS_API_PREFIX : API_PREFIX;
+			const route = url.pathname.slice(prefix.length) || "/";
 			const method = req.method || "GET";
 
 			if (isProjectsApi) {
 				await handleProjectsApi(method, route, req, res, files, previews, tasks);
+				return;
+			}
+			if (isSkillsApi) {
+				await handleSkillsApi(method, route, req, res, skills);
 				return;
 			}
 
@@ -82,12 +101,37 @@ function storageWatchIgnoredPaths(config: StorageConfig): string[] {
 	return [
 		`${normalizeWatchPath(config.sessionsDir)}/**`,
 		`${normalizeWatchPath(config.projectsRootDir)}/**`,
+		`${normalizeWatchPath(config.skillsDir)}/**`,
 		normalizeWatchPath(config.settingsFile),
 	];
 }
 
 function normalizeWatchPath(path: string): string {
 	return path.replace(/\\/g, "/");
+}
+
+async function handleSkillsApi(
+	method: string,
+	route: string,
+	req: Connect.IncomingMessage,
+	res: ServerResponse,
+	skills: WorkspaceSkillService,
+): Promise<void> {
+	if (method === "GET" && (route === "/" || route === "")) {
+		sendJson(res, skills.list());
+		return;
+	}
+	if (method === "POST" && route === "/load") {
+		const body = await readJsonBody(req);
+		sendJson(res, skills.load(body as SkillLoadRequest));
+		return;
+	}
+	if (method === "POST" && route === "/resource") {
+		const body = await readJsonBody(req);
+		sendJson(res, skills.readResource(body as SkillResourceRequest));
+		return;
+	}
+	sendJson(res, { error: "Not found." }, 404);
 }
 
 async function handleProjectsApi(
@@ -142,6 +186,7 @@ async function handleStorageApi(
 			sessionsDir: config.sessionsDir,
 			settingsFile: config.settingsFile,
 			projectsRootDir: config.projectsRootDir,
+			skillsDir: config.skillsDir,
 			previewBaseUrl: config.previewBaseUrl,
 			serverSessionSyncEnabled: config.serverSessionSyncEnabled,
 			defaultModelProvider: config.defaultModelProvider,

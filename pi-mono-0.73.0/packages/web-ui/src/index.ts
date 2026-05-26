@@ -52,6 +52,13 @@ export {
 export { RuntimeMessageBridge } from "./components/sandbox/RuntimeMessageBridge.js";
 export { RUNTIME_MESSAGE_ROUTER } from "./components/sandbox/RuntimeMessageRouter.js";
 export type { SandboxRuntimeProvider } from "./components/sandbox/SandboxRuntimeProvider.js";
+export type {
+	SlashSelection,
+	SlashSelections,
+	SlashSuggestionItem,
+	SlashSuggestionState,
+} from "./components/slash-suggestions.js";
+export { buildSlashSuggestionState, getSlashSelection, getSlashSelections } from "./components/slash-suggestions.js";
 export { ThinkingBlock } from "./components/ThinkingBlock.js";
 export { ApiKeyPromptDialog } from "./dialogs/ApiKeyPromptDialog.js";
 export { AttachmentOverlay } from "./dialogs/AttachmentOverlay.js";

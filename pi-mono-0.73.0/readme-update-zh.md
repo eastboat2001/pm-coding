@@ -35,7 +35,7 @@
 - 初始化浏览器端 PI Chat 应用。
 - 管理 IndexedDB 与服务端 JSON 镜像存储。
 - 处理 PM handoff 流程。
-- 注册 `project_file`、`project_task` 工具。
+- 注册 `skill_load`、`skill_resource`、`project_file`、`project_task` 工具。
 - 提供 Dockerfile、Vite 配置和产品应用 README。
 
 关键子目录：
@@ -44,6 +44,7 @@
 - `src/integrations/`：外部系统接入，目前主要是 PM handoff。
 - `src/prompts/`：PI 编码应用系统提示词和平台执行说明。
 - `src/project-tools/`：浏览器端 project 工具 schema、API client、AgentTool 创建和工具卡渲染。
+- `src/skill-tools/`：浏览器端全局 skill 工具 schema、API client、AgentTool 创建、工具卡渲染、`/skill` 下拉和 `/skill:name` 展开。
 - `src/storage/`：浏览器端调用服务端 storage API 的封装。
 
 ### `packages/web-workspace`
@@ -56,6 +57,7 @@
 - 解析 session、settings、projects 等数据目录。
 - 提供会话 JSON 存储。
 - 提供服务端 project 文件操作。
+- 提供服务端全局 skill 发现、加载和受限资源读取。
 - 提供受控 project task 能力。
 - 构建静态前端产物并发布静态 preview。
 - 暴露 Vite plugin：`configuredStoragePlugin()`。
@@ -68,16 +70,20 @@
 - `WorkspaceTaskService`
 - `WorkspaceCommandService`
 - `WorkspacePreviewService`
+- `WorkspaceSkillService`
 - `configuredStoragePlugin`
 
 说明：
 
-- 当前 Agent 对外只暴露 `project_file` 和 `project_task`。
+- 当前 Agent 对外暴露 `skill_load`、`skill_resource`、`project_file` 和 `project_task`。
+- `skill_load`、`skill_resource` 只读取服务端配置的全局 skill 目录，不提供通用文件读取能力，也不执行 skill 中的脚本。
 - `WorkspaceCommandService` 仍保留在包内，主要用于历史兼容和内部构建执行支撑，不应理解为 AI 可以直接运行任意 shell 命令。
 - `WorkspacePreviewService` 当前只负责静态预览，不启动 Node HTTP 服务。
 - Agent 工具到服务端 API 的主要映射是：
   - `project_file` -> `POST /api/pi-projects/workspace/file`
   - `project_task` -> `POST /api/pi-projects/workspace/task`
+  - `skill_load` -> `POST /api/pi-skills/load`
+  - `skill_resource` -> `POST /api/pi-skills/resource`
 - `/api/pi-projects/workspace/preview` 仍存在于 middleware 中，用于兼容或内部调用，不应重新暴露为 Agent 工具。
 
 该包使服务端 workspace 能力脱离具体 Web 应用，后续如果需要独立服务、权限隔离、多用户队列、沙箱或运行管理，可以继续在这里演进。
@@ -113,6 +119,8 @@
 - `apps/pi-coding-web/src/main.ts` 缩减为应用入口。
 - 浏览器应用逻辑拆分到 `app/`、`integrations/`、`prompts/`、`project-tools/`。
 - Agent 工具从 `project_file`、`project_bash`、`project_preview` 收敛为 `project_file`、`project_task`。
+- 新增全局 skill 工具：`skill_load` 用于加载 `SKILL.md`，`skill_resource` 用于读取该 skill 目录内的文本资源。
+- 首版只支持服务端全局 skill，默认目录为 `apps/pi-coding-web/data/skills`；暂不支持项目级或会话级 skill。
 - `project_task` 只支持受控任务：`inspect`、`validate`、`build_static`、`preview`、`logs`。
 - `project_task` 不接收原始 shell 命令；只有 `build_static` 会运行服务端配置的安装/构建命令。
 - preview 改为静态预览模式，只服务 `index.html` 或 `dist/`、`build/`、`public/` 等静态产物，不再启动 Node 服务。
@@ -207,6 +215,7 @@ apps/pi-coding-web/pi-storage.config.json
 - `sessionsDir`：会话 JSON 存储目录。
 - `settingsFile`：服务端镜像设置文件。
 - `projectsRootDir`：生成项目根目录。
+- `skillsDir`：服务端全局 skill 目录，默认 `./data/skills`。
 - `previewBaseUrl`：对浏览器可访问的 PI 公开地址。
 - `projectInstallCommand`：`project_task build_static` 执行时使用的安装命令，默认 `npm install`。
 - `projectBuildCommand`：`project_task build_static` 执行时使用的构建命令，默认 `npm run build`。
@@ -214,6 +223,14 @@ apps/pi-coding-web/pi-storage.config.json
 - `projectBuildTimeoutMs`：构建超时时间。
 
 相对路径基于 `apps/pi-coding-web/` 解析。
+
+全局 skill 使用目录形式：
+
+```text
+data/skills/<skill-name>/SKILL.md
+```
+
+`SKILL.md` 需要包含 `name` 和 `description` frontmatter。Agent 会在系统提示词里看到 skill 名称和描述，任务匹配时通过 `skill_load` 加载完整说明；用户也可以在聊天框输入 `/skill` 打开全局 skill 下拉列表，选择后会插入 `/skill:<name>` 并在发送前展开该 skill 的 `SKILL.md`。如果说明中引用 `references/*.md` 等相对资源，再通过 `skill_resource` 读取。PI 不会执行 skill 脚本，也不会因为 skill 暴露通用 shell 或任意文件读取能力。
 
 注意：
 
@@ -285,10 +302,11 @@ PI 会执行以下流程：
 2. 读取 PM 返回的实现提示词和文档列表。
 3. 下载 PRD、设计文档等附件。
 4. 将 PM 实现提示词和 PI 平台执行说明合并后填入聊天输入框。
-5. 用户发送后，Agent 使用 project 工具在服务端 workspace 生成项目。
-6. 如果是构建型静态前端，Agent 先调用 `project_task build_static`。
-7. Agent 调用 `project_task validate` 检查静态预览条件。
-8. 修复验证发现的问题后，Agent 调用 `project_task preview` 返回预览地址。
+5. 用户发送后，如果任务匹配全局 skill，Agent 先通过 `skill_load` 加载说明，并按需用 `skill_resource` 读取 skill 内引用资源。
+6. Agent 使用 project 工具在服务端 workspace 生成项目。
+7. 如果是构建型静态前端，Agent 先调用 `project_task build_static`。
+8. Agent 调用 `project_task validate` 检查静态预览条件。
+9. 修复验证发现的问题后，Agent 调用 `project_task preview` 返回预览地址。
 
 PM 文档是需求主依据；PI 自身提示词只补充执行方式，不应扩大或改写 PM 的产品范围。
 

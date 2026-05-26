@@ -21,6 +21,7 @@ export function loadStorageConfig(rootDir: string, configFile = CONFIG_FILE): St
 				(legacyStorageDir ? join(legacyStorageDir, "settings.json") : "data/settings.json"),
 		),
 		projectsRootDir: resolveConfiguredPath(rootDir, stringValue(record.projectsRootDir) || "data/projects"),
+		skillsDir: resolveConfiguredPath(rootDir, stringValue(record.skillsDir) || "data/skills"),
 		previewBaseUrl: (stringValue(record.previewBaseUrl) || "").replace(/\/+$/, ""),
 		projectInstallCommand: stringValue(record.projectInstallCommand) || "npm install",
 		projectBuildCommand: stringValue(record.projectBuildCommand) || "npm run build",

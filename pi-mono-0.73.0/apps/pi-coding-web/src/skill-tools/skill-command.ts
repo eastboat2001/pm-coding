@@ -67,13 +67,27 @@ export function parseSkillCommandPrefix(text: string): ParsedSkillCommandPrefix 
 }
 
 function formatSkillBlock(skill: SkillLoadDetails): string {
+	const resources =
+		skill.resources.length > 0
+			? [
+					"",
+					"Available skill resources:",
+					...skill.resources.map((resource) => `- ${resource.path} (${resource.size} bytes)`),
+				]
+			: [];
 	return [
 		`<skill name="${escapeXml(skill.name)}" location="${escapeXml(skill.location)}">`,
+		skill.interface?.displayName ? `Display name: ${skill.interface.displayName}` : "",
+		skill.interface?.shortDescription ? `Short description: ${skill.interface.shortDescription}` : "",
+		skill.interface?.defaultPrompt ? `Default prompt: ${skill.interface.defaultPrompt}` : "",
 		"References are relative to this skill. Use skill_resource to read listed relative resources when needed.",
 		"",
 		skill.content,
+		...resources,
 		"</skill>",
-	].join("\n");
+	]
+		.filter(Boolean)
+		.join("\n");
 }
 
 function getExpandableTextContent(message: AgentMessage): string | undefined {

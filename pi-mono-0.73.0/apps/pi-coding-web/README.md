@@ -229,7 +229,9 @@ The application writes:
 data/skills/<skill-name>/SKILL.md
 ```
 
-Each `SKILL.md` should include `name` and `description` frontmatter. The agent sees skill names and descriptions in the system prompt, loads full instructions with `skill_load`, and reads referenced text files under the same skill directory with `skill_resource`. Users can type `/skill` in the chat input to open the global skill picker; selecting an item inserts `/skill:<name>`, which is expanded to that skill's `SKILL.md` before the message is sent. Skills do not grant shell access and PI does not execute skill scripts.
+Each `SKILL.md` should include `name` and `description` frontmatter. The agent sees skill names and descriptions in the system prompt, loads full instructions with `skill_load`, and reads referenced text files under the same skill directory with `skill_resource`. Users can type `/skill` in the chat input to open the global skill picker; selecting an item inserts `/skill:<name>`, which is expanded to that skill's `SKILL.md` before the message is sent.
+
+PI supports Anthropic/Agent Skills style directory resources such as `references/`, `assets/`, and `scripts/` as read-only text resources when their file extension is allowed. It also recognizes OpenAI/Codex-style `agents/openai.yaml` interface metadata: `display_name` and `short_description` are used in the `/skill` picker, `default_prompt` is exposed in prompt metadata, and icon/brand fields are parsed for future UI use. `agents/openai.yaml` is not listed as an agent-facing reference resource. Skills do not grant shell access and PI does not execute skill scripts.
 
 With the default configuration, runtime data stays inside `apps/pi-coding-web/data/` and remains decoupled from any PM application directory.
 

@@ -2,6 +2,7 @@ import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, type 
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
 	ResourceDiagnostic,
+	SkillInterfaceMetadata,
 	SkillListResult,
 	SkillLoadRequest,
 	SkillLoadResult,
@@ -14,10 +15,12 @@ import type {
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
+const MAX_INTERFACE_FIELD_LENGTH = 512;
 const MAX_SKILL_BYTES = 256 * 1024;
 const MAX_RESOURCE_BYTES = 256 * 1024;
 const MAX_LISTED_RESOURCES = 200;
 const SKILL_FILE = "SKILL.md";
+const OPENAI_AGENT_METADATA_PATH = ["agents", "openai.yaml"];
 
 const ALLOWED_TEXT_EXTENSIONS = new Set([
 	".css",
@@ -182,6 +185,8 @@ function loadSkillFromFile(
 	const frontmatter = parsed.frontmatter;
 	const name = (frontmatter.name || expectedName).trim();
 	const description = frontmatter.description?.trim() || "";
+	const skillDir = dirname(realFilePath);
+	const interfaceMetadata = readOpenAiInterfaceMetadata(skillDir);
 
 	for (const message of validateSkillName(name, expectedName)) {
 		diagnostics.push({ type: "warning", message, path: relativeToRoot(realRootDir, realFilePath) });
@@ -195,9 +200,10 @@ function loadSkillFromFile(
 		name,
 		description,
 		filePath: realFilePath,
-		baseDir: dirname(realFilePath),
+		baseDir: skillDir,
 		location: skillLocation(name, SKILL_FILE),
 		disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+		...(interfaceMetadata ? { interface: interfaceMetadata } : {}),
 	};
 }
 
@@ -219,6 +225,7 @@ function toSummary(skill: LoadedSkill): SkillSummary {
 		description: skill.description,
 		location: skill.location,
 		disableModelInvocation: skill.disableModelInvocation,
+		...(skill.interface ? { interface: skill.interface } : {}),
 	};
 }
 
@@ -237,11 +244,15 @@ function collectSkillResources(baseDir: string, dir: string, resources: SkillRes
 			collectSkillResources(baseDir, fullPath, resources);
 			continue;
 		}
-		if (!entry.isFile() || entry.name === SKILL_FILE) continue;
+		if (!entry.isFile() || entry.name === SKILL_FILE || isOpenAiAgentMetadataResource(baseDir, fullPath)) continue;
 		const stats = statSync(fullPath);
 		if (!isAllowedTextResource(fullPath, stats)) continue;
 		resources.push({ path: toPosixPath(relative(baseDir, fullPath)), size: stats.size });
 	}
+}
+
+function isOpenAiAgentMetadataResource(baseDir: string, path: string): boolean {
+	return toPosixPath(relative(baseDir, path)) === OPENAI_AGENT_METADATA_PATH.join("/");
 }
 
 function safeRelativeSkillPath(path: string): string {
@@ -323,6 +334,90 @@ function parseSimpleYamlFrontmatter(yaml: string): SkillFrontmatter {
 		assignFrontmatterValue(frontmatter, key, parseScalar(rawValue));
 	}
 	return frontmatter;
+}
+
+function readOpenAiInterfaceMetadata(skillDir: string): SkillInterfaceMetadata | undefined {
+	const metadataPath = join(skillDir, ...OPENAI_AGENT_METADATA_PATH);
+	if (!existsSync(metadataPath)) return undefined;
+	const stats = statSync(metadataPath);
+	if (!stats.isFile() || stats.size > MAX_RESOURCE_BYTES) return undefined;
+	const realSkillDir = realpathSync(skillDir);
+	const realMetadataPath = realpathSync(metadataPath);
+	assertInsideRealPath(realSkillDir, realMetadataPath, "Resolved OpenAI skill metadata path escapes skill root.");
+	return parseOpenAiInterfaceMetadata(readFileSync(realMetadataPath, "utf8"));
+}
+
+function parseOpenAiInterfaceMetadata(content: string): SkillInterfaceMetadata | undefined {
+	const metadata: SkillInterfaceMetadata = {};
+	const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+	let inInterfaceSection = false;
+	let interfaceIndent = -1;
+
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index];
+		if (!line.trim() || line.trimStart().startsWith("#")) continue;
+		const indent = leadingWhitespaceLength(line);
+		if (!inInterfaceSection) {
+			if (line.trim() === "interface:") {
+				inInterfaceSection = true;
+				interfaceIndent = indent;
+			}
+			continue;
+		}
+		if (indent <= interfaceIndent) break;
+		const match = line.match(/^\s+([a-zA-Z0-9_-]+):\s*(.*)$/);
+		if (!match) continue;
+		const key = match[1];
+		const rawValue = match[2].trim();
+		if (rawValue === "|" || rawValue === ">") {
+			const block = collectIndentedYamlBlock(lines, index, indent, rawValue === ">");
+			index = block.nextIndex;
+			assignOpenAiInterfaceValue(metadata, key, block.text);
+			continue;
+		}
+		const value = parseScalar(rawValue);
+		if (typeof value === "string") {
+			assignOpenAiInterfaceValue(metadata, key, value);
+		}
+	}
+
+	return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function collectIndentedYamlBlock(
+	lines: string[],
+	startIndex: number,
+	parentIndent: number,
+	fold: boolean,
+): { text: string; nextIndex: number } {
+	const collected: string[] = [];
+	let index = startIndex;
+	while (index + 1 < lines.length) {
+		const nextLine = lines[index + 1];
+		if (nextLine.trim() && leadingWhitespaceLength(nextLine) <= parentIndent) break;
+		index++;
+		collected.push(nextLine.trim());
+	}
+	return { text: fold ? collected.join(" ") : collected.join("\n"), nextIndex: index };
+}
+
+function assignOpenAiInterfaceValue(metadata: SkillInterfaceMetadata, key: string, rawValue: string): void {
+	const value = clampMetadataValue(rawValue);
+	if (!value) return;
+	if (key === "display_name") metadata.displayName = value;
+	if (key === "short_description") metadata.shortDescription = value;
+	if (key === "default_prompt") metadata.defaultPrompt = value;
+	if (key === "icon_small") metadata.iconSmall = value;
+	if (key === "icon_large") metadata.iconLarge = value;
+	if (key === "brand_color") metadata.brandColor = value;
+}
+
+function clampMetadataValue(value: string): string {
+	return value.trim().slice(0, MAX_INTERFACE_FIELD_LENGTH);
+}
+
+function leadingWhitespaceLength(value: string): number {
+	return value.length - value.trimStart().length;
 }
 
 function parseScalar(value: string): string | boolean {

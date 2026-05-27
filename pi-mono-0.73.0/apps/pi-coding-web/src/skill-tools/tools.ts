@@ -62,14 +62,19 @@ function formatSkillLoadResult(result: SkillLoadDetails): string {
 			: "";
 	return [
 		`Skill: ${result.name}`,
+		result.interface?.displayName ? `Display name: ${result.interface.displayName}` : "",
+		result.interface?.shortDescription ? `Short description: ${result.interface.shortDescription}` : "",
 		`Location: ${result.location}`,
+		result.interface?.defaultPrompt ? `Default prompt: ${result.interface.defaultPrompt}` : "",
 		"References are relative to this skill. Use skill_resource to read listed relative resources when needed.",
 		"",
 		`<skill name="${escapeXml(result.name)}" location="${escapeXml(result.location)}">`,
 		result.content,
 		"</skill>",
 		resources,
-	].join("\n");
+	]
+		.filter(Boolean)
+		.join("\n");
 }
 
 function escapeXml(value: string): string {

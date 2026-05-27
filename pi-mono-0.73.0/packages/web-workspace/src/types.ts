@@ -122,6 +122,16 @@ export interface SkillSummary extends JsonObject {
 	description: string;
 	location: string;
 	disableModelInvocation: boolean;
+	interface?: SkillInterfaceMetadata;
+}
+
+export interface SkillInterfaceMetadata extends JsonObject {
+	displayName?: string;
+	shortDescription?: string;
+	defaultPrompt?: string;
+	iconSmall?: string;
+	iconLarge?: string;
+	brandColor?: string;
 }
 
 export interface SkillListResult extends JsonObject {

@@ -230,7 +230,14 @@ apps/pi-coding-web/pi-storage.config.json
 data/skills/<skill-name>/SKILL.md
 ```
 
-`SKILL.md` 需要包含 `name` 和 `description` frontmatter。Agent 会在系统提示词里看到 skill 名称和描述，任务匹配时通过 `skill_load` 加载完整说明；用户也可以在聊天框输入 `/skill` 打开全局 skill 下拉列表，选择后会插入 `/skill:<name>` 并在发送前展开该 skill 的 `SKILL.md`。如果说明中引用 `references/*.md` 等相对资源，再通过 `skill_resource` 读取。PI 不会执行 skill 脚本，也不会因为 skill 暴露通用 shell 或任意文件读取能力。
+`SKILL.md` 需要包含 `name` 和 `description` frontmatter。Agent 会在系统提示词里看到 skill 名称和描述，任务匹配时通过 `skill_load` 加载完整说明；用户也可以在聊天框输入 `/skill` 打开全局 skill 下拉列表，选择后会插入 `/skill:<name>` 并在发送前展开该 skill 的 `SKILL.md`。如果说明中引用 `references/*.md` 等相对资源，再通过 `skill_resource` 读取。
+
+兼容范围：
+
+- Anthropic/Agent Skills 风格的 `references/`、`assets/`、`scripts/` 等目录会作为只读文本资源处理，前提是文件扩展名在允许列表中。
+- OpenAI/Codex 风格的 `agents/openai.yaml` 会被识别为界面元数据：`display_name`、`short_description` 用于 `/skill` 展示，`default_prompt` 进入系统提示词元数据，图标字段和 `brand_color` 会被解析并透传，便于后续 UI 使用。
+- `agents/openai.yaml` 不会作为普通 agent 参考资源列出，避免模型浪费上下文读取产品配置。
+- PI 不会执行 skill 脚本，也不会因为 skill 暴露通用 shell 或任意文件读取能力。
 
 注意：
 

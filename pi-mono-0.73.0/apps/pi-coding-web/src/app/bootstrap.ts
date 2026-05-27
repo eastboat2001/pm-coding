@@ -213,8 +213,8 @@ const skillSlashCommand: SkillSlashSuggestion = {
 
 const skillToSlashSuggestion = (skill: SkillSummary): SkillSlashSuggestion => ({
 	id: `skill:${skill.name}`,
-	label: skill.name,
-	detail: skill.description,
+	label: skill.interface?.displayName || skill.name,
+	detail: skill.interface?.shortDescription || skill.description,
 	trigger: "/skill",
 	insertText: `/skill:${skill.name} `,
 });

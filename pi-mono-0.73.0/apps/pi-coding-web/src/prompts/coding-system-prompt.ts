@@ -3,6 +3,11 @@ export type CodingSkillPromptInfo = {
 	description: string;
 	location: string;
 	disableModelInvocation?: boolean;
+	interface?: {
+		displayName?: string;
+		shortDescription?: string;
+		defaultPrompt?: string;
+	};
 };
 
 const BASE_SYSTEM_PROMPT = `You are a helpful AI coding assistant that creates directly previewable static projects in a configured server workspace.
@@ -47,13 +52,24 @@ function formatSkillsForPrompt(skills: CodingSkillPromptInfo[]): string {
 		"Use skill_load with the skill name when the task matches its description. Use skill_resource for skill-relative text resources referenced by a loaded skill.",
 		"",
 		"<available_skills>",
-		...visibleSkills.flatMap((skill) => [
-			"  <skill>",
-			`    <name>${escapeXml(skill.name)}</name>`,
-			`    <description>${escapeXml(skill.description)}</description>`,
-			`    <location>${escapeXml(skill.location)}</location>`,
-			"  </skill>",
-		]),
+		...visibleSkills.flatMap((skill) =>
+			[
+				"  <skill>",
+				`    <name>${escapeXml(skill.name)}</name>`,
+				skill.interface?.displayName
+					? `    <display_name>${escapeXml(skill.interface.displayName)}</display_name>`
+					: "",
+				`    <description>${escapeXml(skill.description)}</description>`,
+				skill.interface?.shortDescription
+					? `    <short_description>${escapeXml(skill.interface.shortDescription)}</short_description>`
+					: "",
+				skill.interface?.defaultPrompt
+					? `    <default_prompt>${escapeXml(skill.interface.defaultPrompt)}</default_prompt>`
+					: "",
+				`    <location>${escapeXml(skill.location)}</location>`,
+				"  </skill>",
+			].filter(Boolean),
+		),
 		"</available_skills>",
 	].join("\n");
 }

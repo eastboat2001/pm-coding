@@ -5,6 +5,16 @@ export type SkillSummary = {
 	description: string;
 	location: string;
 	disableModelInvocation: boolean;
+	interface?: SkillInterfaceMetadata;
+};
+
+export type SkillInterfaceMetadata = {
+	displayName?: string;
+	shortDescription?: string;
+	defaultPrompt?: string;
+	iconSmall?: string;
+	iconLarge?: string;
+	brandColor?: string;
 };
 
 export type SkillResourceSummary = {

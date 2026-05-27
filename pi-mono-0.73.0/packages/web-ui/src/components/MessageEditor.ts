@@ -11,10 +11,16 @@ import { i18n } from "../utils/i18n.js";
 import "./AttachmentTile.js";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import {
+	applySlashSuggestionToState,
+	applySlashSuggestionToValue,
 	buildSlashSuggestionState,
 	getSlashSelections,
+	resolveSlashSuggestionCursorPosition,
+	resolveTextareaCursorPosition,
 	type SlashSelections,
 	type SlashSuggestionItem,
+	type SlashSuggestionState,
+	shouldStackSlashSelections,
 } from "./slash-suggestions.js";
 
 function isConfiguredModel(model: Model<any> | undefined): model is Model<any> {
@@ -60,6 +66,7 @@ export class MessageEditor extends LitElement {
 	@state() isDragging = false;
 	@state() private selectedSlashSuggestionIndex = 0;
 	@state() private slashSuggestionsSuppressed = false;
+	@state() private pendingSlashSuggestionCursorPosition?: number;
 	private fileInputRef = createRef<HTMLInputElement>();
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
@@ -72,6 +79,7 @@ export class MessageEditor extends LitElement {
 		this.value = selections.items.length > 0 ? `${selections.prefix}${textarea.value}` : textarea.value;
 		this.selectedSlashSuggestionIndex = 0;
 		this.slashSuggestionsSuppressed = false;
+		this.pendingSlashSuggestionCursorPosition = undefined;
 		this.onInput?.(this.value);
 	};
 
@@ -108,7 +116,7 @@ export class MessageEditor extends LitElement {
 			if (e.key === "Enter" || e.key === "Tab") {
 				e.preventDefault();
 				const selectedIndex = Math.min(this.selectedSlashSuggestionIndex, slashSuggestionState.items.length - 1);
-				this.applySlashSuggestion(slashSuggestionState.items[selectedIndex]);
+				this.applySlashSuggestion(slashSuggestionState.items[selectedIndex], slashSuggestionState);
 				return;
 			}
 		}
@@ -200,26 +208,48 @@ export class MessageEditor extends LitElement {
 		if (this.slashSuggestionsSuppressed || this.isStreaming) {
 			return { open: false, items: [], query: "", trigger: "" };
 		}
-		return buildSlashSuggestionState(this.value, this.slashSuggestions);
+		return buildSlashSuggestionState(this.value, this.slashSuggestions, this.slashSuggestionCursorPosition);
 	}
 
 	private get slashSelections(): SlashSelections {
 		return getSlashSelections(this.value, this.slashSuggestions);
 	}
 
-	private applySlashSuggestion(suggestion: SlashSuggestionItem | undefined) {
+	private get slashSuggestionCursorPosition() {
+		const textarea = this.textareaRef.value;
+		return resolveSlashSuggestionCursorPosition(
+			this.value,
+			textarea?.selectionStart ?? this.value.length,
+			this.slashSuggestions,
+			this.pendingSlashSuggestionCursorPosition,
+		);
+	}
+
+	private applySlashSuggestion(suggestion: SlashSuggestionItem | undefined, state?: SlashSuggestionState) {
 		if (!suggestion) return;
 		const oldValue = this.value;
-		this.value = `${this.slashSelections.prefix}${suggestion.insertText}`;
+		const result = state
+			? applySlashSuggestionToState(this.value, suggestion, this.slashSuggestions, state)
+			: applySlashSuggestionToValue(
+					this.value,
+					suggestion,
+					this.slashSuggestions,
+					this.slashSuggestionCursorPosition,
+				);
+		this.value = result.value;
 		this.selectedSlashSuggestionIndex = 0;
 		this.slashSuggestionsSuppressed = suggestion.keepOpen !== true;
+		this.pendingSlashSuggestionCursorPosition = suggestion.keepOpen === true ? result.cursor : undefined;
 		this.onInput?.(this.value);
 		this.requestUpdate("value", oldValue);
 		requestAnimationFrame(() => {
 			const textarea = this.textareaRef.value;
-			const selectionLength = this.slashSelections.text.length;
+			const cursorPosition = resolveTextareaCursorPosition(this.value, result.cursor, this.slashSuggestions);
 			textarea?.focus();
-			textarea?.setSelectionRange(selectionLength, selectionLength);
+			textarea?.setSelectionRange(cursorPosition, cursorPosition);
+			if (this.pendingSlashSuggestionCursorPosition === result.cursor) {
+				this.pendingSlashSuggestionCursorPosition = undefined;
+			}
 		});
 	}
 
@@ -524,7 +554,7 @@ export class MessageEditor extends LitElement {
 											class="w-full px-3 py-2 text-left ${selected ? "bg-secondary text-secondary-foreground" : "hover:bg-secondary/70"}"
 											@mousedown=${(event: MouseEvent) => {
 												event.preventDefault();
-												this.applySlashSuggestion(item);
+												this.applySlashSuggestion(item, state);
 											}}
 										>
 											<div class="text-sm font-medium font-mono truncate">${item.insertText.trim()}</div>
@@ -556,9 +586,20 @@ export class MessageEditor extends LitElement {
 			`;
 		}
 
+		const stackSelections = shouldStackSlashSelections(selections.text);
+		const containerClass = stackSelections
+			? "px-4 pt-4 pb-2 flex flex-col items-stretch gap-2"
+			: "px-4 pt-4 pb-2 flex items-start gap-2";
+		const selectionClass = stackSelections
+			? "flex flex-wrap items-center gap-1 max-w-full"
+			: "shrink-0 flex flex-wrap items-center gap-1 max-w-[55%]";
+		const textareaClass = stackSelections
+			? "w-full bg-transparent text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto"
+			: "min-w-0 flex-1 bg-transparent text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto";
+
 		return html`
-			<div class="px-4 pt-4 pb-2 flex items-start gap-2">
-				<div class="shrink-0 flex flex-wrap items-center gap-1 max-w-[55%]">
+			<div class=${containerClass}>
+				<div class=${selectionClass}>
 					${selections.items.map(
 						(item, index) => html`
 							<div
@@ -583,7 +624,7 @@ export class MessageEditor extends LitElement {
 					)}
 				</div>
 				<textarea
-					class="min-w-0 flex-1 bg-transparent text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto"
+					class=${textareaClass}
 					placeholder=${i18n("Type a message...")}
 					rows="1"
 					style="max-height: 200px; field-sizing: content; min-height: 1lh; height: auto;"

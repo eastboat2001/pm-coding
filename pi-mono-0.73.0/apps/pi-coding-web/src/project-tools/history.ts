@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolCall } from "@mariozechner/pi-ai";
+import { isProjectFileOmittedContent } from "./omitted-content.js";
 
 export interface ProjectToolHistoryCompactionOptions {
 	maxContentChars?: number;
@@ -52,7 +53,7 @@ function findRecentProjectFileToolCallIds(messages: AgentMessage[], keepRecentTo
 			blockIndex--
 		) {
 			const block = message.content[blockIndex];
-			if (isProjectFileToolCall(block)) ids.add(block.id);
+			if (isContentBearingProjectFileToolCall(block)) ids.add(block.id);
 		}
 	}
 	return ids;
@@ -60,6 +61,14 @@ function findRecentProjectFileToolCallIds(messages: AgentMessage[], keepRecentTo
 
 function isProjectFileToolCall(block: AssistantMessage["content"][number]): block is ToolCall {
 	return block.type === "toolCall" && block.name === "project_file";
+}
+
+function isContentBearingProjectFileToolCall(block: AssistantMessage["content"][number]): block is ToolCall {
+	return (
+		isProjectFileToolCall(block) &&
+		typeof block.arguments.content === "string" &&
+		!isProjectFileOmittedContent(block.arguments.content)
+	);
 }
 
 function summarizeProjectFileContent(block: ToolCall, content: string): string {

@@ -1,4 +1,5 @@
 import { type Static, Type } from "typebox";
+import { assertWritableProjectFileContent } from "./omitted-content.js";
 
 export type ProjectToolContext = {
 	sessionId?: string;
@@ -140,6 +141,7 @@ export function prepareProjectFileArguments(args: unknown): ProjectFileParams {
 		if (!filename || content === undefined) {
 			throw new Error(`project_file ${command} requires: ${projectFileExamples[command]}`);
 		}
+		assertWritableProjectFileContent(content, filename);
 		return { command, filename, content };
 	}
 
@@ -147,6 +149,7 @@ export function prepareProjectFileArguments(args: unknown): ProjectFileParams {
 		if (!filename || !oldStr || newStr === undefined) {
 			throw new Error(`project_file update requires: ${projectFileExamples.update}`);
 		}
+		assertWritableProjectFileContent(newStr, filename);
 		return { command, filename, old_str: oldStr, new_str: newStr };
 	}
 

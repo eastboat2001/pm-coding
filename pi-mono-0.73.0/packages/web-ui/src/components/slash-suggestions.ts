@@ -193,6 +193,23 @@ export function shouldStackSlashSelections(text: string): boolean {
 	return text.includes("\n");
 }
 
+export function getSlashSuggestionSkills(suggestions: SlashSuggestionItem[]): SlashSuggestionItem[] {
+	return suggestions.filter((suggestion) => suggestion.trigger === "/skill" && suggestion.keepOpen !== true);
+}
+
+export function toggleSlashSelection(
+	value: string,
+	suggestion: SlashSuggestionItem,
+	suggestions: SlashSuggestionItem[],
+): string {
+	const selections = getSlashSelections(value, suggestions);
+	const selected = selections.items.some((item) => item.id === suggestion.id);
+	const items = selected
+		? selections.items.filter((item) => item.id !== suggestion.id)
+		: [...selections.items, suggestion];
+	return `${items.map((item) => item.insertText).join("")}${selections.text}`;
+}
+
 function emptyTriggerState(
 	trigger: string,
 	query: string,

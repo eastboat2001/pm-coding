@@ -5,10 +5,12 @@ import {
 	buildSlashSuggestionState,
 	getSlashSelection,
 	getSlashSelections,
+	getSlashSuggestionSkills,
 	resolveSlashSuggestionCursorPosition,
 	resolveTextareaCursorPosition,
 	type SlashSuggestionItem,
 	shouldStackSlashSelections,
+	toggleSlashSelection,
 } from "../src/components/slash-suggestions.js";
 
 const suggestions: SlashSuggestionItem[] = [
@@ -198,5 +200,25 @@ describe("buildSlashSuggestionState", () => {
 	it("stacks selected skill pills above multiline text", () => {
 		expect(shouldStackSlashSelections("single line prompt")).toBe(false);
 		expect(shouldStackSlashSelections("PM implementation prompt\n\n---\n\nPlease build")).toBe(true);
+	});
+
+	it("lists only concrete skill suggestions for extension menus", () => {
+		expect(getSlashSuggestionSkills(suggestions).map((item) => item.label)).toEqual(["ui-polish", "api-mock"]);
+	});
+
+	it("adds a selected skill from the extension menu without changing user text", () => {
+		const result = toggleSlashSelection(
+			"PM implementation prompt\n\n---\n\nPlease build",
+			suggestions[1],
+			suggestions,
+		);
+
+		expect(result).toBe("/skill:ui-polish PM implementation prompt\n\n---\n\nPlease build");
+	});
+
+	it("removes an already selected skill from the extension menu", () => {
+		const result = toggleSlashSelection("/skill:ui-polish /skill:api-mock Please build", suggestions[1], suggestions);
+
+		expect(result).toBe("/skill:api-mock Please build");
 	});
 });

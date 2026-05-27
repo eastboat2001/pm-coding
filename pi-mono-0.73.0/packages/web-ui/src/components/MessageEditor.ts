@@ -5,7 +5,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { html, LitElement } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
-import { Brain, Loader2, Paperclip, Send, Sparkles, Square, X } from "lucide";
+import { ArrowLeft, Brain, Check, ChevronRight, Loader2, Paperclip, Send, Sparkles, Square, X } from "lucide";
 import { type Attachment, loadAttachment } from "../utils/attachment-utils.js";
 import { i18n } from "../utils/i18n.js";
 import "./AttachmentTile.js";
@@ -15,12 +15,14 @@ import {
 	applySlashSuggestionToValue,
 	buildSlashSuggestionState,
 	getSlashSelections,
+	getSlashSuggestionSkills,
 	resolveSlashSuggestionCursorPosition,
 	resolveTextareaCursorPosition,
 	type SlashSelections,
 	type SlashSuggestionItem,
 	type SlashSuggestionState,
 	shouldStackSlashSelections,
+	toggleSlashSelection,
 } from "./slash-suggestions.js";
 
 function isConfiguredModel(model: Model<any> | undefined): model is Model<any> {
@@ -67,6 +69,8 @@ export class MessageEditor extends LitElement {
 	@state() private selectedSlashSuggestionIndex = 0;
 	@state() private slashSuggestionsSuppressed = false;
 	@state() private pendingSlashSuggestionCursorPosition?: number;
+	@state() private extensionsMenuOpen = false;
+	@state() private extensionsMenuView: "main" | "skills" = "main";
 	private fileInputRef = createRef<HTMLInputElement>();
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
@@ -81,6 +85,13 @@ export class MessageEditor extends LitElement {
 		this.slashSuggestionsSuppressed = false;
 		this.pendingSlashSuggestionCursorPosition = undefined;
 		this.onInput?.(this.value);
+	};
+
+	private toggleExtensionsMenu = (event?: Event) => {
+		event?.preventDefault();
+		this.extensionsMenuOpen = !this.extensionsMenuOpen;
+		this.extensionsMenuView = "main";
+		requestAnimationFrame(() => this.textareaRef.value?.focus());
 	};
 
 	private handleKeyDown = (e: KeyboardEvent) => {
@@ -268,6 +279,17 @@ export class MessageEditor extends LitElement {
 		this.fileInputRef.value?.click();
 	};
 
+	private toggleSkillSelection(item: SlashSuggestionItem, event?: Event) {
+		event?.preventDefault();
+		const oldValue = this.value;
+		this.value = toggleSlashSelection(this.value, item, this.slashSuggestions);
+		this.slashSuggestionsSuppressed = false;
+		this.pendingSlashSuggestionCursorPosition = undefined;
+		this.onInput?.(this.value);
+		this.requestUpdate("value", oldValue);
+		requestAnimationFrame(() => this.textareaRef.value?.focus());
+	}
+
 	private async handleFilesSelected(e: Event) {
 		const input = e.target as HTMLInputElement;
 		const files = Array.from(input.files || []);
@@ -395,6 +417,7 @@ export class MessageEditor extends LitElement {
 				}
 
 				${this.renderSlashSuggestions()}
+				${this.renderExtensionsMenu()}
 
 				<!-- Attachments -->
 				${
@@ -476,6 +499,13 @@ export class MessageEditor extends LitElement {
 								`
 								: ""
 						}
+						${Button({
+							variant: this.extensionsMenuOpen ? "secondary" : "ghost",
+							size: "sm",
+							onClick: this.toggleExtensionsMenu,
+							children: html`${icon(Sparkles, "sm")}<span class="ml-1">${i18n("Extensions")}</span>`,
+							className: "h-8 text-xs",
+						})}
 					</div>
 
 					<!-- Model selector and send on the right -->
@@ -564,6 +594,84 @@ export class MessageEditor extends LitElement {
 								})
 					}
 				</div>
+			</div>
+		`;
+	}
+
+	private renderExtensionsMenu() {
+		if (!this.extensionsMenuOpen) return "";
+		const skillItems = getSlashSuggestionSkills(this.slashSuggestions);
+		const selectedIds = new Set(this.slashSelections.items.map((item) => item.id));
+
+		return html`
+			<div class="absolute left-12 bottom-12 z-30 w-72 rounded-md border border-border bg-card shadow-lg overflow-hidden">
+				${
+					this.extensionsMenuView === "main"
+						? html`
+							<div class="py-1">
+								<button
+									type="button"
+									class="w-full px-3 py-2 text-left hover:bg-secondary/70 flex items-center gap-2"
+									@mousedown=${(event: MouseEvent) => {
+										event.preventDefault();
+										this.extensionsMenuView = "skills";
+									}}
+								>
+									${icon(Sparkles, "sm", "text-muted-foreground")}
+									<div class="min-w-0 flex-1">
+										<div class="text-sm font-medium">${i18n("Skill")}</div>
+										<div class="text-xs text-muted-foreground truncate">${i18n("Select global skills")}</div>
+									</div>
+									${icon(ChevronRight, "sm", "text-muted-foreground")}
+								</button>
+							</div>
+						`
+						: html`
+							<div class="border-b border-border px-2 py-1 flex items-center gap-1">
+								<button
+									type="button"
+									class="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary"
+									title=${i18n("Back")}
+									@mousedown=${(event: MouseEvent) => {
+										event.preventDefault();
+										this.extensionsMenuView = "main";
+									}}
+								>
+									${icon(ArrowLeft, "sm")}
+								</button>
+								<div class="text-sm font-medium">${i18n("Skill")}</div>
+							</div>
+							<div class="max-h-64 overflow-y-auto py-1">
+								${
+									skillItems.length === 0
+										? html`
+											<div class="px-3 py-3">
+												<div class="text-sm font-medium text-muted-foreground">${i18n("No skills available")}</div>
+												<div class="text-xs text-muted-foreground mt-1">${i18n("Add SKILL.md files under the configured skills directory.")}</div>
+											</div>
+										`
+										: skillItems.map((item) => {
+												const selected = selectedIds.has(item.id);
+												return html`
+													<button
+														type="button"
+														class="w-full px-3 py-2 text-left hover:bg-secondary/70 flex items-center gap-2 ${selected ? "bg-primary/10 text-primary" : ""}"
+														@mousedown=${(event: MouseEvent) => this.toggleSkillSelection(item, event)}
+													>
+														<span class="h-5 w-5 inline-flex items-center justify-center shrink-0">
+															${selected ? icon(Check, "sm", "text-primary") : ""}
+														</span>
+														<div class="min-w-0 flex-1">
+															<div class="text-sm font-medium truncate">${item.label}</div>
+															${item.detail ? html`<div class="text-xs text-muted-foreground truncate">${item.detail}</div>` : ""}
+														</div>
+													</button>
+												`;
+											})
+								}
+							</div>
+						`
+				}
 			</div>
 		`;
 	}

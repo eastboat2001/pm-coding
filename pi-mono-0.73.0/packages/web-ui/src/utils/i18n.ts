@@ -45,6 +45,12 @@ declare module "@mariozechner/mini-lit" {
 		"Update API key": string;
 		"Enter API key": string;
 		"Type a message...": string;
+		Extensions: string;
+		Skill: string;
+		"Select global skills": string;
+		Back: string;
+		"No skills available": string;
+		"Add SKILL.md files under the configured skills directory.": string;
 		"Failed to fetch file": string;
 		"Invalid source type": string;
 		PDF: string;
@@ -327,6 +333,13 @@ export const translations = {
 		"Update API key": "Update API key",
 		"Enter API key": "Enter API key",
 		"Type a message...": "Type a message...",
+		Extensions: "Extensions",
+		Skill: "Skill",
+		"Select global skills": "Select global skills",
+		Back: "Back",
+		"No skills available": "No skills available",
+		"Add SKILL.md files under the configured skills directory.":
+			"Add SKILL.md files under the configured skills directory.",
 		"Failed to fetch file": "Failed to fetch file",
 		"Invalid source type": "Invalid source type",
 		PDF: "PDF",
@@ -636,6 +649,13 @@ export const translations = {
 		"Update API key": "API-Schlüssel aktualisieren",
 		"Enter API key": "API-Schlüssel eingeben",
 		"Type a message...": "Nachricht eingeben...",
+		Extensions: "Erweiterungen",
+		Skill: "Fähigkeit",
+		"Select global skills": "Globale Fähigkeiten auswählen",
+		Back: "Zurück",
+		"No skills available": "Keine Fähigkeiten verfügbar",
+		"Add SKILL.md files under the configured skills directory.":
+			"Fügen Sie SKILL.md-Dateien im konfigurierten Skills-Verzeichnis hinzu.",
 		"Failed to fetch file": "Datei konnte nicht abgerufen werden",
 		"Invalid source type": "Ungültiger Quellentyp",
 		PDF: "PDF",
@@ -964,6 +984,12 @@ mutableTranslations.zh = {
 	"Update API key": "更新 API Key",
 	"Enter API key": "输入 API Key",
 	"Type a message...": "输入消息...",
+	Extensions: "扩展",
+	Skill: "技能",
+	"Select global skills": "选择全局技能",
+	Back: "返回",
+	"No skills available": "没有可用技能",
+	"Add SKILL.md files under the configured skills directory.": "请在配置的 skills 目录下添加 SKILL.md 文件。",
 	"Failed to fetch file": "获取文件失败",
 	"Invalid source type": "无效的来源类型",
 	PDF: "PDF",
@@ -1271,6 +1297,13 @@ mutableTranslations.ms = {
 	"Update API key": "Kemas kini API Key",
 	"Enter API key": "Masukkan API Key",
 	"Type a message...": "Taip mesej...",
+	Extensions: "Sambungan",
+	Skill: "Kemahiran",
+	"Select global skills": "Pilih kemahiran global",
+	Back: "Kembali",
+	"No skills available": "Tiada kemahiran tersedia",
+	"Add SKILL.md files under the configured skills directory.":
+		"Tambah fail SKILL.md di bawah direktori kemahiran yang dikonfigurasi.",
 	"Failed to fetch file": "Gagal mendapatkan fail",
 	"Invalid source type": "Jenis sumber tidak sah",
 	Document: "Dokumen",

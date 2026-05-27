@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 
+import MarkdownRenderer from './MarkdownRenderer.vue'
 import { computeStructuredRequirementProgress } from '../lib/structuredRequirementProgress'
 import type { LanguageCode } from '../types/session'
 import type {
@@ -714,7 +715,7 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
     </div>
     <div v-else class="document-preview-shell">
       <div class="document-preview-label">{{ activeDocumentTitle }}</div>
-      <pre class="document-preview-content">{{ activeDocument }}</pre>
+      <MarkdownRenderer class="document-preview-content" :source="activeDocument" />
     </div>
   </section>
 </template>
@@ -875,10 +876,9 @@ function pageHasContent(page: StructuredRequirementPage): boolean {
   border: 1px solid var(--line);
   background: #fbfdfe;
   color: var(--ink);
-  font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: 0.86rem;
   line-height: 1.62;
-  white-space: pre-wrap;
+  white-space: normal;
   overflow: visible;
   max-height: none;
 }

@@ -9,6 +9,7 @@ export type BusinessTemplateSummary = {
   description: string
   tags: string[]
   applicable_scenarios: string[]
+  has_example_model: boolean
   section_count: number
   section_titles: string[]
 }
@@ -24,4 +25,8 @@ export type BusinessTemplateDetail = BusinessTemplateSummary & {
   storage_model: string
   render_config: Record<string, unknown>
   sections: BusinessTemplateSection[]
+  template_markdown: string
+  example_model: Record<string, unknown>
+  prompt_hints?: Array<Record<string, unknown>>
+  prompt_questions?: Array<Record<string, unknown>>
 }

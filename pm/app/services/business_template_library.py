@@ -61,6 +61,9 @@ class BusinessTemplateLibrary:
                 for item in section_items
                 if isinstance(item, dict) and str(item.get("section_title", "")).strip()
             ],
+            "example_model": self._example_model(template),
+            "prompt_hints": self._dict_list(template.get("prompt_hints")),
+            "prompt_questions": self._dict_list(template.get("prompt_questions")),
         }
 
     def get_template_markdown(self, template_id: str, language: str | None = None) -> str:
@@ -68,6 +71,15 @@ class BusinessTemplateLibrary:
         if template is None:
             return ""
 
+        return self._read_template_markdown(template)
+
+    def get_template_example_model(self, template_id: str, language: str | None = None) -> dict[str, Any]:
+        template = self._resolve_template_variant(template_id, language)
+        if template is None:
+            return {}
+        return self._example_model(template)
+
+    def _read_template_markdown(self, template: dict[str, Any]) -> str:
         render_config = template.get("render_config")
         if not isinstance(render_config, dict):
             return ""
@@ -170,6 +182,7 @@ class BusinessTemplateLibrary:
             "description": str(template.get("description", "")).strip(),
             "tags": self._string_list(template.get("tags")),
             "applicable_scenarios": self._string_list(template.get("applicable_scenarios")),
+            "has_example_model": bool(self._example_model(template)),
             "section_count": len(section_items),
             "section_titles": [
                 str(item.get("section_title", "")).strip()
@@ -197,12 +210,25 @@ class BusinessTemplateLibrary:
         )
         summary["storage_model"] = str(template.get("storage_model", "")).strip()
         summary["render_config"] = template.get("render_config") if isinstance(template.get("render_config"), dict) else {}
+        summary["template_markdown"] = self._read_template_markdown(template)
+        summary["example_model"] = self._example_model(template)
+        summary["prompt_hints"] = self._dict_list(template.get("prompt_hints"))
+        summary["prompt_questions"] = self._dict_list(template.get("prompt_questions"))
         return summary
+
+    def _example_model(self, template: dict[str, Any]) -> dict[str, Any]:
+        example_model = template.get("example_model")
+        return example_model if isinstance(example_model, dict) else {}
 
     def _string_list(self, value: Any) -> list[str]:
         if isinstance(value, list):
             return [str(item).strip() for item in value if str(item).strip()]
         return []
+
+    def _dict_list(self, value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, dict)]
 
     def _normalize_language(self, value: Any) -> str:
         normalized = str(value or "").strip().lower()

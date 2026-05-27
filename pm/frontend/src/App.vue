@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import type { BusinessTemplateDetail, BusinessTemplateSummary } from './types/businessTemplate'
+import MarkdownRenderer from './components/MarkdownRenderer.vue'
 import RequirementMarkdownPreview from './components/RequirementMarkdownPreview.vue'
 import StructuredRequirementPanel from './components/StructuredRequirementPanel.vue'
 import { computeStructuredRequirementProgress } from './lib/structuredRequirementProgress'
@@ -64,6 +65,10 @@ const loadingTemplateDetail = ref(false)
 const templateDialogError = ref('')
 const selectedBusinessTemplateId = ref('')
 const previewPanelOpen = ref(false)
+const documentGenerationConfirmOpen = ref(false)
+const documentGenerationConfirmMessage = ref('')
+const deleteSessionConfirmOpen = ref(false)
+const deleteSessionConfirmTargetId = ref('')
 const currentWorkspaceView = ref<'chat' | 'templates'>('chat')
 
 
@@ -148,6 +153,8 @@ const translations = {
     templateLibraryHint: 'Choose a business template to start a structured session faster.',
     templateOpen: 'View details',
     templateApply: 'Use this template',
+    templateApplyGuided: 'Guided start',
+    templateApplyExample: 'Start from example',
     templateCancel: 'Cancel',
     templateDetail: 'Template Details',
     templateScenarios: 'Applicable scenarios',
@@ -155,7 +162,7 @@ const translations = {
     templateSectionsShort: 'sections',
     templateTags: 'Tags',
     templateFieldCount: 'fields',
-    templateApplyHint: 'Confirming will start a new conversation with this business template.',
+    templateApplyHint: 'Use guided start to collect requirements section by section, or start from the example and revise it.',
     templatePromptManagedHint: 'A business template is active. Generic quick/expert prompting is disabled for this session.',
     templateSessionBadge: 'Template session',
     failedToLoadTemplates: 'Failed to load template library',
@@ -225,6 +232,8 @@ const translations = {
     templateLibraryHint: 'Waehle eine Fachvorlage, um schneller in eine strukturierte Sitzung zu starten.',
     templateOpen: 'Details ansehen',
     templateApply: 'Vorlage verwenden',
+    templateApplyGuided: 'Gefuehrt starten',
+    templateApplyExample: 'Mit Beispiel starten',
     templateCancel: 'Abbrechen',
     templateDetail: 'Vorlagendetails',
     templateScenarios: 'Geeignete Szenarien',
@@ -232,7 +241,7 @@ const translations = {
     templateSectionsShort: 'Abschnitte',
     templateTags: 'Tags',
     templateFieldCount: 'Felder',
-    templateApplyHint: 'Beim Bestaetigen wird eine neue Konversation mit dieser Fachvorlage gestartet.',
+    templateApplyHint: 'Gefuehrt starten sammelt Anforderungen Abschnitt fuer Abschnitt; mit Beispiel starten erzeugt eine vorbefuellte Sitzung.',
     templatePromptManagedHint: 'Diese Sitzung wird von einer Fachvorlage gesteuert. Die generischen Schnell/Experte-Prompts sind deaktiviert.',
     templateSessionBadge: 'Vorlagen-Sitzung',
     failedToLoadTemplates: 'Vorlagenbibliothek konnte nicht geladen werden',
@@ -302,6 +311,8 @@ const translations = {
     templateLibraryHint: '选择一个业务模板，更快开始结构化需求会话。',
     templateOpen: '查看详情',
     templateApply: '使用该模板',
+    templateApplyGuided: '引导式开始',
+    templateApplyExample: '填充式开始',
     templateCancel: '取消',
     templateDetail: '模板详情',
     templateScenarios: '适用场景',
@@ -309,7 +320,7 @@ const translations = {
     templateSectionsShort: '章节',
     templateTags: '标签',
     templateFieldCount: '个字段',
-    templateApplyHint: '确认后会新建一个基于该业务模板的会话。',
+    templateApplyHint: '可以引导式逐步采集，也可以基于示例业务先生成再修改。',
     templatePromptManagedHint: '当前会话已启用业务模板，通用的“快速/专家”提问策略已停用。',
     templateSessionBadge: '模板会话',
     failedToLoadTemplates: '加载模板库失败',
@@ -378,6 +389,8 @@ const translations = {
     templateLibraryHint: 'Pilih templat perniagaan untuk memulakan sesi berstruktur dengan lebih pantas.',
     templateOpen: 'Lihat butiran',
     templateApply: 'Guna templat ini',
+    templateApplyGuided: 'Mula berpandu',
+    templateApplyExample: 'Mula daripada contoh',
     templateCancel: 'Batal',
     templateDetail: 'Butiran Templat',
     templateScenarios: 'Senario sesuai',
@@ -385,7 +398,7 @@ const translations = {
     templateSectionsShort: 'bahagian',
     templateTags: 'Tag',
     templateFieldCount: 'medan',
-    templateApplyHint: 'Pengesahan akan memulakan perbualan baharu menggunakan templat perniagaan ini.',
+    templateApplyHint: 'Mula berpandu mengumpul keperluan langkah demi langkah; mula daripada contoh mencipta sesi yang telah diisi.',
     templatePromptManagedHint: 'Sesi ini dikawal oleh templat perniagaan. Mod prompt umum Pantas/Pakar dimatikan.',
     templateSessionBadge: 'Sesi templat',
     failedToLoadTemplates: 'Gagal memuatkan pustaka templat',
@@ -500,6 +513,8 @@ const selectedBusinessTemplate = computed<BusinessTemplateDetail | null>(() => {
   }
   return businessTemplateDetails.value[templateId] ?? null
 })
+let documentGenerationConfirmResolver: ((confirmed: boolean) => void) | null = null
+let deleteSessionConfirmResolver: ((confirmed: boolean) => void) | null = null
 const languageOptions: Array<{ code: LanguageCode; label: string }> = [
   { code: 'en', label: 'English' },
   { code: 'de', label: 'Deutsch' },
@@ -651,6 +666,18 @@ const templateFacetLabels: Record<string, Record<LanguageCode, string>> = {
     de: 'Logistik und Lager',
     zh: '物流仓储',
     ms: 'Logistik dan Gudang',
+  },
+  business_process: {
+    en: 'Business Process',
+    de: 'Geschaeftsprozess',
+    zh: '业务流程',
+    ms: 'Proses Perniagaan',
+  },
+  data_visualization: {
+    en: 'Data Visualization',
+    de: 'Datenvisualisierung',
+    zh: '数据可视化',
+    ms: 'Visualisasi Data',
   },
 }
 const templateTagLabels: Record<string, Record<LanguageCode, string>> = {
@@ -869,6 +896,78 @@ const templateTagLabels: Record<string, Record<LanguageCode, string>> = {
     de: 'Sendung',
     zh: '配送',
     ms: 'Penghantaran',
+  },
+  'business-process': {
+    en: 'Business Process',
+    de: 'Geschaeftsprozess',
+    zh: '业务流程',
+    ms: 'Proses Perniagaan',
+  },
+  workflow: {
+    en: 'Workflow',
+    de: 'Workflow',
+    zh: '工作流',
+    ms: 'Workflow',
+  },
+  approval: {
+    en: 'Approval',
+    de: 'Genehmigung',
+    zh: '审批',
+    ms: 'Kelulusan',
+  },
+  permissions: {
+    en: 'Permissions',
+    de: 'Berechtigungen',
+    zh: '权限',
+    ms: 'Kebenaran',
+  },
+  audit: {
+    en: 'Audit',
+    de: 'Audit',
+    zh: '审计',
+    ms: 'Audit',
+  },
+  uat: {
+    en: 'UAT',
+    de: 'UAT',
+    zh: '用户验收测试',
+    ms: 'UAT',
+  },
+  chart: {
+    en: 'Chart',
+    de: 'Diagramm',
+    zh: '图表',
+    ms: 'Carta',
+  },
+  dashboard: {
+    en: 'Dashboard',
+    de: 'Dashboard',
+    zh: '看板',
+    ms: 'Dashboard',
+  },
+  visualization: {
+    en: 'Visualization',
+    de: 'Visualisierung',
+    zh: '可视化',
+    ms: 'Visualisasi',
+  },
+  'data-contract': {
+    en: 'Data Contract',
+    de: 'Datenvertrag',
+    zh: '数据契约',
+    ms: 'Kontrak Data',
+  },
+  'multiple-charts': {
+    en: 'Multiple Charts',
+    de: 'Mehrfachcharts',
+    zh: '多图表',
+    ms: 'Pelbagai Carta',
+  },
+  'drill-down': {
+    en: 'Drill-down',
+    de: 'Drill-down',
+    zh: '下钻',
+    ms: 'Drill-down',
   },
 }
 function selectLanguage(lang: LanguageCode) {
@@ -1333,6 +1432,48 @@ function buildDocumentGenerationConfirmMessage(): string {
   }
   return `Collection coverage is ${progress.collectionCoveragePercentage}% and confirmation progress is ${progress.confirmationPercentage}%. The generated documents will contain more assumptions. Continue anyway?`
 }
+
+function requestDocumentGenerationConfirm(): Promise<boolean> {
+  if (documentGenerationConfirmResolver) {
+    documentGenerationConfirmResolver(false)
+  }
+
+  documentGenerationConfirmMessage.value = buildDocumentGenerationConfirmMessage()
+  documentGenerationConfirmOpen.value = true
+
+  return new Promise((resolve) => {
+    documentGenerationConfirmResolver = resolve
+  })
+}
+
+function resolveDocumentGenerationConfirm(confirmed: boolean) {
+  documentGenerationConfirmOpen.value = false
+  documentGenerationConfirmMessage.value = ''
+  const resolver = documentGenerationConfirmResolver
+  documentGenerationConfirmResolver = null
+  resolver?.(confirmed)
+}
+
+function requestDeleteSessionConfirm(targetSessionId: string): Promise<boolean> {
+  if (deleteSessionConfirmResolver) {
+    deleteSessionConfirmResolver(false)
+  }
+
+  deleteSessionConfirmTargetId.value = targetSessionId
+  deleteSessionConfirmOpen.value = true
+
+  return new Promise((resolve) => {
+    deleteSessionConfirmResolver = resolve
+  })
+}
+
+function resolveDeleteSessionConfirm(confirmed: boolean) {
+  deleteSessionConfirmOpen.value = false
+  deleteSessionConfirmTargetId.value = ''
+  const resolver = deleteSessionConfirmResolver
+  deleteSessionConfirmResolver = null
+  resolver?.(confirmed)
+}
 async function loadStructuredRequirement(
   targetSessionId: string,
   options: { background?: boolean } = {},
@@ -1436,7 +1577,7 @@ async function syncCurrentSessionDetail(targetSessionId: string) {
   }
 }
 
-async function createSession(options: { templateId?: string } = {}) {
+async function createSession(options: { templateId?: string; templateStartMode?: 'guided' | 'example' } = {}) {
   if (messagePipelineActive.value || generatingDocuments.value || loadingSession.value) {
     return
   }
@@ -1451,6 +1592,7 @@ async function createSession(options: { templateId?: string } = {}) {
       body: JSON.stringify({
         language: currentLanguage.value,
         ...(options.templateId ? { template_id: options.templateId } : {}),
+        ...(options.templateStartMode ? { template_start_mode: options.templateStartMode } : {}),
       }),
     })
 
@@ -1530,7 +1672,10 @@ function closeBusinessTemplateDialog() {
   selectedBusinessTemplateId.value = ''
 }
 
-async function launchBusinessTemplateSession(templateId: string, options: { closeDialog?: boolean } = {}) {
+async function launchBusinessTemplateSession(
+  templateId: string,
+  options: { closeDialog?: boolean; startMode?: 'guided' | 'example' } = {},
+) {
   if (
     !templateId ||
     applyingTemplateId.value ||
@@ -1547,7 +1692,10 @@ async function launchBusinessTemplateSession(templateId: string, options: { clos
   templateDialogError.value = ''
 
   try {
-    const created = await createSession({ templateId })
+    const created = await createSession({
+      templateId,
+      templateStartMode: options.startMode ?? 'guided',
+    })
     if (created) {
       currentWorkspaceView.value = 'chat'
       if (options.closeDialog) {
@@ -1575,6 +1723,23 @@ async function applyBusinessTemplate() {
     return
   }
   await launchBusinessTemplateSession(detail.template_id, { closeDialog: true })
+}
+
+async function applyBusinessTemplateExample() {
+  const detail = selectedBusinessTemplate.value
+  if (
+    !detail ||
+    !detail.has_example_model ||
+    applyingTemplateId.value ||
+    loadingSession.value ||
+    switchingSession.value ||
+    deletingSessionId.value ||
+    messagePipelineActive.value ||
+    generatingDocuments.value
+  ) {
+    return
+  }
+  await launchBusinessTemplateSession(detail.template_id, { closeDialog: true, startMode: 'example' })
 }
 
 async function updatePromptTemplate(template: PromptTemplate) {
@@ -1618,11 +1783,11 @@ async function selectSession(targetSessionId: string) {
 }
 
 async function deleteSession(targetSessionId: string) {
-  if (!targetSessionId || !canMutateHistory() || deletingSessionId.value) {
+  if (!targetSessionId || !canMutateHistory() || deletingSessionId.value || deleteSessionConfirmOpen.value) {
     return
   }
 
-  const confirmed = window.confirm(t.value.deleteSessionConfirm)
+  const confirmed = await requestDeleteSessionConfirm(targetSessionId)
   if (!confirmed) {
     return
   }
@@ -1702,15 +1867,38 @@ function splitSseBlocks(rawBuffer: string): { blocks: string[]; rest: string } {
 }
 
 function createSmoothWriter(target: ChatMessage) {
+  let pending = ''
+  let scheduled = false
+
+  const flush = () => {
+    if (!pending) {
+      scheduled = false
+      return
+    }
+    target.content += pending
+    pending = ''
+    scheduled = false
+    scrollToBottom()
+  }
+
+  const scheduleFlush = () => {
+    if (scheduled) {
+      return
+    }
+    scheduled = true
+    window.requestAnimationFrame(flush)
+  }
+
   return {
     push(chunk: string) {
       if (!chunk) {
         return
       }
-      target.content += chunk
-      scrollToBottom()
+      pending += chunk
+      scheduleFlush()
     },
     async finish() {
+      flush()
       scrollToBottom()
     },
   }
@@ -1858,6 +2046,7 @@ function createGeneratedDocumentMessage(kind: NonNullable<ChatMessage['kind']>):
     thinking: '',
     createdAt: new Date().toISOString(),
     kind,
+    streaming: true,
   }
 }
 
@@ -2005,6 +2194,11 @@ function appendReactiveMessage(message: ChatMessage): ChatMessage {
   return messages.value[messages.value.length - 1] as ChatMessage
 }
 
+function finishGeneratedDocumentMessage(message: ChatMessage) {
+  finalizeGeneratedDocumentContent(message)
+  message.streaming = false
+}
+
 function autoResizeTextarea() {
   const textarea = textareaRef.value
   if (textarea) {
@@ -2096,12 +2290,18 @@ async function sendMessage() {
 }
 
 async function generateDocuments() {
-  if (!hasSession.value || generatingDocuments.value || messagePipelineActive.value || switchingSession.value) {
+  if (
+    !hasSession.value ||
+    generatingDocuments.value ||
+    documentGenerationConfirmOpen.value ||
+    messagePipelineActive.value ||
+    switchingSession.value
+  ) {
     return
   }
 
   if (!structuredRequirementProgress.value.readyToGenerate) {
-    const confirmed = window.confirm(buildDocumentGenerationConfirmMessage())
+    const confirmed = await requestDocumentGenerationConfirm()
     if (!confirmed) {
       return
     }
@@ -2116,10 +2316,10 @@ async function generateDocuments() {
     scrollToBottom()
 
     await sendPrdDocStream(sessionId.value, prdMessage, currentLanguage.value)
-    finalizeGeneratedDocumentContent(prdMessage)
+    finishGeneratedDocumentMessage(prdMessage)
     if (!prdMessage.content.trim()) {
       await sendPrdDocFallback(sessionId.value, prdMessage, currentLanguage.value)
-      finalizeGeneratedDocumentContent(prdMessage)
+      finishGeneratedDocumentMessage(prdMessage)
     }
     shouldRefreshHistory = true
 
@@ -2127,10 +2327,10 @@ async function generateDocuments() {
     scrollToBottom()
 
     await sendDesignDocStream(sessionId.value, designMessage, currentLanguage.value)
-    finalizeGeneratedDocumentContent(designMessage)
+    finishGeneratedDocumentMessage(designMessage)
     if (!designMessage.content.trim()) {
       await sendDesignDocFallback(sessionId.value, designMessage, currentLanguage.value)
-      finalizeGeneratedDocumentContent(designMessage)
+      finishGeneratedDocumentMessage(designMessage)
     }
     shouldRefreshHistory = true
   } catch (error) {
@@ -2138,6 +2338,8 @@ async function generateDocuments() {
     const last = messages.value[messages.value.length - 1]
     if (last && last.role === 'assistant' && !last.content) {
       messages.value.pop()
+    } else if (last && isGeneratedDocumentMessage(last)) {
+      last.streaming = false
     }
   } finally {
     if (shouldRefreshHistory) {
@@ -2456,7 +2658,7 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                     type="button"
                     :title="t.deleteSession"
                     :aria-label="t.deleteSession"
-                    :disabled="!canMutateHistory() || deletingSessionId === session.session_id"
+                    :disabled="!canMutateHistory() || deleteSessionConfirmOpen || deletingSessionId === session.session_id"
                     @click="deleteSession(session.session_id)"
                   >
                     <svg class="session-card-delete-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2577,7 +2779,8 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                     <div class="design-doc-toolbar">
                       <span class="design-doc-badge">{{ documentBadgeLabel(msg) }}</span>
                     </div>
-                    <pre class="content design-doc-content">{{ msg.content }}</pre>
+                    <pre v-if="msg.streaming" class="content design-doc-content streaming-doc-content">{{ msg.content }}</pre>
+                    <MarkdownRenderer v-else class="content design-doc-content" :source="msg.content" />
                     <div v-if="msg.downloadUrl" class="design-doc-footer">
                       <button
                         class="btn btn-secondary design-doc-download"
@@ -2696,7 +2899,7 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                 :syncing="syncingStructuredRequirement"
                 :generating-documents="generatingDocuments"
                 :opening-go-coding="openingGoCoding"
-                :generation-disabled="messagePipelineActive || switchingSession || !hasSession"
+                :generation-disabled="messagePipelineActive || switchingSession || documentGenerationConfirmOpen || !hasSession"
                 :has-prd-document="Boolean(latestPrdDocument)"
                 :has-design-document="Boolean(latestDesignDocument)"
                 :error="structuredRequirementError"
@@ -2764,9 +2967,18 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                     class="btn template-page-apply-btn"
                     type="button"
                     :disabled="loadingSession || messagePipelineActive || generatingDocuments || Boolean(applyingTemplateId)"
-                    @click="launchBusinessTemplateSession(templateItem.template_id)"
+                    @click="launchBusinessTemplateSession(templateItem.template_id, { startMode: 'guided' })"
                   >
-                    {{ applyingTemplateId === templateItem.template_id ? t.creating : t.templateApply }}
+                    {{ applyingTemplateId === templateItem.template_id ? t.creating : t.templateApplyGuided }}
+                  </button>
+                  <button
+                    v-if="templateItem.has_example_model"
+                    class="btn template-page-apply-btn"
+                    type="button"
+                    :disabled="loadingSession || messagePipelineActive || generatingDocuments || Boolean(applyingTemplateId)"
+                    @click="launchBusinessTemplateSession(templateItem.template_id, { startMode: 'example' })"
+                  >
+                    {{ applyingTemplateId === templateItem.template_id ? t.creating : t.templateApplyExample }}
                   </button>
                 </div>
               </article>
@@ -2800,31 +3012,19 @@ watch(messageRenderSignature, (signature, previousSignature) => {
         <div v-else-if="templateDialogError" class="template-dialog-state error">
           {{ templateDialogError }}
         </div>
-        <div v-else-if="selectedBusinessTemplate" class="template-dialog-body">
-          <p class="template-dialog-description">{{ selectedBusinessTemplate.description }}</p>
-
-          <div v-if="selectedBusinessTemplate.tags.length" class="template-dialog-block">
-            <h4>{{ t.templateTags }}</h4>
-            <div class="template-dialog-tags">
-              <span v-for="tag in selectedBusinessTemplate.tags" :key="tag" class="template-dialog-tag">{{ formatTemplateTag(tag) }}</span>
-            </div>
+        <div v-else-if="selectedBusinessTemplate" class="template-dialog-body template-markdown-dialog-body">
+          <div v-if="selectedBusinessTemplate.tags.length" class="template-dialog-tags compact">
+            <span v-for="tag in selectedBusinessTemplate.tags" :key="tag" class="template-dialog-tag">{{ formatTemplateTag(tag) }}</span>
           </div>
 
-          <div v-if="selectedBusinessTemplate.applicable_scenarios.length" class="template-dialog-block">
-            <h4>{{ t.templateScenarios }}</h4>
-            <ul class="template-dialog-list">
-              <li v-for="scenario in selectedBusinessTemplate.applicable_scenarios" :key="scenario">{{ scenario }}</li>
-            </ul>
-          </div>
+          <MarkdownRenderer
+            v-if="selectedBusinessTemplate.template_markdown"
+            class="template-markdown-preview"
+            :source="selectedBusinessTemplate.template_markdown"
+          />
 
-          <div v-if="selectedBusinessTemplate.sections.length" class="template-dialog-block">
-            <h4>{{ t.templateSections }}</h4>
-            <ul class="template-dialog-list">
-              <li v-for="section in selectedBusinessTemplate.sections" :key="section.section_key">
-                <strong>{{ section.section_title }}</strong>
-                <span class="template-dialog-field-count">{{ section.field_count }} {{ t.templateFieldCount }}</span>
-              </li>
-            </ul>
+          <div v-else class="template-dialog-state">
+            {{ selectedBusinessTemplate.description }}
           </div>
 
           <div class="template-dialog-note">
@@ -2838,7 +3038,94 @@ watch(messageRenderSignature, (signature, previousSignature) => {
             {{ t.templateCancel }}
           </button>
           <button class="btn btn-primary" type="button" :disabled="loadingTemplateDetail || Boolean(applyingTemplateId) || !selectedBusinessTemplate" @click="applyBusinessTemplate">
-            {{ applyingTemplateId ? t.creating : t.templateApply }}
+            {{ applyingTemplateId ? t.creating : t.templateApplyGuided }}
+          </button>
+          <button
+            v-if="selectedBusinessTemplate?.has_example_model"
+            class="btn btn-primary"
+            type="button"
+            :disabled="loadingTemplateDetail || Boolean(applyingTemplateId) || !selectedBusinessTemplate"
+            @click="applyBusinessTemplateExample"
+          >
+            {{ applyingTemplateId ? t.creating : t.templateApplyExample }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="deleteSessionConfirmOpen"
+      class="template-dialog-backdrop"
+      @click.self="resolveDeleteSessionConfirm(false)"
+    >
+      <div class="template-dialog document-confirm-dialog" role="dialog" aria-modal="true" aria-label="AIPM">
+        <div class="template-dialog-head">
+          <div>
+            <p class="template-dialog-eyebrow">{{ t.deleteSession }}</p>
+            <h3>AIPM</h3>
+          </div>
+          <button
+            class="template-dialog-close"
+            type="button"
+            :aria-label="t.close"
+            @click="resolveDeleteSessionConfirm(false)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="template-dialog-body">
+          <p class="document-confirm-message">{{ t.deleteSessionConfirm }}</p>
+        </div>
+
+        <div class="template-dialog-actions">
+          <button class="btn btn-secondary" type="button" @click="resolveDeleteSessionConfirm(false)">
+            {{ t.templateCancel }}
+          </button>
+          <button class="btn btn-danger" type="button" @click="resolveDeleteSessionConfirm(true)">
+            {{ t.delete }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="documentGenerationConfirmOpen"
+      class="template-dialog-backdrop"
+      @click.self="resolveDocumentGenerationConfirm(false)"
+    >
+      <div class="template-dialog document-confirm-dialog" role="dialog" aria-modal="true" aria-label="AIPM">
+        <div class="template-dialog-head">
+          <div>
+            <p class="template-dialog-eyebrow">{{ t.generatePrd }}</p>
+            <h3>AIPM</h3>
+          </div>
+          <button
+            class="template-dialog-close"
+            type="button"
+            :aria-label="t.close"
+            @click="resolveDocumentGenerationConfirm(false)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="template-dialog-body">
+          <p class="document-confirm-message">{{ documentGenerationConfirmMessage }}</p>
+        </div>
+
+        <div class="template-dialog-actions">
+          <button class="btn btn-secondary" type="button" @click="resolveDocumentGenerationConfirm(false)">
+            {{ t.templateCancel }}
+          </button>
+          <button class="btn btn-primary" type="button" @click="resolveDocumentGenerationConfirm(true)">
+            {{ t.generatePrd }}
           </button>
         </div>
       </div>
@@ -4028,8 +4315,22 @@ body {
   border-radius: var(--radius-md);
   border: 1px solid #e2e8f5;
   background: #f7faff;
-  font-family: var(--mono);
   font-size: 0.84rem;
+}
+
+.think-content {
+  font-family: var(--mono);
+}
+
+.design-doc-content {
+  white-space: normal;
+}
+
+.streaming-doc-content {
+  max-height: 56vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--mono);
 }
 
 .design-doc-footer {
@@ -4215,6 +4516,11 @@ body {
   box-shadow: inset 0 0 0 1px rgba(220, 229, 243, 0.92);
 }
 
+.btn-danger {
+  background: var(--warn);
+  box-shadow: 0 12px 22px rgba(194, 65, 59, 0.18);
+}
+
 .btn-icon {
   width: 46px;
   min-width: 46px;
@@ -4305,6 +4611,10 @@ body {
   overflow: hidden;
 }
 
+.document-confirm-dialog {
+  width: min(520px, 100%);
+}
+
 .template-dialog-head,
 .template-dialog-actions {
   display: flex;
@@ -4374,8 +4684,18 @@ body {
   gap: 18px;
 }
 
+.template-markdown-dialog-body {
+  gap: 14px;
+}
+
 .template-dialog-description {
   margin: 0;
+  line-height: 1.7;
+}
+
+.document-confirm-message {
+  margin: 0;
+  color: var(--ink);
   line-height: 1.7;
 }
 
@@ -4395,6 +4715,10 @@ body {
   gap: 8px;
 }
 
+.template-dialog-tags.compact {
+  gap: 6px;
+}
+
 .template-dialog-tag {
   padding: 7px 12px;
   border-radius: 999px;
@@ -4402,6 +4726,14 @@ body {
   color: #4b6ba4;
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.template-markdown-preview {
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fbfdfe;
+  color: var(--ink);
 }
 
 .template-dialog-list {
@@ -4586,6 +4918,11 @@ body {
 .btn:hover:not(:disabled),
 .composer-send:hover:not(:disabled) {
   background: var(--accent-strong);
+  color: #ffffff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #a73531;
 }
 
 .btn-secondary,

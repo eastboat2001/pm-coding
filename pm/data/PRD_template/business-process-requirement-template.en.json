@@ -370,5 +370,192 @@
         }
       ]
     }
-  ]
+  ],
+  "example_model": {
+    "document_info": {
+      "project_name": "Procurement Approval Workflow Digitization",
+      "requirement_name": "Purchase request approval process optimization"
+    },
+    "background": {
+      "summary": "Purchase requests are currently handled through email, spreadsheets, and offline signatures. Requesters cannot see approval status, approvers lack one task queue, and finance has difficulty tracing approval evidence during audits.",
+      "objective": "Create a standardized online approval workflow for purchase requests, improve approval transparency, reduce cycle time, and preserve full audit history."
+    },
+    "scope": {
+      "in_scope": [
+        "Purchase request initiation and validation",
+        "Multi-level approval routing by amount and department",
+        "Approver task queue and process history",
+        "Return, withdraw, reject, and resubmit handling",
+        "Permission control and audit trail"
+      ],
+      "out_of_scope": [
+        "Supplier bidding management",
+        "Contract lifecycle management",
+        "ERP payment execution"
+      ]
+    },
+    "users_and_scenarios": {
+      "target_users": [
+        "Requester: submits purchase requests and tracks progress",
+        "Department approver: reviews team requests",
+        "Finance reviewer: checks budget and account rules",
+        "Procurement specialist: confirms purchasing category",
+        "System administrator: maintains workflow configuration"
+      ],
+      "core_scenarios": [
+        "A requester submits a purchase request and attaches quotation evidence.",
+        "The system routes the request to department and finance approvers based on amount.",
+        "An approver returns the request with comments and the requester resubmits it.",
+        "Finance exports approval history during monthly audit review."
+      ]
+    },
+    "functional_requirements": {
+      "overview": "This default example includes Workflow initiation and validation, Approval task queue, Process history and audit export.",
+      "feature_details": [
+        {
+          "feature_name": "Workflow initiation and validation",
+          "description": "Support workflow initiation and validation for the example business scenario.",
+          "trigger": "User opens the related workspace or submits the related business action.",
+          "processing_logic": "Validate required fields, apply permission rules, persist records, and update related status or metrics.",
+          "inputs": [
+            "Business master data",
+            "User filter or request data"
+          ],
+          "outputs": [
+            "Updated records",
+            "Visible status or chart result"
+          ],
+          "exception_cases": [
+            "Missing required data",
+            "Insufficient permission",
+            "Data refresh delay"
+          ]
+        },
+        {
+          "feature_name": "Approval task queue",
+          "description": "Support approval task queue for the example business scenario.",
+          "trigger": "User opens the related workspace or submits the related business action.",
+          "processing_logic": "Validate required fields, apply permission rules, persist records, and update related status or metrics.",
+          "inputs": [
+            "Business master data",
+            "User filter or request data"
+          ],
+          "outputs": [
+            "Updated records",
+            "Visible status or chart result"
+          ],
+          "exception_cases": [
+            "Missing required data",
+            "Insufficient permission",
+            "Data refresh delay"
+          ]
+        },
+        {
+          "feature_name": "Process history and audit export",
+          "description": "Support process history and audit export for the example business scenario.",
+          "trigger": "User opens the related workspace or submits the related business action.",
+          "processing_logic": "Validate required fields, apply permission rules, persist records, and update related status or metrics.",
+          "inputs": [
+            "Business master data",
+            "User filter or request data"
+          ],
+          "outputs": [
+            "Updated records",
+            "Visible status or chart result"
+          ],
+          "exception_cases": [
+            "Missing required data",
+            "Insufficient permission",
+            "Data refresh delay"
+          ]
+        }
+      ]
+    },
+    "business_rules": [
+      "Only authorized roles can view scoped data and perform sensitive actions.",
+      "Core business actions must keep an audit trail.",
+      "Exported data must follow the same filters and permission scope as the page.",
+      "Data refresh status and calculation definitions must be visible to users."
+    ],
+    "page_and_interaction": {
+      "pages": [
+        {
+          "page_name": "Workflow initiation and validation",
+          "entry_point": "Main workspace",
+          "page_elements": [
+            "Filter area",
+            "Main content area",
+            "Detail area"
+          ],
+          "button_actions": [
+            "Search",
+            "Reset",
+            "Export",
+            "Open detail"
+          ]
+        },
+        {
+          "page_name": "Approval task queue",
+          "entry_point": "Main workspace",
+          "page_elements": [
+            "Filter area",
+            "Main content area",
+            "Detail area"
+          ],
+          "button_actions": [
+            "Search",
+            "Reset",
+            "Export",
+            "Open detail"
+          ]
+        },
+        {
+          "page_name": "Process history and audit export",
+          "entry_point": "Main workspace",
+          "page_elements": [
+            "Filter area",
+            "Main content area",
+            "Detail area"
+          ],
+          "button_actions": [
+            "Search",
+            "Reset",
+            "Export",
+            "Open detail"
+          ]
+        }
+      ],
+      "interaction_flow": [
+        "A requester submits a purchase request and attaches quotation evidence.",
+        "The system routes the request to department and finance approvers based on amount.",
+        "An approver returns the request with comments and the requester resubmits it.",
+        "Finance exports approval history during monthly audit review."
+      ]
+    },
+    "copywriting": [],
+    "data_and_dependencies": [
+      "User and organization master data",
+      "Business transaction data",
+      "Permission configuration",
+      "Reporting/export service"
+    ],
+    "risks_and_notes": [
+      "Metric ownership and data definitions must be confirmed.",
+      "Historical data quality may affect acceptance.",
+      "External system readiness may affect rollout scope."
+    ],
+    "acceptance_criteria": [
+      "The example scope can be generated into PRD and design documents.",
+      "Users can revise the seeded requirement through chat messages.",
+      "Main roles, flows, data, permissions, and acceptance criteria are represented."
+    ],
+    "open_questions": [
+      "Which roles need final approval authority?",
+      "Which fields and metrics are mandatory for MVP?",
+      "Which external systems must be integrated in the first release?"
+    ],
+    "template_meta": {
+      "example_note": "AI-generated default example business; replace with real business facts before final delivery."
+    }
+  }
 }

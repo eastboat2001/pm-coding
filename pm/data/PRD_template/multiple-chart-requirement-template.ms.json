@@ -1,13 +1,13 @@
 {
-  "template_id": "multiple_chart_requirement_template_en",
+  "template_id": "multiple_chart_requirement_template_ms",
   "template_key": "multiple_chart_requirement",
-  "template_name": "Multiple Chart Requirement Template",
+  "template_name": "Templat Keperluan Pelbagai Carta",
   "template_category": "business_requirement",
   "business_domain": "data_visualization",
-  "language": "en",
+  "language": "ms",
   "version": "1.0.0",
   "status": "enabled",
-  "description": "A requirement template for responsive multi-chart dashboards with multiple data sources, chart inventory, layout selection, linked interactions, filters, UI rules, technical specifications, and acceptance criteria.",
+  "description": "Templat untuk dashboard pelbagai carta responsif dengan beberapa sumber data, inventori carta, pemilihan susun atur, interaksi berkait, penapis, peraturan UI, spesifikasi teknikal dan kriteria penerimaan.",
   "tags": [
     "multiple-charts",
     "dashboard",
@@ -16,300 +16,237 @@
     "data-contract"
   ],
   "applicable_scenarios": [
-    "Multi-chart dashboard page",
-    "Multiple related QDM data sources",
-    "Primary-detail or uniform-grid chart layout",
-    "Chart drill-down and cross-filtering",
-    "Dashboard export and data accuracy validation"
+    "Halaman dashboard pelbagai carta",
+    "Beberapa sumber data QDM berkaitan",
+    "Susun atur Primary-Detail atau Uniform Grid",
+    "Drill-down carta dan cross-filtering",
+    "Eksport dashboard dan validasi ketepatan data"
   ],
   "render_config": {
     "format": "markdown",
-    "markdown_relative_path": "data/PRD_template/multiple-chart-requirement-template.en.md"
+    "markdown_relative_path": "data/PRD_template/multiple-chart-requirement-template.ms.md"
   },
   "storage_model": "structured_requirement_template.v1",
   "sections": [
     {
       "section_key": "document_info",
-      "section_title": "Basic Document Information",
+      "section_title": "Maklumat Dokumen Asas",
       "sort_order": 1,
       "fields": [
         {
-          "field_key": "document_info.document_name",
-          "label": "Document name",
+          "field_key": "document_info.name",
+          "label": "Nama dokumen",
           "component": "input",
           "data_type": "string",
-          "required": true,
-          "placeholder": "D.CHQ.QDM Multiple Chart Requirement"
-        },
-        {
-          "field_key": "document_info.module",
-          "label": "System / module",
-          "component": "input",
-          "data_type": "string",
-          "required": true,
-          "placeholder": "D.CHQ.QDM / Dashboard and chart presentation"
+          "required": true
         }
       ]
     },
     {
       "section_key": "background_objectives",
-      "section_title": "Background and Objectives",
+      "section_title": "Latar Belakang dan Objektif",
       "sort_order": 2,
       "fields": [
         {
-          "field_key": "background_objectives.background",
-          "label": "Background",
+          "field_key": "background_objectives.summary",
+          "label": "Latar belakang dan objektif",
           "component": "textarea",
           "data_type": "string",
-          "required": true,
-          "placeholder": "Describe the business questions, data sources, and need for a coordinated dashboard"
-        },
-        {
-          "field_key": "background_objectives.objectives",
-          "label": "Objectives",
-          "component": "list",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Comparison, drill-down, standardized chart configuration, acceptance targets"
+          "required": true
         }
       ]
     },
     {
       "section_key": "scope",
-      "section_title": "Scope",
+      "section_title": "Skop",
       "sort_order": 3,
       "fields": [
         {
           "field_key": "scope.items",
-          "label": "Scope",
+          "label": "Skop",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Layout, charts, interactions, data, delivery scope"
+          "required": true
         }
       ]
     },
     {
       "section_key": "stakeholders",
-      "section_title": "Responsible Parties and Stakeholders",
+      "section_title": "Pihak Bertanggungjawab dan Berkepentingan",
       "sort_order": 4,
       "fields": [
         {
           "field_key": "stakeholders.roles",
-          "label": "Stakeholder roles",
+          "label": "Stakeholder",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Business owner, product owner, data owner, UI/UX, developer, QA, security"
+          "required": true
         }
       ]
     },
     {
       "section_key": "data_contract",
-      "section_title": "Data Description and Data Contract",
+      "section_title": "Penerangan Data dan Kontrak Data",
       "sort_order": 5,
       "fields": [
         {
-          "field_key": "data_contract.sources",
-          "label": "Data sources",
+          "field_key": "data_contract.items",
+          "label": "Kontrak data",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Source ID, table/view/API, grain, refresh cadence, owner"
-        },
-        {
-          "field_key": "data_contract.fields",
-          "label": "Required data fields",
-          "component": "table",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Field name, source, type, required, business logic"
-        },
-        {
-          "field_key": "data_contract.rules",
-          "label": "Field logic and data rules",
-          "component": "list",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Join keys, aggregation level, formulas, null handling, labels"
+          "required": true
         }
       ]
     },
     {
       "section_key": "layout",
-      "section_title": "Page / Function Layout",
+      "section_title": "Susun Atur Halaman / Fungsi",
       "sort_order": 6,
       "fields": [
         {
           "field_key": "layout.options",
-          "label": "Layout options",
+          "label": "Pilihan susun atur",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Uniform Grid, Primary-Detail, Drill-down, Tabbed, Masonry"
+          "required": true
         }
       ]
     },
     {
       "section_key": "page_presentation",
-      "section_title": "Page / Function Presentation",
+      "section_title": "Persembahan Halaman / Fungsi",
       "sort_order": 7,
       "fields": [
         {
           "field_key": "page_presentation.areas",
-          "label": "Page areas",
+          "label": "Kawasan halaman",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Page purpose, top query area, middle charts, bottom detail area"
+          "required": true
         }
       ]
     },
     {
       "section_key": "chart_inventory",
-      "section_title": "Chart Inventory and Configuration",
+      "section_title": "Inventori dan Konfigurasi Carta",
       "sort_order": 8,
       "fields": [
         {
-          "field_key": "chart_inventory.charts",
-          "label": "Chart inventory",
+          "field_key": "chart_inventory.items",
+          "label": "Inventori carta",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Chart ID, name, type, metric, dimension, source, interaction"
-        },
-        {
-          "field_key": "chart_inventory.configuration",
-          "label": "Chart configuration fields",
-          "component": "table",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Title, axes, legend, tooltip, empty/loading/error state, export"
+          "required": true
         }
       ]
     },
     {
       "section_key": "filters_interactions",
-      "section_title": "Query Conditions and User Interactions",
+      "section_title": "Syarat Carian dan Interaksi Pengguna",
       "sort_order": 9,
       "fields": [
         {
-          "field_key": "filters_interactions.filters",
-          "label": "Filters",
+          "field_key": "filters_interactions.items",
+          "label": "Penapis dan interaksi",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Date range, organization, category, data source, reset"
-        },
-        {
-          "field_key": "filters_interactions.rules",
-          "label": "Interaction rules",
-          "component": "list",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Cross-filtering, active state, tooltip, keyboard legend, export context"
+          "required": true
         }
       ]
     },
     {
       "section_key": "ui_design",
-      "section_title": "UI and Visual Design Requirements",
+      "section_title": "Keperluan UI dan Reka Bentuk Visual",
       "sort_order": 10,
       "fields": [
         {
           "field_key": "ui_design.requirements",
-          "label": "UI requirements",
+          "label": "Keperluan UI",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Color system, typography, spacing, panels, responsiveness, states"
+          "required": true
         }
       ]
     },
     {
       "section_key": "technical_specs",
-      "section_title": "Technical Specifications",
+      "section_title": "Spesifikasi Teknikal",
       "sort_order": 11,
       "fields": [
         {
           "field_key": "technical_specs.requirements",
-          "label": "Technical specifications",
+          "label": "Spesifikasi teknikal",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Frontend stack, chart library, responsiveness, performance, browser support, maintainability, security"
+          "required": true
         }
       ]
     },
     {
       "section_key": "non_functional",
-      "section_title": "Non-Functional Requirements",
+      "section_title": "Keperluan Bukan Fungsi",
       "sort_order": 12,
       "fields": [
         {
           "field_key": "non_functional.requirements",
-          "label": "Non-functional requirements",
+          "label": "Keperluan bukan fungsi",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Data accuracy, performance, accessibility, reliability, compatibility, auditability"
+          "required": true
         }
       ]
     },
     {
       "section_key": "acceptance",
-      "section_title": "Acceptance Criteria",
+      "section_title": "Kriteria Penerimaan",
       "sort_order": 13,
       "fields": [
         {
           "field_key": "acceptance.criteria",
-          "label": "Acceptance criteria",
+          "label": "Kriteria penerimaan",
           "component": "list",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Chart list, data sources, rendering, states, responsiveness, export, data accuracy, visual style"
+          "required": true
         }
       ]
     },
     {
       "section_key": "open_questions",
-      "section_title": "Open Questions and Decisions Needed",
+      "section_title": "Soalan Terbuka dan Keputusan",
       "sort_order": 14,
       "fields": [
         {
           "field_key": "open_questions.questions",
-          "label": "Open questions",
+          "label": "Soalan terbuka",
           "component": "table",
           "data_type": "array",
-          "required": false,
-          "placeholder": "Layout decision, source tables, mandatory charts, export roles, refresh SLA"
+          "required": false
         }
       ]
     },
     {
       "section_key": "additional_fields",
-      "section_title": "Suggested Additional Requirement Fields",
+      "section_title": "Medan Keperluan Tambahan Dicadangkan",
       "sort_order": 15,
       "fields": [
         {
           "field_key": "additional_fields.groups",
-          "label": "Additional requirement fields",
+          "label": "Medan tambahan",
           "component": "table",
           "data_type": "array",
-          "required": false,
-          "placeholder": "Governance, business definition, data contract, chart configuration, interaction design, quality and release"
+          "required": false
         }
       ]
     }
   ],
   "example_model": {
     "document_info": {
-      "project_name": "Quality Operations Dashboard",
-      "requirement_name": "Multi-chart dashboard for quality operations"
+      "project_name": "Projek contoh: Quality Operations Dashboard",
+      "requirement_name": "Keperluan contoh: Multi-chart dashboard for quality operations"
     },
     "background": {
-      "summary": "Quality operations teams need a dashboard combining trend, Pareto, ranking, and detail charts. Existing reports are separated and cannot cross-filter.",
-      "objective": "Build a multi-chart dashboard with shared filters, linked interactions, drill-down, and exportable details."
+      "summary": "Ini ialah contoh perniagaan terbina dalam untuk memulakan templat berisi dengan pantas. Quality operations teams need a dashboard combining trend, Pareto, ranking, and detail charts. Existing reports are separated and cannot cross-filter.",
+      "objective": "Jana dokumen PRD dan reka bentuk berdasarkan contoh; perubahan pengguna kemudian mengatasi contoh."
     },
     "scope": {
       "in_scope": [

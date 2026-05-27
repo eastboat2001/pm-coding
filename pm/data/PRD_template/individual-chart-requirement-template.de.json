@@ -1,13 +1,13 @@
 {
-  "template_id": "individual_chart_requirement_template_en",
+  "template_id": "individual_chart_requirement_template_de",
   "template_key": "individual_chart_requirement",
-  "template_name": "Individual Chart Requirement Template",
+  "template_name": "Vorlage fuer Einzelchart-Anforderungen",
   "template_category": "business_requirement",
   "business_domain": "data_visualization",
-  "language": "en",
+  "language": "de",
   "version": "1.0.0",
   "status": "enabled",
-  "description": "A requirement template for one chart or dashboard component, covering business purpose, data contract, chart specification, filters, detail table, interactions, permissions, development requirements, and UAT.",
+  "description": "Eine Vorlage fuer ein einzelnes Chart oder Dashboard-Element mit fachlichem Zweck, Datenvertrag, Chart-Spezifikation, Filtern, Detailtabelle, Interaktionen, Berechtigungen, Entwicklungsanforderungen und UAT.",
   "tags": [
     "chart",
     "dashboard",
@@ -16,263 +16,195 @@
     "uat"
   ],
   "applicable_scenarios": [
-    "Single chart or dashboard component",
-    "Metric visualization with filters",
-    "Chart data contract confirmation",
-    "Chart drill-down and detail table",
-    "Chart export and permission rules"
+    "Einzelnes Chart oder Dashboard-Element",
+    "Kennzahlenvisualisierung mit Filtern",
+    "Bestaetigung des Chart-Datenvertrags",
+    "Chart-Drill-down und Detailtabelle",
+    "Chart-Export und Berechtigungsregeln"
   ],
   "render_config": {
     "format": "markdown",
-    "markdown_relative_path": "data/PRD_template/individual-chart-requirement-template.en.md"
+    "markdown_relative_path": "data/PRD_template/individual-chart-requirement-template.de.md"
   },
   "storage_model": "structured_requirement_template.v1",
   "sections": [
     {
       "section_key": "document_info",
-      "section_title": "Basic Document Information",
+      "section_title": "Grundlegende Dokumentinformationen",
       "sort_order": 1,
       "fields": [
         {
           "field_key": "document_info.chart_name",
-          "label": "Chart / page name",
+          "label": "Chart- / Seitenname",
           "component": "input",
           "data_type": "string",
-          "required": true,
-          "placeholder": "Enter chart or page name"
-        },
-        {
-          "field_key": "document_info.business_owner",
-          "label": "Business owner",
-          "component": "input",
-          "data_type": "string",
-          "required": true,
-          "placeholder": "Name or team responsible for approval"
+          "required": true
         }
       ]
     },
     {
       "section_key": "background_objectives",
-      "section_title": "Background and Objectives",
+      "section_title": "Hintergrund und Ziele",
       "sort_order": 2,
       "fields": [
         {
-          "field_key": "background_objectives.background",
-          "label": "Background",
+          "field_key": "background_objectives.summary",
+          "label": "Hintergrund und Ziele",
           "component": "textarea",
           "data_type": "string",
-          "required": true,
-          "placeholder": "Describe the business context, pain point, and decision scenario"
-        },
-        {
-          "field_key": "background_objectives.objectives",
-          "label": "Objectives",
-          "component": "list",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Describe the chart objective and success criteria"
+          "required": true
         }
       ]
     },
     {
       "section_key": "scope",
-      "section_title": "Scope",
+      "section_title": "Umfang",
       "sort_order": 3,
       "fields": [
         {
           "field_key": "scope.items",
-          "label": "Scope",
+          "label": "Umfang",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "In scope, out of scope, assumptions, dependencies, constraints"
+          "required": true
         }
       ]
     },
     {
       "section_key": "stakeholders",
-      "section_title": "Responsible Parties and Stakeholders",
+      "section_title": "Verantwortliche und Stakeholder",
       "sort_order": 4,
       "fields": [
         {
           "field_key": "stakeholders.roles",
-          "label": "Stakeholder roles",
+          "label": "Stakeholder",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Business owner, data owner, BA, UI/UX, developers, QA, approver"
+          "required": true
         }
       ]
     },
     {
       "section_key": "data_description",
-      "section_title": "Data Description",
+      "section_title": "Datenbeschreibung",
       "sort_order": 5,
       "fields": [
         {
-          "field_key": "data_description.sources",
-          "label": "Data source",
+          "field_key": "data_description.items",
+          "label": "Datenquelle und Felder",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Source/table/API, owner, refresh frequency, data grain"
-        },
-        {
-          "field_key": "data_description.fields",
-          "label": "Key fields and business definitions",
-          "component": "table",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Field name, business definition, type, required, source logic"
-        },
-        {
-          "field_key": "data_description.logic_rules",
-          "label": "Calculation and logic rules",
-          "component": "list",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Metric formula, filtering, date logic, null handling, deduplication"
+          "required": true
         }
       ]
     },
     {
       "section_key": "chart_presentation",
-      "section_title": "Page and Chart Presentation",
+      "section_title": "Seiten- und Chart-Darstellung",
       "sort_order": 6,
       "fields": [
         {
-          "field_key": "chart_presentation.layout",
-          "label": "Page layout",
+          "field_key": "chart_presentation.spec",
+          "label": "Chart-Spezifikation",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Query area, chart display area, detail area"
-        },
-        {
-          "field_key": "chart_presentation.chart_spec",
-          "label": "Chart specification",
-          "component": "table",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Chart type, metric, axes, legend, tooltip, drill-down, states"
+          "required": true
         }
       ]
     },
     {
       "section_key": "filters_detail",
-      "section_title": "Query Conditions and Detail Table",
+      "section_title": "Filter und Detailtabelle",
       "sort_order": 7,
       "fields": [
         {
-          "field_key": "filters_detail.filters",
-          "label": "Query conditions and filters",
+          "field_key": "filters_detail.items",
+          "label": "Filter und Details",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Filter field, control type, default, required, dependency"
-        },
-        {
-          "field_key": "filters_detail.detail_columns",
-          "label": "Detail table fields",
-          "component": "table",
-          "data_type": "array",
-          "required": false,
-          "placeholder": "Column, source field, format, sortable, notes"
+          "required": true
         }
       ]
     },
     {
       "section_key": "interactions_permissions",
-      "section_title": "Interaction, Permission, and Export Requirements",
+      "section_title": "Interaktion, Berechtigungen und Export",
       "sort_order": 8,
       "fields": [
         {
           "field_key": "interactions_permissions.requirements",
-          "label": "Interaction and permission requirements",
+          "label": "Interaktion und Berechtigungen",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Responsive layout, hover/click, export, permissions, audit, accessibility"
+          "required": true
         }
       ]
     },
     {
       "section_key": "development",
-      "section_title": "Development Requirements",
+      "section_title": "Entwicklungsanforderungen",
       "sort_order": 9,
       "fields": [
         {
-          "field_key": "development.technical_specs",
-          "label": "Technical specifications",
+          "field_key": "development.requirements",
+          "label": "Entwicklung",
           "component": "list",
           "data_type": "array",
-          "required": false,
-          "placeholder": "HTML, Bootstrap, JavaScript, jQuery, API contract, response schema"
-        },
-        {
-          "field_key": "development.performance_security",
-          "label": "Performance and security",
-          "component": "table",
-          "data_type": "array",
-          "required": true,
-          "placeholder": "Performance, security, compatibility, error handling"
+          "required": false
         }
       ]
     },
     {
       "section_key": "color_system",
-      "section_title": "Color System",
+      "section_title": "Farbsystem",
       "sort_order": 10,
       "fields": [
         {
           "field_key": "color_system.tokens",
-          "label": "Color tokens",
+          "label": "Farb-Tokens",
           "component": "table",
           "data_type": "array",
-          "required": false,
-          "placeholder": "Approved color token and value"
+          "required": false
         }
       ]
     },
     {
       "section_key": "acceptance",
-      "section_title": "Acceptance Criteria and UAT Checklist",
+      "section_title": "Abnahmekriterien und UAT-Checkliste",
       "sort_order": 11,
       "fields": [
         {
           "field_key": "acceptance.criteria",
-          "label": "Acceptance criteria",
+          "label": "Abnahmekriterien",
           "component": "table",
           "data_type": "array",
-          "required": true,
-          "placeholder": "Chart values, filters, states, detail table, export, responsiveness, permissions"
+          "required": true
         }
       ]
     },
     {
       "section_key": "open_questions",
-      "section_title": "Open Questions and Change Log",
+      "section_title": "Offene Fragen und Aenderungsprotokoll",
       "sort_order": 12,
       "fields": [
         {
           "field_key": "open_questions.questions",
-          "label": "Open questions",
+          "label": "Offene Fragen",
           "component": "table",
           "data_type": "array",
-          "required": false,
-          "placeholder": "Question, owner, due date, resolution"
+          "required": false
         }
       ]
     }
   ],
   "example_model": {
     "document_info": {
-      "project_name": "Monthly Defect Rate Chart",
-      "requirement_name": "Single chart for monthly defect-rate monitoring"
+      "project_name": "Beispielprojekt: Monthly Defect Rate Chart",
+      "requirement_name": "Beispielanforderung: Single chart for monthly defect-rate monitoring"
     },
     "background": {
-      "summary": "Quality managers need one trusted chart to monitor monthly defect rate by plant, product family, and defect category. Current reports are manually prepared and definitions are inconsistent.",
-      "objective": "Deliver a single interactive chart with confirmed data contract, filters, detail table, export, and permission rules."
+      "summary": "Dies ist ein integriertes Beispielgeschaeft fuer den schnellen Start mit einer vorbefuellten Vorlage. Quality managers need one trusted chart to monitor monthly defect rate by plant, product family, and defect category. Current reports are manually prepared and definitions are inconsistent.",
+      "objective": "Aus dem Beispiel sollen PRD und Design-Dokument erzeugt werden; spaetere Nutzeraenderungen haben Vorrang."
     },
     "scope": {
       "in_scope": [

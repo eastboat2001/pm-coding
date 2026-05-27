@@ -702,5 +702,192 @@
     "request_date": "",
     "current_pain_points": [],
     "goal_metrics": []
+  },
+  "example_model": {
+    "document_info": {
+      "project_name": "HR Lifecycle Management Platform",
+      "requirement_name": "Employee lifecycle management optimization"
+    },
+    "background": {
+      "summary": "Employee profiles, recruitment, onboarding, attendance, payroll inputs, performance records, and training data are scattered across tools and spreadsheets.",
+      "objective": "Create one HR lifecycle workspace, improve data accuracy, automate handoffs, and support management reporting."
+    },
+    "scope": {
+      "in_scope": [
+        "Employee profile management",
+        "Recruitment and onboarding workflow",
+        "Attendance and scheduling records",
+        "Payroll input collection",
+        "Performance and training records",
+        "Organization permissions"
+      ],
+      "out_of_scope": [
+        "Payroll calculation engine",
+        "External recruitment marketplace",
+        "Legal contract signing service build"
+      ]
+    },
+    "users_and_scenarios": {
+      "target_users": [
+        "HR specialist",
+        "Hiring manager",
+        "Employee",
+        "Department manager",
+        "Payroll specialist",
+        "System administrator"
+      ],
+      "core_scenarios": [
+        "HR creates an employee profile during onboarding.",
+        "Manager reviews attendance exceptions.",
+        "Payroll specialist exports verified payroll inputs."
+      ]
+    },
+    "functional_requirements": {
+      "overview": "This default example includes Employee master data, Onboarding workflow, Attendance and payroll input.",
+      "feature_details": [
+        {
+          "feature_name": "Employee master data",
+          "description": "Support employee master data for the example business scenario.",
+          "trigger": "User opens the related workspace or submits the related business action.",
+          "processing_logic": "Validate required fields, apply permission rules, persist records, and update related status or metrics.",
+          "inputs": [
+            "Business master data",
+            "User filter or request data"
+          ],
+          "outputs": [
+            "Updated records",
+            "Visible status or chart result"
+          ],
+          "exception_cases": [
+            "Missing required data",
+            "Insufficient permission",
+            "Data refresh delay"
+          ]
+        },
+        {
+          "feature_name": "Onboarding workflow",
+          "description": "Support onboarding workflow for the example business scenario.",
+          "trigger": "User opens the related workspace or submits the related business action.",
+          "processing_logic": "Validate required fields, apply permission rules, persist records, and update related status or metrics.",
+          "inputs": [
+            "Business master data",
+            "User filter or request data"
+          ],
+          "outputs": [
+            "Updated records",
+            "Visible status or chart result"
+          ],
+          "exception_cases": [
+            "Missing required data",
+            "Insufficient permission",
+            "Data refresh delay"
+          ]
+        },
+        {
+          "feature_name": "Attendance and payroll input",
+          "description": "Support attendance and payroll input for the example business scenario.",
+          "trigger": "User opens the related workspace or submits the related business action.",
+          "processing_logic": "Validate required fields, apply permission rules, persist records, and update related status or metrics.",
+          "inputs": [
+            "Business master data",
+            "User filter or request data"
+          ],
+          "outputs": [
+            "Updated records",
+            "Visible status or chart result"
+          ],
+          "exception_cases": [
+            "Missing required data",
+            "Insufficient permission",
+            "Data refresh delay"
+          ]
+        }
+      ]
+    },
+    "business_rules": [
+      "Only authorized roles can view scoped data and perform sensitive actions.",
+      "Core business actions must keep an audit trail.",
+      "Exported data must follow the same filters and permission scope as the page.",
+      "Data refresh status and calculation definitions must be visible to users."
+    ],
+    "page_and_interaction": {
+      "pages": [
+        {
+          "page_name": "Employee master data",
+          "entry_point": "Main workspace",
+          "page_elements": [
+            "Filter area",
+            "Main content area",
+            "Detail area"
+          ],
+          "button_actions": [
+            "Search",
+            "Reset",
+            "Export",
+            "Open detail"
+          ]
+        },
+        {
+          "page_name": "Onboarding workflow",
+          "entry_point": "Main workspace",
+          "page_elements": [
+            "Filter area",
+            "Main content area",
+            "Detail area"
+          ],
+          "button_actions": [
+            "Search",
+            "Reset",
+            "Export",
+            "Open detail"
+          ]
+        },
+        {
+          "page_name": "Attendance and payroll input",
+          "entry_point": "Main workspace",
+          "page_elements": [
+            "Filter area",
+            "Main content area",
+            "Detail area"
+          ],
+          "button_actions": [
+            "Search",
+            "Reset",
+            "Export",
+            "Open detail"
+          ]
+        }
+      ],
+      "interaction_flow": [
+        "HR creates an employee profile during onboarding.",
+        "Manager reviews attendance exceptions.",
+        "Payroll specialist exports verified payroll inputs."
+      ]
+    },
+    "copywriting": [],
+    "data_and_dependencies": [
+      "User and organization master data",
+      "Business transaction data",
+      "Permission configuration",
+      "Reporting/export service"
+    ],
+    "risks_and_notes": [
+      "Metric ownership and data definitions must be confirmed.",
+      "Historical data quality may affect acceptance.",
+      "External system readiness may affect rollout scope."
+    ],
+    "acceptance_criteria": [
+      "The example scope can be generated into PRD and design documents.",
+      "Users can revise the seeded requirement through chat messages.",
+      "Main roles, flows, data, permissions, and acceptance criteria are represented."
+    ],
+    "open_questions": [
+      "Which roles need final approval authority?",
+      "Which fields and metrics are mandatory for MVP?",
+      "Which external systems must be integrated in the first release?"
+    ],
+    "template_meta": {
+      "example_note": "AI-generated default example business; replace with real business facts before final delivery."
+    }
   }
 }

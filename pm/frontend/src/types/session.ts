@@ -22,6 +22,7 @@ export type ChatMessage = {
   kind?: MessageKind
   downloadUrl?: string
   downloadFilename?: string
+  streaming?: boolean
 }
 
 export type SessionSummary = {

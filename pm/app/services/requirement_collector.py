@@ -14,6 +14,7 @@ from .business_template_library import BusinessTemplateLibrary
 from .llm_client import MiniMaxChatClient
 from .session_store import SQLiteSessionStore
 from .structured_requirement_model import (
+    REQUIREMENT_ITEM_KEYS,
     build_structured_requirement_model_prompt,
     empty_structured_requirement_model,
     normalize_structured_requirement_model,
@@ -305,6 +306,8 @@ PRD_TEMPLATE_FILE_BY_LANGUAGE = {
     "ms": "simple-prd-template.ms.md",
 }
 
+TEMPLATE_START_MODE_GUIDED = "guided"
+TEMPLATE_START_MODE_EXAMPLE = "example"
 PROMPT_TEMPLATE_PERSONAL_PROJECT = "personal_project"
 PROMPT_TEMPLATE_STANDARD = "standard"
 
@@ -829,23 +832,38 @@ class RequirementCollectorService:
         self.business_template_library = BusinessTemplateLibrary(self.prd_templates_dir)
         self._lock = threading.Lock()
 
-    def create_session(self, template_id: str | None = None, language: str = "zh") -> Session:
+    def create_session(
+        self,
+        template_id: str | None = None,
+        language: str = "zh",
+        template_start_mode: str = TEMPLATE_START_MODE_GUIDED,
+    ) -> Session:
         session_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
+        normalized_language = self._normalize_language(language)
+        normalized_start_mode = self._normalize_template_start_mode(template_start_mode)
         applied_template_id = ""
         applied_template_name = ""
         title = ""
+        template_detail: dict[str, Any] | None = None
 
         if template_id:
             template_detail = self.business_template_library.get_localized_template(
                 template_id,
-                self._normalize_language(language),
+                normalized_language,
             )
             if template_detail is None:
                 raise KeyError("Business template not found.")
             applied_template_id = template_detail["template_id"]
             applied_template_name = template_detail["template_name"]
             title = applied_template_name
+        elif normalized_start_mode == TEMPLATE_START_MODE_EXAMPLE:
+            raise ValueError("Field `template_id` is required when `template_start_mode` is `example`.")
+
+        if normalized_start_mode == TEMPLATE_START_MODE_EXAMPLE and template_detail is not None:
+            example_model = template_detail.get("example_model")
+            if not isinstance(example_model, dict) or not example_model:
+                raise ValueError("Business template does not include an example model.")
 
         record = self.session_store.create_session(
             session_id=session_id,
@@ -854,6 +872,15 @@ class RequirementCollectorService:
             applied_template_id=applied_template_id,
             applied_template_name=applied_template_name,
         )
+        if normalized_start_mode == TEMPLATE_START_MODE_EXAMPLE and template_detail is not None:
+            self._seed_session_from_template_example(
+                session_id=session_id,
+                template_detail=template_detail,
+                language=normalized_language,
+            )
+            record = self.session_store.get_session(session_id)
+            if record is None:
+                raise RuntimeError("Failed to load seeded session.")
         return self._session_from_record(record)
 
     def get_session(self, session_id: str) -> Session | None:
@@ -870,6 +897,487 @@ class RequirementCollectorService:
 
     def get_business_template(self, template_id: str) -> dict[str, Any] | None:
         return self.business_template_library.get_template(template_id)
+
+    def _seed_session_from_template_example(
+        self,
+        session_id: str,
+        template_detail: dict[str, Any],
+        language: str,
+    ) -> None:
+        example_model = template_detail.get("example_model")
+        if not isinstance(example_model, dict) or not example_model:
+            raise ValueError("Business template does not include an example model.")
+
+        structured_requirement_model = self._structured_requirement_model_from_template_example(
+            template_detail,
+            example_model,
+            language,
+        )
+        message = self._template_example_seed_message(
+            template_detail,
+            structured_requirement_model,
+            language,
+        )
+        self._append_message(session_id, "assistant", message)
+        self._save_structured_requirement_model_cache(
+            session_id,
+            STRUCTURED_REQUIREMENT_CANONICAL_CACHE_KEY,
+            1,
+            structured_requirement_model,
+        )
+        self._save_structured_requirement_model_cache(
+            session_id,
+            language,
+            1,
+            structured_requirement_model,
+        )
+
+    def _structured_requirement_model_from_template_example(
+        self,
+        template_detail: dict[str, Any],
+        example_model: dict[str, Any],
+        language: str,
+    ) -> dict[str, Any]:
+        model = normalize_structured_requirement_model(example_model)
+
+        project_name = self._first_string_from_paths(
+            example_model,
+            (
+                "document_info.project_name",
+                "document_info.project",
+                "document_info.analysis_name",
+                "document_info.chart_name",
+                "document_info.document_name",
+            ),
+        )
+        requirement_name = self._first_string_from_paths(
+            example_model,
+            (
+                "document_info.requirement_name",
+                "document_info.process_name",
+                "document_info.analysis_name",
+                "document_info.chart_name",
+                "document_info.document_name",
+            ),
+        )
+        model["document_info"]["project_name"] = model["document_info"]["project_name"] or project_name
+        model["document_info"]["requirement_name"] = (
+            model["document_info"]["requirement_name"]
+            or requirement_name
+            or str(template_detail.get("template_name", "")).strip()
+        )
+
+        model["background"]["summary"] = model["background"]["summary"] or self._first_string_from_paths(
+            example_model,
+            (
+                "background.summary",
+                "business_background.summary",
+                "background_objectives.background",
+                "summary",
+            ),
+        )
+        model["background"]["objective"] = model["background"]["objective"] or self._first_joined_strings_from_paths(
+            example_model,
+            (
+                "background.objective",
+                "business_objectives.objectives",
+                "background_objectives.objectives",
+                "objective",
+            ),
+        )
+
+        model["scope"]["in_scope"] = model["scope"]["in_scope"] or self._first_string_list_from_paths(
+            example_model,
+            ("scope.in_scope", "business_scope.in_scope"),
+        )
+        model["scope"]["out_of_scope"] = model["scope"]["out_of_scope"] or self._first_string_list_from_paths(
+            example_model,
+            ("scope.out_of_scope", "scope.out_scope", "business_scope.out_scope", "business_scope.out_of_scope"),
+        )
+        if not model["scope"]["in_scope"]:
+            model["scope"]["in_scope"] = self._flatten_path_strings(example_model, "scope.items")[:8]
+
+        model["users_and_scenarios"]["target_users"] = model["users_and_scenarios"]["target_users"] or self._first_string_list_from_paths(
+            example_model,
+            ("users_and_scenarios.target_users", "roles_and_scenarios.target_roles", "stakeholders.roles"),
+        )
+        model["users_and_scenarios"]["core_scenarios"] = model["users_and_scenarios"]["core_scenarios"] or self._first_string_list_from_paths(
+            example_model,
+            ("users_and_scenarios.core_scenarios", "roles_and_scenarios.core_scenarios"),
+        )
+        if not model["users_and_scenarios"]["core_scenarios"]:
+            model["users_and_scenarios"]["core_scenarios"] = self._flatten_path_strings(
+                example_model,
+                "process_description.step_matrix",
+            )[:8]
+
+        model["functional_requirements"]["overview"] = model["functional_requirements"]["overview"] or self._first_string_from_paths(
+            example_model,
+            ("functional_requirements.overview", "chart_presentation.overview"),
+        )
+        if not model["functional_requirements"]["feature_details"]:
+            model["functional_requirements"]["feature_details"] = self._feature_details_from_template_example(example_model)
+
+        if not model["business_rules"]:
+            model["business_rules"] = self._first_string_list_from_paths(
+                example_model,
+                (
+                    "business_rules",
+                    "business_rules.rules",
+                    "business_rules_and_data.rules",
+                    "yield_definition.rules",
+                    "data_description.quality_rules",
+                    "data_contract.quality_rules",
+                ),
+            )
+
+        if not model["page_and_interaction"]["pages"]:
+            model["page_and_interaction"]["pages"] = self._pages_from_template_example(example_model)
+        if not model["page_and_interaction"]["interaction_flow"]:
+            model["page_and_interaction"]["interaction_flow"] = self._first_string_list_from_paths(
+                example_model,
+                ("page_and_interaction.interaction_flow",),
+            ) or self._flatten_path_strings(example_model, "page_and_process.pages")[:8]
+
+        if not model["data_and_dependencies"]:
+            model["data_and_dependencies"] = self._unique_strings(
+                [
+                    *self._flatten_path_strings(example_model, "business_rules_and_data.key_data"),
+                    *self._flatten_path_strings(example_model, "integration_dependencies.external_systems"),
+                    *self._flatten_path_strings(example_model, "data_description.sources"),
+                    *self._flatten_path_strings(example_model, "data_description.fields"),
+                    *self._flatten_path_strings(example_model, "data_contract.sources"),
+                    *self._flatten_path_strings(example_model, "data_contract.fields"),
+                ]
+            )
+
+        if not model["risks_and_notes"]:
+            model["risks_and_notes"] = self._first_string_list_from_paths(
+                example_model,
+                ("risks_and_notes", "risks_and_questions.risks"),
+            )
+        if not model["acceptance_criteria"]:
+            model["acceptance_criteria"] = self._unique_strings(
+                [
+                    *self._flatten_path_strings(example_model, "acceptance_criteria"),
+                    *self._flatten_path_strings(example_model, "milestone_acceptance.milestones"),
+                    *self._flatten_path_strings(example_model, "uat.acceptance_criteria"),
+                    *self._flatten_path_strings(example_model, "uat.criteria"),
+                ]
+            )[:12]
+        if not model["open_questions"]:
+            model["open_questions"] = self._unique_strings(
+                [
+                    *self._flatten_path_strings(example_model, "open_questions"),
+                    *self._flatten_path_strings(example_model, "risks_and_questions.open_questions"),
+                    *[
+                        str(item.get("content", "")).strip()
+                        for item in template_detail.get("prompt_questions", [])
+                        if isinstance(item, dict) and str(item.get("content", "")).strip()
+                    ],
+                ]
+            )
+
+        reason = self._template_example_status_reason(language)
+        model["collection_status"] = {
+            key: {
+                "status": "confirmed",
+                "reason": reason,
+                "pending_questions": [],
+            }
+            for key in REQUIREMENT_ITEM_KEYS
+        }
+        return normalize_structured_requirement_model(model)
+
+    def _template_example_seed_message(
+        self,
+        template_detail: dict[str, Any],
+        structured_requirement_model: dict[str, Any],
+        language: str,
+    ) -> str:
+        template_name = str(template_detail.get("template_name", "")).strip() or "Business template"
+        model = normalize_structured_requirement_model(structured_requirement_model)
+        example_model = template_detail.get("example_model") if isinstance(template_detail.get("example_model"), dict) else {}
+        page_lines = self._template_example_page_lines(model, language)
+        image_description_lines = self._template_example_image_description_lines(example_model, language)
+        if self._normalize_language(language) == "zh":
+            intro = (
+                f"已加载「{template_name}」的默认示例业务。\n\n"
+                "你可以直接基于这份示例生成需求文档和设计文档，也可以继续告诉我需要调整的业务范围、角色、流程、规则或指标。"
+            )
+        else:
+            intro = (
+                f"I loaded the default example business for \"{template_name}\".\n\n"
+                "You can generate the PRD and design document from this example, or tell me what to adjust in the scope, roles, workflows, rules, or metrics."
+            )
+
+        lines = [
+            intro,
+            "",
+            "# 示例业务" if self._normalize_language(language) == "zh" else "# Example Business",
+            "",
+            f"- {'项目' if self._normalize_language(language) == 'zh' else 'Project'}: {model['document_info']['project_name'] or 'TBD'}",
+            f"- {'需求' if self._normalize_language(language) == 'zh' else 'Requirement'}: {model['document_info']['requirement_name'] or 'TBD'}",
+            "",
+            "## 背景" if self._normalize_language(language) == "zh" else "## Background",
+            "",
+            model["background"]["summary"] or "TBD",
+            "",
+            "## 目标" if self._normalize_language(language) == "zh" else "## Objective",
+            "",
+            model["background"]["objective"] or "TBD",
+            "",
+            "## 范围" if self._normalize_language(language) == "zh" else "## In Scope",
+            *[f"- {item}" for item in model["scope"]["in_scope"]],
+            "",
+            "## 目标用户" if self._normalize_language(language) == "zh" else "## Target Users",
+            *[f"- {item}" for item in model["users_and_scenarios"]["target_users"]],
+            "",
+            "## 核心场景" if self._normalize_language(language) == "zh" else "## Core Scenarios",
+            *[f"{index + 1}. {item}" for index, item in enumerate(model["users_and_scenarios"]["core_scenarios"])],
+            "",
+            "## 功能概述" if self._normalize_language(language) == "zh" else "## Feature Overview",
+            "",
+            model["functional_requirements"]["overview"] or "TBD",
+            "",
+            "## 业务规则" if self._normalize_language(language) == "zh" else "## Business Rules",
+            *[f"- {item}" for item in model["business_rules"][:10]],
+            "",
+            "## 数据与依赖" if self._normalize_language(language) == "zh" else "## Data and Dependencies",
+            *[f"- {item}" for item in model["data_and_dependencies"][:10]],
+            "",
+            "## 页面与图表" if self._normalize_language(language) == "zh" else "## Pages and Charts",
+            *page_lines,
+            "",
+            "## 图片文字描述" if self._normalize_language(language) == "zh" else "## Image Descriptions",
+            *image_description_lines,
+            "",
+            "## 验收标准" if self._normalize_language(language) == "zh" else "## Acceptance Criteria",
+            *[f"- {item}" for item in model["acceptance_criteria"][:10]],
+        ]
+        if not image_description_lines:
+            image_heading = "## 图片文字描述" if self._normalize_language(language) == "zh" else "## Image Descriptions"
+            try:
+                image_heading_index = lines.index(image_heading)
+                del lines[image_heading_index:image_heading_index + 2]
+            except ValueError:
+                pass
+        return "\n".join(lines).strip()
+
+    def _template_example_page_lines(self, model: dict[str, Any], language: str) -> list[str]:
+        pages = model.get("page_and_interaction", {}).get("pages", [])
+        if not isinstance(pages, list):
+            return ["- TBD"]
+
+        lines: list[str] = []
+        for page in pages[:6]:
+            if not isinstance(page, dict):
+                continue
+            page_name = str(page.get("page_name", "")).strip()
+            if not page_name:
+                continue
+            elements = self._string_list(page.get("page_elements"))[:4]
+            if elements:
+                elements_label = "页面元素" if self._normalize_language(language) == "zh" else "elements"
+                lines.append(f"- {page_name}: {elements_label} - {', '.join(elements)}")
+            else:
+                lines.append(f"- {page_name}")
+        return lines or ["- TBD"]
+
+    def _template_example_image_description_lines(self, example_model: dict[str, Any], language: str) -> list[str]:
+        image_descriptions = self._first_string_list_from_paths(
+            example_model,
+            (
+                "template_specific_details.image_descriptions",
+                "image_descriptions",
+            ),
+        )
+        if not image_descriptions:
+            return []
+
+        return [f"- {item}" for item in image_descriptions[:8]]
+
+    def _template_example_status_reason(self, language: str) -> str:
+        if self._normalize_language(language) == "zh":
+            return "已由模板示例业务预填，可被用户后续修改意见覆盖。"
+        return "Pre-filled from the template example business; later user changes can override it."
+
+    def _feature_details_from_template_example(self, example_model: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_features = self._value_at_path(example_model, "functional_requirements.features")
+        if raw_features is None:
+            raw_features = self._value_at_path(example_model, "features")
+        if not isinstance(raw_features, list):
+            return []
+
+        features: list[dict[str, Any]] = []
+        for raw_item in raw_features:
+            if not isinstance(raw_item, dict):
+                continue
+            feature = {
+                "feature_name": self._first_non_empty_string(
+                    raw_item.get("feature_name"),
+                    raw_item.get("feature"),
+                    raw_item.get("name"),
+                ),
+                "description": self._first_non_empty_string(raw_item.get("description"), raw_item.get("summary")),
+                "trigger": self._first_non_empty_string(raw_item.get("trigger")),
+                "processing_logic": "; ".join(
+                    self._string_list(raw_item.get("processing_logic"))
+                    or self._string_list(raw_item.get("logic"))
+                    or self._string_list(raw_item.get("rules"))
+                ),
+                "inputs": self._string_list(raw_item.get("inputs")),
+                "outputs": self._string_list(raw_item.get("outputs")),
+                "exception_cases": self._string_list(raw_item.get("exception_cases"))
+                or self._string_list(raw_item.get("exceptions")),
+            }
+            if any(value for value in feature.values() if value):
+                features.append(feature)
+        return features
+
+    def _pages_from_template_example(self, example_model: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_pages = self._value_at_path(example_model, "page_and_interaction.pages")
+        if raw_pages is None:
+            raw_pages = self._value_at_path(example_model, "page_and_process.pages")
+        if raw_pages is None:
+            raw_pages = self._value_at_path(example_model, "pages_functions.page_list")
+        if not isinstance(raw_pages, list):
+            return []
+
+        pages: list[dict[str, Any]] = []
+        for raw_item in raw_pages:
+            if isinstance(raw_item, str):
+                pages.append(
+                    {
+                        "page_name": raw_item,
+                        "entry_point": "",
+                        "page_elements": [],
+                        "button_actions": [],
+                    }
+                )
+                continue
+            if not isinstance(raw_item, dict):
+                continue
+            page = {
+                "page_name": self._first_non_empty_string(
+                    raw_item.get("page_name"),
+                    raw_item.get("page"),
+                    raw_item.get("name"),
+                    raw_item.get("module"),
+                ),
+                "entry_point": self._first_non_empty_string(raw_item.get("entry_point"), raw_item.get("entry")),
+                "page_elements": self._string_list(raw_item.get("page_elements"))
+                or self._string_list(raw_item.get("elements")),
+                "button_actions": self._string_list(raw_item.get("button_actions"))
+                or self._string_list(raw_item.get("actions")),
+            }
+            if any(value for value in page.values() if value):
+                pages.append(page)
+        return pages
+
+    def _first_string_from_paths(self, payload: dict[str, Any], paths: tuple[str, ...]) -> str:
+        for path in paths:
+            value = self._value_at_path(payload, path)
+            text = self._first_non_empty_string(value)
+            if text:
+                return text
+        return ""
+
+    def _first_joined_strings_from_paths(self, payload: dict[str, Any], paths: tuple[str, ...]) -> str:
+        for path in paths:
+            values = self._flatten_path_strings(payload, path)
+            if values:
+                return "; ".join(values)
+        return ""
+
+    def _first_string_list_from_paths(self, payload: dict[str, Any], paths: tuple[str, ...]) -> list[str]:
+        for path in paths:
+            values = self._flatten_path_strings(payload, path)
+            if values:
+                return values
+        return []
+
+    def _flatten_path_strings(self, payload: dict[str, Any], path: str) -> list[str]:
+        value = self._value_at_path(payload, path)
+        return self._flatten_strings(value)
+
+    def _flatten_strings(self, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return [cleaned] if cleaned else []
+        if isinstance(value, (int, float, bool)):
+            return [str(value)]
+        if isinstance(value, list):
+            values: list[str] = []
+            for item in value:
+                values.extend(self._flatten_strings(item))
+            return self._unique_strings(values)
+        if isinstance(value, dict):
+            label_keys = (
+                "name",
+                "title",
+                "label",
+                "role",
+                "actor",
+                "feature",
+                "page",
+                "metric",
+                "field",
+                "source",
+                "rule",
+                "description",
+                "flow",
+                "acceptance",
+                "content",
+            )
+            parts = [str(value.get(key, "")).strip() for key in label_keys if str(value.get(key, "")).strip()]
+            if parts:
+                return [" - ".join(parts)]
+            values: list[str] = []
+            for item in value.values():
+                values.extend(self._flatten_strings(item))
+            return self._unique_strings(values)
+        return []
+
+    def _value_at_path(self, payload: dict[str, Any], path: str) -> Any:
+        current: Any = payload
+        for part in path.split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+        return current
+
+    def _first_non_empty_string(self, *values: Any) -> str:
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, (int, float, bool)):
+                return str(value)
+        return ""
+
+    def _string_list(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return self._unique_strings(self._flatten_strings(value))
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return [cleaned] if cleaned else []
+        if value is None:
+            return []
+        return self._flatten_strings(value)
+
+    def _unique_strings(self, values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for value in values:
+            normalized = " ".join(str(value).split())
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique.append(normalized)
+        return unique
+
 
     def delete_session(self, session_id: str) -> bool:
         return self.session_store.delete_session(session_id)
@@ -2387,6 +2895,12 @@ class RequirementCollectorService:
         if normalized in SUPPORTED_OUTPUT_LANGUAGES:
             return normalized
         return "zh"
+
+    def _normalize_template_start_mode(self, value: str | None) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {TEMPLATE_START_MODE_GUIDED, TEMPLATE_START_MODE_EXAMPLE}:
+            return normalized
+        raise ValueError("Field `template_start_mode` must be `guided` or `example`.")
 
     def _parse_datetime(self, raw_value: Any) -> datetime | None:
         try:

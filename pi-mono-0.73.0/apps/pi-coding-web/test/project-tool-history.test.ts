@@ -33,6 +33,36 @@ function assistantWithProjectFile(content: string, id = "call-1"): AssistantMess
 	};
 }
 
+function assistantWithProjectFileGet(id = "call-get"): AssistantMessage {
+	return {
+		role: "assistant",
+		api: "openai-responses",
+		provider: "openai",
+		model: "mock",
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		content: [
+			{
+				type: "toolCall",
+				id,
+				name: "project_file",
+				arguments: {
+					command: "get",
+					filename: "src/main.js",
+				},
+			},
+		],
+	};
+}
+
 describe("compactProjectToolHistory", () => {
 	it("compacts old project_file content while preserving the latest tool call", async () => {
 		const oldMessage = assistantWithProjectFile("a".repeat(200), "call-old");
@@ -54,6 +84,24 @@ describe("compactProjectToolHistory", () => {
 		expect((compacted[1] as AssistantMessage).content[0]).toMatchObject({
 			arguments: { content: "b".repeat(200) },
 		});
+	});
+
+	it("keeps the latest content-bearing project_file call when a later get call exists", async () => {
+		const writeMessage = assistantWithProjectFile("a".repeat(200), "call-write");
+		const getMessage = assistantWithProjectFileGet("call-get");
+
+		const compacted = await compactProjectToolHistory([writeMessage, getMessage], { maxContentChars: 40 });
+
+		expect((compacted[0] as AssistantMessage).content[0]).toMatchObject({
+			type: "toolCall",
+			name: "project_file",
+			arguments: {
+				command: "create",
+				filename: "src/main.js",
+				content: "a".repeat(200),
+			},
+		});
+		expect(compacted[1]).toBe(getMessage);
 	});
 
 	it("does not mutate the original message objects", async () => {

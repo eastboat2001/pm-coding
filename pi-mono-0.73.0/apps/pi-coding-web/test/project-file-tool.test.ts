@@ -45,4 +45,14 @@ describe("project_file arguments", () => {
 			/project_file create requires: \{"command":"create","filename":"index.html","content":"完整文件内容"\}/,
 		);
 	});
+
+	it("rejects omitted project_file placeholders as writable content", () => {
+		expect(() =>
+			prepareProjectFileArguments({
+				command: "rewrite",
+				filename: "index.html",
+				content: "[project_file content omitted: 44099 chars, 1550 lines from index.html]",
+			}),
+		).toThrow(/project_file get/);
+	});
 });

@@ -1,0 +1,4 @@
+smallcode/
+*.tar
+*.tar.gz
+pi-mono-0.73.0/docker/**/data/

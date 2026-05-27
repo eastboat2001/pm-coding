@@ -1,0 +1,366 @@
+import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, type Stats, statSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type {
+	ResourceDiagnostic,
+	SkillListResult,
+	SkillLoadRequest,
+	SkillLoadResult,
+	SkillResourceRequest,
+	SkillResourceResult,
+	SkillResourceSummary,
+	SkillSummary,
+	StorageConfig,
+} from "./types.js";
+
+const MAX_NAME_LENGTH = 64;
+const MAX_DESCRIPTION_LENGTH = 1024;
+const MAX_SKILL_BYTES = 256 * 1024;
+const MAX_RESOURCE_BYTES = 256 * 1024;
+const MAX_LISTED_RESOURCES = 200;
+const SKILL_FILE = "SKILL.md";
+
+const ALLOWED_TEXT_EXTENSIONS = new Set([
+	".css",
+	".csv",
+	".html",
+	".js",
+	".json",
+	".jsx",
+	".md",
+	".mjs",
+	".py",
+	".sh",
+	".svg",
+	".ts",
+	".tsx",
+	".txt",
+	".xml",
+	".yaml",
+	".yml",
+]);
+
+type SkillFrontmatter = {
+	name?: string;
+	description?: string;
+	"disable-model-invocation"?: boolean;
+};
+
+type LoadedSkill = SkillSummary & {
+	filePath: string;
+	baseDir: string;
+};
+
+type DiscoverResult = {
+	skills: LoadedSkill[];
+	diagnostics: ResourceDiagnostic[];
+};
+
+export class WorkspaceSkillService {
+	constructor(private readonly config: StorageConfig) {}
+
+	list(): SkillListResult {
+		const result = this.discover();
+		const skills = result.skills.map(toSummary);
+		return {
+			skills,
+			promptSkills: skills.filter((skill) => !skill.disableModelInvocation),
+			diagnostics: result.diagnostics,
+		};
+	}
+
+	load(body: SkillLoadRequest): SkillLoadResult {
+		const skill = this.resolveSkill(body.name);
+		const raw = readFileSync(skill.filePath, "utf8");
+		return {
+			...toSummary(skill),
+			content: stripFrontmatter(raw).trim(),
+			resources: listSkillResources(skill.baseDir),
+		};
+	}
+
+	readResource(body: SkillResourceRequest): SkillResourceResult {
+		const skill = this.resolveSkill(body.name);
+		const requestedPath = safeRelativeSkillPath(String(body.path || ""));
+		const targetPath = resolve(skill.baseDir, requestedPath);
+		if (!existsSync(targetPath)) throw new Error(`Skill resource not found: ${toPosixPath(requestedPath)}`);
+		const stats = statSync(targetPath);
+		if (!stats.isFile()) throw new Error(`Skill resource is not a file: ${toPosixPath(requestedPath)}`);
+		assertAllowedTextResource(targetPath, stats);
+
+		const realBaseDir = realpathSync(skill.baseDir);
+		const realTargetPath = realpathSync(targetPath);
+		assertInsideRealPath(realBaseDir, realTargetPath, "Resolved skill resource path escapes skill root.");
+
+		return {
+			name: skill.name,
+			path: toPosixPath(relative(realBaseDir, realTargetPath)),
+			content: readFileSync(realTargetPath, "utf8"),
+			size: stats.size,
+		};
+	}
+
+	private resolveSkill(name: unknown): LoadedSkill {
+		const normalizedName = String(name || "").trim();
+		if (!normalizedName) throw new Error("Field `name` is required.");
+		const result = this.discover();
+		const skill = result.skills.find((candidate) => candidate.name === normalizedName);
+		if (!skill) throw new Error(`Skill not found: ${normalizedName}`);
+		return skill;
+	}
+
+	private discover(): DiscoverResult {
+		if (!existsSync(this.config.skillsDir)) return { skills: [], diagnostics: [] };
+		const skills = new Map<string, LoadedSkill>();
+		const diagnostics: ResourceDiagnostic[] = [];
+		const rootDir = resolve(this.config.skillsDir);
+		const realRootDir = realpathSync(rootDir);
+
+		for (const skill of scanSkills(rootDir, realRootDir, diagnostics)) {
+			const existing = skills.get(skill.name);
+			if (existing) {
+				diagnostics.push({
+					type: "collision",
+					message: `name "${skill.name}" collision`,
+					path: relativeToRoot(rootDir, skill.filePath),
+					collision: {
+						resourceType: "skill",
+						name: skill.name,
+						winnerPath: existing.location,
+						loserPath: skill.location,
+					},
+				});
+				continue;
+			}
+			skills.set(skill.name, skill);
+		}
+
+		return {
+			skills: [...skills.values()].sort((a, b) => a.name.localeCompare(b.name)),
+			diagnostics,
+		};
+	}
+}
+
+function scanSkills(dir: string, realRootDir: string, diagnostics: ResourceDiagnostic[]): LoadedSkill[] {
+	const entries = readDirectorySafe(dir);
+	const rootSkill = entries.find((entry) => entry.name === SKILL_FILE && entry.isFile());
+	if (rootSkill) {
+		const skill = loadSkillFromFile(join(dir, rootSkill.name), basename(dir), realRootDir, diagnostics);
+		return skill ? [skill] : [];
+	}
+
+	const skills: LoadedSkill[] = [];
+	for (const entry of entries) {
+		if (shouldSkipEntry(entry)) continue;
+		const fullPath = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			skills.push(...scanSkills(fullPath, realRootDir, diagnostics));
+		}
+	}
+	return skills;
+}
+
+function loadSkillFromFile(
+	filePath: string,
+	expectedName: string,
+	realRootDir: string,
+	diagnostics: ResourceDiagnostic[],
+): LoadedSkill | null {
+	const realFilePath = realpathSync(filePath);
+	assertInsideRealPath(realRootDir, realFilePath, "Resolved skill path escapes configured skills root.");
+	const stats = statSync(realFilePath);
+	if (stats.size > MAX_SKILL_BYTES) {
+		diagnostics.push({
+			type: "warning",
+			message: `skill file exceeds ${MAX_SKILL_BYTES} bytes`,
+			path: relativeToRoot(realRootDir, realFilePath),
+		});
+		return null;
+	}
+	const raw = readFileSync(realFilePath, "utf8");
+	const parsed = parseFrontmatter(raw);
+	const frontmatter = parsed.frontmatter;
+	const name = (frontmatter.name || expectedName).trim();
+	const description = frontmatter.description?.trim() || "";
+
+	for (const message of validateSkillName(name, expectedName)) {
+		diagnostics.push({ type: "warning", message, path: relativeToRoot(realRootDir, realFilePath) });
+	}
+	for (const message of validateDescription(description)) {
+		diagnostics.push({ type: "warning", message, path: relativeToRoot(realRootDir, realFilePath) });
+	}
+	if (!description) return null;
+
+	return {
+		name,
+		description,
+		filePath: realFilePath,
+		baseDir: dirname(realFilePath),
+		location: skillLocation(name, SKILL_FILE),
+		disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+	};
+}
+
+function readDirectorySafe(dir: string): Dirent[] {
+	try {
+		return readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+	} catch {
+		return [];
+	}
+}
+
+function shouldSkipEntry(entry: Dirent): boolean {
+	return entry.isSymbolicLink() || entry.name.startsWith(".") || entry.name === "node_modules";
+}
+
+function toSummary(skill: LoadedSkill): SkillSummary {
+	return {
+		name: skill.name,
+		description: skill.description,
+		location: skill.location,
+		disableModelInvocation: skill.disableModelInvocation,
+	};
+}
+
+function listSkillResources(baseDir: string): SkillResourceSummary[] {
+	const resources: SkillResourceSummary[] = [];
+	collectSkillResources(baseDir, baseDir, resources);
+	return resources.sort((a, b) => a.path.localeCompare(b.path)).slice(0, MAX_LISTED_RESOURCES);
+}
+
+function collectSkillResources(baseDir: string, dir: string, resources: SkillResourceSummary[]): void {
+	if (resources.length >= MAX_LISTED_RESOURCES) return;
+	for (const entry of readDirectorySafe(dir)) {
+		if (shouldSkipEntry(entry)) continue;
+		const fullPath = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			collectSkillResources(baseDir, fullPath, resources);
+			continue;
+		}
+		if (!entry.isFile() || entry.name === SKILL_FILE) continue;
+		const stats = statSync(fullPath);
+		if (!isAllowedTextResource(fullPath, stats)) continue;
+		resources.push({ path: toPosixPath(relative(baseDir, fullPath)), size: stats.size });
+	}
+}
+
+function safeRelativeSkillPath(path: string): string {
+	const normalized = path.trim().replace(/\\/g, "/");
+	if (!normalized) throw new Error("Field `path` is required.");
+	if (isAbsolute(normalized)) throw new Error("Skill resource path must be relative.");
+	const parts = normalized.split("/").filter(Boolean);
+	if (parts.length === 0) throw new Error("Field `path` is required.");
+	for (const part of parts) {
+		if (part === "." || part === ".." || part.includes(":")) {
+			throw new Error("Resolved skill resource path escapes skill root.");
+		}
+	}
+	return join(...parts);
+}
+
+function assertAllowedTextResource(path: string, stats: Stats): void {
+	if (!isAllowedTextResource(path, stats)) {
+		throw new Error(`Skill resource is not an allowed text resource: ${toPosixPath(path)}`);
+	}
+}
+
+function isAllowedTextResource(path: string, stats: Stats): boolean {
+	if (stats.size > MAX_RESOURCE_BYTES) return false;
+	return ALLOWED_TEXT_EXTENSIONS.has(extname(path).toLowerCase());
+}
+
+function validateSkillName(name: string, expectedName: string): string[] {
+	const errors: string[] = [];
+	if (name !== expectedName) errors.push(`name "${name}" does not match skill path "${expectedName}"`);
+	if (name.length > MAX_NAME_LENGTH) errors.push(`name exceeds ${MAX_NAME_LENGTH} characters (${name.length})`);
+	if (!/^[a-z0-9-]+$/.test(name)) {
+		errors.push("name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)");
+	}
+	if (name.startsWith("-") || name.endsWith("-")) errors.push("name must not start or end with a hyphen");
+	if (name.includes("--")) errors.push("name must not contain consecutive hyphens");
+	return errors;
+}
+
+function validateDescription(description: string): string[] {
+	if (!description) return ["description is required"];
+	if (description.length > MAX_DESCRIPTION_LENGTH) {
+		return [`description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`];
+	}
+	return [];
+}
+
+function parseFrontmatter(content: string): { frontmatter: SkillFrontmatter; body: string } {
+	const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	if (!normalized.startsWith("---\n")) return { frontmatter: {}, body: normalized };
+	const endIndex = normalized.indexOf("\n---", 4);
+	if (endIndex === -1) return { frontmatter: {}, body: normalized };
+	const yaml = normalized.slice(4, endIndex);
+	const body = normalized.slice(endIndex + 4).trim();
+	return { frontmatter: parseSimpleYamlFrontmatter(yaml), body };
+}
+
+function stripFrontmatter(content: string): string {
+	return parseFrontmatter(content).body;
+}
+
+function parseSimpleYamlFrontmatter(yaml: string): SkillFrontmatter {
+	const frontmatter: SkillFrontmatter = {};
+	const lines = yaml.split("\n");
+	for (let index = 0; index < lines.length; index++) {
+		const match = lines[index].match(/^([a-zA-Z0-9_-]+):\s*(.*)$/);
+		if (!match) continue;
+		const key = match[1];
+		const rawValue = match[2].trim();
+		if (rawValue === "|" || rawValue === ">") {
+			const collected: string[] = [];
+			while (index + 1 < lines.length && /^\s+/.test(lines[index + 1])) {
+				index++;
+				collected.push(lines[index].trim());
+			}
+			assignFrontmatterValue(frontmatter, key, rawValue === ">" ? collected.join(" ") : collected.join("\n"));
+			continue;
+		}
+		assignFrontmatterValue(frontmatter, key, parseScalar(rawValue));
+	}
+	return frontmatter;
+}
+
+function parseScalar(value: string): string | boolean {
+	if (value === "true") return true;
+	if (value === "false") return false;
+	if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+		return value.slice(1, -1);
+	}
+	return value;
+}
+
+function assignFrontmatterValue(frontmatter: SkillFrontmatter, key: string, value: string | boolean): void {
+	if (key === "name" && typeof value === "string") frontmatter.name = value;
+	if (key === "description" && typeof value === "string") frontmatter.description = value;
+	if (key === "disable-model-invocation" && typeof value === "boolean") {
+		frontmatter["disable-model-invocation"] = value;
+	}
+}
+
+function skillLocation(name: string, path: string): string {
+	return `skill://${encodeURIComponent(name)}/${toPosixPath(path)}`;
+}
+
+function relativeToRoot(root: string, path: string): string {
+	return toPosixPath(relative(root, path));
+}
+
+function toPosixPath(path: string): string {
+	return path.split(sep).join("/");
+}
+
+function assertInsideRealPath(root: string, target: string, message: string): void {
+	const normalizedRoot = normalizeCase(resolve(root));
+	const normalizedTarget = normalizeCase(resolve(target));
+	const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
+	if (normalizedTarget !== normalizedRoot && !normalizedTarget.startsWith(prefix)) throw new Error(message);
+}
+
+function normalizeCase(path: string): string {
+	return process.platform === "win32" ? path.toLowerCase() : path;
+}

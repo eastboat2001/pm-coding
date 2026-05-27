@@ -5,11 +5,17 @@ import type { Model } from "@mariozechner/pi-ai";
 import { html, LitElement } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
-import { Brain, Loader2, Paperclip, Send, Sparkles, Square } from "lucide";
+import { Brain, Loader2, Paperclip, Send, Sparkles, Square, X } from "lucide";
 import { type Attachment, loadAttachment } from "../utils/attachment-utils.js";
 import { i18n } from "../utils/i18n.js";
 import "./AttachmentTile.js";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import {
+	buildSlashSuggestionState,
+	getSlashSelections,
+	type SlashSelections,
+	type SlashSuggestionItem,
+} from "./slash-suggestions.js";
 
 function isConfiguredModel(model: Model<any> | undefined): model is Model<any> {
 	return !!model && model.provider !== "unknown" && model.id !== "unknown";
@@ -43,6 +49,7 @@ export class MessageEditor extends LitElement {
 	@property() onModelSelect?: () => void;
 	@property() onThinkingChange?: (level: "off" | "minimal" | "low" | "medium" | "high") => void;
 	@property() onFilesChange?: (files: Attachment[]) => void;
+	@property({ attribute: false }) slashSuggestions: SlashSuggestionItem[] = [];
 	@property() attachments: Attachment[] = [];
 	@property() maxFiles = 10;
 	@property() maxFileSize = 20 * 1024 * 1024; // 20MB
@@ -51,6 +58,8 @@ export class MessageEditor extends LitElement {
 
 	@state() processingFiles = false;
 	@state() isDragging = false;
+	@state() private selectedSlashSuggestionIndex = 0;
+	@state() private slashSuggestionsSuppressed = false;
 	private fileInputRef = createRef<HTMLInputElement>();
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
@@ -59,13 +68,68 @@ export class MessageEditor extends LitElement {
 
 	private handleTextareaInput = (e: Event) => {
 		const textarea = e.target as HTMLTextAreaElement;
-		this.value = textarea.value;
+		const selections = this.slashSelections;
+		this.value = selections.items.length > 0 ? `${selections.prefix}${textarea.value}` : textarea.value;
+		this.selectedSlashSuggestionIndex = 0;
+		this.slashSuggestionsSuppressed = false;
 		this.onInput?.(this.value);
 	};
 
 	private handleKeyDown = (e: KeyboardEvent) => {
 		// Ignore key events during IME composition (e.g. CJK input)
 		if (e.isComposing || e.key === "Process") return;
+
+		const slashSuggestionState = this.slashSuggestionState;
+		if (slashSuggestionState.open) {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				this.slashSuggestionsSuppressed = true;
+				return;
+			}
+			if (slashSuggestionState.items.length === 0) {
+				if (e.key === "Enter" || e.key === "Tab") {
+					e.preventDefault();
+				}
+				return;
+			}
+			if (e.key === "ArrowDown") {
+				e.preventDefault();
+				this.selectedSlashSuggestionIndex =
+					(this.selectedSlashSuggestionIndex + 1) % slashSuggestionState.items.length;
+				return;
+			}
+			if (e.key === "ArrowUp") {
+				e.preventDefault();
+				this.selectedSlashSuggestionIndex =
+					(this.selectedSlashSuggestionIndex - 1 + slashSuggestionState.items.length) %
+					slashSuggestionState.items.length;
+				return;
+			}
+			if (e.key === "Enter" || e.key === "Tab") {
+				e.preventDefault();
+				const selectedIndex = Math.min(this.selectedSlashSuggestionIndex, slashSuggestionState.items.length - 1);
+				this.applySlashSuggestion(slashSuggestionState.items[selectedIndex]);
+				return;
+			}
+		}
+
+		const selections = this.slashSelections;
+		const textarea = e.target as HTMLTextAreaElement;
+		if (
+			selections.items.length > 0 &&
+			e.key === "Backspace" &&
+			textarea.selectionStart === 0 &&
+			textarea.selectionEnd === 0
+		) {
+			e.preventDefault();
+			const oldValue = this.value;
+			const remainingItems = selections.items.slice(0, -1);
+			this.value = `${remainingItems.map((item) => item.insertText).join("")}${selections.text}`;
+			this.slashSuggestionsSuppressed = false;
+			this.onInput?.(this.value);
+			this.requestUpdate("value", oldValue);
+			return;
+		}
 
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
@@ -131,6 +195,44 @@ export class MessageEditor extends LitElement {
 	private handleSend = () => {
 		this.onSend?.(this.value, this.attachments);
 	};
+
+	private get slashSuggestionState() {
+		if (this.slashSuggestionsSuppressed || this.isStreaming) {
+			return { open: false, items: [], query: "", trigger: "" };
+		}
+		return buildSlashSuggestionState(this.value, this.slashSuggestions);
+	}
+
+	private get slashSelections(): SlashSelections {
+		return getSlashSelections(this.value, this.slashSuggestions);
+	}
+
+	private applySlashSuggestion(suggestion: SlashSuggestionItem | undefined) {
+		if (!suggestion) return;
+		const oldValue = this.value;
+		this.value = `${this.slashSelections.prefix}${suggestion.insertText}`;
+		this.selectedSlashSuggestionIndex = 0;
+		this.slashSuggestionsSuppressed = suggestion.keepOpen !== true;
+		this.onInput?.(this.value);
+		this.requestUpdate("value", oldValue);
+		requestAnimationFrame(() => {
+			const textarea = this.textareaRef.value;
+			const selectionLength = this.slashSelections.text.length;
+			textarea?.focus();
+			textarea?.setSelectionRange(selectionLength, selectionLength);
+		});
+	}
+
+	private removeSlashSelection(index: number) {
+		const selections = this.slashSelections;
+		const oldValue = this.value;
+		const remainingItems = selections.items.filter((_, itemIndex) => itemIndex !== index);
+		this.value = `${remainingItems.map((item) => item.insertText).join("")}${selections.text}`;
+		this.slashSuggestionsSuppressed = false;
+		this.onInput?.(this.value);
+		this.requestUpdate("value", oldValue);
+		requestAnimationFrame(() => this.textareaRef.value?.focus());
+	}
 
 	private handleAttachmentClick = () => {
 		this.fileInputRef.value?.click();
@@ -262,6 +364,8 @@ export class MessageEditor extends LitElement {
 						: ""
 				}
 
+				${this.renderSlashSuggestions()}
+
 				<!-- Attachments -->
 				${
 					this.attachments.length > 0
@@ -281,17 +385,7 @@ export class MessageEditor extends LitElement {
 						: ""
 				}
 
-				<textarea
-					class="w-full bg-transparent p-4 text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto"
-					placeholder=${i18n("Type a message...")}
-					rows="1"
-					style="max-height: 200px; field-sizing: content; min-height: 1lh; height: auto;"
-					.value=${this.value}
-					@input=${this.handleTextareaInput}
-					@keydown=${this.handleKeyDown}
-					@paste=${this.handlePaste}
-					${ref(this.textareaRef)}
-				></textarea>
+				${this.renderMessageInput()}
 
 				<!-- Hidden file input -->
 				<input
@@ -403,6 +497,103 @@ export class MessageEditor extends LitElement {
 						}
 					</div>
 				</div>
+			</div>
+		`;
+	}
+
+	private renderSlashSuggestions() {
+		const state = this.slashSuggestionState;
+		if (!state.open) return "";
+		const selectedIndex = Math.min(this.selectedSlashSuggestionIndex, state.items.length - 1);
+		return html`
+			<div class="absolute left-2 right-2 bottom-full mb-2 z-20 rounded-md border border-border bg-card shadow-lg overflow-hidden">
+				<div class="max-h-64 overflow-y-auto py-1">
+					${
+						state.items.length === 0
+							? html`
+								<div class="px-3 py-3">
+									<div class="text-sm font-medium text-muted-foreground">${state.emptyLabel}</div>
+									${state.emptyDetail ? html`<div class="text-xs text-muted-foreground mt-1">${state.emptyDetail}</div>` : ""}
+								</div>
+							`
+							: state.items.map((item, index) => {
+									const selected = index === selectedIndex;
+									return html`
+										<button
+											type="button"
+											class="w-full px-3 py-2 text-left ${selected ? "bg-secondary text-secondary-foreground" : "hover:bg-secondary/70"}"
+											@mousedown=${(event: MouseEvent) => {
+												event.preventDefault();
+												this.applySlashSuggestion(item);
+											}}
+										>
+											<div class="text-sm font-medium font-mono truncate">${item.insertText.trim()}</div>
+											${item.detail ? html`<div class="text-xs text-muted-foreground truncate">${item.detail}</div>` : ""}
+										</button>
+									`;
+								})
+					}
+				</div>
+			</div>
+		`;
+	}
+
+	private renderMessageInput() {
+		const selections = this.slashSelections;
+		if (selections.items.length === 0) {
+			return html`
+				<textarea
+					class="w-full bg-transparent p-4 text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto"
+					placeholder=${i18n("Type a message...")}
+					rows="1"
+					style="max-height: 200px; field-sizing: content; min-height: 1lh; height: auto;"
+					.value=${this.value}
+					@input=${this.handleTextareaInput}
+					@keydown=${this.handleKeyDown}
+					@paste=${this.handlePaste}
+					${ref(this.textareaRef)}
+				></textarea>
+			`;
+		}
+
+		return html`
+			<div class="px-4 pt-4 pb-2 flex items-start gap-2">
+				<div class="shrink-0 flex flex-wrap items-center gap-1 max-w-[55%]">
+					${selections.items.map(
+						(item, index) => html`
+							<div
+								class="inline-flex items-center gap-1 rounded-md border border-primary/20 bg-primary/10 px-2 py-1 text-sm font-medium text-primary"
+								title=${item.insertText.trim()}
+							>
+								${icon(Sparkles, "sm", "text-primary")}
+								<span class="truncate max-w-40">${item.label}</span>
+								<button
+									type="button"
+									class="ml-1 inline-flex rounded-sm text-primary/70 hover:text-primary"
+									@mousedown=${(event: MouseEvent) => {
+										event.preventDefault();
+										this.removeSlashSelection(index);
+									}}
+									title=${i18n("Remove")}
+								>
+									${icon(X, "sm")}
+								</button>
+							</div>
+						`,
+					)}
+				</div>
+				<textarea
+					class="min-w-0 flex-1 bg-transparent text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto"
+					placeholder=${i18n("Type a message...")}
+					rows="1"
+					style="max-height: 200px; field-sizing: content; min-height: 1lh; height: auto;"
+					.value=${selections.text}
+					spellcheck="true"
+					@input=${this.handleTextareaInput}
+					@keydown=${this.handleKeyDown}
+					@paste=${this.handlePaste}
+					${ref(this.textareaRef)}
+				></textarea>
 			</div>
 		`;
 	}

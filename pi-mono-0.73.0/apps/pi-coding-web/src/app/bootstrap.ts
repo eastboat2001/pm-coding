@@ -1,12 +1,13 @@
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
-import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import {
 	type AgentState,
 	ApiKeyPromptDialog,
 	AppStorage,
 	ChatPanel,
+	createStreamFn,
 	defaultConvertToLlm,
 	getCurrentLanguage,
 	IndexedDBStorageBackend,
@@ -21,8 +22,8 @@ import {
 	SessionsStore,
 	SettingsDialog,
 	SettingsStore,
-	setLanguage,
 	setAppStorage,
+	setLanguage,
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
 import { History, Plus, Settings } from "lucide";
@@ -37,8 +38,13 @@ import {
 	fetchPmHandoffPayload,
 	type PmHandoffPayload,
 } from "../integrations/pm-handoff.js";
+import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../prompts/coding-system-prompt.js";
+import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
+import { loadServerSkillList } from "../skill-tools/client.js";
+import type { SkillSummary } from "../skill-tools/schemas.js";
+import { expandSkillCommandsInMessages } from "../skill-tools/skill-command.js";
+import { createServerSkillTools } from "../skill-tools/tools.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
@@ -49,6 +55,24 @@ import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessio
 const piRuntimeConfig = {
 	serverSessionSyncEnabled: false,
 	handoffDefaultThinkingLevel: "high" as ThinkingLevel,
+	globalSkills: [] as SkillSummary[],
+	skillSlashSuggestions: [] as SkillSlashSuggestion[],
+};
+
+type SkillSlashSuggestion = {
+	id: string;
+	label: string;
+	detail?: string;
+	trigger: string;
+	insertText: string;
+	keepOpen?: boolean;
+	emptyLabel?: string;
+	emptyDetail?: string;
+};
+
+type SlashSuggestionHost = {
+	slashSuggestions: SkillSlashSuggestion[];
+	requestUpdate?: () => void;
 };
 
 document.documentElement.lang = getCurrentLanguage();
@@ -85,14 +109,29 @@ const storage = new AppStorage(settings, providerKeys, sessions, customProviders
 setAppStorage(storage);
 const modelController = new ModelController(storage, configuredStorage);
 
+const getProviderApiKey = async (provider: string): Promise<string | undefined> => {
+	return (await storage.providerKeys.get(provider)) ?? undefined;
+};
+
+const getProxyUrl = async (): Promise<string | undefined> => {
+	const enabled = await storage.settings.get<boolean>("proxy.enabled");
+	return enabled ? (await storage.settings.get<string>("proxy.url")) || undefined : undefined;
+};
+
 const loadPiRuntimeConfig = async () => {
-	const status = await configuredStorage.getStatus();
+	const [status, skillList] = await Promise.all([configuredStorage.getStatus(), loadServerSkillList()]);
 	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
 	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
+	piRuntimeConfig.globalSkills = skillList.promptSkills;
+	piRuntimeConfig.skillSlashSuggestions = [skillSlashCommand, ...skillList.skills.map(skillToSlashSuggestion)];
 };
 
 const syncRuntimeConfigAfterRender = async () => {
 	await loadPiRuntimeConfig();
+	if (agent) {
+		agent.state.systemPrompt = buildCurrentSystemPrompt();
+	}
+	applySkillSlashSuggestions();
 	if (isServerSessionSyncEnabled() && currentSessionId) {
 		await configuredStorage.writeSettings({ currentSessionId });
 	}
@@ -159,8 +198,36 @@ const ensureSessionIdentity = async () => {
 	await setCurrentSessionId(crypto.randomUUID());
 };
 
+const buildCurrentSystemPrompt = () => buildCodingSystemPrompt(piRuntimeConfig.globalSkills);
+
+const skillSlashCommand: SkillSlashSuggestion = {
+	id: "command:skill",
+	label: "skill",
+	detail: "选择服务端全局 skill",
+	trigger: "/",
+	insertText: "/skill",
+	keepOpen: true,
+	emptyLabel: "没有可用 skill",
+	emptyDetail: "请在服务端 skillsDir 下添加 data/skills/<skill-name>/SKILL.md。",
+};
+
+const skillToSlashSuggestion = (skill: SkillSummary): SkillSlashSuggestion => ({
+	id: `skill:${skill.name}`,
+	label: skill.name,
+	detail: skill.description,
+	trigger: "/skill",
+	insertText: `/skill:${skill.name} `,
+});
+
+const applySkillSlashSuggestions = () => {
+	const agentInterface = chatPanel?.agentInterface as unknown as SlashSuggestionHost | undefined;
+	if (!agentInterface) return;
+	agentInterface.slashSuggestions = piRuntimeConfig.skillSlashSuggestions;
+	agentInterface.requestUpdate?.();
+};
+
 const createInitialAgentState = (model?: Model<any>): Partial<AgentState> => ({
-	systemPrompt: DEFAULT_SYSTEM_PROMPT,
+	systemPrompt: buildCurrentSystemPrompt(),
 	...(model ? { model } : {}),
 	thinkingLevel: "off",
 	messages: [],
@@ -295,10 +362,15 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	}
 
 	const defaultModel = await modelController.getDefaultModel();
+	const resolvedInitialState = initialState || createInitialAgentState(defaultModel);
 	agent = new Agent({
-		initialState: initialState || createInitialAgentState(defaultModel),
+		initialState: { ...resolvedInitialState, systemPrompt: buildCurrentSystemPrompt() },
 		convertToLlm: defaultConvertToLlm,
+		transformContext: async (messages) => compactProjectToolHistory(await expandSkillCommandsInMessages(messages)),
+		streamFn: createStreamFn(getProxyUrl),
+		getApiKey: getProviderApiKey,
 	});
+	(agent as Agent & { repairToolCalls: boolean }).repairToolCalls = true;
 
 	agentUnsubscribe = agent.subscribe((event: AgentEvent) => {
 		void handleAgentEvent(event);
@@ -321,12 +393,15 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			await saveSession();
 		},
 		enableArtifacts: false,
-		toolsFactory: (toolAgent) =>
-			createServerProjectTools(() => ({
+		toolsFactory: (toolAgent) => [
+			...createServerSkillTools(),
+			...createServerProjectTools(() => ({
 				sessionId: currentSessionId,
 				title: sessionTitle(currentTitle, toolAgent.state.messages),
 			})),
+		],
 	});
+	applySkillSlashSuggestions();
 };
 
 const loadSession = async (sessionId: string): Promise<boolean> => {
@@ -625,6 +700,7 @@ export async function initApp() {
 	);
 
 	chatPanel = new ChatPanel();
+	await loadPiRuntimeConfig();
 	await restoreInitialSession();
 	renderApp();
 	void syncRuntimeConfigAfterRender();

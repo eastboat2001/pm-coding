@@ -1,15 +1,17 @@
-import { mkdirSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
-import { createServer } from "node:http";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import {
+	configuredStoragePlugin,
 	isUnsafeProjectCommand,
 	loadStorageConfig,
 	WorkspaceCommandService,
 	WorkspaceFileService,
 	WorkspacePreviewService,
 	WorkspaceSessionService,
+	WorkspaceSkillService,
+	WorkspaceTaskService,
 } from "../dist/index.js";
 
 function tempRoot() {
@@ -21,6 +23,7 @@ function testConfig(root, overrides = {}) {
 		sessionsDir: join(root, "data", "sessions"),
 		settingsFile: join(root, "data", "settings.json"),
 		projectsRootDir: join(root, "data", "projects"),
+		skillsDir: join(root, "data", "skills"),
 		previewBaseUrl: "http://localhost:5173",
 		projectInstallCommand: "npm install",
 		projectBuildCommand: "npm run build",
@@ -39,25 +42,6 @@ async function test(name, fn) {
 	console.log(`ok - ${name}`);
 }
 
-function listen(server) {
-	return new Promise((resolveListen) => {
-		server.listen(0, "127.0.0.1", () => {
-			const address = server.address();
-			assert(address && typeof address === "object");
-			resolveListen(address.port);
-		});
-	});
-}
-
-function closeServer(server) {
-	return new Promise((resolveClose, rejectClose) => {
-		server.close((error) => {
-			if (error) rejectClose(error);
-			else resolveClose();
-		});
-	});
-}
-
 await test("loadStorageConfig resolves relative paths from the app root and strips preview trailing slash", () => {
 	const root = tempRoot();
 	writeFileSync(
@@ -66,6 +50,7 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 			sessionsDir: "runtime/sessions",
 			settingsFile: "runtime/settings.json",
 			projectsRootDir: "runtime/projects",
+			skillsDir: "runtime/skills",
 			previewBaseUrl: "http://localhost:5173/",
 			serverSessionSyncEnabled: true,
 			defaultModelProvider: "openai",
@@ -80,6 +65,7 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "runtime/projects"));
+	assert.equal(config.skillsDir, resolve(root, "runtime/skills"));
 	assert.equal(config.previewBaseUrl, "http://localhost:5173");
 	assert.equal(config.serverSessionSyncEnabled, true);
 	assert.equal(config.defaultModelProvider, "openai");
@@ -96,10 +82,91 @@ await test("loadStorageConfig supports legacy storageDir defaults", () => {
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "data/projects"));
+	assert.equal(config.skillsDir, resolve(root, "data/skills"));
 	assert.equal(config.serverSessionSyncEnabled, false);
 	assert.equal(config.defaultModelProvider, "");
 	assert.equal(config.defaultModelId, "");
 	assert.equal(config.handoffDefaultThinkingLevel, "high");
+});
+
+await test("WorkspaceSkillService loads global skills and hides disabled skills from prompt metadata", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const skillDir = join(config.skillsDir, "ui-polish");
+	mkdirSync(skillDir, { recursive: true });
+	writeFileSync(
+		join(skillDir, "SKILL.md"),
+		`---
+name: ui-polish
+description: Improve generated UI spacing, visual hierarchy, and responsive polish.
+---
+
+# UI Polish
+
+Use stronger layout hierarchy.
+`,
+		"utf8",
+	);
+	mkdirSync(join(config.skillsDir, "private-skill"), { recursive: true });
+	writeFileSync(
+		join(config.skillsDir, "private-skill", "SKILL.md"),
+		`---
+name: private-skill
+description: Hidden skill.
+disable-model-invocation: true
+---
+
+# Private
+`,
+		"utf8",
+	);
+
+	const service = new WorkspaceSkillService(config);
+	const list = service.list();
+
+	assert.deepEqual(
+		list.skills.map((skill) => skill.name),
+		["private-skill", "ui-polish"],
+	);
+	assert.deepEqual(
+		list.promptSkills.map((skill) => skill.name),
+		["ui-polish"],
+	);
+	assert.equal(list.diagnostics.length, 0);
+
+	const loaded = service.load({ name: "ui-polish" });
+	assert.equal(loaded.name, "ui-polish");
+	assert.match(loaded.content, /Use stronger layout hierarchy/);
+	assert.equal(loaded.location, "skill://ui-polish/SKILL.md");
+});
+
+await test("WorkspaceSkillService reads only text resources inside a skill directory", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const skillDir = join(config.skillsDir, "ui-polish");
+	mkdirSync(join(skillDir, "references"), { recursive: true });
+	writeFileSync(
+		join(skillDir, "SKILL.md"),
+		`---
+name: ui-polish
+description: Improve generated UI spacing.
+---
+
+# UI Polish
+`,
+		"utf8",
+	);
+	writeFileSync(join(skillDir, "references", "rules.md"), "# Rules\n\nUse clear spacing.", "utf8");
+	writeFileSync(join(skillDir, "image.png"), "not really an image", "utf8");
+
+	const service = new WorkspaceSkillService(config);
+	const resource = service.readResource({ name: "ui-polish", path: "references/rules.md" });
+
+	assert.equal(resource.name, "ui-polish");
+	assert.equal(resource.path, "references/rules.md");
+	assert.match(resource.content, /Use clear spacing/);
+	assert.throws(() => service.readResource({ name: "ui-polish", path: "../outside.md" }), /escapes skill root/);
+	assert.throws(() => service.readResource({ name: "ui-polish", path: "image.png" }), /not an allowed text resource/);
 });
 
 await test("WorkspaceSessionService merges and deletes server-backed provider keys in settings", () => {
@@ -186,6 +253,31 @@ await test("WorkspaceCommandService rejects commands that can stop the PI server
 	);
 });
 
+await test("configuredStoragePlugin ignores generated storage directories in the Vite watcher", async () => {
+	const root = tempRoot();
+	const configFile = join(root, "pi-storage.config.json");
+	writeFileSync(
+		configFile,
+		JSON.stringify({
+			sessionsDir: join(root, "runtime", "sessions"),
+			settingsFile: join(root, "runtime", "settings.json"),
+			projectsRootDir: join(root, "runtime", "projects"),
+			skillsDir: join(root, "runtime", "skills"),
+		}),
+		"utf8",
+	);
+
+	const plugin = configuredStoragePlugin(configFile);
+	const viteConfig = plugin.config?.();
+	const ignored = viteConfig?.server?.watch?.ignored;
+
+	assert.ok(Array.isArray(ignored));
+	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "sessions")) + "/**"));
+	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "projects")) + "/**"));
+	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "skills")) + "/**"));
+	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "settings.json"))));
+});
+
 await test("WorkspacePreviewService serves dist when a project was built", async () => {
 	const root = tempRoot();
 	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
@@ -211,21 +303,82 @@ await test("WorkspacePreviewService serves dist when a project was built", async
 	assert.match(readFileSync(join(String(created.projectRoot), ".pi-project.json"), "utf8"), /"status": "running"/);
 });
 
-await test("WorkspacePreviewService starts a single Node HTTP service when no static build output exists", async () => {
+await test("WorkspaceTaskService previews static root without running package scripts", async () => {
 	const root = tempRoot();
-	const config = testConfig(root, { previewBaseUrl: "", projectInstallCommand: "", projectBuildCommand: "" });
+	const config = testConfig(root);
 	const fileService = new WorkspaceFileService(config);
-	const previewService = new WorkspacePreviewService(config);
-	const context = { sessionId: "session-node-service", title: "Node Service" };
-	const previewServer = createServer((req, res) => {
-		if (!previewService.servePreviewRequest(req, res)) {
-			res.statusCode = 404;
-			res.end("not found");
-		}
-	});
-	const previewPort = await listen(previewServer);
+	const taskService = new WorkspaceTaskService(config);
+	const context = { sessionId: "session-static-script", title: "Static Script" };
 
 	const created = fileService.handle({
+		...context,
+		command: "create",
+		filename: "index.html",
+		content: "<h1>Static root</h1>",
+	});
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "package.json",
+		content: JSON.stringify({
+			scripts: {
+				build:
+					"node -e \"require('node:fs').mkdirSync('dist',{recursive:true});require('node:fs').writeFileSync('dist/index.html','<h1>Build script ran</h1>')\"",
+			},
+		}),
+	});
+
+	const result = await taskService.run({ ...context, task: "preview" }, { headers: { host: "localhost:5173" } });
+
+	assert.equal(result.status, "running");
+	assert.equal(result.mode, "static");
+	assert.equal(result.previewUrl, "http://localhost:5173/preview/static-script-session-/");
+	assert.equal(result.serveRoot, String(created.projectRoot));
+	assert.equal(existsSync(join(String(created.projectRoot), "dist", "index.html")), false);
+	assert.match(result.logs.join(""), /does not run package scripts/);
+});
+
+await test("WorkspacePreviewService rejects build source entries before build_static", async () => {
+	const root = tempRoot();
+	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
+	const fileService = new WorkspaceFileService(config);
+	const previewService = new WorkspacePreviewService(config);
+	const context = { sessionId: "session-vite-source", title: "Vite Source" };
+
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "package.json",
+		content: JSON.stringify({ scripts: { build: "vite build" }, dependencies: { "@vitejs/plugin-react": "latest" } }),
+	});
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "index.html",
+		content: '<div id="root"></div><script type="module" src="/src/main.tsx"></script>',
+	});
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "src/main.tsx",
+		content: "console.log('tsx source');",
+	});
+
+	const result = await previewService.preview(context, { headers: { host: "localhost:5173" } });
+
+	assert.equal(result.status, "failed");
+	assert.equal(result.previewUrl, "");
+	assert.match(result.logs.join(""), /project_task build_static/);
+});
+
+await test("WorkspaceTaskService rejects Node services without a static entry", async () => {
+	const root = tempRoot();
+	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
+	const fileService = new WorkspaceFileService(config);
+	const taskService = new WorkspaceTaskService(config);
+	const context = { sessionId: "session-node-service", title: "Node Service" };
+
+	fileService.handle({
 		...context,
 		command: "create",
 		filename: "package.json",
@@ -235,35 +388,59 @@ await test("WorkspacePreviewService starts a single Node HTTP service when no st
 		...context,
 		command: "create",
 		filename: "server.js",
-		content: [
-			"const http = require('node:http');",
-			"const port = Number(process.env.PORT);",
-			"if (!port) throw new Error('PORT is required');",
-			"const server = http.createServer((req, res) => {",
-			"  res.setHeader('content-type', 'text/html; charset=utf-8');",
-			"  res.end('<h1>Node service preview</h1>');",
-			"});",
-			"server.listen(port, '127.0.0.1');",
-		].join("\n"),
+		content: "require('node:http').createServer((_req, res) => res.end('no')).listen(process.env.PORT)",
 	});
 
-	try {
-		const result = await previewService.preview(context, { headers: { host: `127.0.0.1:${previewPort}` } });
+	const result = await taskService.run({ ...context, task: "preview" }, { headers: { host: "localhost:5173" } });
 
-		assert.equal(result.status, "running");
-		assert.equal(result.mode, "node-service");
-		assert.equal(result.previewUrl, `http://127.0.0.1:${previewPort}/preview/node-service-session-/`);
-		assert.equal(result.serveRoot, String(created.projectRoot));
-		assert.match(readFileSync(join(String(created.projectRoot), ".pi-project.json"), "utf8"), /"mode": "node-service"/);
+	assert.equal(result.status, "failed");
+	assert.equal(result.previewUrl, "");
+	assert.match(result.logs.join(""), /Static preview requires an index\.html/);
+	assert.match(result.logs.join(""), /Node services are not started/);
+});
 
-		const response = await fetch(result.previewUrl);
-		const body = await response.text();
-		assert.equal(response.status, 200, body);
-		assert.match(body, /Node service preview/);
-	} finally {
-		previewService.dispose?.();
-		await closeServer(previewServer);
-	}
+await test("WorkspaceTaskService build_static runs the configured build and exposes static output", async () => {
+	const root = tempRoot();
+	const config = testConfig(root, {
+		projectInstallCommand: "npm install",
+		projectBuildCommand: "npm run build",
+	});
+	const fileService = new WorkspaceFileService(config);
+	const commands = [];
+	const taskService = new WorkspaceTaskService(config, undefined, async (command, cwd, _timeoutMs, logs) => {
+		commands.push(command);
+		logs.push(`ran: ${command}\n`);
+		if (command === "npm run build") {
+			mkdirSync(join(cwd, "dist"), { recursive: true });
+			writeFileSync(join(cwd, "dist", "index.html"), "<h1>Built static</h1>", "utf8");
+		}
+	});
+	const context = { sessionId: "session-build-static", title: "Build Static" };
+
+	const created = fileService.handle({
+		...context,
+		command: "create",
+		filename: "package.json",
+		content: JSON.stringify({ scripts: { build: "vite build" } }),
+	});
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "src/main.js",
+		content: "console.log('source');",
+	});
+
+	const build = await taskService.run({ ...context, task: "build_static" });
+	const preview = await taskService.run({ ...context, task: "preview" }, { headers: { host: "localhost:5173" } });
+
+	assert.equal(build.status, "passed");
+	assert.equal(build.valid, true);
+	assert.deepEqual(commands, ["npm install", "npm run build"]);
+	assert.equal(build.serveRoot, join(String(created.projectRoot), "dist"));
+	assert.equal(existsSync(join(String(created.projectRoot), "dist", "index.html")), true);
+	assert.match(build.logs.join(""), /Static build completed/);
+	assert.equal(preview.status, "running");
+	assert.equal(preview.serveRoot, join(String(created.projectRoot), "dist"));
 });
 
 await test("WorkspacePreviewService does not return a clickable URL for an unpreviewable project", async () => {
@@ -284,5 +461,9 @@ await test("WorkspacePreviewService does not return a clickable URL for an unpre
 
 	assert.equal(result.status, "failed");
 	assert.equal(result.previewUrl, "");
-	assert.match(result.logs.join(""), /Project is not previewable/);
+	assert.match(result.logs.join(""), /Static preview requires an index\.html/);
 });
+
+function normalizeWatchPath(path) {
+	return resolve(path).replace(/\\/g, "/");
+}

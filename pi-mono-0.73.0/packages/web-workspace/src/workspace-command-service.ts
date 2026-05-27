@@ -32,7 +32,7 @@ export function runCommand(command: string, cwd: string, timeoutMs: number, logs
 	if (!trimmedCommand) return Promise.resolve();
 	if (isUnsafeProjectCommand(trimmedCommand)) {
 		throw new Error(
-			"Refusing to run a command that can stop the PI server. Use project_preview to manage preview services instead.",
+			"Refusing to run a command that can stop the PI server. Use project_task preview to manage static previews instead.",
 		);
 	}
 	logs.push(`$ ${trimmedCommand}`);

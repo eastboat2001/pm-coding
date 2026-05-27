@@ -6,6 +6,7 @@ export interface StorageConfig {
 	sessionsDir: string;
 	settingsFile: string;
 	projectsRootDir: string;
+	skillsDir: string;
 	previewBaseUrl: string;
 	projectInstallCommand: string;
 	projectBuildCommand: string;
@@ -68,15 +69,89 @@ export interface ProjectPreviewResult extends JsonObject {
 	sessionId: string;
 	title: string;
 	status: string;
-	mode: "static" | "node-service";
+	mode: "static";
 	previewUrl: string;
 	projectRoot: string;
 	serveRoot: string;
-	startCommand?: string;
-	servicePort?: number;
 	fileCount: number;
 	updatedAt: string;
 	logs: string[];
 }
 
+export type ProjectTaskName = "inspect" | "validate" | "build_static" | "preview" | "logs";
+
+export interface ProjectTaskRequest extends ProjectRequestContext {
+	task: ProjectTaskName;
+}
+
+export interface ProjectTaskResult extends JsonObject {
+	task: ProjectTaskName;
+	status: string;
+	projectId?: string;
+	sessionId?: string;
+	title?: string;
+	projectRoot?: string;
+	fileCount?: number;
+	files?: string[];
+	hasPackageJson?: boolean;
+	valid?: boolean;
+	errors?: string[];
+	mode?: "static";
+	previewUrl?: string;
+	serveRoot?: string;
+	logs?: string[];
+	updatedAt?: string;
+}
+
 export type PreviewRequestLike = Pick<IncomingMessage, "headers">;
+
+export interface ResourceDiagnostic {
+	type: "warning" | "collision";
+	message: string;
+	path?: string;
+	collision?: {
+		resourceType: "skill";
+		name: string;
+		winnerPath: string;
+		loserPath: string;
+	};
+}
+
+export interface SkillSummary extends JsonObject {
+	name: string;
+	description: string;
+	location: string;
+	disableModelInvocation: boolean;
+}
+
+export interface SkillListResult extends JsonObject {
+	skills: SkillSummary[];
+	promptSkills: SkillSummary[];
+	diagnostics: ResourceDiagnostic[];
+}
+
+export interface SkillLoadRequest extends JsonObject {
+	name?: string;
+}
+
+export interface SkillLoadResult extends SkillSummary {
+	content: string;
+	resources: SkillResourceSummary[];
+}
+
+export interface SkillResourceRequest extends JsonObject {
+	name?: string;
+	path?: string;
+}
+
+export interface SkillResourceSummary extends JsonObject {
+	path: string;
+	size: number;
+}
+
+export interface SkillResourceResult extends JsonObject {
+	name: string;
+	path: string;
+	content: string;
+	size: number;
+}

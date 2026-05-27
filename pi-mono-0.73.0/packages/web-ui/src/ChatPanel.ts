@@ -7,6 +7,7 @@ import type { AgentInterface } from "./components/AgentInterface.js";
 import { ArtifactsRuntimeProvider } from "./components/sandbox/ArtifactsRuntimeProvider.js";
 import { AttachmentsRuntimeProvider } from "./components/sandbox/AttachmentsRuntimeProvider.js";
 import type { SandboxRuntimeProvider } from "./components/sandbox/SandboxRuntimeProvider.js";
+import type { SlashSuggestionItem } from "./components/slash-suggestions.js";
 import { ArtifactsPanel, ArtifactsToolRenderer } from "./tools/artifacts/index.js";
 import { registerToolRenderer } from "./tools/renderer-registry.js";
 import type { Attachment } from "./utils/attachment-utils.js";
@@ -63,6 +64,7 @@ export class ChatPanel extends LitElement {
 			onCostClick?: () => void;
 			onModelSelect?: () => void;
 			onThinkingChange?: (level: ThinkingLevel) => void | Promise<void>;
+			slashSuggestions?: SlashSuggestionItem[];
 			enableArtifacts?: boolean;
 			sandboxUrlProvider?: () => string;
 			toolsFactory?: (
@@ -87,6 +89,7 @@ export class ChatPanel extends LitElement {
 		this.agentInterface.onThinkingChange = config?.onThinkingChange;
 		this.agentInterface.onBeforeSend = config?.onBeforeSend;
 		this.agentInterface.onCostClick = config?.onCostClick;
+		this.agentInterface.slashSuggestions = config?.slashSuggestions ?? [];
 
 		if (config?.enableArtifacts === false) {
 			this.artifactsPanel = undefined;

@@ -2,18 +2,17 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { requestProjectApi } from "./client.js";
 import { registerProjectToolRenderers } from "./renderers.js";
 import {
-	type ProjectBashDetails,
 	type ProjectFileDetails,
-	type ProjectPreviewDetails,
+	type ProjectTaskDetails,
 	type ProjectToolContext,
-	projectBashSchema,
+	prepareProjectFileArguments,
 	projectFileSchema,
-	projectPreviewSchema,
+	projectTaskSchema,
 } from "./schemas.js";
 
 export function createServerProjectTools(getContext: () => ProjectToolContext): AgentTool<any>[] {
 	registerProjectToolRenderers();
-	return [createProjectFileTool(getContext), createProjectBashTool(getContext), createProjectPreviewTool(getContext)];
+	return [createProjectFileTool(getContext), createProjectTaskTool(getContext)];
 }
 
 function createProjectFileTool(
@@ -23,8 +22,9 @@ function createProjectFileTool(
 		label: "Project File",
 		name: "project_file",
 		description:
-			"Create, rewrite, update, read, delete, or list files in the configured server project root. Use this instead of browser artifacts when generating runnable apps.",
+			"Create, rewrite, update, get, delete, or list files in the configured server project root. create/rewrite require filename and content in the same call. Use this instead of browser artifacts when generating runnable apps.",
 		parameters: projectFileSchema,
+		prepareArguments: prepareProjectFileArguments,
 		execute: async (_toolCallId, args, signal) => {
 			const result = await requestProjectApi<ProjectFileDetails>(
 				"/api/pi-projects/workspace/file",
@@ -42,19 +42,19 @@ function createProjectFileTool(
 	};
 }
 
-function createProjectBashTool(
+function createProjectTaskTool(
 	getContext: () => ProjectToolContext,
-): AgentTool<typeof projectBashSchema, ProjectBashDetails> {
+): AgentTool<typeof projectTaskSchema, ProjectTaskDetails> {
 	return {
-		label: "Project Bash",
-		name: "project_bash",
+		label: "Project Task",
+		name: "project_task",
 		description:
-			"Run a short non-interactive shell command in the configured server project root. Use it to inspect, test, install, or build. Never start a long-running dev server or kill global Node processes. Failed commands return their output and server environment so the next command can be adjusted.",
-		parameters: projectBashSchema,
+			"Run a controlled static project task in the configured server project root. Available tasks are inspect, validate, build_static, preview, and logs. This tool never accepts raw shell commands; build_static runs only the server-configured install/build commands and preview serves only static output.",
+		parameters: projectTaskSchema,
 		executionMode: "sequential",
 		execute: async (_toolCallId, args, signal) => {
-			const result = await requestProjectApi<ProjectBashDetails>(
-				"/api/pi-projects/workspace/bash",
+			const result = await requestProjectApi<ProjectTaskDetails>(
+				"/api/pi-projects/workspace/task",
 				{
 					...getRequiredContext(getContext),
 					...args,
@@ -62,34 +62,7 @@ function createProjectBashTool(
 				signal,
 			);
 			return {
-				content: [{ type: "text", text: result.output }],
-				details: result,
-			};
-		},
-	};
-}
-
-function createProjectPreviewTool(
-	getContext: () => ProjectToolContext,
-): AgentTool<typeof projectPreviewSchema, ProjectPreviewDetails> {
-	return {
-		label: "Project Preview",
-		name: "project_preview",
-		description:
-			"Install/build the current server project workspace if needed, serve static output or start one Node HTTP service behind the PI preview proxy, and return the final Preview URL. Call this after project files are ready.",
-		parameters: projectPreviewSchema,
-		executionMode: "sequential",
-		execute: async (_toolCallId, args, signal) => {
-			const result = await requestProjectApi<ProjectPreviewDetails>(
-				"/api/pi-projects/workspace/preview",
-				{
-					...getRequiredContext(getContext),
-					...args,
-				},
-				signal,
-			);
-			return {
-				content: [{ type: "text", text: formatPreviewResult(result) }],
+				content: [{ type: "text", text: formatProjectTaskResult(result) }],
 				details: result,
 			};
 		},
@@ -109,16 +82,18 @@ function formatProjectFileResult(result: ProjectFileDetails): string {
 	return `${result.action || result.command}: ${result.filename}`;
 }
 
-export function formatPreviewResult(result: ProjectPreviewDetails): string {
+export function formatProjectTaskResult(result: ProjectTaskDetails): string {
 	return [
+		`Task: ${result.task}`,
 		`Status: ${result.status}`,
 		result.mode ? `Mode: ${result.mode}` : "",
 		result.previewUrl ? `Preview URL: ${result.previewUrl}` : "",
-		`Project root: ${result.projectRoot}`,
-		`Serve root: ${result.serveRoot}`,
-		result.startCommand ? `Start command: ${result.startCommand}` : "",
-		result.servicePort ? `Internal service port: ${result.servicePort} (proxied by Preview URL)` : "",
-		`Files: ${result.fileCount}`,
+		result.projectRoot ? `Project root: ${result.projectRoot}` : "",
+		result.serveRoot ? `Serve root: ${result.serveRoot}` : "",
+		typeof result.fileCount === "number" ? `Files: ${result.fileCount}` : "",
+		typeof result.valid === "boolean" ? `Valid: ${result.valid ? "yes" : "no"}` : "",
+		result.errors?.length ? `Errors:\n${result.errors.join("\n")}` : "",
+		result.files?.length ? `Project files:\n${result.files.join("\n")}` : "",
 		result.logs?.length ? `\nLogs:\n${result.logs.join("").trim()}` : "",
 	]
 		.filter(Boolean)

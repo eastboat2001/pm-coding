@@ -1,9 +1,9 @@
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, join, resolve } from "node:path";
 import { PREVIEW_PREFIX, PROJECT_METADATA_FILE } from "./constants.js";
-import { isObject, readJsonFile, sendJson, writeJsonFile } from "./json.js";
-import { NodeServiceRuntime } from "./node-service-runtime.js";
+import { readJsonFile, sendJson, writeJsonFile } from "./json.js";
+import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import type {
 	JsonObject,
 	PreviewRequestLike,
@@ -11,7 +11,6 @@ import type {
 	ProjectPreviewResult,
 	StorageConfig,
 } from "./types.js";
-import { runCommand } from "./workspace-command-service.js";
 import {
 	assertInside,
 	listProjectSourceFiles,
@@ -21,10 +20,7 @@ import {
 } from "./workspace-paths.js";
 
 export class WorkspacePreviewService {
-	constructor(
-		private readonly config: StorageConfig,
-		private readonly nodeServices = new NodeServiceRuntime(),
-	) {}
+	constructor(private readonly config: StorageConfig) {}
 
 	async preview(body: ProjectPreviewRequest, req: PreviewRequestLike): Promise<ProjectPreviewResult> {
 		const { sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
@@ -36,7 +32,7 @@ export class WorkspacePreviewService {
 	}
 
 	dispose(): void {
-		this.nodeServices.dispose();
+		// Kept as a no-op for callers that previously disposed preview runtimes.
 	}
 
 	readProjectLogs(projectId: string): JsonObject {
@@ -58,9 +54,8 @@ export class WorkspacePreviewService {
 			return true;
 		}
 
-		if (metadata.mode === "node-service") {
-			const previewBasePath = `${PREVIEW_PREFIX}/${encodeURIComponent(decodeURIComponent(projectId))}/`;
-			proxyNodeServicePreview(req, res, metadata, parts, url.search, previewBasePath);
+		if (metadata.mode && metadata.mode !== "static") {
+			sendJson(res, { error: "Preview mode is no longer supported." }, 404);
 			return true;
 		}
 
@@ -98,55 +93,37 @@ export class WorkspacePreviewService {
 		const logs: string[] = [];
 		logs.push(`Project root: ${projectDir}\n`);
 		const packageJsonPath = join(projectDir, "package.json");
-		let serveRoot = projectDir;
+		let serveRoot = "";
 		let status = "running";
-		let mode: ProjectPreviewResult["mode"] = "static";
 		let previewUrl = buildPreviewUrl(this.config, options.req, options.projectId);
-		let startCommand: string | undefined;
-		let servicePort: number | undefined;
 
 		try {
-			if (existsSync(packageJsonPath)) {
-				await runCommand(this.config.projectInstallCommand, projectDir, this.config.projectInstallTimeoutMs, logs);
-				const packageJson = readJsonFile(packageJsonPath);
-				if (isObject(packageJson.scripts) && typeof packageJson.scripts.build === "string") {
-					await runCommand(this.config.projectBuildCommand, projectDir, this.config.projectBuildTimeoutMs, logs);
-				}
-
-				const builtStaticRoot = findStaticServeRoot(projectDir, ["dist", "build"]);
-				if (builtStaticRoot) {
-					serveRoot = builtStaticRoot;
-					logs.push(`Serving static output: ${serveRoot}\n`);
-				} else {
-					const command = nodeServiceStartCommand(projectDir, packageJson);
-					if (command) {
-						const runtime = await this.nodeServices.start(options.projectId, projectDir, command);
-						mode = "node-service";
-						previewUrl = buildPreviewUrl(this.config, options.req, options.projectId);
-						startCommand = runtime.command;
-						servicePort = runtime.port;
-						logs.push(...runtime.logs);
-						logs.push(`Node service proxied at: ${previewUrl}\n`);
-					} else {
-						const fallbackStaticRoot = findStaticServeRoot(projectDir, ["", "public"]);
-						if (!fallbackStaticRoot) {
-							throw new Error(
-								"Project is not previewable: no static index.html, build output, or package.json start script was found.",
-							);
-						}
-						serveRoot = fallbackStaticRoot;
-						logs.push(`Serving static output: ${serveRoot}\n`);
-					}
-				}
+			const hasPackageJson = existsSync(packageJsonPath);
+			if (hasPackageJson) {
+				logs.push(
+					"Static preview mode does not run package scripts, npm install, npm run build, or Node services.\n",
+				);
 			} else {
-				const staticRoot = findStaticServeRoot(projectDir, [""]);
-				if (!staticRoot) throw new Error("Project is not previewable: index.html is missing.");
-				serveRoot = staticRoot;
-				logs.push("No package.json found; serving project root without install/build.\n");
+				logs.push("No package.json found; serving static files directly.\n");
 			}
+			const staticRoot = findStaticServeRoot(projectDir, staticServeRootCandidates(hasPackageJson));
+			if (!staticRoot) {
+				const buildSourceEntry = findBuildSourceEntry(projectDir, ["", "public"]);
+				if (buildSourceEntry) {
+					throw new Error(
+						`Static preview found a build source entry at ${buildSourceEntry}. Run project_task build_static before project_task preview so PI can serve browser-ready dist/build output.`,
+					);
+				}
+				throw new Error(
+					"Static preview requires an index.html in the project root, dist, build, or public. Package scripts, npm install, npm run build, and Node services are not started.",
+				);
+			}
+			serveRoot = staticRoot;
+			logs.push(`Serving static output: ${serveRoot}\n`);
 		} catch (error) {
 			status = "failed";
 			previewUrl = "";
+			serveRoot = "";
 			logs.push(error instanceof Error ? error.message : String(error));
 		}
 
@@ -156,12 +133,10 @@ export class WorkspacePreviewService {
 			sessionId: options.sessionId,
 			title: options.title,
 			status,
-			mode,
+			mode: "static",
 			previewUrl,
 			projectRoot: projectDir,
 			serveRoot,
-			startCommand,
-			servicePort,
 			fileCount: options.fileCount,
 			updatedAt: new Date().toISOString(),
 			logs,
@@ -177,31 +152,6 @@ export class WorkspacePreviewService {
 		if (!existsSync(metadataPath)) return undefined;
 		return readJsonFile(metadataPath);
 	}
-}
-
-function findStaticServeRoot(projectDir: string, candidates: string[]): string | undefined {
-	for (const candidate of candidates) {
-		const serveRoot = candidate ? join(projectDir, candidate) : projectDir;
-		const entryPath = join(serveRoot, "index.html");
-		if (existsSync(entryPath) && statSync(entryPath).isFile()) return serveRoot;
-	}
-	return undefined;
-}
-
-function nodeServiceStartCommand(projectDir: string, packageJson: JsonObject): string | undefined {
-	if (isObject(packageJson.scripts) && typeof packageJson.scripts.start === "string") return "npm start";
-	const main = typeof packageJson.main === "string" ? safeNodeEntrypoint(packageJson.main) : "";
-	if (main && existsSync(join(projectDir, main))) return `node ${main}`;
-	for (const filename of ["server.js", "app.js", "index.js"]) {
-		if (existsSync(join(projectDir, filename))) return `node ${filename}`;
-	}
-	return undefined;
-}
-
-function safeNodeEntrypoint(value: string): string {
-	const normalized = value.replaceAll("\\", "/").replace(/^\/+/, "");
-	if (!normalized || normalized.includes("..")) return "";
-	return normalized;
 }
 
 function safePreviewProjectId(value: string): string {
@@ -230,91 +180,6 @@ function rewritePreviewHtml(html: string, previewBasePath: string): string {
 			/\b(srcset)=("|')\/(?!\/|preview\/)/g,
 			(_match, attribute: string, quote: string) => `${attribute}=${quote}${previewBasePath}`,
 		);
-}
-
-function proxyNodeServicePreview(
-	req: IncomingMessage,
-	res: ServerResponse,
-	metadata: JsonObject,
-	parts: string[],
-	search: string,
-	previewBasePath: string,
-): void {
-	const servicePort = Number(metadata.servicePort);
-	if (!Number.isInteger(servicePort) || servicePort <= 0) {
-		sendJson(res, { error: "Node service preview is unavailable." }, 502);
-		return;
-	}
-
-	const headers: Record<string, string | string[] | undefined> = { ...req.headers, host: `127.0.0.1:${servicePort}` };
-	for (const header of HOP_BY_HOP_HEADERS) delete headers[header];
-	delete headers["accept-encoding"];
-	const upstreamPath = nodeServiceUpstreamPath(parts, search);
-	const upstream = httpRequest(
-		{
-			host: "127.0.0.1",
-			port: servicePort,
-			method: req.method,
-			path: upstreamPath,
-			headers,
-		},
-		(upstreamRes) => {
-			const contentType = String(upstreamRes.headers["content-type"] || "");
-			const contentEncoding = String(upstreamRes.headers["content-encoding"] || "");
-			if (!contentEncoding && contentType.toLowerCase().includes("text/html")) {
-				const chunks: Buffer[] = [];
-				upstreamRes.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-				upstreamRes.on("end", () => {
-					writeProxyHeaders(res, upstreamRes.statusCode || 200, upstreamRes.headers, true);
-					res.end(rewritePreviewHtml(Buffer.concat(chunks).toString("utf8"), previewBasePath));
-				});
-				return;
-			}
-
-			writeProxyHeaders(res, upstreamRes.statusCode || 200, upstreamRes.headers, false);
-			upstreamRes.pipe(res);
-		},
-	);
-	upstream.on("error", (error) => {
-		if (res.headersSent) {
-			res.destroy(error);
-			return;
-		}
-		sendJson(res, { error: "Node service preview is unavailable." }, 502);
-	});
-	req.pipe(upstream);
-}
-
-const HOP_BY_HOP_HEADERS = [
-	"connection",
-	"keep-alive",
-	"proxy-authenticate",
-	"proxy-authorization",
-	"te",
-	"trailer",
-	"transfer-encoding",
-	"upgrade",
-];
-
-function nodeServiceUpstreamPath(parts: string[], search: string): string {
-	const pathname =
-		parts.length > 0 ? `/${parts.map((part) => encodeURIComponent(decodeURIComponent(part))).join("/")}` : "/";
-	return `${pathname}${search}`;
-}
-
-function writeProxyHeaders(
-	res: ServerResponse,
-	statusCode: number,
-	headers: IncomingMessage["headers"],
-	dropContentLength: boolean,
-): void {
-	res.statusCode = statusCode;
-	for (const [name, value] of Object.entries(headers)) {
-		if (value === undefined) continue;
-		if (HOP_BY_HOP_HEADERS.includes(name.toLowerCase())) continue;
-		if (dropContentLength && name.toLowerCase() === "content-length") continue;
-		res.setHeader(name, value);
-	}
 }
 
 function mimeType(path: string): string {

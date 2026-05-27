@@ -18,7 +18,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ## Docker
 
-Build the PI Web UI example from the repository root:
+Build the PI Coding Web application from the repository root:
 
 ```bash
 docker build -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
@@ -27,19 +27,19 @@ docker build -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
 Run it with a persistent data volume:
 
 ```bash
-docker run -d --name pi-web-ui -p 5173:5173 -v pi-web-ui-data:/app/apps/pi-coding-web/data pi-coding-web:0.73.0
+docker run -d --name pi-coding-web -p 5173:5173 -v pi-coding-web-data:/app/apps/pi-coding-web/data pi-coding-web:0.73.0
 ```
 
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
-This image runs Vite preview instead of a static nginx server because the example depends on Vite server middleware for session storage, server-side project files, project commands, and `/preview/<project-id>/` URLs.
+This image runs Vite preview instead of a static nginx server because the application depends on Vite server middleware for session storage, server-side project files, controlled project tasks, and `/preview/<project-id>/` URLs.
 
 When deploying behind a domain or reverse proxy, set `previewBaseUrl` in `pi-storage.config.json` to the public PI origin, for example `https://pi.example.com`. Generated projects and optional server-synced sessions should stay in the mounted `data` volume, not inside the image.
 
-For server deployment with an offline image, use the deployment package under `docker/pi-web-ui`. Copy `docker-compose.yaml` and `pi-storage.config.json` from that directory to the same server directory, load the image, then start the service:
+For server deployment with an offline image, use the deployment package under `docker/pi-coding-web`. Copy `docker-compose.yaml` and `pi-storage.config.json` from that directory to the same server directory, load the image, then start the service:
 
 ```bash
-docker load -i pi-web-ui-0.73.0.tar
+docker load -i pi-coding-web-0.73.0.tar
 docker compose up -d
 ```
 
@@ -113,11 +113,11 @@ When using a domain, replace both values with the domain, for example `https://p
 
 ## What's Included
 
-This example demonstrates:
+This application includes:
 
 - **ChatPanel** - The main chat interface component
 - **System Prompt** - Custom configuration for the AI assistant
-- **Server workspace tools** - The normal Web UI agent flow creates files, runs commands, and publishes previews in a fixed server project root
+- **Server workspace tools** - The normal Web UI agent flow creates files and runs controlled static project tasks in a fixed server project root
 - **Browser-private session persistence** - Active and recent sessions are restored from browser IndexedDB only
 - **Model persistence** - The selected model is remembered across refreshes and new sessions
 - **Configured server storage** - Model configuration and generated project files use fixed paths from `pi-storage.config.json`
@@ -140,7 +140,7 @@ Custom provider definitions, API keys, and the selected model are stored in the 
 
 ## Session Storage Behavior
 
-The example uses **browser IndexedDB as its primary runtime store**.
+The application uses **browser IndexedDB as its primary runtime store**.
 
 By default, it persists:
 
@@ -178,16 +178,19 @@ Behavioral details:
 
 ## Configured Server Storage
 
-The example uses the Vite dev/preview server for generated project files, preview hosting, and selected shared configuration. The browser no longer asks the user to choose a local directory.
+The application uses the Vite dev/preview server for generated project files, preview hosting, and selected shared configuration. The browser no longer asks the user to choose a local directory.
 
 ### How it works
 
 - Browser IndexedDB is the only active session store in the current temporary multi-user mode.
 - Saved chat sessions are not mirrored to disk while `serverSessionSyncEnabled` is `false`.
 - The session list only reads browser-backed records.
-- The Web UI agent can call server workspace tools: `project_file`, `project_bash`, and `project_preview`.
+- The Web UI agent can call read-only global skill tools: `skill_load` and `skill_resource`.
+- The Web UI agent can call server workspace tools: `project_file` and `project_task`.
+- Global skills are loaded from the configured `skillsDir`; they provide instructions and reference text only, not script execution or arbitrary filesystem access.
 - Project files are written directly under the configured project root on the server.
-- Built-in browser artifacts are disabled for project generation in this example.
+- `project_task` supports only controlled static tasks: `inspect`, `validate`, `build_static`, `preview`, and `logs`.
+- Built-in browser artifacts are disabled for project generation in this application.
 
 ### Configuration
 
@@ -198,6 +201,7 @@ Edit `pi-storage.config.json`:
   "sessionsDir": "./data/sessions",
   "settingsFile": "./data/settings.json",
   "projectsRootDir": "./data/projects",
+  "skillsDir": "./data/skills",
   "previewBaseUrl": "",
   "serverSessionSyncEnabled": false,
   "defaultModelProvider": "",
@@ -212,12 +216,20 @@ Edit `pi-storage.config.json`:
 
 Relative paths are resolved from `apps/pi-coding-web/`. Absolute paths are also supported.
 
-The example writes:
+The application writes:
 
 - `<settingsFile>`
 - one project root directory per generated project under `projectsRootDir`
 
 `sessionsDir` is reserved for the future authenticated server-session mode. It is not used while browser-private sessions are enabled.
+
+`skillsDir` stores server-configured global skills. The first version supports directory-style skills only:
+
+```text
+data/skills/<skill-name>/SKILL.md
+```
+
+Each `SKILL.md` should include `name` and `description` frontmatter. The agent sees skill names and descriptions in the system prompt, loads full instructions with `skill_load`, and reads referenced text files under the same skill directory with `skill_resource`. Users can type `/skill` in the chat input to open the global skill picker; selecting an item inserts `/skill:<name>`, which is expanded to that skill's `SKILL.md` before the message is sent. Skills do not grant shell access and PI does not execute skill scripts.
 
 With the default configuration, runtime data stays inside `apps/pi-coding-web/data/` and remains decoupled from any PM application directory.
 
@@ -231,24 +243,25 @@ The PM app can open this PI Web UI with a short-lived handoff token:
 /?handoff_token=<token>&pm_api_base_url=<pm-backend-base-url>
 ```
 
-PI resolves the token through PM, downloads the PRD/design documents as attachments, and places the PM implementation prompt into the chat input. The PM prompt and documents are treated as the primary requirement source. PI's own handoff instructions only describe platform execution: write files into the configured project root, run short validation/build commands when useful, publish with `project_preview`, and return the Preview URL.
+PI resolves the token through PM, downloads the PRD/design documents as attachments, and places the PM implementation prompt into the chat input. The PM prompt and documents are treated as the primary requirement source. PI's own handoff instructions only describe platform execution: write files into the configured project root, run controlled static project tasks when useful, publish with `project_task preview`, and return the Preview URL.
 
-For the current stage, PM demos should target static HTML/CSS/JS projects, Node frontend projects that can be built to static output such as Vite React/Vue, or a single Node HTTP service with a `package.json` `start` script that respects the `PORT` environment variable. Node service projects are exposed through the PI `/preview/<project-id>/` URL and proxied internally, so generated apps should use relative asset, navigation, form, and API URLs instead of `http://localhost` or root-absolute paths like `/api/items`. Multi-service stacks, Docker, external databases, and custom reverse-proxy routing are outside the current preview scope.
+For the current stage, PM demos should target static HTML/CSS/JS projects or build-based static frontend projects such as Vite React/Vue. Backend services, databases, auth providers, queues, external APIs, and deployment topology from PM documents are treated as target-system context and should be simulated in the static frontend with sample data, local state, mock responses, and clear loading/empty/error/success states. Node services, multi-service stacks, Docker, external databases, and custom reverse-proxy routing are outside the current preview scope.
 
 ## Server Workspace Flow
 
-The example keeps the regular Web UI agent conversation, model selector, API key flow, and tool-card rendering. No extra project panel, log panel, or preview button is added to the UI.
+The application keeps the regular Web UI agent conversation, model selector, API key flow, and tool-card rendering. No extra project panel, log panel, or preview button is added to the UI.
 
 Expected conversation flow:
 
 1. The user sends a request in the chat input.
 2. The Web UI agent decides whether project execution is needed.
-3. For app/site/project work, it calls `project_file` repeatedly to create or update server-side files.
-4. When useful, it calls `project_bash` to run short checks or build commands in the server project root.
-5. After files are ready, it calls `project_preview`.
-6. If `package.json` exists, the server runs `projectInstallCommand` and then `projectBuildCommand` when a build script exists.
-7. The server serves `dist/` or `build/` when present, serves static roots directly, or starts one internal Node HTTP service and proxies it through `/preview/<project-id>/`.
-8. The browser displays file, command, and preview tool cards plus the final assistant message with the preview URL.
+3. If a configured global skill matches the task, it calls `skill_load`, then optionally `skill_resource` for referenced text resources.
+4. For app/site/project work, it calls `project_file` repeatedly to create or update server-side files.
+5. For dependency-free static projects, it calls `project_task validate` and then `project_task preview`.
+6. For build-based static frontend projects, it calls `project_task build_static`, then `project_task validate`, and finally `project_task preview`.
+7. `build_static` runs only the server-configured `projectInstallCommand` and `projectBuildCommand`; `preview` never runs package scripts.
+8. The server serves `dist/`, `build/`, `public/`, or a root static `index.html` when present.
+9. The browser displays skill, file, and task tool cards plus the final assistant message with the preview URL.
 
 Preview URLs are served from this PI server at:
 
@@ -264,38 +277,40 @@ Set `previewBaseUrl` in `pi-storage.config.json` when the server is behind a dom
 }
 ```
 
-This is optimized for generated static projects, built frontend projects, and one self-contained Node HTTP service. Projects with a static build output in `dist/` or `build/` are served from that directory. Static projects without `package.json` are served from the project root. Node service projects without static build output are started through `npm start` or a detected Node entry file, with `PORT` assigned by PI. The Node service listens only as an internal process; the returned Preview URL remains the PI `/preview/<project-id>/` URL and PI proxies browser traffic to the service.
+This is optimized for generated static projects and build-based static frontend projects. Projects with static build output in `dist/` or `build/` are served from that directory. Static projects without `package.json` are served from the project root. `project_task preview` does not start Node services, run `npm start`, run `npm run dev`, or run arbitrary package scripts.
 
-Because preview URLs may live under `/preview/<project-id>/`, generated Node service apps should use relative URLs such as `./style.css`, `./page.html`, and `./api/items`. Avoid `http://localhost:<port>` and root-absolute browser paths such as `/api/items`; those bypass the preview proxy when PI is deployed on a server.
+Because preview URLs may live under `/preview/<project-id>/`, generated apps should use relative URLs such as `./style.css`, `./page.html`, and `./api/items`. Avoid `http://localhost:<port>` and root-absolute browser paths such as `/api/items`; those bypass the preview route when PI is deployed on a server.
 
-`project_bash` runs on the same operating system as the PI server process. Failed commands return the command output plus the server platform and shell, so the agent can adjust and retry with an environment-compatible command.
+If a project root `index.html` still references build-source files such as `src/main.tsx` or `src/main.jsx`, static preview rejects the project and returns logs that tell the agent to run `project_task build_static` before previewing.
 
-`project_bash` refuses global Node process-kill commands such as `taskkill /IM node.exe`, `pkill node`, `killall node`, and `Stop-Process -Name node`. Generated projects should not start or stop long-running preview servers through `project_bash`; `project_preview` owns preview service lifecycle so the PI server process is not accidentally stopped.
+`project_task` never accepts raw shell commands. The only task that runs configured commands is `build_static`, and those commands come from `pi-storage.config.json`.
 
 ### Limitations
 
-- The configured storage API is provided by this example's Vite dev/preview server.
+- The configured storage API is provided by this application's Vite dev/preview server.
 - If the app is served as static files without that server, the browser can still use IndexedDB, but disk mirroring and generated project file output are unavailable.
-- Generated code and model-requested commands may execute on the server. For production multi-user deployment, run the PI server inside an isolated environment and restrict filesystem, network, CPU, memory, and command timeout limits.
+- Generated code dependencies and build scripts may execute on the server during `project_task build_static`. For production multi-user deployment, run the PI server inside an isolated environment and restrict filesystem, network, CPU, memory, dependency installation, and command timeout limits.
 
 ## Project Structure
 
 ```
-example/
+apps/pi-coding-web/
 ├── src/
 │   ├── main.ts                     # Main application entry point
-│   ├── app.css                     # Tailwind CSS configuration
+│   ├── app.css                     # Application styles
+│   ├── app/                        # Bootstrap, session, and model controllers
 │   ├── dialogs/
 │   │   ├── LocalSessionListDialog.ts
+│   ├── integrations/               # PM handoff integration
 │   ├── storage/
 │   │   ├── configured-server-storage.ts
 │   │   └── merged-session-index.ts
-│   └── tools/
-│       └── server-project.ts # Web UI agent tools for server files, commands, and preview
+│   ├── project-tools/              # Browser-side tool schemas, API client, and renderers
+│   ├── skill-tools/                # Browser-side global skill tools, picker, and slash expansion
+│   └── prompts/                    # PI coding system prompt and PM handoff instructions
 ├── index.html        # HTML entry point
 ├── package.json      # Dependencies
 ├── pi-storage.config.json
-├── src/project-tools/ # Browser-side tool schemas, API client, and renderers
 ├── vite.config.ts    # Vite configuration
 └── tsconfig.json     # TypeScript configuration
 ```

@@ -15,7 +15,7 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 
 	override async get(id: string): Promise<CustomProvider | null> {
 		const serverState = await this.readServerCustomProviders();
-		if (serverState.hasCustomProviders) {
+		if (serverState.hasCustomProviders && serverState.providers.length > 0) {
 			const provider = serverState.providers.find((item) => item.id === id) ?? null;
 			if (provider) {
 				void this.writeLocalProvider(provider);
@@ -34,7 +34,7 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 
 	override async set(provider: CustomProvider): Promise<void> {
 		const serverState = await this.readServerCustomProviders();
-		const providers = serverState.hasCustomProviders ? serverState.providers : await this.readLocalProviders();
+		const providers = await this.readProvidersForWrite(serverState);
 		const wroteServer = await this.writeServerProviders(upsertProvider(providers, provider));
 		if (wroteServer) {
 			void this.writeLocalProvider(provider);
@@ -46,7 +46,7 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 
 	override async delete(id: string): Promise<void> {
 		const serverState = await this.readServerCustomProviders();
-		const providers = serverState.hasCustomProviders ? serverState.providers : await this.readLocalProviders();
+		const providers = await this.readProvidersForWrite(serverState);
 		const wroteServer = await this.writeServerProviders(providers.filter((provider) => provider.id !== id));
 		if (wroteServer) {
 			void this.deleteLocalProvider(id);
@@ -59,6 +59,13 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 	override async getAll(): Promise<CustomProvider[]> {
 		const serverState = await this.readServerCustomProviders();
 		if (serverState.hasCustomProviders) {
+			if (serverState.providers.length === 0) {
+				const localProviders = await this.readLocalProviders();
+				if (localProviders.length > 0) {
+					await this.writeServerProviders(localProviders);
+					return localProviders;
+				}
+			}
 			void this.replaceLocalProviders(serverState.providers);
 			return serverState.providers;
 		}
@@ -87,8 +94,26 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 		return await this.configuredStorage.writeSettings({ customProviders: providers });
 	}
 
+	private async readProvidersForWrite(serverState: ServerCustomProvidersState): Promise<CustomProvider[]> {
+		if (!serverState.hasCustomProviders || serverState.providers.length === 0) {
+			return await this.readLocalProviders();
+		}
+		return serverState.providers;
+	}
+
 	private async readLocalProviders(): Promise<CustomProvider[]> {
-		return await withTimeout(super.getAll(), LOCAL_CACHE_TIMEOUT_MS, []);
+		return await withTimeout(this.readLocalProvidersFromBackend(), LOCAL_CACHE_TIMEOUT_MS, []);
+	}
+
+	private async readLocalProvidersFromBackend(): Promise<CustomProvider[]> {
+		const backend = this.getBackend();
+		const storeName = this.getConfig().name;
+		const providers: CustomProvider[] = [];
+		for (const key of await backend.keys(storeName)) {
+			const provider = await backend.get<CustomProvider>(storeName, key);
+			if (provider) providers.push(provider);
+		}
+		return providers;
 	}
 
 	private async replaceLocalProviders(providers: CustomProvider[]): Promise<void> {

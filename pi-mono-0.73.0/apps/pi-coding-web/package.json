@@ -17,8 +17,15 @@
     "@mariozechner/pi-web-ui": "file:../../packages/web-ui",
     "@mariozechner/pi-web-workspace": "file:../../packages/web-workspace",
     "@tailwindcss/vite": "^4.1.17",
+    "cookie-parser": "^1.4.7",
+    "ejs": "^5.0.2",
+    "express": "^5.2.1",
     "lit": "^3.3.1",
-    "lucide": "^0.544.0"
+    "lucide": "^0.544.0",
+    "mammoth": "^1.12.0",
+    "marked": "^15.0.12",
+    "multer": "^2.1.1",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

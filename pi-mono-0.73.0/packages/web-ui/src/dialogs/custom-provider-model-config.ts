@@ -10,6 +10,9 @@ import type { CustomProvider } from "../storage/stores/custom-providers-store.js
 export type CompatibleThinkingFormat = NonNullable<OpenAICompletionsCompat["thinkingFormat"]>;
 export type CompatibleMaxTokensField = NonNullable<OpenAICompletionsCompat["maxTokensField"]>;
 export type AnthropicReasoningReplayFormat = NonNullable<AnthropicMessagesCompat["reasoningReplayFormat"]>;
+type OpenAICompletionsCompatWithToolMode = OpenAICompletionsCompat & {
+	useNonStreamingToolCalls?: boolean;
+};
 
 export type OpenAICompletionsProfile =
 	| "standard"
@@ -39,6 +42,7 @@ export interface ManualModelConfig {
 	anthropicReasoningReplayFormat: AnthropicReasoningReplayFormat;
 	supportsEagerToolInputStreaming: boolean;
 	anthropicSupportsLongCacheRetention: boolean;
+	useNonStreamingToolCalls: boolean;
 	contextWindow: string;
 	maxTokens: string;
 }
@@ -67,6 +71,7 @@ export function defaultManualModelConfig(id = ""): ManualModelConfig {
 		anthropicReasoningReplayFormat: "anthropic-signature",
 		supportsEagerToolInputStreaming: true,
 		anthropicSupportsLongCacheRetention: true,
+		useNonStreamingToolCalls: false,
 		contextWindow: "128000",
 		maxTokens: "8192",
 	};
@@ -99,6 +104,9 @@ export function manualModelConfigFromModel(model: Model<Api>): ManualModelConfig
 		anthropicReasoningReplayFormat: anthropicCompat?.reasoningReplayFormat ?? "anthropic-signature",
 		supportsEagerToolInputStreaming: anthropicCompat?.supportsEagerToolInputStreaming ?? true,
 		anthropicSupportsLongCacheRetention: anthropicCompat?.supportsLongCacheRetention ?? true,
+		useNonStreamingToolCalls:
+			(openAICompletionsCompat as OpenAICompletionsCompatWithToolMode | undefined)?.useNonStreamingToolCalls ??
+			false,
 		contextWindow: String(model.contextWindow || 128000),
 		maxTokens: String(model.maxTokens || 8192),
 	};
@@ -147,7 +155,7 @@ function createCompat(
 }
 
 function createOpenAICompletionsCompat(config: ManualModelConfig): OpenAICompletionsCompat {
-	const compat: OpenAICompletionsCompat = standardOpenAICompletionsCompat();
+	const compat: OpenAICompletionsCompatWithToolMode = standardOpenAICompletionsCompat();
 
 	switch (config.openAICompletionsProfile) {
 		case "local-basic":
@@ -198,10 +206,11 @@ function createOpenAICompletionsCompat(config: ManualModelConfig): OpenAIComplet
 			break;
 	}
 
+	compat.useNonStreamingToolCalls = config.useNonStreamingToolCalls;
 	return compat;
 }
 
-function standardOpenAICompletionsCompat(): OpenAICompletionsCompat {
+function standardOpenAICompletionsCompat(): OpenAICompletionsCompatWithToolMode {
 	return {
 		supportsStore: true,
 		supportsDeveloperRole: true,
@@ -217,6 +226,7 @@ function standardOpenAICompletionsCompat(): OpenAICompletionsCompat {
 		supportsStrictMode: true,
 		sendSessionAffinityHeaders: false,
 		supportsLongCacheRetention: true,
+		useNonStreamingToolCalls: false,
 	};
 }
 

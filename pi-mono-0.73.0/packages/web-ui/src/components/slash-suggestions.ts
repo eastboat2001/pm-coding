@@ -189,8 +189,8 @@ export function resolveTextareaCursorPosition(
 	return clampCursor(fullCursorPosition, value);
 }
 
-export function shouldStackSlashSelections(text: string): boolean {
-	return text.includes("\n");
+export function shouldStackSlashSelections(text: string, itemCount = 1): boolean {
+	return text.includes("\n") || itemCount >= 2;
 }
 
 export function getSlashSuggestionSkills(suggestions: SlashSuggestionItem[]): SlashSuggestionItem[] {

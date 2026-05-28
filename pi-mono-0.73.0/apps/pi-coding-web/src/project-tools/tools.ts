@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { requestProjectApi } from "./client.js";
 import { registerProjectToolRenderers } from "./renderers.js";
+import { formatProjectFileResult, formatProjectTaskResult } from "./result-format.js";
 import {
 	type ProjectFileDetails,
 	type ProjectTaskDetails,
@@ -42,6 +43,8 @@ function createProjectFileTool(
 	};
 }
 
+export { formatProjectTaskResult } from "./result-format.js";
+
 function createProjectTaskTool(
 	getContext: () => ProjectToolContext,
 ): AgentTool<typeof projectTaskSchema, ProjectTaskDetails> {
@@ -53,16 +56,22 @@ function createProjectTaskTool(
 		parameters: projectTaskSchema,
 		executionMode: "sequential",
 		execute: async (_toolCallId, args, signal) => {
+			const context = getRequiredContext(getContext);
 			const result = await requestProjectApi<ProjectTaskDetails>(
 				"/api/pi-projects/workspace/task",
 				{
-					...getRequiredContext(getContext),
+					...context,
 					...args,
 				},
 				signal,
 			);
 			return {
-				content: [{ type: "text", text: formatProjectTaskResult(result) }],
+				content: [
+					{
+						type: "text",
+						text: formatProjectTaskResult(result, { activeSkillNames: context.activeSkillNames }),
+					},
+				],
 				details: result,
 			};
 		},
@@ -74,28 +83,4 @@ function getRequiredContext(getContext: () => ProjectToolContext): ProjectToolCo
 	if (!context.sessionId)
 		throw new Error("Cannot use project workspace tools before the current session has been created.");
 	return context;
-}
-
-function formatProjectFileResult(result: ProjectFileDetails): string {
-	if (result.command === "list") return (result.files || []).join("\n") || "(no files)";
-	if (result.command === "get") return result.content || "";
-	return `${result.action || result.command}: ${result.filename}`;
-}
-
-export function formatProjectTaskResult(result: ProjectTaskDetails): string {
-	return [
-		`Task: ${result.task}`,
-		`Status: ${result.status}`,
-		result.mode ? `Mode: ${result.mode}` : "",
-		result.previewUrl ? `Preview URL: ${result.previewUrl}` : "",
-		result.projectRoot ? `Project root: ${result.projectRoot}` : "",
-		result.serveRoot ? `Serve root: ${result.serveRoot}` : "",
-		typeof result.fileCount === "number" ? `Files: ${result.fileCount}` : "",
-		typeof result.valid === "boolean" ? `Valid: ${result.valid ? "yes" : "no"}` : "",
-		result.errors?.length ? `Errors:\n${result.errors.join("\n")}` : "",
-		result.files?.length ? `Project files:\n${result.files.join("\n")}` : "",
-		result.logs?.length ? `\nLogs:\n${result.logs.join("").trim()}` : "",
-	]
-		.filter(Boolean)
-		.join("\n");
 }

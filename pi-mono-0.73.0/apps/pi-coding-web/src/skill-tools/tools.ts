@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { requestSkillApi } from "./client.js";
+import { registerDefaultSkillLoadMessageRenderer } from "./default-skill-message.js";
 import { registerSkillToolRenderers } from "./renderers.js";
 import {
 	prepareSkillLoadArguments,
@@ -12,6 +13,7 @@ import {
 
 export function createServerSkillTools(): AgentTool[] {
 	registerSkillToolRenderers();
+	registerDefaultSkillLoadMessageRenderer();
 	return [createSkillLoadTool(), createSkillResourceTool()];
 }
 

@@ -31,6 +31,7 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 		sessions.ensureDirs();
 		mkdirSync(dirname(config.settingsFile), { recursive: true });
 		mkdirSync(config.skillsDir, { recursive: true });
+		mkdirSync(config.defaultSkillsDir, { recursive: true });
 	};
 
 	const handler: Connect.NextHandleFunction = async (req, res, next) => {
@@ -102,6 +103,7 @@ function storageWatchIgnoredPaths(config: StorageConfig): string[] {
 		`${normalizeWatchPath(config.sessionsDir)}/**`,
 		`${normalizeWatchPath(config.projectsRootDir)}/**`,
 		`${normalizeWatchPath(config.skillsDir)}/**`,
+		`${normalizeWatchPath(config.defaultSkillsDir)}/**`,
 		normalizeWatchPath(config.settingsFile),
 	];
 }
@@ -187,6 +189,7 @@ async function handleStorageApi(
 			settingsFile: config.settingsFile,
 			projectsRootDir: config.projectsRootDir,
 			skillsDir: config.skillsDir,
+			defaultSkillsDir: config.defaultSkillsDir,
 			previewBaseUrl: config.previewBaseUrl,
 			serverSessionSyncEnabled: config.serverSessionSyncEnabled,
 			defaultModelProvider: config.defaultModelProvider,

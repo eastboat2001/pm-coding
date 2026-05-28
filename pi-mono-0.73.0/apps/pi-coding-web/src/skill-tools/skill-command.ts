@@ -7,42 +7,80 @@ type ParsedSkillCommandPrefix = {
 	args: string;
 };
 
-export async function expandSkillCommandsInMessages(messages: AgentMessage[]): Promise<AgentMessage[]> {
+type ExpandSkillCommandOptions = {
+	defaultSkillNames?: string[];
+};
+
+export async function expandSkillCommandsInMessages(
+	messages: AgentMessage[],
+	options: ExpandSkillCommandOptions = {},
+): Promise<AgentMessage[]> {
 	let changed = false;
 	const expandedMessages: AgentMessage[] = [];
-	for (const message of messages) {
-		const content = getExpandableTextContent(message);
+	const latestExpandableMessageIndex = findLatestExpandableMessageIndex(messages);
+	const defaultSkillNames = uniqueNames(options.defaultSkillNames ?? []);
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		const content = readExpandableTextContent(message);
 		if (content === undefined) {
 			expandedMessages.push(message);
 			continue;
 		}
-		const expanded = await expandSkillCommandText(content);
+		const expanded = await expandSkillCommandText(
+			content,
+			index === latestExpandableMessageIndex ? defaultSkillNames : [],
+		);
 		if (expanded === content) {
 			expandedMessages.push(message);
 		} else {
 			changed = true;
-			expandedMessages.push({ ...message, content: expanded } as AgentMessage);
+			expandedMessages.push(writeExpandableTextContent(message, expanded));
 		}
 	}
 	return changed ? expandedMessages : messages;
 }
 
-async function expandSkillCommandText(text: string): Promise<string> {
-	const parsed = parseSkillCommandPrefix(text);
-	if (!parsed) return text;
+export function getLatestRequiredSkillNames(messages: AgentMessage[], defaultSkillNames: string[] = []): string[] {
+	return uniqueNames([...defaultSkillNames, ...getLatestExplicitSkillNames(messages)]);
+}
 
-	const blocks: string[] = [];
-	for (const skillName of parsed.skillNames) {
+export function getLatestExplicitSkillNames(messages: AgentMessage[]): string[] {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const content = readExpandableTextContent(messages[index]);
+		if (content === undefined) continue;
+		return parseSkillCommandPrefix(content)?.skillNames ?? [];
+	}
+	return [];
+}
+
+async function expandSkillCommandText(text: string, defaultSkillNames: string[] = []): Promise<string> {
+	const parsed = parseSkillCommandPrefix(text);
+	if (!parsed && defaultSkillNames.length === 0) return text;
+
+	const defaultSkills = await loadSkills(defaultSkillNames);
+	if (!defaultSkills) return text;
+	const explicitSkills = await loadSkills(parsed?.skillNames ?? [], new Set(defaultSkills.map((skill) => skill.name)));
+	if (!explicitSkills) return text;
+
+	if (defaultSkills.length > 0) {
+		return formatRequiredSkillSelection(defaultSkills, explicitSkills, parsed?.args ?? text);
+	}
+	return formatExplicitSkillSelection(explicitSkills, parsed?.args ?? text);
+}
+
+async function loadSkills(skillNames: string[], seen = new Set<string>()): Promise<SkillLoadDetails[] | undefined> {
+	const skills: SkillLoadDetails[] = [];
+	for (const skillName of skillNames) {
+		if (seen.has(skillName)) continue;
 		const skill = await requestSkillApi<SkillLoadDetails>("/load", {
 			body: { name: skillName },
 			allowMissing: true,
 		});
-		if (!skill) return text;
-		blocks.push(formatSkillBlock(skill));
+		if (!skill) return undefined;
+		skills.push(skill);
+		seen.add(skill.name);
 	}
-
-	const expandedSkills = blocks.join("\n\n");
-	return parsed.args ? `${expandedSkills}\n\n${parsed.args}` : expandedSkills;
+	return skills;
 }
 
 export function parseSkillCommandPrefix(text: string): ParsedSkillCommandPrefix | undefined {
@@ -64,6 +102,78 @@ export function parseSkillCommandPrefix(text: string): ParsedSkillCommandPrefix 
 
 	if (skillNames.length === 0) return undefined;
 	return { skillNames, args: remaining.trimStart() };
+}
+
+function formatExplicitSkillSelection(skills: SkillLoadDetails[], userRequest: string): string {
+	const skillNames = skills.map((skill) => skill.name);
+	const lines = [
+		"<explicitly_selected_skills>",
+		"The user explicitly selected these PI global skills. They are mandatory implementation instructions, not optional suggestions.",
+		"You must apply every selected skill before creating, editing, validating, or previewing project files.",
+		"When multiple skills are selected, merge their non-conflicting requirements into one implementation plan. Do not ignore one selected skill because another selected skill seems more relevant.",
+		"If selected skill instructions conflict, preserve the user or PM product requirements first, then follow the more specific selected skill instruction.",
+		"",
+		"Selected skills:",
+		...skillNames.map((name) => `- ${name}`),
+		"",
+		...skills.map(formatSkillBlock),
+		"</explicitly_selected_skills>",
+		"",
+		"<active_skill_checklist>",
+		"Before acting, ensure:",
+		...skillNames.map((name) => `- ${name}: identify and apply the relevant instructions from this skill.`),
+		"</active_skill_checklist>",
+	];
+	if (!userRequest) return lines.join("\n");
+	return `${lines.join("\n")}\n\nUser request:\n${userRequest}`;
+}
+
+function formatRequiredSkillSelection(
+	defaultSkills: SkillLoadDetails[],
+	explicitSkills: SkillLoadDetails[],
+	userRequest: string,
+): string {
+	const defaultSkillNames = defaultSkills.map((skill) => skill.name);
+	const explicitSkillNames = explicitSkills.map((skill) => skill.name);
+	const skillNames = uniqueNames([...defaultSkillNames, ...explicitSkillNames]);
+	const defaultSkillLines =
+		defaultSkillNames.length > 0
+			? [
+					"Server default skills:",
+					...defaultSkillNames.map((name) => `- ${name}`),
+					"These default skills are configured by the PI server and are not user-selectable.",
+					"",
+				]
+			: [];
+	const explicitSkillLines =
+		explicitSkillNames.length > 0
+			? [
+					"User-selected skills:",
+					...explicitSkillNames.map((name) => `- ${name}`),
+					"The user explicitly selected these PI global skills.",
+					"",
+				]
+			: [];
+	const lines = [
+		"<required_skills>",
+		"These PI skills are mandatory implementation instructions, not optional suggestions.",
+		"You must apply every required skill before creating, editing, validating, or previewing project files.",
+		"When multiple skills are required, merge their non-conflicting requirements into one implementation plan. Do not ignore one required skill because another required skill seems more relevant.",
+		"If required skill instructions conflict, preserve the user or PM product requirements first, then follow the more specific skill instruction.",
+		"",
+		...defaultSkillLines,
+		...explicitSkillLines,
+		...defaultSkills.map(formatSkillBlock),
+		...explicitSkills.map(formatSkillBlock),
+		"</required_skills>",
+		"",
+		"<active_skill_checklist>",
+		"Before acting, ensure:",
+		...skillNames.map((name) => `- ${name}: identify and apply the relevant instructions from this skill.`),
+		"</active_skill_checklist>",
+	];
+	if (!userRequest) return lines.join("\n");
+	return `${lines.join("\n")}\n\nUser request:\n${userRequest}`;
 }
 
 function formatSkillBlock(skill: SkillLoadDetails): string {
@@ -90,11 +200,57 @@ function formatSkillBlock(skill: SkillLoadDetails): string {
 		.join("\n");
 }
 
-function getExpandableTextContent(message: AgentMessage): string | undefined {
+function readExpandableTextContent(message: AgentMessage): string | undefined {
 	const role = (message as { role?: unknown }).role;
 	if (role !== "user" && role !== "user-with-attachments") return undefined;
 	const content = (message as { content?: unknown }).content;
-	return typeof content === "string" ? content : undefined;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return undefined;
+	const textBlock = content.find(isTextContentBlock);
+	return textBlock?.text;
+}
+
+function writeExpandableTextContent(message: AgentMessage, text: string): AgentMessage {
+	const content = (message as { content?: unknown }).content;
+	if (typeof content === "string") return { ...message, content: text } as AgentMessage;
+	if (!Array.isArray(content)) return message;
+	let replaced = false;
+	const nextContent = content.map((block) => {
+		if (!replaced && isTextContentBlock(block)) {
+			replaced = true;
+			return { ...block, text };
+		}
+		return block;
+	});
+	return replaced ? ({ ...message, content: nextContent } as AgentMessage) : message;
+}
+
+function isTextContentBlock(value: unknown): value is { type: "text"; text: string } {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		(value as { type?: unknown }).type === "text" &&
+		typeof (value as { text?: unknown }).text === "string"
+	);
+}
+
+function findLatestExpandableMessageIndex(messages: AgentMessage[]): number {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		if (readExpandableTextContent(messages[index]) !== undefined) return index;
+	}
+	return -1;
+}
+
+function uniqueNames(names: string[]): string[] {
+	const unique: string[] = [];
+	const seen = new Set<string>();
+	for (const rawName of names) {
+		const name = rawName.trim();
+		if (!name || seen.has(name)) continue;
+		unique.push(name);
+		seen.add(name);
+	}
+	return unique;
 }
 
 function escapeXml(value: string): string {

@@ -7,6 +7,7 @@ export interface StorageConfig {
 	settingsFile: string;
 	projectsRootDir: string;
 	skillsDir: string;
+	defaultSkillsDir: string;
 	previewBaseUrl: string;
 	projectInstallCommand: string;
 	projectBuildCommand: string;
@@ -136,6 +137,7 @@ export interface SkillInterfaceMetadata extends JsonObject {
 
 export interface SkillListResult extends JsonObject {
 	skills: SkillSummary[];
+	defaultSkills: SkillSummary[];
 	promptSkills: SkillSummary[];
 	diagnostics: ResourceDiagnostic[];
 }

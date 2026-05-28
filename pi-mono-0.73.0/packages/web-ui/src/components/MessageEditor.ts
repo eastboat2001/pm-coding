@@ -694,7 +694,7 @@ export class MessageEditor extends LitElement {
 			`;
 		}
 
-		const stackSelections = shouldStackSlashSelections(selections.text);
+		const stackSelections = shouldStackSlashSelections(selections.text, selections.items.length);
 		const containerClass = stackSelections
 			? "px-4 pt-4 pb-2 flex flex-col items-stretch gap-2"
 			: "px-4 pt-4 pb-2 flex items-start gap-2";

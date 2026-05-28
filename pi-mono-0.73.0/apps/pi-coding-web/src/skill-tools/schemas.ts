@@ -24,6 +24,7 @@ export type SkillResourceSummary = {
 
 export type SkillListDetails = {
 	skills: SkillSummary[];
+	defaultSkills: SkillSummary[];
 	promptSkills: SkillSummary[];
 	diagnostics: Array<{
 		type: "warning" | "collision";

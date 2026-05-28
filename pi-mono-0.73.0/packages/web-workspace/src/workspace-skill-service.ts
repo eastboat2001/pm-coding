@@ -15,12 +15,17 @@ import type {
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
+const MIN_RECOMMENDED_DESCRIPTION_LENGTH = 80;
 const MAX_INTERFACE_FIELD_LENGTH = 512;
 const MAX_SKILL_BYTES = 256 * 1024;
 const MAX_RESOURCE_BYTES = 256 * 1024;
 const MAX_LISTED_RESOURCES = 200;
 const SKILL_FILE = "SKILL.md";
 const OPENAI_AGENT_METADATA_PATH = ["agents", "openai.yaml"];
+const DESCRIPTION_TRIGGER_PATTERN =
+	/\b(use this skill when|use when|trigger(?:s|ed)? when|invoke when|apply when|适用|用于|使用.*时)\b/i;
+const DESCRIPTION_BOUNDARY_PATTERN =
+	/\b(do not use|don't use|not for|avoid using|unless|except when|不适用|不要用于|不要使用|除非)\b/i;
 
 const ALLOWED_TEXT_EXTENSIONS = new Set([
 	".css",
@@ -55,6 +60,7 @@ type LoadedSkill = SkillSummary & {
 
 type DiscoverResult = {
 	skills: LoadedSkill[];
+	defaultSkills: LoadedSkill[];
 	diagnostics: ResourceDiagnostic[];
 };
 
@@ -64,8 +70,10 @@ export class WorkspaceSkillService {
 	list(): SkillListResult {
 		const result = this.discover();
 		const skills = result.skills.map(toSummary);
+		const defaultSkills = result.defaultSkills.map(toSummary);
 		return {
 			skills,
+			defaultSkills,
 			promptSkills: skills.filter((skill) => !skill.disableModelInvocation),
 			diagnostics: result.diagnostics,
 		};
@@ -106,42 +114,67 @@ export class WorkspaceSkillService {
 		const normalizedName = String(name || "").trim();
 		if (!normalizedName) throw new Error("Field `name` is required.");
 		const result = this.discover();
-		const skill = result.skills.find((candidate) => candidate.name === normalizedName);
+		const skill = [...result.defaultSkills, ...result.skills].find((candidate) => candidate.name === normalizedName);
 		if (!skill) throw new Error(`Skill not found: ${normalizedName}`);
 		return skill;
 	}
 
 	private discover(): DiscoverResult {
-		if (!existsSync(this.config.skillsDir)) return { skills: [], diagnostics: [] };
-		const skills = new Map<string, LoadedSkill>();
 		const diagnostics: ResourceDiagnostic[] = [];
-		const rootDir = resolve(this.config.skillsDir);
-		const realRootDir = realpathSync(rootDir);
-
-		for (const skill of scanSkills(rootDir, realRootDir, diagnostics)) {
-			const existing = skills.get(skill.name);
-			if (existing) {
-				diagnostics.push({
-					type: "collision",
-					message: `name "${skill.name}" collision`,
-					path: relativeToRoot(rootDir, skill.filePath),
-					collision: {
-						resourceType: "skill",
-						name: skill.name,
-						winnerPath: existing.location,
-						loserPath: skill.location,
-					},
-				});
+		const skills = discoverSkillsInDir(this.config.skillsDir, diagnostics);
+		const defaultSkills = discoverSkillsInDir(this.config.defaultSkillsDir, diagnostics);
+		const defaultNames = new Set(defaultSkills.map((skill) => skill.name));
+		const selectableSkills: LoadedSkill[] = [];
+		for (const skill of skills) {
+			if (!defaultNames.has(skill.name)) {
+				selectableSkills.push(skill);
 				continue;
 			}
-			skills.set(skill.name, skill);
+			const defaultSkill = defaultSkills.find((candidate) => candidate.name === skill.name);
+			if (!defaultSkill) continue;
+			diagnostics.push({
+				type: "collision",
+				message: `name "${skill.name}" collision between selectable and default skills`,
+				path: skill.location,
+				collision: {
+					resourceType: "skill",
+					name: skill.name,
+					winnerPath: defaultSkill.location,
+					loserPath: skill.location,
+				},
+			});
 		}
-
-		return {
-			skills: [...skills.values()].sort((a, b) => a.name.localeCompare(b.name)),
-			diagnostics,
-		};
+		return { skills: selectableSkills, defaultSkills, diagnostics };
 	}
+}
+
+function discoverSkillsInDir(root: string | undefined, diagnostics: ResourceDiagnostic[]): LoadedSkill[] {
+	if (!root) return [];
+	if (!existsSync(root)) return [];
+	const skills = new Map<string, LoadedSkill>();
+	const rootDir = resolve(root);
+	const realRootDir = realpathSync(rootDir);
+
+	for (const skill of scanSkills(rootDir, realRootDir, diagnostics)) {
+		const existing = skills.get(skill.name);
+		if (existing) {
+			diagnostics.push({
+				type: "collision",
+				message: `name "${skill.name}" collision`,
+				path: relativeToRoot(rootDir, skill.filePath),
+				collision: {
+					resourceType: "skill",
+					name: skill.name,
+					winnerPath: existing.location,
+					loserPath: skill.location,
+				},
+			});
+			continue;
+		}
+		skills.set(skill.name, skill);
+	}
+
+	return [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function scanSkills(dir: string, realRootDir: string, diagnostics: ResourceDiagnostic[]): LoadedSkill[] {
@@ -294,10 +327,22 @@ function validateSkillName(name: string, expectedName: string): string[] {
 
 function validateDescription(description: string): string[] {
 	if (!description) return ["description is required"];
+	const warnings: string[] = [];
 	if (description.length > MAX_DESCRIPTION_LENGTH) {
-		return [`description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`];
+		warnings.push(`description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`);
 	}
-	return [];
+	if (!DESCRIPTION_TRIGGER_PATTERN.test(description)) {
+		warnings.push('description should include explicit trigger wording such as "Use this skill when" or "Use when"');
+	}
+	if (!DESCRIPTION_BOUNDARY_PATTERN.test(description)) {
+		warnings.push('description should describe non-use boundaries, such as "Do not use for ..."');
+	}
+	if (description.length < MIN_RECOMMENDED_DESCRIPTION_LENGTH) {
+		warnings.push(
+			"description should be specific enough to guide model invocation; include task types, trigger phrases, and boundaries",
+		);
+	}
+	return warnings;
 }
 
 function parseFrontmatter(content: string): { frontmatter: SkillFrontmatter; body: string } {

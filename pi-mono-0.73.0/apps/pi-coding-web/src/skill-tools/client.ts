@@ -9,7 +9,7 @@ export async function loadServerSkillList(): Promise<SkillListDetails> {
 			method: "GET",
 			allowMissing: true,
 			timeoutMs: READ_REQUEST_TIMEOUT_MS,
-		})) || { skills: [], promptSkills: [], diagnostics: [] }
+		})) || { skills: [], defaultSkills: [], promptSkills: [], diagnostics: [] }
 	);
 }
 

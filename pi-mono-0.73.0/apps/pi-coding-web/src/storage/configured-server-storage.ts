@@ -10,6 +10,7 @@ export interface ConfiguredStorageStatus {
 	settingsFile: string;
 	projectsRootDir: string;
 	skillsDir?: string;
+	defaultSkillsDir?: string;
 	previewBaseUrl?: string;
 	serverSessionSyncEnabled?: boolean;
 	defaultModelProvider?: string;

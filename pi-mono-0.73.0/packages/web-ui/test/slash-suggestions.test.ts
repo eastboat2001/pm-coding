@@ -202,6 +202,11 @@ describe("buildSlashSuggestionState", () => {
 		expect(shouldStackSlashSelections("PM implementation prompt\n\n---\n\nPlease build")).toBe(true);
 	});
 
+	it("stacks selected skill pills when multiple skills are selected", () => {
+		expect(shouldStackSlashSelections("single line prompt", 1)).toBe(false);
+		expect(shouldStackSlashSelections("single line prompt", 2)).toBe(true);
+	});
+
 	it("lists only concrete skill suggestions for extension menus", () => {
 		expect(getSlashSuggestionSkills(suggestions).map((item) => item.label)).toEqual(["ui-polish", "api-mock"]);
 	});

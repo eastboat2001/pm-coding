@@ -22,6 +22,7 @@ export function loadStorageConfig(rootDir: string, configFile = CONFIG_FILE): St
 		),
 		projectsRootDir: resolveConfiguredPath(rootDir, stringValue(record.projectsRootDir) || "data/projects"),
 		skillsDir: resolveConfiguredPath(rootDir, stringValue(record.skillsDir) || "data/skills"),
+		defaultSkillsDir: resolveConfiguredPath(rootDir, stringValue(record.defaultSkillsDir) || "data/default-skills"),
 		previewBaseUrl: (stringValue(record.previewBaseUrl) || "").replace(/\/+$/, ""),
 		projectInstallCommand: stringValue(record.projectInstallCommand) || "npm install",
 		projectBuildCommand: stringValue(record.projectBuildCommand) || "npm run build",

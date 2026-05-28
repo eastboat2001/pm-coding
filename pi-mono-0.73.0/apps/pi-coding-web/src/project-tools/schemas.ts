@@ -4,6 +4,7 @@ import { assertWritableProjectFileContent } from "./omitted-content.js";
 export type ProjectToolContext = {
 	sessionId?: string;
 	title: string;
+	activeSkillNames?: string[];
 };
 
 export type ProjectFileDetails = {

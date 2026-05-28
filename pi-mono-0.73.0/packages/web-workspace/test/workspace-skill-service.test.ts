@@ -15,6 +15,7 @@ function testConfig(root: string): StorageConfig {
 		settingsFile: join(root, "data", "settings.json"),
 		projectsRootDir: join(root, "data", "projects"),
 		skillsDir: join(root, "data", "skills"),
+		defaultSkillsDir: join(root, "data", "default-skills"),
 		previewBaseUrl: "http://localhost:5173",
 		projectInstallCommand: "npm install",
 		projectBuildCommand: "npm run build",
@@ -25,6 +26,24 @@ function testConfig(root: string): StorageConfig {
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
 	};
+}
+
+function writeSkill(root: string, name: string, description: string, body = "Use this skill body."): void {
+	const skillDir = join(root, name);
+	mkdirSync(skillDir, { recursive: true });
+	writeFileSync(
+		join(skillDir, "SKILL.md"),
+		`---
+name: ${name}
+description: ${description}
+---
+
+# ${name}
+
+${body}
+`,
+		"utf8",
+	);
 }
 
 describe("WorkspaceSkillService compatibility", () => {
@@ -78,5 +97,68 @@ Read references/layout.md when building a page.
 
 		const loaded = service.load({ name: "page-style" });
 		expect(loaded.resources.map((resource) => resource.path)).toEqual(["references/layout.md", "scripts/audit.py"]);
+	});
+
+	it("reports quality warnings for vague skill descriptions", () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const skillDir = join(config.skillsDir, "vague-style");
+		mkdirSync(skillDir, { recursive: true });
+		writeFileSync(
+			join(skillDir, "SKILL.md"),
+			`---
+name: vague-style
+description: Make things better.
+---
+
+# Vague Style
+`,
+			"utf8",
+		);
+
+		const service = new WorkspaceSkillService(config);
+		const list = service.list();
+
+		expect(list.skills.map((skill) => skill.name)).toEqual(["vague-style"]);
+		expect(list.diagnostics.map((diagnostic) => diagnostic.message)).toEqual(
+			expect.arrayContaining([
+				'description should include explicit trigger wording such as "Use this skill when" or "Use when"',
+				'description should describe non-use boundaries, such as "Do not use for ..."',
+				"description should be specific enough to guide model invocation; include task types, trigger phrases, and boundaries",
+			]),
+		);
+	});
+
+	it("keeps default forced skills hidden from selectable skills while allowing backend load", () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		writeSkill(
+			config.skillsDir,
+			"selectable-style",
+			"Use this skill when creating selectable page styles. Do not use for backend-only tasks.",
+		);
+		writeSkill(
+			config.defaultSkillsDir,
+			"platform-defaults",
+			"Use this skill when any PI static app is generated. Do not use outside PI static preview delivery.",
+			"Always preserve PI platform defaults.",
+		);
+		writeSkill(
+			config.skillsDir,
+			"platform-defaults",
+			"Use this skill when selecting visible platform defaults. Do not use for backend-forced defaults.",
+			"This duplicate should stay hidden behind the default skill.",
+		);
+
+		const service = new WorkspaceSkillService(config);
+		const list = service.list();
+
+		expect(list.skills.map((skill) => skill.name)).toEqual(["selectable-style"]);
+		expect(list.promptSkills.map((skill) => skill.name)).toEqual(["selectable-style"]);
+		expect(list.defaultSkills.map((skill) => skill.name)).toEqual(["platform-defaults"]);
+		expect(list.diagnostics.map((diagnostic) => diagnostic.message)).toContain(
+			'name "platform-defaults" collision between selectable and default skills',
+		);
+		expect(service.load({ name: "platform-defaults" }).content).toContain("Always preserve PI platform defaults.");
 	});
 });

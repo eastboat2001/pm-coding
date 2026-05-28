@@ -42,8 +42,9 @@ import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
+import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
 import type { SkillSummary } from "../skill-tools/schemas.js";
-import { expandSkillCommandsInMessages } from "../skill-tools/skill-command.js";
+import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
 import { createServerSkillTools } from "../skill-tools/tools.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
@@ -56,6 +57,7 @@ const piRuntimeConfig = {
 	serverSessionSyncEnabled: false,
 	handoffDefaultThinkingLevel: "high" as ThinkingLevel,
 	globalSkills: [] as SkillSummary[],
+	defaultSkills: [] as SkillSummary[],
 	skillSlashSuggestions: [] as SkillSlashSuggestion[],
 };
 
@@ -123,6 +125,7 @@ const loadPiRuntimeConfig = async () => {
 	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
 	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
 	piRuntimeConfig.globalSkills = skillList.promptSkills;
+	piRuntimeConfig.defaultSkills = skillList.defaultSkills ?? [];
 	piRuntimeConfig.skillSlashSuggestions = [skillSlashCommand, ...skillList.skills.map(skillToSlashSuggestion)];
 };
 
@@ -366,7 +369,12 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	agent = new Agent({
 		initialState: { ...resolvedInitialState, systemPrompt: buildCurrentSystemPrompt() },
 		convertToLlm: defaultConvertToLlm,
-		transformContext: async (messages) => compactProjectToolHistory(await expandSkillCommandsInMessages(messages)),
+		transformContext: async (messages) =>
+			compactProjectToolHistory(
+				await expandSkillCommandsInMessages(messages, {
+					defaultSkillNames: piRuntimeConfig.defaultSkills.map((skill) => skill.name),
+				}),
+			),
 		streamFn: createStreamFn(getProxyUrl),
 		getApiKey: getProviderApiKey,
 	});
@@ -384,6 +392,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		},
 		onBeforeSend: async () => {
 			await ensureSessionIdentity();
+			await enqueueDefaultSkillLoadMessages(agent, piRuntimeConfig.defaultSkills);
 			await modelController.persistSelectedModel(agent.state.model);
 			await saveSession();
 		},
@@ -398,6 +407,10 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			...createServerProjectTools(() => ({
 				sessionId: currentSessionId,
 				title: sessionTitle(currentTitle, toolAgent.state.messages),
+				activeSkillNames: getLatestRequiredSkillNames(
+					toolAgent.state.messages,
+					piRuntimeConfig.defaultSkills.map((skill) => skill.name),
+				),
 			})),
 		],
 	});

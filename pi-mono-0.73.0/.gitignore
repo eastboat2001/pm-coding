@@ -44,6 +44,8 @@ apps/pi-coding-web/data/projects/
 apps/pi-coding-web/data/sessions/
 apps/pi-coding-web/data/skills/*
 !apps/pi-coding-web/data/skills/.gitkeep
+apps/pi-coding-web/data/default-skills/*
+!apps/pi-coding-web/data/default-skills/.gitkeep
 apps/pi-coding-web/data/settings.json
 apps/pi-coding-web/dist/
 packages/web-ui/example/data/projects/

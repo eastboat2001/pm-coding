@@ -2933,7 +2933,14 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                     </p>
                     <h3>{{ templateItem.template_name }}</h3>
                   </div>
-                  <span class="template-page-card-count">{{ templateItem.section_count }} {{ t.templateSectionsShort }}</span>
+                  <button
+                    class="btn btn-secondary template-page-detail-btn template-page-card-detail-btn"
+                    type="button"
+                    :disabled="loadingSession || messagePipelineActive || generatingDocuments || Boolean(applyingTemplateId)"
+                    @click="openBusinessTemplate(templateItem.template_id)"
+                  >
+                    {{ t.templateOpen }}
+                  </button>
                 </div>
 
                 <p class="template-page-card-description">
@@ -2955,14 +2962,6 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                 </div>
 
                 <div class="template-page-card-actions">
-                  <button
-                    class="btn btn-secondary template-page-detail-btn"
-                    type="button"
-                    :disabled="loadingSession || messagePipelineActive || generatingDocuments || Boolean(applyingTemplateId)"
-                    @click="openBusinessTemplate(templateItem.template_id)"
-                  >
-                    {{ t.templateOpen }}
-                  </button>
                   <button
                     class="btn template-page-apply-btn"
                     type="button"
@@ -4011,7 +4010,7 @@ body {
 
 .template-page-card-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   margin-top: auto;
 }
@@ -4019,6 +4018,14 @@ body {
 .template-page-detail-btn,
 .template-page-apply-btn {
   justify-content: center;
+}
+
+.template-page-card-detail-btn {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 .template-page-state {

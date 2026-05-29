@@ -58,9 +58,7 @@ async function expandSkillCommandText(text: string, defaultSkillNames: string[] 
 	if (!parsed && defaultSkillNames.length === 0) return text;
 
 	const defaultSkills = await loadSkills(defaultSkillNames);
-	if (!defaultSkills) return text;
 	const explicitSkills = await loadSkills(parsed?.skillNames ?? [], new Set(defaultSkills.map((skill) => skill.name)));
-	if (!explicitSkills) return text;
 
 	if (defaultSkills.length > 0) {
 		return formatRequiredSkillSelection(defaultSkills, explicitSkills, parsed?.args ?? text);
@@ -68,15 +66,13 @@ async function expandSkillCommandText(text: string, defaultSkillNames: string[] 
 	return formatExplicitSkillSelection(explicitSkills, parsed?.args ?? text);
 }
 
-async function loadSkills(skillNames: string[], seen = new Set<string>()): Promise<SkillLoadDetails[] | undefined> {
+async function loadSkills(skillNames: string[], seen = new Set<string>()): Promise<SkillLoadDetails[]> {
 	const skills: SkillLoadDetails[] = [];
 	for (const skillName of skillNames) {
 		if (seen.has(skillName)) continue;
 		const skill = await requestSkillApi<SkillLoadDetails>("/load", {
 			body: { name: skillName },
-			allowMissing: true,
 		});
-		if (!skill) return undefined;
 		skills.push(skill);
 		seen.add(skill.name);
 	}

@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { setBedrockProviderModule, streamSimple } from "../src/index.js";
+import type { AssistantMessageEvent, Model } from "../src/types.js";
 
 const require = createRequire(import.meta.url);
-const tsxLoader = require.resolve("tsx/esm");
+const tsxLoader = pathToFileURL(require.resolve("tsx/esm")).href;
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const aiEntryUrl = new URL("../src/index.ts", import.meta.url).href;
 
@@ -98,5 +100,53 @@ describe("lazy provider module loading", () => {
 		`);
 
 		expect(result.loadedSpecifiers).toEqual(["@anthropic-ai/sdk"]);
+	});
+
+	it("converts lazy provider iterator failures into terminal error messages", async () => {
+		const failingStream = (): AsyncIterable<AssistantMessageEvent> => ({
+			[Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent> {
+				return {
+					async next(): Promise<IteratorResult<AssistantMessageEvent>> {
+						throw new Error("iter-boom");
+					},
+				};
+			},
+		});
+		setBedrockProviderModule({
+			streamBedrock: failingStream,
+			streamSimpleBedrock: failingStream,
+		});
+		const model: Model<"bedrock-converse-stream"> = {
+			id: "bedrock-mock",
+			name: "Bedrock Mock",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+			baseUrl: "https://bedrock.example.invalid",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 8192,
+			maxTokens: 2048,
+		};
+
+		const stream = streamSimple(model, { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(events.at(-1)).toMatchObject({
+			type: "error",
+			reason: "error",
+			error: {
+				stopReason: "error",
+				errorMessage: "iter-boom",
+			},
+		});
+		expect(result).toMatchObject({
+			stopReason: "error",
+			errorMessage: "iter-boom",
+		});
 	});
 });

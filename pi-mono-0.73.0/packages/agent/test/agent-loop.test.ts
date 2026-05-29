@@ -236,6 +236,38 @@ describe("agentLoop with AgentMessage", () => {
 		expect(convertedMessages.length).toBe(2);
 	});
 
+	it("should end the event stream when streamFn throws before returning a provider stream", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+		const userPrompt = createUserMessage("Hello");
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		const stream = agentLoop([userPrompt], context, config, undefined, () => {
+			throw new Error("stream-boom");
+		});
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		expect(messages).toHaveLength(2);
+		expect(messages[0]).toBe(userPrompt);
+		expect(messages[1]).toMatchObject({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "stream-boom",
+		});
+		expect(events.map((event) => event.type)).toContain("agent_end");
+		expect(events.at(-1)).toMatchObject({ type: "agent_end", messages });
+	});
+
 	it("should handle tool calls and results", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadServerSkillList } from "../src/skill-tools/client.js";
 import {
 	expandSkillCommandsInMessages,
 	getLatestExplicitSkillNames,
@@ -19,6 +20,49 @@ describe("parseSkillCommandPrefix", () => {
 
 	it("returns undefined when the message does not start with a skill prefix", () => {
 		expect(parseSkillCommandPrefix("please use /skill:ui-polish")).toBeUndefined();
+	});
+
+	it("reports skill list API failures as diagnostics instead of an empty success state", async () => {
+		vi.stubGlobal("window", { location: { origin: "http://pi.test" } });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				return new Response(JSON.stringify({ error: "disk unavailable" }), {
+					status: 500,
+					headers: { "Content-Type": "application/json" },
+				});
+			}),
+		);
+
+		const skillList = await loadServerSkillList();
+
+		expect(skillList.skills).toEqual([]);
+		expect(skillList.defaultSkills).toEqual([]);
+		expect(skillList.promptSkills).toEqual([]);
+		expect(skillList.diagnostics).toEqual([
+			expect.objectContaining({
+				type: "error",
+				path: "/api/pi-skills",
+				message: expect.stringContaining("disk unavailable"),
+			}),
+		]);
+	});
+
+	it("fails visibly when an explicitly selected skill cannot be loaded", async () => {
+		vi.stubGlobal("window", { location: { origin: "http://pi.test" } });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				return new Response(JSON.stringify({ error: "skill backend failed" }), {
+					status: 500,
+					headers: { "Content-Type": "application/json" },
+				});
+			}),
+		);
+
+		await expect(
+			expandSkillCommandsInMessages([{ role: "user", content: "/skill:ui-polish build the page" }]),
+		).rejects.toThrow(/skill backend failed/);
 	});
 
 	it("expands explicitly selected skills as mandatory multi-skill instructions", async () => {

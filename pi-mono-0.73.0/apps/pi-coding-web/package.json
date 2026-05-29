@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "tsx ../../node_modules/vitest/dist/cli.js --run --config vitest.config.ts",
     "check": "tsgo --noEmit",
     "clean": "shx rm -rf dist"
   },

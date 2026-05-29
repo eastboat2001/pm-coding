@@ -3,26 +3,45 @@ import type { SkillListDetails } from "./schemas.js";
 const READ_REQUEST_TIMEOUT_MS = 1000;
 const TOOL_REQUEST_TIMEOUT_MS = 5000;
 
+type SkillApiRequestOptions = {
+	method?: "GET" | "POST";
+	body?: unknown;
+	allowMissing?: boolean;
+	timeoutMs?: number;
+	signal?: AbortSignal;
+};
+
 export async function loadServerSkillList(): Promise<SkillListDetails> {
-	return (
-		(await requestSkillApi<SkillListDetails>("", {
+	try {
+		return await requestSkillApi<SkillListDetails>("", {
 			method: "GET",
-			allowMissing: true,
 			timeoutMs: READ_REQUEST_TIMEOUT_MS,
-		})) || { skills: [], defaultSkills: [], promptSkills: [], diagnostics: [] }
-	);
+		});
+	} catch (error) {
+		return {
+			skills: [],
+			defaultSkills: [],
+			promptSkills: [],
+			diagnostics: [
+				{
+					type: "error",
+					path: "/api/pi-skills",
+					message: error instanceof Error ? error.message : String(error),
+				},
+			],
+		};
+	}
 }
 
-export async function requestSkillApi<T>(
+export function requestSkillApi<T>(
 	path: string,
-	options: {
-		method?: "GET" | "POST";
-		body?: unknown;
-		allowMissing?: boolean;
-		timeoutMs?: number;
-		signal?: AbortSignal;
-	} = {},
-): Promise<T | null> {
+	options: SkillApiRequestOptions & { allowMissing: true },
+): Promise<T | null>;
+export function requestSkillApi<T>(
+	path: string,
+	options?: SkillApiRequestOptions & { allowMissing?: false | undefined },
+): Promise<T>;
+export async function requestSkillApi<T>(path: string, options: SkillApiRequestOptions = {}): Promise<T | null> {
 	const endpoint = new URL(`/api/pi-skills${path}`, window.location.origin).toString();
 	const timeoutController = new AbortController();
 	const timeoutId = setTimeout(() => timeoutController.abort(), options.timeoutMs ?? TOOL_REQUEST_TIMEOUT_MS);

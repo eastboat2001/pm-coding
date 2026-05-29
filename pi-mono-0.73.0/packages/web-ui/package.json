@@ -14,6 +14,7 @@
 		"build": "tsc -p tsconfig.build.json && tailwindcss -i ./src/app.css -o ./dist/app.css --minify",
     "dev": "concurrently --names \"build,css\" --prefix-colors \"cyan,green\" \"tsc -p tsconfig.build.json --watch --preserveWatchOutput\" \"tailwindcss -i ./src/app.css -o ./dist/app.css --watch\"",
 		"dev:tsc": "concurrently --names \"build\" --prefix-colors \"cyan\" \"tsc -p tsconfig.build.json --watch --preserveWatchOutput\" \"tailwindcss -i ./src/app.css -o ./dist/app.css --watch\"",
+		"test": "tsx ../../node_modules/vitest/dist/cli.js --run --config vitest.config.ts",
     "check": "biome check --write --error-on-warnings . && tsc --noEmit"
 	},
 	"dependencies": {

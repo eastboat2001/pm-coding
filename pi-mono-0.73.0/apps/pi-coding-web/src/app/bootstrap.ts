@@ -133,7 +133,10 @@ const loadPiRuntimeConfig = async () => {
 	piRuntimeConfig.globalSkills = skillList.promptSkills;
 	piRuntimeConfig.defaultSkills = skillList.defaultSkills ?? [];
 	piRuntimeConfig.skillDiagnostics = skillList.diagnostics ?? [];
-	piRuntimeConfig.skillSlashSuggestions = [skillSlashCommand, ...skillList.skills.map(skillToSlashSuggestion)];
+	piRuntimeConfig.skillSlashSuggestions = [
+		createSkillSlashCommand(skillApiErrorDetail(skillList.diagnostics ?? [])),
+		...skillList.skills.map(skillToSlashSuggestion),
+	];
 };
 
 const syncRuntimeConfigAfterRender = async () => {
@@ -210,7 +213,9 @@ const ensureSessionIdentity = async () => {
 
 const buildCurrentSystemPrompt = () => buildCodingSystemPrompt(piRuntimeConfig.globalSkills);
 
-const skillSlashCommand: SkillSlashSuggestion = {
+const DEFAULT_SKILL_EMPTY_DETAIL = "请在服务端 skillsDir 下添加 data/skills/<skill-name>/SKILL.md。";
+
+const createSkillSlashCommand = (emptyDetail = DEFAULT_SKILL_EMPTY_DETAIL): SkillSlashSuggestion => ({
 	id: "command:skill",
 	label: "skill",
 	detail: "选择服务端全局 skill",
@@ -218,8 +223,11 @@ const skillSlashCommand: SkillSlashSuggestion = {
 	insertText: "/skill",
 	keepOpen: true,
 	emptyLabel: "没有可用 skill",
-	emptyDetail: "请在服务端 skillsDir 下添加 data/skills/<skill-name>/SKILL.md。",
-};
+	emptyDetail,
+});
+
+const skillApiErrorDetail = (diagnostics: SkillDiagnostic[]): string | undefined =>
+	diagnostics.find((diagnostic) => diagnostic.type === "error" && diagnostic.path === "/api/pi-skills")?.message;
 
 const skillToSlashSuggestion = (skill: SkillSummary): SkillSlashSuggestion => ({
 	id: `skill:${skill.name}`,

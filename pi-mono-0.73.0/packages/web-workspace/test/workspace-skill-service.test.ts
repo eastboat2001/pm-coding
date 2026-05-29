@@ -123,8 +123,73 @@ description: Make things better.
 		expect(list.diagnostics.map((diagnostic) => diagnostic.message)).toEqual(
 			expect.arrayContaining([
 				'description should include explicit trigger wording such as "Use this skill when" or "Use when"',
-				'description should describe non-use boundaries, such as "Do not use for ..."',
+				'description should describe non-use boundaries, for example: "Do not use for backend-only, data-only, or pure documentation tasks."',
 				"description should be specific enough to guide model invocation; include task types, trigger phrases, and boundaries",
+			]),
+		);
+	});
+
+	it("reports invalid skill files with paths and excludes them from available skills", () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const markdownMetadataDir = join(config.skillsDir, "markdown-metadata");
+		const missingNameDir = join(config.skillsDir, "missing-name");
+		const versionedDir = join(config.skillsDir, "ui-ux-design-1.0.0");
+		mkdirSync(markdownMetadataDir, { recursive: true });
+		mkdirSync(missingNameDir, { recursive: true });
+		mkdirSync(versionedDir, { recursive: true });
+		writeFileSync(
+			join(markdownMetadataDir, "SKILL.md"),
+			`# UI/UX Design
+
+**Name:** ui-ux-design
+**Description:** Use this skill when creating UI/UX design. Do not use for backend-only tasks.
+`,
+			"utf8",
+		);
+		writeFileSync(
+			join(missingNameDir, "SKILL.md"),
+			`---
+description: Use this skill when creating UI/UX design. Do not use for backend-only tasks.
+---
+
+# Missing Name
+`,
+			"utf8",
+		);
+		writeFileSync(
+			join(versionedDir, "SKILL.md"),
+			`---
+name: ui-ux-design
+description: Use this skill when creating UI/UX design. Do not use for backend-only tasks.
+---
+
+# UI/UX Design
+`,
+			"utf8",
+		);
+
+		const service = new WorkspaceSkillService(config);
+		const list = service.list();
+
+		expect(list.skills).toEqual([]);
+		expect(list.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "error",
+					path: "markdown-metadata/SKILL.md",
+					message: "description is required in SKILL.md YAML frontmatter",
+				}),
+				expect.objectContaining({
+					type: "error",
+					path: "missing-name/SKILL.md",
+					message: "name is required in SKILL.md YAML frontmatter",
+				}),
+				expect.objectContaining({
+					type: "error",
+					path: "ui-ux-design-1.0.0/SKILL.md",
+					message: 'name "ui-ux-design" does not match skill path "ui-ux-design-1.0.0"',
+				}),
 			]),
 		);
 	});

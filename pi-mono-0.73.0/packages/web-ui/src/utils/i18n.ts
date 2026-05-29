@@ -51,6 +51,25 @@ declare module "@mariozechner/mini-lit" {
 		Back: string;
 		"No skills available": string;
 		"Add SKILL.md files under the configured skills directory.": string;
+		"Skill status": string;
+		"All configured skills are valid.": string;
+		"Skill issues found": string;
+		"Review configured PI skills and format diagnostics.": string;
+		"Available skills": string;
+		"Default skills": string;
+		Issues: string;
+		Diagnostics: string;
+		Errors: string;
+		Warnings: string;
+		Collisions: string;
+		Error: string;
+		Warning: string;
+		Collision: string;
+		Path: string;
+		Message: string;
+		Suggestion: string;
+		"Expand diagnostic": string;
+		"Collapse diagnostic": string;
 		"Failed to fetch file": string;
 		"Invalid source type": string;
 		PDF: string;
@@ -340,6 +359,25 @@ export const translations = {
 		"No skills available": "No skills available",
 		"Add SKILL.md files under the configured skills directory.":
 			"Add SKILL.md files under the configured skills directory.",
+		"Skill status": "Skill status",
+		"All configured skills are valid.": "All configured skills are valid.",
+		"Skill issues found": "Skill issues found",
+		"Review configured PI skills and format diagnostics.": "Review configured PI skills and format diagnostics.",
+		"Available skills": "Available skills",
+		"Default skills": "Default skills",
+		Issues: "Issues",
+		Diagnostics: "Diagnostics",
+		Errors: "Errors",
+		Warnings: "Warnings",
+		Collisions: "Collisions",
+		Error: "Error",
+		Warning: "Warning",
+		Collision: "Collision",
+		Path: "Path",
+		Message: "Message",
+		Suggestion: "Suggestion",
+		"Expand diagnostic": "Expand diagnostic",
+		"Collapse diagnostic": "Collapse diagnostic",
 		"Failed to fetch file": "Failed to fetch file",
 		"Invalid source type": "Invalid source type",
 		PDF: "PDF",
@@ -656,6 +694,25 @@ export const translations = {
 		"No skills available": "Keine Fähigkeiten verfügbar",
 		"Add SKILL.md files under the configured skills directory.":
 			"Fügen Sie SKILL.md-Dateien im konfigurierten Skills-Verzeichnis hinzu.",
+		"Skill status": "Fähigkeitenstatus",
+		"All configured skills are valid.": "Alle konfigurierten Fähigkeiten sind gültig.",
+		"Skill issues found": "Fähigkeitenprobleme gefunden",
+		"Review configured PI skills and format diagnostics.": "Konfigurierte PI-Fähigkeiten und Formatdiagnosen prüfen.",
+		"Available skills": "Verfügbare Fähigkeiten",
+		"Default skills": "Standardfähigkeiten",
+		Issues: "Probleme",
+		Diagnostics: "Diagnosen",
+		Errors: "Fehler",
+		Warnings: "Warnungen",
+		Collisions: "Konflikte",
+		Error: "Fehler",
+		Warning: "Warnung",
+		Collision: "Konflikt",
+		Path: "Pfad",
+		Message: "Nachricht",
+		Suggestion: "Vorschlag",
+		"Expand diagnostic": "Diagnose erweitern",
+		"Collapse diagnostic": "Diagnose einklappen",
 		"Failed to fetch file": "Datei konnte nicht abgerufen werden",
 		"Invalid source type": "Ungültiger Quellentyp",
 		PDF: "PDF",
@@ -990,6 +1047,25 @@ mutableTranslations.zh = {
 	Back: "返回",
 	"No skills available": "没有可用技能",
 	"Add SKILL.md files under the configured skills directory.": "请在配置的 skills 目录下添加 SKILL.md 文件。",
+	"Skill status": "技能状态",
+	"All configured skills are valid.": "所有已配置技能均有效。",
+	"Skill issues found": "发现技能问题",
+	"Review configured PI skills and format diagnostics.": "查看已配置的 PI 技能和格式诊断。",
+	"Available skills": "可用技能",
+	"Default skills": "默认技能",
+	Issues: "问题",
+	Diagnostics: "诊断",
+	Errors: "错误",
+	Warnings: "警告",
+	Collisions: "冲突",
+	Error: "错误",
+	Warning: "警告",
+	Collision: "冲突",
+	Path: "路径",
+	Message: "内容",
+	Suggestion: "建议",
+	"Expand diagnostic": "展开诊断",
+	"Collapse diagnostic": "收起诊断",
 	"Failed to fetch file": "获取文件失败",
 	"Invalid source type": "无效的来源类型",
 	PDF: "PDF",
@@ -1304,6 +1380,26 @@ mutableTranslations.ms = {
 	"No skills available": "Tiada kemahiran tersedia",
 	"Add SKILL.md files under the configured skills directory.":
 		"Tambah fail SKILL.md di bawah direktori kemahiran yang dikonfigurasi.",
+	"Skill status": "Status kemahiran",
+	"All configured skills are valid.": "Semua kemahiran yang dikonfigurasi adalah sah.",
+	"Skill issues found": "Isu kemahiran ditemui",
+	"Review configured PI skills and format diagnostics.":
+		"Semak kemahiran PI yang dikonfigurasi dan diagnostik format.",
+	"Available skills": "Kemahiran tersedia",
+	"Default skills": "Kemahiran lalai",
+	Issues: "Isu",
+	Diagnostics: "Diagnostik",
+	Errors: "Ralat",
+	Warnings: "Amaran",
+	Collisions: "Pertindihan",
+	Error: "Ralat",
+	Warning: "Amaran",
+	Collision: "Pertindihan",
+	Path: "Laluan",
+	Message: "Mesej",
+	Suggestion: "Cadangan",
+	"Expand diagnostic": "Kembangkan diagnostik",
+	"Collapse diagnostic": "Kuncupkan diagnostik",
 	"Failed to fetch file": "Gagal mendapatkan fail",
 	"Invalid source type": "Jenis sumber tidak sah",
 	Document: "Dokumen",

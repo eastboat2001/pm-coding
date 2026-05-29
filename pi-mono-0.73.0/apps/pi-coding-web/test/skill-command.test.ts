@@ -62,6 +62,7 @@ describe("parseSkillCommandPrefix", () => {
 		expect(content.indexOf('<skill name="ui-polish"')).toBeLessThan(content.indexOf('<skill name="brand-style"'));
 		expect(content).toContain("<active_skill_checklist>");
 		expect(content).toContain("- ui-polish: identify and apply the relevant instructions from this skill.");
+		expect(content).toContain("<response_language_policy>");
 		expect(content).toContain("User request:\nbuild the page");
 	});
 
@@ -103,7 +104,35 @@ describe("parseSkillCommandPrefix", () => {
 		expect(content).toContain("Server default skills:");
 		expect(content).toContain("- platform-defaults");
 		expect(content).toContain("These default skills are configured by the PI server and are not user-selectable.");
+		expect(content).toContain("Use the user request language for assistant prose");
 		expect(content).toContain("User request:\nbuild a page");
+	});
+
+	it("adds a Chinese language hint when the user request is Chinese", async () => {
+		vi.stubGlobal("window", { location: { origin: "http://pi.test" } });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init?: RequestInit) => {
+				const body = JSON.parse(String(init?.body || "{}")) as { name: string };
+				return new Response(
+					JSON.stringify({
+						name: body.name,
+						location: `skill://${body.name}/SKILL.md`,
+						content: "# Neon Console\n\nUse neon console visual language.",
+						resources: [],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}),
+		);
+
+		const expanded = await expandSkillCommandsInMessages([
+			{ role: "user", content: "/skill:style-neon-console 生成一个个人介绍" },
+		]);
+		const content = expanded[0].content as string;
+
+		expect(content).toContain("Detected user request language: Chinese. Reply in Chinese");
+		expect(content).toContain("User request:\n生成一个个人介绍");
 	});
 
 	it("injects default forced skills into agent-normalized text content arrays", async () => {

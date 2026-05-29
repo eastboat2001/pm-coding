@@ -43,7 +43,8 @@ import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
-import type { SkillSummary } from "../skill-tools/schemas.js";
+import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
+import type { SkillListDetails, SkillSummary } from "../skill-tools/schemas.js";
 import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
 import { createServerSkillTools } from "../skill-tools/tools.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
@@ -56,8 +57,10 @@ import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessio
 const piRuntimeConfig = {
 	serverSessionSyncEnabled: false,
 	handoffDefaultThinkingLevel: "high" as ThinkingLevel,
+	selectableSkills: [] as SkillSummary[],
 	globalSkills: [] as SkillSummary[],
 	defaultSkills: [] as SkillSummary[],
+	skillDiagnostics: [] as SkillDiagnostic[],
 	skillSlashSuggestions: [] as SkillSlashSuggestion[],
 };
 
@@ -71,6 +74,8 @@ type SkillSlashSuggestion = {
 	emptyLabel?: string;
 	emptyDetail?: string;
 };
+
+type SkillDiagnostic = SkillListDetails["diagnostics"][number];
 
 type SlashSuggestionHost = {
 	slashSuggestions: SkillSlashSuggestion[];
@@ -124,8 +129,10 @@ const loadPiRuntimeConfig = async () => {
 	const [status, skillList] = await Promise.all([configuredStorage.getStatus(), loadServerSkillList()]);
 	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
 	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
+	piRuntimeConfig.selectableSkills = skillList.skills;
 	piRuntimeConfig.globalSkills = skillList.promptSkills;
 	piRuntimeConfig.defaultSkills = skillList.defaultSkills ?? [];
+	piRuntimeConfig.skillDiagnostics = skillList.diagnostics ?? [];
 	piRuntimeConfig.skillSlashSuggestions = [skillSlashCommand, ...skillList.skills.map(skillToSlashSuggestion)];
 };
 
@@ -673,7 +680,11 @@ const renderApp = () => {
 						onClick: () => {
 							const providersTab = new ProvidersModelsTab();
 							providersTab.showKnownProviders = false;
-							SettingsDialog.open([new LanguageTab(), providersTab, new ProxyTab()]);
+							const skillStatusTab = new SkillStatusTab();
+							skillStatusTab.skills = piRuntimeConfig.selectableSkills;
+							skillStatusTab.defaultSkills = piRuntimeConfig.defaultSkills;
+							skillStatusTab.diagnostics = piRuntimeConfig.skillDiagnostics;
+							SettingsDialog.open([new LanguageTab(), providersTab, new ProxyTab(), skillStatusTab]);
 						},
 						title: i18n("Settings"),
 					})}

@@ -38,7 +38,6 @@ const props = withDefaults(
 )
 const emit = defineEmits<{
   (event: 'generate-documents'): void
-  (event: 'download-document', kind: 'prd' | 'design'): void
   (event: 'go-coding'): void
 }>()
 
@@ -289,27 +288,8 @@ function summarizeText(value: string): string {
         >
           {{ generatingDocuments ? copy.generatingDocuments : copy.generateDocuments }}
         </button>
-        <div v-if="hasPrdDocument || hasDesignDocument" class="document-download-actions">
+        <div v-if="hasPrdDocument && hasDesignDocument" class="document-ready-actions">
           <button
-            v-if="hasPrdDocument"
-            class="document-download-btn"
-            type="button"
-            :disabled="generationDisabled"
-            @click="emit('download-document', 'prd')"
-          >
-            {{ copy.downloadPrd }}
-          </button>
-          <button
-            v-if="hasDesignDocument"
-            class="document-download-btn"
-            type="button"
-            :disabled="generationDisabled"
-            @click="emit('download-document', 'design')"
-          >
-            {{ copy.downloadDesign }}
-          </button>
-          <button
-            v-if="hasPrdDocument && hasDesignDocument"
             class="go-coding-btn"
             type="button"
             :disabled="generationDisabled || openingGoCoding"
@@ -575,36 +555,10 @@ function summarizeText(value: string): string {
   box-shadow: none;
 }
 
-.document-download-actions {
+.document-ready-actions {
   display: grid;
   gap: 8px;
   margin-top: 10px;
-}
-
-.document-download-btn {
-  width: 100%;
-  min-height: 40px;
-  border: 1px solid rgba(37, 99, 235, 0.16);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: #fff;
-  color: var(--accent-strong);
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-}
-
-.document-download-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  border-color: rgba(37, 99, 235, 0.34);
-  box-shadow: 0 10px 18px rgba(38, 55, 70, 0.08);
-}
-
-.document-download-btn:disabled {
-  opacity: 0.72;
-  cursor: not-allowed;
-  box-shadow: none;
-  transform: none;
 }
 
 .go-coding-btn {

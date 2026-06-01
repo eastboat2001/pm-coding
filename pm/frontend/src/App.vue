@@ -119,8 +119,8 @@ const translations = {
     failedToGenerate: 'Failed to generate documents',
     microphoneAccessError: 'Unable to access microphone',
     speechRecognitionError: 'Speech recognition failed',
-    prdDocLabel: 'Requirements Document',
-    designDocLabel: 'Design Document',
+    prdDocLabel: 'Requirements Doc',
+    designDocLabel: 'Design Doc',
     downloadMarkdown: 'Download Markdown',
     streamingError: 'Streaming response error',
     browserNotSupport: 'Browser does not support streaming responses',
@@ -2803,8 +2803,8 @@ watch(messageRenderSignature, (signature, previousSignature) => {
 
             <div class="composer-zone">
               <div v-if="hasSession" class="composer-context">
-                <div class="composer-context-row">
-                  <div class="template-picker-options">
+                <div class="composer-context-row" :class="{ 'template-driven': templateDrivenSession }">
+                  <div v-if="!templateDrivenSession" class="template-picker-options">
                     <button
                       v-for="option in promptTemplateOptions"
                       :key="option.value"
@@ -2817,18 +2817,51 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                       {{ option.label }}
                     </button>
                   </div>
-                  <button
-                    class="preview-toggle-btn"
-                    type="button"
-                    :aria-expanded="previewPanelOpen"
-                    @click="togglePreviewPanel"
-                  >
-                    {{ previewToggleLabel }}
-                  </button>
+                  <div class="composer-context-actions">
+                    <div v-if="latestPrdDocument || latestDesignDocument" class="composer-document-actions">
+                      <button
+                        v-if="latestPrdDocument"
+                        class="composer-document-download-btn"
+                        type="button"
+                        :aria-label="`${t.downloadMarkdown}: ${t.prdDocLabel}`"
+                        :title="t.prdDocLabel"
+                        :disabled="sending || generatingDocuments || switchingSession"
+                        @click="downloadLatestGeneratedDocument('prd')"
+                      >
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M12 3v12"/>
+                          <path d="M7 10l5 5 5-5"/>
+                          <path d="M5 21h14"/>
+                        </svg>
+                        <span>{{ t.prdDocLabel }}</span>
+                      </button>
+                      <button
+                        v-if="latestDesignDocument"
+                        class="composer-document-download-btn"
+                        type="button"
+                        :aria-label="`${t.downloadMarkdown}: ${t.designDocLabel}`"
+                        :title="t.designDocLabel"
+                        :disabled="sending || generatingDocuments || switchingSession"
+                        @click="downloadLatestGeneratedDocument('design')"
+                      >
+                        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M12 3v12"/>
+                          <path d="M7 10l5 5 5-5"/>
+                          <path d="M5 21h14"/>
+                        </svg>
+                        <span>{{ t.designDocLabel }}</span>
+                      </button>
+                    </div>
+                    <button
+                      class="preview-toggle-btn"
+                      type="button"
+                      :aria-expanded="previewPanelOpen"
+                      @click="togglePreviewPanel"
+                    >
+                      {{ previewToggleLabel }}
+                    </button>
+                  </div>
                 </div>
-                <p v-if="templateDrivenSession" class="template-picker-hint">
-                  {{ t.templatePromptManagedHint }}
-                </p>
               </div>
 
               <form class="composer-card" @submit.prevent="sendMessage">
@@ -2904,7 +2937,6 @@ watch(messageRenderSignature, (signature, previousSignature) => {
                 :has-design-document="Boolean(latestDesignDocument)"
                 :error="structuredRequirementError"
                 @generate-documents="generateDocuments"
-                @download-document="downloadLatestGeneratedDocument"
                 @go-coding="openGoCoding"
               />
             </div>
@@ -3279,7 +3311,11 @@ body {
   gap: 18px;
   padding: 16px;
   border-radius: 0;
-  background: var(--panel);
+  background-color: #0a2a55;
+  background-image: url('./sidebar_circuit_background.svg');
+  background-position: left center;
+  background-size: cover;
+  background-repeat: no-repeat;
   border: 0;
   border-right: 1px solid var(--line);
   box-shadow: none;
@@ -3415,7 +3451,7 @@ body {
 
 .sidebar-nav-text strong {
   font-size: 0.92rem;
-  font-weight: 800;
+  font-weight: 760;
 }
 
 .sidebar-nav-text small {
@@ -3715,8 +3751,13 @@ body {
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.94);
-  border-bottom: 1px solid var(--line);
+  background-color: #061b36;
+  background-image: url('./topbar_circuit_background.svg');
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  border: 1px solid rgba(102, 178, 255, 0.24);
+  border-radius: 0;
   backdrop-filter: blur(18px);
 }
 
@@ -3772,11 +3813,11 @@ body {
   gap: 12px;
   padding: 11px 16px;
   border-radius: var(--radius-md);
-  background: #ffffff;
-  color: var(--ink);
+  background: rgba(6, 24, 50, 0.84);
+  color: rgba(246, 251, 255, 0.96);
   cursor: pointer;
   outline: none;
-  box-shadow: inset 0 0 0 1px var(--line), 0 8px 18px rgba(38, 55, 70, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(142, 210, 255, 0.26), 0 8px 18px rgba(0, 10, 24, 0.18);
   transition: background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
 }
 
@@ -3785,7 +3826,7 @@ body {
 }
 
 .language-switcher-label {
-  color: var(--muted);
+  color: rgba(205, 229, 248, 0.72);
   font-size: 0.82rem;
 }
 
@@ -4407,11 +4448,64 @@ body {
   flex-wrap: wrap;
 }
 
+.composer-context-row.template-driven {
+  justify-content: flex-end;
+}
+
 .template-picker-options {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 8px;
   flex: 1 1 auto;
+}
+
+.composer-context-actions,
+.composer-document-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-context-actions {
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.composer-document-download-btn {
+  min-height: 38px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 999px;
+  padding: 0 12px;
+  background: #ffffff;
+  color: var(--accent-strong);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.composer-document-download-btn svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.composer-document-download-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: #bfd2f7;
+  color: var(--accent-strong);
+  box-shadow: 0 10px 18px rgba(74, 104, 157, 0.12);
+}
+
+.composer-document-download-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .preview-toggle-btn {
@@ -4958,6 +5052,103 @@ body {
   border-color: var(--line);
 }
 
+.sidebar {
+  color: rgba(236, 246, 255, 0.94);
+  border-right-color: rgba(102, 178, 255, 0.22);
+}
+
+.sidebar-toggle {
+  background: rgba(7, 24, 52, 0.82);
+  color: #e9f7ff;
+  box-shadow: inset 0 0 0 1px rgba(125, 202, 255, 0.24);
+}
+
+.sidebar-appmark strong,
+.sidebar-nav-text strong,
+.template-library-item-title,
+.session-card-title {
+  color: rgba(248, 252, 255, 0.96);
+}
+
+.sidebar-appmark strong {
+  text-shadow: 0 1px 8px rgba(0, 10, 24, 0.38);
+}
+
+.sidebar .session-card,
+.sidebar .template-library-item {
+  background: rgba(9, 42, 84, 0.48);
+}
+
+.sidebar .session-card-title,
+.sidebar .template-library-item-title {
+  font-weight: 680;
+}
+
+.sidebar-appmark span,
+.sidebar-block-head span,
+.sidebar-nav-text small,
+.template-library-item-count,
+.template-library-item-meta,
+.session-card-time,
+.session-card-preview {
+  color: rgba(201, 224, 244, 0.72);
+}
+
+.sidebar-block-head h2 {
+  color: rgba(158, 215, 255, 0.82);
+}
+
+.sidebar-nav-item,
+.template-library-item,
+.session-card-main {
+  color: rgba(229, 244, 255, 0.86);
+}
+
+.sidebar-nav-item:hover,
+.template-library-item:hover:not(:disabled),
+.session-card:hover {
+  background: rgba(17, 72, 134, 0.66);
+  color: #ffffff;
+}
+
+.sidebar-nav-item.active,
+.sidebar .session-card.active {
+  background: rgba(19, 91, 164, 0.78);
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(122, 199, 255, 0.3);
+}
+
+.sidebar-nav-item.active .sidebar-nav-text small,
+.sidebar .session-card.active .session-card-preview,
+.sidebar .session-card.active .session-card-time {
+  color: rgba(221, 241, 255, 0.86);
+}
+
+.session-card-template {
+  color: rgba(151, 219, 255, 0.86);
+}
+
+.session-history-placeholder {
+  background: rgba(10, 43, 86, 0.58);
+  border-color: rgba(125, 202, 255, 0.2);
+  color: rgba(221, 241, 255, 0.74);
+}
+
+.session-card-delete {
+  color: rgba(221, 241, 255, 0.44);
+}
+
+.session-card-delete:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.menu-entry-accent,
+.menu-entry-accent.template,
+.menu-entry-accent.recent {
+  background: rgba(112, 214, 255, 0.34);
+}
+
 .template-page-hero-copy h1,
 .conversation-title-wrap h2,
 .sidebar-appmark strong,
@@ -4978,7 +5169,6 @@ body {
   border-color: var(--line);
 }
 
-.session-card-delete:hover:not(:disabled),
 .template-dialog-state.error,
 .error-banner {
   background: rgba(220, 38, 38, 0.13);
@@ -5183,6 +5373,19 @@ body {
     align-items: stretch;
   }
 
+  .composer-context-actions,
+  .composer-document-actions {
+    width: 100%;
+  }
+
+  .composer-context-actions {
+    justify-content: stretch;
+  }
+
+  .composer-document-download-btn {
+    flex: 1 1 140px;
+  }
+
   .composer-actions {
     width: 100%;
     justify-content: space-between;
@@ -5195,6 +5398,11 @@ body {
   .preview-toggle-btn {
     width: 100%;
     justify-content: center;
+  }
+
+  .composer-context-actions .preview-toggle-btn {
+    width: auto;
+    flex: 1 1 150px;
   }
 
   .bubble {

@@ -126,12 +126,22 @@ export function setBedrockProviderModule(module: BedrockProviderModule): void {
 	};
 }
 
-function forwardStream(target: AssistantMessageEventStream, source: AsyncIterable<AssistantMessageEvent>): void {
+function forwardStream<TApi extends Api>(
+	target: AssistantMessageEventStream,
+	source: AsyncIterable<AssistantMessageEvent>,
+	model: Model<TApi>,
+): void {
 	(async () => {
-		for await (const event of source) {
-			target.push(event);
+		try {
+			for await (const event of source) {
+				target.push(event);
+			}
+			target.end();
+		} catch (error) {
+			const message = createLazyLoadErrorMessage(model, error);
+			target.push({ type: "error", reason: "error", error: message });
+			target.end(message);
 		}
-		target.end();
 	})();
 }
 
@@ -165,7 +175,7 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TSim
 		loadModule()
 			.then((module) => {
 				const inner = module.stream(model, context, options);
-				forwardStream(outer, inner);
+				forwardStream(outer, inner, model);
 			})
 			.catch((error) => {
 				const message = createLazyLoadErrorMessage(model, error);
@@ -188,7 +198,7 @@ function createLazySimpleStream<
 		loadModule()
 			.then((module) => {
 				const inner = module.streamSimple(model, context, options);
-				forwardStream(outer, inner);
+				forwardStream(outer, inner, model);
 			})
 			.catch((error) => {
 				const message = createLazyLoadErrorMessage(model, error);

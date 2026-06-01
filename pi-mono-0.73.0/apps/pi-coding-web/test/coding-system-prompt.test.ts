@@ -36,4 +36,9 @@ describe("coding system prompt", () => {
 		expect(prompt).toContain("<short_description>Distinctive static page design</short_description>");
 		expect(prompt).toContain("<default_prompt>Use $page-style to design a static landing page.</default_prompt>");
 	});
+
+	it("keeps assistant and generated UI language aligned with the user request", () => {
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("Match the latest user request language");
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("without switching the output language");
+	});
 });

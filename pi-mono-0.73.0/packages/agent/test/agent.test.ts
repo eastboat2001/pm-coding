@@ -5,8 +5,9 @@ import {
 	getModel,
 	type Model,
 } from "@mariozechner/pi-ai";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { Agent } from "../src/index.js";
+import { Agent, type AgentEvent, type AgentTool } from "../src/index.js";
 
 // Mock stream that mimics AssistantMessageEventStream
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -22,7 +23,31 @@ class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMe
 	}
 }
 
-function createAssistantMessage(text: string): AssistantMessage {
+class ThrowingAssistantStream extends MockAssistantStream {
+	constructor(
+		private readonly events: AssistantMessageEvent[],
+		private readonly error: Error,
+	) {
+		super();
+	}
+
+	override async *[Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent> {
+		for (const event of this.events) {
+			yield event;
+		}
+		throw this.error;
+	}
+
+	override result(): Promise<AssistantMessage> {
+		return Promise.resolve(createAssistantMessage("", "error", this.error.message));
+	}
+}
+
+function createAssistantMessage(
+	text: string,
+	stopReason: AssistantMessage["stopReason"] = "stop",
+	errorMessage?: string,
+): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
@@ -37,8 +62,17 @@ function createAssistantMessage(text: string): AssistantMessage {
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
-		stopReason: "stop",
+		stopReason,
+		errorMessage,
 		timestamp: Date.now(),
+	};
+}
+
+function createToolCallMessage(id: string, name: string, args: Record<string, unknown>): AssistantMessage {
+	return {
+		...createAssistantMessage(""),
+		content: [{ type: "toolCall", id, name, arguments: args }],
+		stopReason: "toolUse",
 	};
 }
 
@@ -274,6 +308,136 @@ describe("Agent", () => {
 		await promptPromise;
 
 		expect(receivedSignal?.aborted).toBe(true);
+	});
+
+	it("should settle when the provider iterator throws after starting a response", async () => {
+		const events: AgentEvent[] = [];
+		const partial = createAssistantMessage("");
+		const agent = new Agent({
+			streamFn: () => new ThrowingAssistantStream([{ type: "start", partial }], new Error("iterator-boom")),
+		});
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+
+		await expect(agent.prompt("hello")).resolves.toBeUndefined();
+
+		expect(agent.state.isStreaming).toBe(false);
+		expect(agent.state.streamingMessage).toBeUndefined();
+		expect(agent.state.pendingToolCalls).toEqual(new Set());
+		expect(agent.state.errorMessage).toBe("iterator-boom");
+		expect(agent.state.messages.at(-1)).toMatchObject({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "iterator-boom",
+		});
+		expect(events.at(-1)?.type).toBe("agent_end");
+	});
+
+	it("should settle and surface a tool result when a tool throws", async () => {
+		const events: AgentEvent[] = [];
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "explode",
+			label: "Explode",
+			description: "Throws for testing",
+			parameters: toolSchema,
+			async execute() {
+				throw new Error("tool-boom");
+			},
+		};
+
+		let callIndex = 0;
+		const agent = new Agent({
+			initialState: {
+				model: createTestModel(false),
+				tools: [tool],
+			},
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callIndex === 0) {
+						stream.push({
+							type: "done",
+							reason: "toolUse",
+							message: createToolCallMessage("tool-1", "explode", { value: "x" }),
+						});
+					} else {
+						stream.push({ type: "done", reason: "stop", message: createAssistantMessage("recovered") });
+					}
+					callIndex++;
+				});
+				return stream;
+			},
+		});
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+
+		await expect(agent.prompt("run tool")).resolves.toBeUndefined();
+
+		const toolResult = agent.state.messages.find(
+			(message) => message.role === "toolResult" && message.toolCallId === "tool-1",
+		);
+		const toolEnd = events.find(
+			(event): event is Extract<AgentEvent, { type: "tool_execution_end" }> => event.type === "tool_execution_end",
+		);
+		expect(callIndex).toBe(2);
+		expect(toolEnd).toMatchObject({ toolCallId: "tool-1", toolName: "explode", isError: true });
+		expect(toolResult).toMatchObject({
+			role: "toolResult",
+			toolCallId: "tool-1",
+			toolName: "explode",
+			isError: true,
+			content: [{ type: "text", text: "tool-boom" }],
+		});
+		expect(agent.state.isStreaming).toBe(false);
+		expect(agent.state.pendingToolCalls).toEqual(new Set());
+		expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "stop" });
+		expect(events.at(-1)?.type).toBe("agent_end");
+	});
+
+	it("should settle when aborted while the provider stream is active", async () => {
+		const started = createDeferred();
+		const events: AgentEvent[] = [];
+		const agent = new Agent({
+			streamFn: (_model, _context, options) => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const abort = () => {
+						stream.push({
+							type: "error",
+							reason: "aborted",
+							error: createAssistantMessage("", "aborted", "Request aborted by user"),
+						});
+					};
+					options?.signal?.addEventListener("abort", abort, { once: true });
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					started.resolve();
+					if (options?.signal?.aborted) abort();
+				});
+				return stream;
+			},
+		});
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+
+		const promptPromise = agent.prompt("hello");
+		await started.promise;
+		agent.abort();
+		await expect(promptPromise).resolves.toBeUndefined();
+
+		expect(agent.state.isStreaming).toBe(false);
+		expect(agent.state.streamingMessage).toBeUndefined();
+		expect(agent.state.pendingToolCalls).toEqual(new Set());
+		expect(agent.state.errorMessage).toBe("Request aborted by user");
+		expect(agent.state.messages.at(-1)).toMatchObject({
+			role: "assistant",
+			stopReason: "aborted",
+			errorMessage: "Request aborted by user",
+		});
+		expect(events.at(-1)?.type).toBe("agent_end");
 	});
 
 	it("should update state with mutators", () => {

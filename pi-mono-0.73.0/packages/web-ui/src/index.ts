@@ -52,6 +52,12 @@ export {
 export { RuntimeMessageBridge } from "./components/sandbox/RuntimeMessageBridge.js";
 export { RUNTIME_MESSAGE_ROUTER } from "./components/sandbox/RuntimeMessageRouter.js";
 export type { SandboxRuntimeProvider } from "./components/sandbox/SandboxRuntimeProvider.js";
+export type { SkillDiagnostic, SkillDiagnosticType } from "./components/skill-diagnostics.js";
+export {
+	countSkillDiagnostics,
+	formatSkillDiagnosticDetail,
+	highestSkillDiagnosticType,
+} from "./components/skill-diagnostics.js";
 export type {
 	SlashSelection,
 	SlashSelections,

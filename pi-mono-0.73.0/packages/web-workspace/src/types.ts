@@ -107,7 +107,7 @@ export interface ProjectTaskResult extends JsonObject {
 export type PreviewRequestLike = Pick<IncomingMessage, "headers">;
 
 export interface ResourceDiagnostic {
-	type: "warning" | "collision";
+	type: "error" | "warning" | "collision";
 	message: string;
 	path?: string;
 	collision?: {

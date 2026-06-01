@@ -27,7 +27,7 @@ export type SkillListDetails = {
 	defaultSkills: SkillSummary[];
 	promptSkills: SkillSummary[];
 	diagnostics: Array<{
-		type: "warning" | "collision";
+		type: "error" | "warning" | "collision";
 		message: string;
 		path?: string;
 	}>;

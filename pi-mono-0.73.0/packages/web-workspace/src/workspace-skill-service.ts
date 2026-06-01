@@ -207,7 +207,7 @@ function loadSkillFromFile(
 	const stats = statSync(realFilePath);
 	if (stats.size > MAX_SKILL_BYTES) {
 		diagnostics.push({
-			type: "warning",
+			type: "error",
 			message: `skill file exceeds ${MAX_SKILL_BYTES} bytes`,
 			path: relativeToRoot(realRootDir, realFilePath),
 		});
@@ -216,18 +216,25 @@ function loadSkillFromFile(
 	const raw = readFileSync(realFilePath, "utf8");
 	const parsed = parseFrontmatter(raw);
 	const frontmatter = parsed.frontmatter;
-	const name = (frontmatter.name || expectedName).trim();
+	const frontmatterName = frontmatter.name?.trim() || "";
+	const name = (frontmatterName || expectedName).trim();
 	const description = frontmatter.description?.trim() || "";
 	const skillDir = dirname(realFilePath);
 	const interfaceMetadata = readOpenAiInterfaceMetadata(skillDir);
+	const diagnosticPath = relativeToRoot(realRootDir, realFilePath);
+	const nameErrors = validateSkillName(frontmatterName, name, expectedName);
+	const descriptionErrors = validateDescriptionErrors(description);
 
-	for (const message of validateSkillName(name, expectedName)) {
-		diagnostics.push({ type: "warning", message, path: relativeToRoot(realRootDir, realFilePath) });
+	for (const message of nameErrors) {
+		diagnostics.push({ type: "error", message, path: diagnosticPath });
 	}
-	for (const message of validateDescription(description)) {
-		diagnostics.push({ type: "warning", message, path: relativeToRoot(realRootDir, realFilePath) });
+	for (const message of descriptionErrors) {
+		diagnostics.push({ type: "error", message, path: diagnosticPath });
 	}
-	if (!description) return null;
+	if (nameErrors.length > 0 || descriptionErrors.length > 0) return null;
+	for (const message of validateDescriptionWarnings(description)) {
+		diagnostics.push({ type: "warning", message, path: diagnosticPath });
+	}
 
 	return {
 		name,
@@ -313,8 +320,9 @@ function isAllowedTextResource(path: string, stats: Stats): boolean {
 	return ALLOWED_TEXT_EXTENSIONS.has(extname(path).toLowerCase());
 }
 
-function validateSkillName(name: string, expectedName: string): string[] {
+function validateSkillName(frontmatterName: string, name: string, expectedName: string): string[] {
 	const errors: string[] = [];
+	if (!frontmatterName) errors.push("name is required in SKILL.md YAML frontmatter");
 	if (name !== expectedName) errors.push(`name "${name}" does not match skill path "${expectedName}"`);
 	if (name.length > MAX_NAME_LENGTH) errors.push(`name exceeds ${MAX_NAME_LENGTH} characters (${name.length})`);
 	if (!/^[a-z0-9-]+$/.test(name)) {
@@ -325,8 +333,12 @@ function validateSkillName(name: string, expectedName: string): string[] {
 	return errors;
 }
 
-function validateDescription(description: string): string[] {
-	if (!description) return ["description is required"];
+function validateDescriptionErrors(description: string): string[] {
+	if (!description) return ["description is required in SKILL.md YAML frontmatter"];
+	return [];
+}
+
+function validateDescriptionWarnings(description: string): string[] {
 	const warnings: string[] = [];
 	if (description.length > MAX_DESCRIPTION_LENGTH) {
 		warnings.push(`description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`);
@@ -335,7 +347,9 @@ function validateDescription(description: string): string[] {
 		warnings.push('description should include explicit trigger wording such as "Use this skill when" or "Use when"');
 	}
 	if (!DESCRIPTION_BOUNDARY_PATTERN.test(description)) {
-		warnings.push('description should describe non-use boundaries, such as "Do not use for ..."');
+		warnings.push(
+			'description should describe non-use boundaries, for example: "Do not use for backend-only, data-only, or pure documentation tasks."',
+		);
 	}
 	if (description.length < MIN_RECOMMENDED_DESCRIPTION_LENGTH) {
 		warnings.push(

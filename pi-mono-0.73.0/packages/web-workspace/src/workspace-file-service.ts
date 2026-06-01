@@ -61,8 +61,18 @@ export class WorkspaceFileService {
 			const newStr = String(body.new_str ?? "");
 			if (!oldStr) throw new Error("Field `old_str` is required for update.");
 			const current = readFileSync(targetPath, "utf8");
-			if (!current.includes(oldStr)) throw new Error(`old_str was not found in ${relativePath}.`);
-			writeFileSync(targetPath, current.replace(oldStr, newStr), "utf8");
+			const firstMatchIndex = current.indexOf(oldStr);
+			if (firstMatchIndex === -1) throw new Error(`old_str was not found in ${relativePath}.`);
+			if (current.indexOf(oldStr, firstMatchIndex + 1) !== -1) {
+				throw new Error(
+					`old_str must match exactly one location in ${relativePath}. Use a longer old_str context or rewrite the file.`,
+				);
+			}
+			writeFileSync(
+				targetPath,
+				`${current.slice(0, firstMatchIndex)}${newStr}${current.slice(firstMatchIndex + oldStr.length)}`,
+				"utf8",
+			);
 			return { command, filename: relativePath, action: "updated", projectRoot: projectDir };
 		}
 

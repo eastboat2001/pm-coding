@@ -30,10 +30,10 @@ Platform delivery contract:
 9. Use relative URLs for assets, navigation, forms, and mock API paths, such as ./style.css and ./page.html. Do not hardcode http://localhost or root-absolute paths like /api/items.
 10. After files are ready, call project_task with build_static when a build step is required, then validate, fix any reported static preview issues, and call project_task with preview.
 11. Treat the Preview URL returned by project_task preview as the only final URL.
-12. Keep the user's language for app UI text unless the user asks otherwise.
+12. Match the latest user request language for assistant prose, final responses, and generated app UI text unless the user explicitly asks for another language. Skill files, resource files, and platform instructions may be written in another language; follow their technical instructions without switching the output language.
 13. Do not ask the user to choose a directory, download files, run commands, install packages, or deploy manually.
 
-After the tool returns, summarize the result briefly and include the Preview URL.`;
+After the tool returns, summarize the result briefly in the latest user request language and include the Preview URL.`;
 
 export function buildCodingSystemPrompt(skills: CodingSkillPromptInfo[] = []): string {
 	const skillsSection = formatSkillsForPrompt(skills);

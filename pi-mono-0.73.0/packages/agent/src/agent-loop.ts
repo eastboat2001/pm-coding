@@ -47,9 +47,13 @@ export function agentLoop(
 		},
 		signal,
 		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	)
+		.then((messages) => {
+			stream.end(messages);
+		})
+		.catch((error) => {
+			endAgentStreamWithError(stream, prompts, config, error);
+		});
 
 	return stream;
 }
@@ -86,9 +90,13 @@ export function agentLoopContinue(
 		},
 		signal,
 		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	)
+		.then((messages) => {
+			stream.end(messages);
+		})
+		.catch((error) => {
+			endAgentStreamWithError(stream, [], config, error);
+		});
 
 	return stream;
 }
@@ -148,6 +156,42 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
 		(event: AgentEvent) => event.type === "agent_end",
 		(event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
 	);
+}
+
+function createAgentLoopErrorMessage(config: AgentLoopConfig, error: unknown): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: config.model.api,
+		provider: config.model.provider,
+		model: config.model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "error",
+		errorMessage: error instanceof Error ? error.message : String(error),
+		timestamp: Date.now(),
+	};
+}
+
+function endAgentStreamWithError(
+	stream: EventStream<AgentEvent, AgentMessage[]>,
+	prefixMessages: AgentMessage[],
+	config: AgentLoopConfig,
+	error: unknown,
+): void {
+	const message = createAgentLoopErrorMessage(config, error);
+	const messages = [...prefixMessages, message];
+	stream.push({ type: "message_start", message });
+	stream.push({ type: "message_end", message });
+	stream.push({ type: "turn_end", message, toolResults: [] });
+	stream.push({ type: "agent_end", messages });
+	stream.end(messages);
 }
 
 /**

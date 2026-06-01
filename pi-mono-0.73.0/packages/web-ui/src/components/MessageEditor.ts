@@ -77,6 +77,16 @@ export class MessageEditor extends LitElement {
 		return this;
 	}
 
+	override connectedCallback(): void {
+		super.connectedCallback();
+		document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+	}
+
+	override disconnectedCallback(): void {
+		document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+		super.disconnectedCallback();
+	}
+
 	private handleTextareaInput = (e: Event) => {
 		const textarea = e.target as HTMLTextAreaElement;
 		const selections = this.slashSelections;
@@ -92,6 +102,22 @@ export class MessageEditor extends LitElement {
 		this.extensionsMenuOpen = !this.extensionsMenuOpen;
 		this.extensionsMenuView = "main";
 		requestAnimationFrame(() => this.textareaRef.value?.focus());
+	};
+
+	private closeExtensionsMenu() {
+		if (!this.extensionsMenuOpen) return;
+		this.extensionsMenuOpen = false;
+		this.extensionsMenuView = "main";
+	}
+
+	private handleDocumentPointerDown = (event: PointerEvent) => {
+		if (!this.extensionsMenuOpen) return;
+		const target = event.target;
+		if (!(target instanceof Node)) return;
+		const menu = this.querySelector(".message-editor-extensions-menu");
+		const trigger = this.querySelector(".message-editor-extensions-trigger");
+		if (menu?.contains(target) || trigger?.contains(target)) return;
+		this.closeExtensionsMenu();
 	};
 
 	private handleKeyDown = (e: KeyboardEvent) => {
@@ -504,7 +530,7 @@ export class MessageEditor extends LitElement {
 							size: "sm",
 							onClick: this.toggleExtensionsMenu,
 							children: html`${icon(Sparkles, "sm")}<span class="ml-1">${i18n("Extensions")}</span>`,
-							className: "h-8 text-xs",
+							className: "message-editor-extensions-trigger h-8 text-xs",
 						})}
 					</div>
 
@@ -604,7 +630,7 @@ export class MessageEditor extends LitElement {
 		const selectedIds = new Set(this.slashSelections.items.map((item) => item.id));
 
 		return html`
-			<div class="absolute left-12 bottom-12 z-30 w-72 rounded-md border border-border bg-card shadow-lg overflow-hidden">
+			<div class="message-editor-extensions-menu absolute left-12 bottom-12 z-30 w-72 rounded-md border border-border bg-card shadow-lg overflow-hidden">
 				${
 					this.extensionsMenuView === "main"
 						? html`

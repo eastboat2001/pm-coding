@@ -98,7 +98,7 @@ await test("WorkspaceSkillService loads global skills and hides disabled skills 
 		join(skillDir, "SKILL.md"),
 		`---
 name: ui-polish
-description: Improve generated UI spacing, visual hierarchy, and responsive polish.
+description: Use this skill when improving generated UI spacing, visual hierarchy, and responsive polish. Do not use for backend-only, data-only, or pure documentation tasks.
 ---
 
 # UI Polish
@@ -112,7 +112,7 @@ Use stronger layout hierarchy.
 		join(config.skillsDir, "private-skill", "SKILL.md"),
 		`---
 name: private-skill
-description: Hidden skill.
+description: Use this skill when testing hidden skills. Do not use for visible model invocation.
 disable-model-invocation: true
 ---
 
@@ -223,6 +223,34 @@ await test("WorkspaceFileService creates, rewrites, updates, lists, reads, and d
 
 	const deleted = service.handle({ ...context, command: "delete", filename: "src/main.js" });
 	assert.equal(deleted.action, "deleted");
+});
+
+await test("WorkspaceFileService rejects update when old_str is not unique", () => {
+	const root = tempRoot();
+	const service = new WorkspaceFileService(testConfig(root));
+	const context = { sessionId: "session-123456789", title: "Demo App" };
+
+	service.handle({
+		...context,
+		command: "create",
+		filename: "src/main.js",
+		content: "const label = 'Save';\nconst buttonLabel = 'Save';\n",
+	});
+
+	assert.throws(
+		() =>
+			service.handle({
+				...context,
+				command: "update",
+				filename: "src/main.js",
+				old_str: "'Save'",
+				new_str: "'Submit'",
+			}),
+		/old_str must match exactly one location/,
+	);
+
+	const read = service.handle({ ...context, command: "get", filename: "src/main.js" });
+	assert.equal(read.content, "const label = 'Save';\nconst buttonLabel = 'Save';\n");
 });
 
 await test("WorkspaceFileService rejects project paths that escape the workspace", () => {

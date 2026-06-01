@@ -58,9 +58,7 @@ async function expandSkillCommandText(text: string, defaultSkillNames: string[] 
 	if (!parsed && defaultSkillNames.length === 0) return text;
 
 	const defaultSkills = await loadSkills(defaultSkillNames);
-	if (!defaultSkills) return text;
 	const explicitSkills = await loadSkills(parsed?.skillNames ?? [], new Set(defaultSkills.map((skill) => skill.name)));
-	if (!explicitSkills) return text;
 
 	if (defaultSkills.length > 0) {
 		return formatRequiredSkillSelection(defaultSkills, explicitSkills, parsed?.args ?? text);
@@ -68,15 +66,13 @@ async function expandSkillCommandText(text: string, defaultSkillNames: string[] 
 	return formatExplicitSkillSelection(explicitSkills, parsed?.args ?? text);
 }
 
-async function loadSkills(skillNames: string[], seen = new Set<string>()): Promise<SkillLoadDetails[] | undefined> {
+async function loadSkills(skillNames: string[], seen = new Set<string>()): Promise<SkillLoadDetails[]> {
 	const skills: SkillLoadDetails[] = [];
 	for (const skillName of skillNames) {
 		if (seen.has(skillName)) continue;
 		const skill = await requestSkillApi<SkillLoadDetails>("/load", {
 			body: { name: skillName },
-			allowMissing: true,
 		});
-		if (!skill) return undefined;
 		skills.push(skill);
 		seen.add(skill.name);
 	}
@@ -112,6 +108,7 @@ function formatExplicitSkillSelection(skills: SkillLoadDetails[], userRequest: s
 		"You must apply every selected skill before creating, editing, validating, or previewing project files.",
 		"When multiple skills are selected, merge their non-conflicting requirements into one implementation plan. Do not ignore one selected skill because another selected skill seems more relevant.",
 		"If selected skill instructions conflict, preserve the user or PM product requirements first, then follow the more specific selected skill instruction.",
+		"Skill files and resources may be written in a different language from the user request. Follow their technical/style instructions without switching the assistant response language or generated user-facing app text away from the user request language.",
 		"",
 		"Selected skills:",
 		...skillNames.map((name) => `- ${name}`),
@@ -125,7 +122,7 @@ function formatExplicitSkillSelection(skills: SkillLoadDetails[], userRequest: s
 		"</active_skill_checklist>",
 	];
 	if (!userRequest) return lines.join("\n");
-	return `${lines.join("\n")}\n\nUser request:\n${userRequest}`;
+	return `${lines.join("\n")}\n\n${formatUserRequestSection(userRequest)}`;
 }
 
 function formatRequiredSkillSelection(
@@ -160,6 +157,7 @@ function formatRequiredSkillSelection(
 		"You must apply every required skill before creating, editing, validating, or previewing project files.",
 		"When multiple skills are required, merge their non-conflicting requirements into one implementation plan. Do not ignore one required skill because another required skill seems more relevant.",
 		"If required skill instructions conflict, preserve the user or PM product requirements first, then follow the more specific skill instruction.",
+		"Skill files and resources may be written in a different language from the user request. Follow their technical/style instructions without switching the assistant response language or generated user-facing app text away from the user request language.",
 		"",
 		...defaultSkillLines,
 		...explicitSkillLines,
@@ -173,7 +171,7 @@ function formatRequiredSkillSelection(
 		"</active_skill_checklist>",
 	];
 	if (!userRequest) return lines.join("\n");
-	return `${lines.join("\n")}\n\nUser request:\n${userRequest}`;
+	return `${lines.join("\n")}\n\n${formatUserRequestSection(userRequest)}`;
 }
 
 function formatSkillBlock(skill: SkillLoadDetails): string {
@@ -251,6 +249,26 @@ function uniqueNames(names: string[]): string[] {
 		seen.add(name);
 	}
 	return unique;
+}
+
+function formatUserRequestSection(userRequest: string): string {
+	const languageHint = hasHanText(userRequest)
+		? "Detected user request language: Chinese. Reply in Chinese and generate Chinese user-facing app UI text unless the user explicitly asks for another language."
+		: "Use the same natural language as the user request unless the user explicitly asks for another language.";
+	return [
+		"<response_language_policy>",
+		"Use the user request language for assistant prose, final responses, and generated user-facing app UI text.",
+		"Skill files, skill resources, and platform instructions are technical references; their language must not override the user request language.",
+		languageHint,
+		"</response_language_policy>",
+		"",
+		"User request:",
+		userRequest,
+	].join("\n");
+}
+
+function hasHanText(value: string): boolean {
+	return /[\u3400-\u9fff]/.test(value);
 }
 
 function escapeXml(value: string): string {

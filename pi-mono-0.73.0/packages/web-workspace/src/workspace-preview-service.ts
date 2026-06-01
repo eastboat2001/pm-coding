@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, join, resolve } from "node:path";
 import { PREVIEW_PREFIX, PROJECT_METADATA_FILE } from "./constants.js";
@@ -7,8 +7,10 @@ import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } 
 import type {
 	JsonObject,
 	PreviewRequestLike,
+	ProjectPreviewListResult,
 	ProjectPreviewRequest,
 	ProjectPreviewResult,
+	ProjectPreviewSummary,
 	StorageConfig,
 } from "./types.js";
 import {
@@ -39,6 +41,46 @@ export class WorkspacePreviewService {
 		const metadata = this.readProjectMetadata(projectId);
 		if (!metadata) return { error: "Project not found." };
 		return { projectId, status: metadata.status, logs: metadata.logs || [] };
+	}
+
+	listProjects(req?: PreviewRequestLike): ProjectPreviewListResult {
+		if (!existsSync(this.config.projectsRootDir)) return { projects: [] };
+		const projects: ProjectPreviewSummary[] = [];
+		for (const entry of readdirSync(this.config.projectsRootDir, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const metadataPath = join(this.config.projectsRootDir, entry.name, PROJECT_METADATA_FILE);
+			if (!existsSync(metadataPath)) continue;
+			try {
+				const summary = projectPreviewSummary(readJsonFile(metadataPath), entry.name);
+				if (summary && req && summary.status === "running") {
+					summary.previewUrl = buildPreviewUrl(this.config, req, summary.projectId);
+				}
+				if (summary) projects.push(summary);
+			} catch {
+				// Ignore partial or corrupt generated project records.
+			}
+		}
+		projects.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.title.localeCompare(b.title));
+		return { projects };
+	}
+
+	renameProject(projectId: string, title: string, req?: PreviewRequestLike): ProjectPreviewSummary {
+		const safeProjectId = safePreviewProjectId(projectId);
+		if (!safeProjectId) throw new Error("Invalid project id.");
+		const nextTitle = normalizeProjectTitle(title);
+		if (!nextTitle) throw new Error("App name is required.");
+		if (nextTitle.length > 160) throw new Error("App name must be 160 characters or fewer.");
+		const metadataPath = join(this.config.projectsRootDir, safeProjectId, PROJECT_METADATA_FILE);
+		if (!existsSync(metadataPath)) throw new Error("Project not found.");
+		const metadata = readJsonFile(metadataPath);
+		if (!projectPreviewSummary(metadata, safeProjectId)) throw new Error("Project metadata is invalid.");
+		const nextMetadata: JsonObject = { ...metadata, title: nextTitle };
+		writeJsonFile(metadataPath, nextMetadata);
+		const summary = projectPreviewSummary(nextMetadata, safeProjectId);
+		if (!summary) throw new Error("Project metadata is invalid.");
+		if (req && summary.status === "running")
+			summary.previewUrl = buildPreviewUrl(this.config, req, summary.projectId);
+		return summary;
 	}
 
 	servePreviewRequest(req: IncomingMessage, res: ServerResponse): boolean {
@@ -154,11 +196,45 @@ export class WorkspacePreviewService {
 	}
 }
 
+function projectPreviewSummary(metadata: JsonObject, directoryName: string): ProjectPreviewSummary | undefined {
+	const projectId = stringValue(metadata.projectId);
+	if (!projectId || projectId !== directoryName || safePreviewProjectId(projectId) !== projectId) return undefined;
+	const sessionId = stringValue(metadata.sessionId);
+	const title = stringValue(metadata.title);
+	const status = stringValue(metadata.status);
+	const updatedAt = stringValue(metadata.updatedAt);
+	const fileCount = numberValue(metadata.fileCount);
+	if (!sessionId || !title || !status || !updatedAt || !Number.isFinite(Date.parse(updatedAt))) return undefined;
+	if (metadata.mode !== "static" || fileCount === undefined) return undefined;
+	return {
+		projectId,
+		sessionId,
+		title,
+		status,
+		mode: "static",
+		previewUrl: stringValue(metadata.previewUrl),
+		fileCount,
+		updatedAt,
+	};
+}
+
 function safePreviewProjectId(value: string): string {
 	const projectId = value.trim();
 	if (!projectId || projectId.includes("..") || projectId.includes("/") || projectId.includes("\\")) return "";
 	if (!/^[a-z0-9._-]+$/i.test(projectId)) return "";
 	return projectId;
+}
+
+function stringValue(value: unknown): string {
+	return typeof value === "string" ? value : "";
+}
+
+function numberValue(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeProjectTitle(value: string): string {
+	return value.replace(/\s+/g, " ").trim();
 }
 
 export function buildPreviewUrl(config: StorageConfig, req: PreviewRequestLike, projectId: string): string {

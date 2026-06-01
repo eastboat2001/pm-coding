@@ -331,6 +331,141 @@ await test("WorkspacePreviewService serves dist when a project was built", async
 	assert.match(readFileSync(join(String(created.projectRoot), ".pi-project.json"), "utf8"), /"status": "running"/);
 });
 
+await test("WorkspacePreviewService lists generated projects from preview metadata newest first", async () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const previewService = new WorkspacePreviewService(config);
+	const olderDir = join(config.projectsRootDir, "older-app");
+	const newerDir = join(config.projectsRootDir, "newer-app");
+	const brokenDir = join(config.projectsRootDir, "broken-app");
+	const incompleteDir = join(config.projectsRootDir, "incomplete-app");
+	mkdirSync(olderDir, { recursive: true });
+	mkdirSync(newerDir, { recursive: true });
+	mkdirSync(brokenDir, { recursive: true });
+	mkdirSync(incompleteDir, { recursive: true });
+	writeFileSync(
+		join(olderDir, ".pi-project.json"),
+		JSON.stringify({
+			version: 1,
+			projectId: "older-app",
+			sessionId: "session-old",
+			title: "Older App",
+			status: "running",
+			mode: "static",
+			previewUrl: "http://localhost:5173/preview/older-app/",
+			projectRoot: olderDir,
+			serveRoot: olderDir,
+			fileCount: 2,
+			updatedAt: "2026-05-28T10:00:00.000Z",
+			logs: ["old"],
+		}),
+		"utf8",
+	);
+	writeFileSync(
+		join(newerDir, ".pi-project.json"),
+		JSON.stringify({
+			version: 1,
+			projectId: "newer-app",
+			sessionId: "session-new",
+			title: "Newer App",
+			status: "failed",
+			mode: "static",
+			previewUrl: "",
+			projectRoot: newerDir,
+			serveRoot: "",
+			fileCount: 4,
+			updatedAt: "2026-05-29T10:00:00.000Z",
+			logs: ["new"],
+		}),
+		"utf8",
+	);
+	writeFileSync(join(brokenDir, ".pi-project.json"), "{not json", "utf8");
+	writeFileSync(join(incompleteDir, ".pi-project.json"), JSON.stringify({ projectId: "incomplete-app" }), "utf8");
+
+	const result = previewService.listProjects();
+
+	assert.deepEqual(
+		result.projects.map((project) => project.projectId),
+		["newer-app", "older-app"],
+	);
+	assert.equal(result.projects[0].title, "Newer App");
+	assert.equal(result.projects[0].status, "failed");
+	assert.equal(result.projects[0].previewUrl, "");
+	assert.equal(result.projects[0].fileCount, 4);
+	assert.equal(result.projects[0].sessionId, "session-new");
+	assert.equal(result.projects[0].updatedAt, "2026-05-29T10:00:00.000Z");
+	assert.equal("projectRoot" in result.projects[0], false);
+	assert.equal("serveRoot" in result.projects[0], false);
+	assert.equal("logs" in result.projects[0], false);
+});
+
+await test("WorkspacePreviewService rewrites running project preview URLs for the current request host", async () => {
+	const root = tempRoot();
+	const config = testConfig(root, { previewBaseUrl: "" });
+	const previewService = new WorkspacePreviewService(config);
+	const projectDir = join(config.projectsRootDir, "current-host-app");
+	mkdirSync(projectDir, { recursive: true });
+	writeFileSync(
+		join(projectDir, ".pi-project.json"),
+		JSON.stringify({
+			version: 1,
+			projectId: "current-host-app",
+			sessionId: "session-current-host",
+			title: "Current Host App",
+			status: "running",
+			mode: "static",
+			previewUrl: "http://localhost:5173/preview/current-host-app/",
+			projectRoot: projectDir,
+			serveRoot: projectDir,
+			fileCount: 1,
+			updatedAt: "2026-05-29T10:00:00.000Z",
+			logs: [],
+		}),
+		"utf8",
+	);
+
+	const result = previewService.listProjects({ headers: { host: "127.0.0.1:5194" } });
+
+	assert.equal(result.projects[0].previewUrl, "http://127.0.0.1:5194/preview/current-host-app/");
+});
+
+await test("WorkspacePreviewService renames generated project metadata", async () => {
+	const root = tempRoot();
+	const config = testConfig(root, { previewBaseUrl: "" });
+	const previewService = new WorkspacePreviewService(config);
+	const projectDir = join(config.projectsRootDir, "rename-app");
+	const updatedAt = "2026-05-29T10:00:00.000Z";
+	mkdirSync(projectDir, { recursive: true });
+	writeFileSync(
+		join(projectDir, ".pi-project.json"),
+		JSON.stringify({
+			version: 1,
+			projectId: "rename-app",
+			sessionId: "session-rename",
+			title: "Original App",
+			status: "running",
+			mode: "static",
+			previewUrl: "http://localhost:5173/preview/rename-app/",
+			projectRoot: projectDir,
+			serveRoot: projectDir,
+			fileCount: 2,
+			updatedAt,
+			logs: [],
+		}),
+		"utf8",
+	);
+
+	const result = previewService.renameProject("rename-app", "Renamed App", { headers: { host: "127.0.0.1:5194" } });
+	const metadata = JSON.parse(readFileSync(join(projectDir, ".pi-project.json"), "utf8"));
+
+	assert.equal(result.title, "Renamed App");
+	assert.equal(result.status, "running");
+	assert.equal(result.previewUrl, "http://127.0.0.1:5194/preview/rename-app/");
+	assert.equal(result.updatedAt, updatedAt);
+	assert.equal(metadata.title, "Renamed App");
+	assert.equal(metadata.updatedAt, updatedAt);
+});
+
 await test("WorkspaceTaskService previews static root without running package scripts", async () => {
 	const root = tempRoot();
 	const config = testConfig(root);

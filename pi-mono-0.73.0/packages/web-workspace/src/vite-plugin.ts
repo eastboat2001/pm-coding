@@ -7,6 +7,7 @@ import { API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, SKILLS_API_PREFIX } fr
 import { isObject, readJsonBody, sendJson } from "./json.js";
 import type {
 	ProjectFileRequest,
+	ProjectPreviewRenameRequest,
 	ProjectTaskRequest,
 	SkillLoadRequest,
 	SkillResourceRequest,
@@ -145,6 +146,10 @@ async function handleProjectsApi(
 	previews: WorkspacePreviewService,
 	tasks: WorkspaceTaskService,
 ): Promise<void> {
+	if (method === "GET" && (route === "/" || route === "")) {
+		sendJson(res, previews.listProjects(req));
+		return;
+	}
 	if (method === "POST" && route === "/workspace/file") {
 		const body = await readJsonBody(req);
 		sendJson(res, files.handle(body as unknown as ProjectFileRequest));
@@ -164,6 +169,19 @@ async function handleProjectsApi(
 	if (method === "POST" && route === "/workspace/preview") {
 		const body = await readJsonBody(req);
 		sendJson(res, await previews.preview({ ...body, sessionId: String(body.sessionId || "") }, req));
+		return;
+	}
+	const renameMatch = route.match(/^\/([^/]+)$/);
+	if (method === "PUT" && renameMatch) {
+		const body = await readJsonBody(req);
+		sendJson(
+			res,
+			previews.renameProject(
+				decodeURIComponent(renameMatch[1]),
+				String((body as ProjectPreviewRenameRequest).title || ""),
+				req,
+			),
+		);
 		return;
 	}
 	const logsMatch = route.match(/^\/([^/]+)\/logs$/);

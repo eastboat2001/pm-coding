@@ -26,7 +26,7 @@ import {
 	setLanguage,
 } from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
-import { History, Plus, Settings } from "lucide";
+import { Folder, History, PanelsTopLeft, Plus, Settings } from "lucide";
 import "../app.css";
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
@@ -51,6 +51,14 @@ import { ConfiguredServerStorage } from "../storage/configured-server-storage.js
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
+import "./GeneratedAppsPanel.js";
+import type { GeneratedAppsPanel } from "./GeneratedAppsPanel.js";
+import {
+	clampGeneratedAppsPanelWidth,
+	GENERATED_APPS_PANEL_DEFAULT_WIDTH,
+	readGeneratedAppsPanelWidth,
+	writeGeneratedAppsPanelWidth,
+} from "./generated-apps-state.js";
 import { ModelController, SELECTED_MODEL_KEY } from "./model-controller.js";
 import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessionTitle } from "./session-controller.js";
 
@@ -127,15 +135,19 @@ const getProxyUrl = async (): Promise<string | undefined> => {
 
 const loadPiRuntimeConfig = async () => {
 	const [status, skillList] = await Promise.all([configuredStorage.getStatus(), loadServerSkillList()]);
+	const selectableSkills = Array.isArray(skillList.skills) ? skillList.skills : [];
+	const promptSkills = Array.isArray(skillList.promptSkills) ? skillList.promptSkills : [];
+	const defaultSkills = Array.isArray(skillList.defaultSkills) ? skillList.defaultSkills : [];
+	const diagnostics = Array.isArray(skillList.diagnostics) ? skillList.diagnostics : [];
 	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
 	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
-	piRuntimeConfig.selectableSkills = skillList.skills;
-	piRuntimeConfig.globalSkills = skillList.promptSkills;
-	piRuntimeConfig.defaultSkills = skillList.defaultSkills ?? [];
-	piRuntimeConfig.skillDiagnostics = skillList.diagnostics ?? [];
+	piRuntimeConfig.selectableSkills = selectableSkills;
+	piRuntimeConfig.globalSkills = promptSkills;
+	piRuntimeConfig.defaultSkills = defaultSkills;
+	piRuntimeConfig.skillDiagnostics = diagnostics;
 	piRuntimeConfig.skillSlashSuggestions = [
-		createSkillSlashCommand(skillApiErrorDetail(skillList.diagnostics ?? [])),
-		...skillList.skills.map(skillToSlashSuggestion),
+		createSkillSlashCommand(skillApiErrorDetail(diagnostics)),
+		...selectableSkills.map(skillToSlashSuggestion),
 	];
 };
 
@@ -177,8 +189,26 @@ let agent: Agent;
 let chatPanel: ChatPanel;
 let agentUnsubscribe: (() => void) | undefined;
 const resumedInterruptedSessions = new Set<string>();
+let activeSidebarPanel: "apps" | null = null;
+let generatedAppsPanelWidth = safeReadGeneratedAppsPanelWidth();
 
 const getDisplayTitle = () => (isDefaultNewSessionTitle(currentTitle) ? i18n("New Session") : currentTitle);
+
+function safeReadGeneratedAppsPanelWidth(): number {
+	try {
+		return readGeneratedAppsPanelWidth();
+	} catch {
+		return GENERATED_APPS_PANEL_DEFAULT_WIDTH;
+	}
+}
+
+function safeWriteGeneratedAppsPanelWidth(width: number): number {
+	try {
+		return writeGeneratedAppsPanelWidth(width);
+	} catch {
+		return clampGeneratedAppsPanelWidth(width, window.innerWidth);
+	}
+}
 
 const updateUrl = (sessionId?: string) => {
 	const url = new URL(window.location.href);
@@ -335,10 +365,53 @@ const handleAgentEvent = async (event: AgentEvent) => {
 				await saveSession();
 			}
 			renderApp();
+			if (event.type === "agent_end" && activeSidebarPanel === "apps") {
+				refreshGeneratedAppsPanel();
+			}
 			break;
 		}
 	}
 };
+
+function toggleGeneratedAppsPanel(): void {
+	activeSidebarPanel = activeSidebarPanel === "apps" ? null : "apps";
+	renderApp();
+}
+
+function refreshGeneratedAppsPanel(): void {
+	requestAnimationFrame(() => {
+		const panel = document.querySelector("pi-generated-apps-panel") as GeneratedAppsPanel | null;
+		void panel?.refresh();
+	});
+}
+
+function startGeneratedAppsPanelResize(event: PointerEvent): void {
+	if (activeSidebarPanel !== "apps") return;
+	event.preventDefault();
+	const startX = event.clientX;
+	const startWidth = generatedAppsPanelWidth;
+	document.body.classList.add("app-is-resizing-generated-apps");
+
+	const updateWidth = (moveEvent: PointerEvent) => {
+		generatedAppsPanelWidth = clampGeneratedAppsPanelWidth(
+			startWidth + moveEvent.clientX - startX,
+			window.innerWidth,
+		);
+		renderApp();
+	};
+	const finishResize = () => {
+		window.removeEventListener("pointermove", updateWidth);
+		window.removeEventListener("pointerup", finishResize);
+		window.removeEventListener("pointercancel", finishResize);
+		document.body.classList.remove("app-is-resizing-generated-apps");
+		generatedAppsPanelWidth = safeWriteGeneratedAppsPanelWidth(generatedAppsPanelWidth);
+		renderApp();
+	};
+
+	window.addEventListener("pointermove", updateWidth);
+	window.addEventListener("pointerup", finishResize, { once: true });
+	window.addEventListener("pointercancel", finishResize, { once: true });
+}
 
 const handleModelSelect = () => {
 	ModelSelector.open(
@@ -699,8 +772,49 @@ const renderApp = () => {
 				</div>
 			</div>
 
-			<main class="example-content flex-1 min-h-0 overflow-hidden">
-				${chatPanel}
+			<main class=${`example-content app-workspace flex-1 min-h-0 overflow-hidden ${activeSidebarPanel ? "app-workspace--panel-open" : ""}`}>
+				<nav class="app-side-rail" aria-label="Workspace tools">
+					<button
+						type="button"
+						class="app-side-rail__item"
+						disabled
+						title="Files"
+						aria-label="Files"
+					>
+						<span class="app-side-rail__icon">${icon(Folder, "md")}</span>
+						<span class="app-side-rail__label">Files</span>
+					</button>
+					<button
+						type="button"
+						class=${`app-side-rail__item ${activeSidebarPanel === "apps" ? "app-side-rail__item--active" : ""}`}
+						@click=${toggleGeneratedAppsPanel}
+						title="Generated Apps"
+						aria-label="Generated Apps"
+						aria-pressed=${activeSidebarPanel === "apps" ? "true" : "false"}
+					>
+						<span class="app-side-rail__icon">${icon(PanelsTopLeft, "md")}</span>
+						<span class="app-side-rail__label">APP</span>
+					</button>
+				</nav>
+				${
+					activeSidebarPanel === "apps"
+						? html`
+							<aside class="generated-apps-sidebar" style=${`width: ${generatedAppsPanelWidth}px;`}>
+								<pi-generated-apps-panel></pi-generated-apps-panel>
+							</aside>
+							<div
+								class="generated-apps-resizer"
+								role="separator"
+								aria-orientation="vertical"
+								title="Resize generated apps panel"
+								@pointerdown=${startGeneratedAppsPanelResize}
+							></div>
+						`
+						: ""
+				}
+				<section class="app-chat-workspace">
+					${chatPanel}
+				</section>
 			</main>
 		</div>
 	`;

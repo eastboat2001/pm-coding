@@ -64,6 +64,10 @@ export interface ProjectPreviewRequest extends ProjectRequestContext {
 	note?: string;
 }
 
+export interface ProjectPreviewRenameRequest extends JsonObject {
+	title?: string;
+}
+
 export interface ProjectPreviewResult extends JsonObject {
 	version: number;
 	projectId: string;
@@ -77,6 +81,21 @@ export interface ProjectPreviewResult extends JsonObject {
 	fileCount: number;
 	updatedAt: string;
 	logs: string[];
+}
+
+export interface ProjectPreviewSummary extends JsonObject {
+	projectId: string;
+	sessionId: string;
+	title: string;
+	status: string;
+	mode: "static";
+	previewUrl: string;
+	fileCount: number;
+	updatedAt: string;
+}
+
+export interface ProjectPreviewListResult extends JsonObject {
+	projects: ProjectPreviewSummary[];
 }
 
 export type ProjectTaskName = "inspect" | "validate" | "build_static" | "preview" | "logs";

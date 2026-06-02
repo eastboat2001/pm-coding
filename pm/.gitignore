@@ -1,7 +1,8 @@
 # Python cache
 __pycache__/
 *.pyc
-
+data/design_docs/
+data/prd_docs/
 # Virtual environment
 .venv/
 venv/

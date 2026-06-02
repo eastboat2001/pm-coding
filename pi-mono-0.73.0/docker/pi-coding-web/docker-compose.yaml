@@ -1,10 +1,24 @@
 services:
   pi-coding-web:
     image: pi-coding-web:0.73.0
+    pull_policy: never
     container_name: pi-coding-web
+    init: true
     restart: unless-stopped
     ports:
-      - "5173:5173"
+      - "${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
       - ./data:/app/apps/pi-coding-web/data
       - ./pi-storage.config.json:/app/apps/pi-coding-web/pi-storage.config.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5173/api/pi-storage/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

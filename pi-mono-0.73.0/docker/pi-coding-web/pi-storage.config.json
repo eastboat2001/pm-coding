@@ -3,6 +3,7 @@
   "settingsFile": "./data/settings.json",
   "projectsRootDir": "./data/projects",
   "skillsDir": "./data/skills",
+  "defaultSkillsDir": "./data/default-skills",
   "previewBaseUrl": "",
   "serverSessionSyncEnabled": false,
   "defaultModelProvider": "",

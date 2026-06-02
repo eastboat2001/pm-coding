@@ -1,6 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import type { ProjectFileRequest, ProjectFileResult, StorageConfig } from "./types.js";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, extname, relative, resolve } from "node:path";
+import type {
+	ProjectFilePreviewRequest,
+	ProjectFilePreviewResult,
+	ProjectFileRequest,
+	ProjectFileResult,
+	ProjectFilesListResult,
+	ProjectRequestContext,
+	StorageConfig,
+} from "./types.js";
 import {
 	assertInside,
 	listProjectSourceFiles,
@@ -11,6 +19,41 @@ import {
 
 export class WorkspaceFileService {
 	constructor(private readonly config: StorageConfig) {}
+
+	listProjectFiles(body: ProjectRequestContext): ProjectFilesListResult {
+		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
+		const files = listProjectSourceFiles(projectDir).map((file) => normalizeProjectFilePath(relative(projectDir, file)));
+		return { projectId, sessionId, title, projectRoot: projectDir, files, fileCount: files.length };
+	}
+
+	readProjectFilePreview(body: ProjectFilePreviewRequest): ProjectFilePreviewResult {
+		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
+		const relativePath = safeRelativeProjectPath(String(body.filename || "").trim());
+		const targetPath = resolve(projectDir, relativePath);
+		assertInside(projectDir, targetPath);
+		if (!existsSync(targetPath)) throw new Error(`File not found: ${normalizeProjectFilePath(relativePath)}`);
+		const stat = statSync(targetPath);
+		if (!stat.isFile()) throw new Error(`Project path is not a file: ${normalizeProjectFilePath(relativePath)}`);
+
+		const maxBytes = normalizePreviewMaxBytes(body.maxBytes);
+		const bytesToRead = Math.min(stat.size, maxBytes);
+		const buffer = bytesToRead > 0 ? readFilePrefix(targetPath, bytesToRead) : Buffer.alloc(0);
+		const binary = isProbablyBinary(buffer);
+		const content = binary ? "" : buffer.toString("utf8");
+		const filename = normalizeProjectFilePath(relativePath);
+		return {
+			projectId,
+			sessionId,
+			title,
+			filename,
+			content,
+			size: stat.size,
+			language: languageForFilename(filename),
+			binary,
+			truncated: stat.size > bytesToRead,
+			projectRoot: projectDir,
+		};
+	}
 
 	handle(body: ProjectFileRequest): ProjectFileResult {
 		const { projectDir, sessionId } = workspaceContext(this.config, body);
@@ -78,4 +121,54 @@ export class WorkspaceFileService {
 
 		throw new Error(`Unsupported workspace file command: ${command}`);
 	}
+}
+
+const DEFAULT_PROJECT_FILE_PREVIEW_MAX_BYTES = 512 * 1024;
+const PROJECT_FILE_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+
+function normalizeProjectFilePath(path: string): string {
+	return path.replace(/\\/g, "/");
+}
+
+function normalizePreviewMaxBytes(value: unknown): number {
+	const parsed = typeof value === "number" ? value : Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PROJECT_FILE_PREVIEW_MAX_BYTES;
+	return Math.min(Math.floor(parsed), PROJECT_FILE_PREVIEW_MAX_BYTES);
+}
+
+function readFilePrefix(path: string, bytesToRead: number): Buffer {
+	const fd = openSync(path, "r");
+	try {
+		const buffer = Buffer.alloc(bytesToRead);
+		const bytesRead = readSync(fd, buffer, 0, bytesToRead, 0);
+		return bytesRead === bytesToRead ? buffer : buffer.subarray(0, bytesRead);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+function isProbablyBinary(buffer: Buffer): boolean {
+	return buffer.includes(0);
+}
+
+function languageForFilename(filename: string): string {
+	const extension = extname(filename).toLowerCase().slice(1);
+	const languages: Record<string, string> = {
+		cjs: "javascript",
+		css: "css",
+		html: "html",
+		js: "javascript",
+		json: "json",
+		jsx: "javascript",
+		md: "markdown",
+		mjs: "javascript",
+		ts: "typescript",
+		tsx: "typescript",
+		txt: "text",
+		vue: "vue",
+		xml: "xml",
+		yaml: "yaml",
+		yml: "yaml",
+	};
+	return languages[extension] || extension || "text";
 }

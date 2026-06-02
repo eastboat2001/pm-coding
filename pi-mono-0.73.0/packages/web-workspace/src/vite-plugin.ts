@@ -6,7 +6,9 @@ import { loadStorageConfig } from "./config.js";
 import { API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, SKILLS_API_PREFIX } from "./constants.js";
 import { isObject, readJsonBody, sendJson } from "./json.js";
 import type {
+	ProjectFilePreviewRequest,
 	ProjectFileRequest,
+	ProjectRequestContext,
 	ProjectPreviewRenameRequest,
 	ProjectTaskRequest,
 	SkillLoadRequest,
@@ -148,6 +150,16 @@ async function handleProjectsApi(
 ): Promise<void> {
 	if (method === "GET" && (route === "/" || route === "")) {
 		sendJson(res, previews.listProjects(req));
+		return;
+	}
+	if (method === "POST" && route === "/workspace/files") {
+		const body = await readJsonBody(req);
+		sendJson(res, files.listProjectFiles(body as unknown as ProjectRequestContext));
+		return;
+	}
+	if (method === "POST" && route === "/workspace/file-preview") {
+		const body = await readJsonBody(req);
+		sendJson(res, files.readProjectFilePreview(body as unknown as ProjectFilePreviewRequest));
 		return;
 	}
 	if (method === "POST" && route === "/workspace/file") {

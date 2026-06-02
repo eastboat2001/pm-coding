@@ -49,6 +49,33 @@ export interface ProjectFileResult extends JsonObject {
 	projectRoot?: string;
 }
 
+export interface ProjectFilesListResult extends JsonObject {
+	projectId: string;
+	sessionId: string;
+	title: string;
+	files: string[];
+	fileCount: number;
+	projectRoot: string;
+}
+
+export interface ProjectFilePreviewRequest extends ProjectRequestContext {
+	filename: string;
+	maxBytes?: number;
+}
+
+export interface ProjectFilePreviewResult extends JsonObject {
+	projectId: string;
+	sessionId: string;
+	title: string;
+	filename: string;
+	content: string;
+	size: number;
+	language: string;
+	binary: boolean;
+	truncated: boolean;
+	projectRoot: string;
+}
+
 export interface ProjectBashRequest extends ProjectRequestContext {
 	command: string;
 	timeoutMs?: number;

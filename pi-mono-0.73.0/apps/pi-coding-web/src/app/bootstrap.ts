@@ -51,6 +51,18 @@ import { ConfiguredServerStorage } from "../storage/configured-server-storage.js
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
+import "./CurrentProjectFilesPanel.js";
+import type { CurrentProjectFilesPanel } from "./CurrentProjectFilesPanel.js";
+import {
+	clampCurrentProjectFilePreviewDrawerWidth,
+	clampCurrentProjectFilesPanelWidth,
+	CURRENT_PROJECT_FILE_PREVIEW_DRAWER_DEFAULT_WIDTH,
+	CURRENT_PROJECT_FILES_PANEL_DEFAULT_WIDTH,
+	readCurrentProjectFilePreviewDrawerWidth,
+	readCurrentProjectFilesPanelWidth,
+	writeCurrentProjectFilePreviewDrawerWidth,
+	writeCurrentProjectFilesPanelWidth,
+} from "./current-project-files-state.js";
 import "./GeneratedAppsPanel.js";
 import type { GeneratedAppsPanel } from "./GeneratedAppsPanel.js";
 import {
@@ -189,10 +201,45 @@ let agent: Agent;
 let chatPanel: ChatPanel;
 let agentUnsubscribe: (() => void) | undefined;
 const resumedInterruptedSessions = new Set<string>();
-let activeSidebarPanel: "apps" | null = null;
+let activeSidebarPanel: "files" | "apps" | null = null;
+let currentProjectFilesPanelWidth = safeReadCurrentProjectFilesPanelWidth();
 let generatedAppsPanelWidth = safeReadGeneratedAppsPanelWidth();
+let currentProjectFilePreviewFilename = "";
+let currentProjectFilePreviewDrawerWidth = safeReadCurrentProjectFilePreviewDrawerWidth();
 
 const getDisplayTitle = () => (isDefaultNewSessionTitle(currentTitle) ? i18n("New Session") : currentTitle);
+
+function safeReadCurrentProjectFilesPanelWidth(): number {
+	try {
+		return readCurrentProjectFilesPanelWidth();
+	} catch {
+		return CURRENT_PROJECT_FILES_PANEL_DEFAULT_WIDTH;
+	}
+}
+
+function safeWriteCurrentProjectFilesPanelWidth(width: number): number {
+	try {
+		return writeCurrentProjectFilesPanelWidth(width);
+	} catch {
+		return clampCurrentProjectFilesPanelWidth(width, window.innerWidth);
+	}
+}
+
+function safeReadCurrentProjectFilePreviewDrawerWidth(): number {
+	try {
+		return readCurrentProjectFilePreviewDrawerWidth();
+	} catch {
+		return CURRENT_PROJECT_FILE_PREVIEW_DRAWER_DEFAULT_WIDTH;
+	}
+}
+
+function safeWriteCurrentProjectFilePreviewDrawerWidth(width: number): number {
+	try {
+		return writeCurrentProjectFilePreviewDrawerWidth(width);
+	} catch {
+		return clampCurrentProjectFilePreviewDrawerWidth(width, window.innerWidth);
+	}
+}
 
 function safeReadGeneratedAppsPanelWidth(): number {
 	try {
@@ -223,6 +270,9 @@ const updateUrl = (sessionId?: string) => {
 };
 
 const setCurrentSessionId = async (sessionId: string | undefined) => {
+	if (currentSessionId !== sessionId) {
+		currentProjectFilePreviewFilename = "";
+	}
 	currentSessionId = sessionId;
 	if (sessionId) {
 		await storage.settings.set(CURRENT_SESSION_ID_KEY, sessionId);
@@ -355,6 +405,12 @@ const deleteBrowserSession = async (sessionId: string) => {
 
 const handleAgentEvent = async (event: AgentEvent) => {
 	switch (event.type) {
+		case "tool_execution_end": {
+			if (activeSidebarPanel === "files" && event.toolName === "project_file") {
+				refreshCurrentProjectFilesPanel();
+			}
+			break;
+		}
 		case "message_end":
 		case "agent_end": {
 			const generatedTitle = generateTitle(agent.state.messages);
@@ -365,17 +421,32 @@ const handleAgentEvent = async (event: AgentEvent) => {
 				await saveSession();
 			}
 			renderApp();
-			if (event.type === "agent_end" && activeSidebarPanel === "apps") {
-				refreshGeneratedAppsPanel();
+			if (event.type === "agent_end") {
+				if (activeSidebarPanel === "apps") refreshGeneratedAppsPanel();
+				if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 			}
 			break;
 		}
 	}
 };
 
+function toggleCurrentProjectFilesPanel(): void {
+	activeSidebarPanel = activeSidebarPanel === "files" ? null : "files";
+	if (activeSidebarPanel !== "files") currentProjectFilePreviewFilename = "";
+	renderApp();
+}
+
 function toggleGeneratedAppsPanel(): void {
 	activeSidebarPanel = activeSidebarPanel === "apps" ? null : "apps";
+	if (activeSidebarPanel === "apps") currentProjectFilePreviewFilename = "";
 	renderApp();
+}
+
+function refreshCurrentProjectFilesPanel(): void {
+	requestAnimationFrame(() => {
+		const panel = document.querySelector("pi-current-project-files-panel") as CurrentProjectFilesPanel | null;
+		void panel?.refresh();
+	});
 }
 
 function refreshGeneratedAppsPanel(): void {
@@ -383,6 +454,34 @@ function refreshGeneratedAppsPanel(): void {
 		const panel = document.querySelector("pi-generated-apps-panel") as GeneratedAppsPanel | null;
 		void panel?.refresh();
 	});
+}
+
+function startCurrentProjectFilesPanelResize(event: PointerEvent): void {
+	if (activeSidebarPanel !== "files") return;
+	event.preventDefault();
+	const startX = event.clientX;
+	const startWidth = currentProjectFilesPanelWidth;
+	document.body.classList.add("app-is-resizing-current-project-files");
+
+	const updateWidth = (moveEvent: PointerEvent) => {
+		currentProjectFilesPanelWidth = clampCurrentProjectFilesPanelWidth(
+			startWidth + moveEvent.clientX - startX,
+			window.innerWidth,
+		);
+		renderApp();
+	};
+	const finishResize = () => {
+		window.removeEventListener("pointermove", updateWidth);
+		window.removeEventListener("pointerup", finishResize);
+		window.removeEventListener("pointercancel", finishResize);
+		document.body.classList.remove("app-is-resizing-current-project-files");
+		currentProjectFilesPanelWidth = safeWriteCurrentProjectFilesPanelWidth(currentProjectFilesPanelWidth);
+		renderApp();
+	};
+
+	window.addEventListener("pointermove", updateWidth);
+	window.addEventListener("pointerup", finishResize, { once: true });
+	window.addEventListener("pointercancel", finishResize, { once: true });
 }
 
 function startGeneratedAppsPanelResize(event: PointerEvent): void {
@@ -411,6 +510,48 @@ function startGeneratedAppsPanelResize(event: PointerEvent): void {
 	window.addEventListener("pointermove", updateWidth);
 	window.addEventListener("pointerup", finishResize, { once: true });
 	window.addEventListener("pointercancel", finishResize, { once: true });
+}
+
+function startCurrentProjectFilePreviewDrawerResize(event: PointerEvent): void {
+	if (!currentProjectFilePreviewFilename) return;
+	event.preventDefault();
+	const startX = event.clientX;
+	const startWidth = currentProjectFilePreviewDrawerWidth;
+	document.body.classList.add("app-is-resizing-current-project-file-preview");
+
+	const updateWidth = (moveEvent: PointerEvent) => {
+		currentProjectFilePreviewDrawerWidth = clampCurrentProjectFilePreviewDrawerWidth(
+			startWidth - (moveEvent.clientX - startX),
+			window.innerWidth,
+		);
+		renderApp();
+	};
+	const finishResize = () => {
+		window.removeEventListener("pointermove", updateWidth);
+		window.removeEventListener("pointerup", finishResize);
+		window.removeEventListener("pointercancel", finishResize);
+		document.body.classList.remove("app-is-resizing-current-project-file-preview");
+		currentProjectFilePreviewDrawerWidth = safeWriteCurrentProjectFilePreviewDrawerWidth(
+			currentProjectFilePreviewDrawerWidth,
+		);
+		renderApp();
+	};
+
+	window.addEventListener("pointermove", updateWidth);
+	window.addEventListener("pointerup", finishResize, { once: true });
+	window.addEventListener("pointercancel", finishResize, { once: true });
+}
+
+function openCurrentProjectFilePreview(event: CustomEvent<{ filename?: string }>): void {
+	const filename = String(event.detail?.filename || "");
+	if (!filename) return;
+	currentProjectFilePreviewFilename = filename;
+	renderApp();
+}
+
+function closeCurrentProjectFilePreview(): void {
+	currentProjectFilePreviewFilename = "";
+	renderApp();
 }
 
 const handleModelSelect = () => {
@@ -648,6 +789,7 @@ const newSession = async () => {
 const renderApp = () => {
 	const app = document.getElementById("app");
 	if (!app) return;
+	const currentProjectTitle = agent ? sessionTitle(currentTitle, agent.state.messages) : currentTitle;
 
 	const appHtml = html`
 		<div class="example-shell w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
@@ -776,10 +918,11 @@ const renderApp = () => {
 				<nav class="app-side-rail" aria-label="Workspace tools">
 					<button
 						type="button"
-						class="app-side-rail__item"
-						disabled
+						class=${`app-side-rail__item ${activeSidebarPanel === "files" ? "app-side-rail__item--active" : ""}`}
+						@click=${toggleCurrentProjectFilesPanel}
 						title="Files"
 						aria-label="Files"
+						aria-pressed=${activeSidebarPanel === "files" ? "true" : "false"}
 					>
 						<span class="app-side-rail__icon">${icon(Folder, "md")}</span>
 						<span class="app-side-rail__label">Files</span>
@@ -796,6 +939,27 @@ const renderApp = () => {
 						<span class="app-side-rail__label">APP</span>
 					</button>
 				</nav>
+				${
+					activeSidebarPanel === "files"
+						? html`
+							<aside class="current-project-files-sidebar" style=${`width: ${currentProjectFilesPanelWidth}px;`}>
+								<pi-current-project-files-panel
+									.sessionId=${currentSessionId || ""}
+									.title=${currentProjectTitle}
+									.selectedFilename=${currentProjectFilePreviewFilename}
+									@pi-open-current-project-file-preview=${openCurrentProjectFilePreview}
+								></pi-current-project-files-panel>
+							</aside>
+							<div
+								class="current-project-files-resizer"
+								role="separator"
+								aria-orientation="vertical"
+								title="Resize files panel"
+								@pointerdown=${startCurrentProjectFilesPanelResize}
+							></div>
+						`
+						: ""
+				}
 				${
 					activeSidebarPanel === "apps"
 						? html`
@@ -815,6 +979,26 @@ const renderApp = () => {
 				<section class="app-chat-workspace">
 					${chatPanel}
 				</section>
+				${
+					currentProjectFilePreviewFilename
+						? html`
+							<div
+								class="current-project-file-preview-resizer"
+								role="separator"
+								aria-orientation="vertical"
+								title="Resize file preview"
+								@pointerdown=${startCurrentProjectFilePreviewDrawerResize}
+							></div>
+							<pi-current-project-file-preview-drawer
+								.sessionId=${currentSessionId || ""}
+								.title=${currentProjectTitle}
+								.filename=${currentProjectFilePreviewFilename}
+								style=${`width: ${currentProjectFilePreviewDrawerWidth}px; flex-basis: ${currentProjectFilePreviewDrawerWidth}px;`}
+								@pi-close-current-project-file-preview=${closeCurrentProjectFilePreview}
+							></pi-current-project-file-preview-drawer>
+						`
+						: ""
+				}
 			</main>
 		</div>
 	`;

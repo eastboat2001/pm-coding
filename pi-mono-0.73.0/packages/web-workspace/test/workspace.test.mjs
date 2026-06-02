@@ -225,6 +225,48 @@ await test("WorkspaceFileService creates, rewrites, updates, lists, reads, and d
 	assert.equal(deleted.action, "deleted");
 });
 
+await test("WorkspaceFileService lists current project files without write-side effects", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const service = new WorkspaceFileService(config);
+	const context = { sessionId: "session-files", title: "Demo App" };
+
+	service.handle({ ...context, command: "create", filename: "src/main.js", content: "console.log('ok');" });
+	service.handle({ ...context, command: "create", filename: "src/components/App.vue", content: "<template></template>" });
+	const siblingDir = join(config.projectsRootDir, "legacy-session-");
+	mkdirSync(siblingDir, { recursive: true });
+
+	const listed = service.listProjectFiles(context);
+	const missing = service.listProjectFiles({ sessionId: "session-missing", title: "Missing App" });
+
+	assert.deepEqual(listed.files, ["src/components/App.vue", "src/main.js"]);
+	assert.equal(listed.fileCount, 2);
+	assert.equal(existsSync(siblingDir), true);
+	assert.deepEqual(missing.files, []);
+	assert.equal(existsSync(join(config.projectsRootDir, "missing-app-session-")), false);
+});
+
+await test("WorkspaceFileService previews a current project text file without write-side effects", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const service = new WorkspaceFileService(config);
+	const context = { sessionId: "session-preview", title: "Preview App" };
+
+	service.handle({ ...context, command: "create", filename: "src/main.ts", content: "export const answer = 42;\n" });
+	const siblingDir = join(config.projectsRootDir, "legacy-session-");
+	mkdirSync(siblingDir, { recursive: true });
+
+	const preview = service.readProjectFilePreview({ ...context, filename: "src/main.ts" });
+
+	assert.equal(preview.filename, "src/main.ts");
+	assert.equal(preview.content, "export const answer = 42;\n");
+	assert.equal(preview.language, "typescript");
+	assert.equal(preview.binary, false);
+	assert.equal(preview.truncated, false);
+	assert.equal(existsSync(siblingDir), true);
+	assert.throws(() => service.readProjectFilePreview({ ...context, filename: "../outside.txt" }), /Project path component/);
+});
+
 await test("WorkspaceFileService rejects update when old_str is not unique", () => {
 	const root = tempRoot();
 	const service = new WorkspaceFileService(testConfig(root));

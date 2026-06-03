@@ -2,6 +2,7 @@ import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { loadMonaco } from "./monaco-loader.js";
 import { replaceMonacoEditorModel } from "./monaco-model-state.js";
+import { MONACO_FILE_PREVIEW_LIGHT_THEME, monacoThemeForRoot } from "./monaco-theme-state.js";
 
 type Monaco = Awaited<ReturnType<typeof loadMonaco>>;
 type MonacoEditor = ReturnType<Monaco["editor"]["create"]>;
@@ -23,6 +24,8 @@ export class MonacoFileViewer extends LitElement {
 	private model: MonacoModel | undefined;
 	private modelKey = "";
 	private resizeObserver: ResizeObserver | undefined;
+	private themeObserver: MutationObserver | undefined;
+	private themeName = MONACO_FILE_PREVIEW_LIGHT_THEME;
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
 		return this;
@@ -30,6 +33,8 @@ export class MonacoFileViewer extends LitElement {
 
 	override connectedCallback(): void {
 		super.connectedCallback();
+		this.syncTheme();
+		this.observeThemeChanges();
 		void this.ensureEditor();
 	}
 
@@ -47,9 +52,11 @@ export class MonacoFileViewer extends LitElement {
 
 	override disconnectedCallback(): void {
 		this.resizeObserver?.disconnect();
+		this.themeObserver?.disconnect();
 		this.editor?.dispose();
 		this.model?.dispose();
 		this.resizeObserver = undefined;
+		this.themeObserver = undefined;
 		this.editor = undefined;
 		this.model = undefined;
 		super.disconnectedCallback();
@@ -91,7 +98,7 @@ export class MonacoFileViewer extends LitElement {
 					readOnly: this.readOnly,
 					renderLineHighlight: "all",
 					scrollBeyondLastLine: false,
-					theme: "pi-file-preview",
+					theme: this.themeName,
 					wordWrap: "off",
 				});
 				this.resizeObserver = new ResizeObserver(() => this.editor?.layout());
@@ -105,6 +112,17 @@ export class MonacoFileViewer extends LitElement {
 			this.loading = false;
 			this.error = error instanceof Error ? error.message : String(error);
 		}
+	}
+
+	private observeThemeChanges(): void {
+		this.themeObserver?.disconnect();
+		this.themeObserver = new MutationObserver(() => this.syncTheme());
+		this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
+	}
+
+	private syncTheme(): void {
+		this.themeName = monacoThemeForRoot();
+		this.monaco?.editor.setTheme(this.themeName);
 	}
 
 	private syncModel(): void {

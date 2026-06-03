@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, relative, resolve } from "node:path";
 import type {
@@ -5,6 +6,8 @@ import type {
 	ProjectFilePreviewResult,
 	ProjectFileRequest,
 	ProjectFileResult,
+	ProjectFileSaveRequest,
+	ProjectFileSaveResult,
 	ProjectFilesListResult,
 	ProjectRequestContext,
 	StorageConfig,
@@ -51,8 +54,36 @@ export class WorkspaceFileService {
 			language: languageForFilename(filename),
 			binary,
 			truncated: stat.size > bytesToRead,
+			hash: fileHash(targetPath),
 			projectRoot: projectDir,
 		};
+	}
+
+	saveProjectFile(body: ProjectFileSaveRequest): ProjectFileSaveResult {
+		const { projectDir } = workspaceContext(this.config, body);
+		const filename = String(body.filename || "").trim();
+		const content = body.content;
+		const baseHash = String(body.baseHash || "").trim();
+		if (!filename) throw new Error("Field `filename` is required.");
+		if (typeof content !== "string") throw new Error("Field `content` is required.");
+		if (!baseHash) throw new Error("Field `baseHash` is required.");
+		if (Buffer.byteLength(content, "utf8") > PROJECT_FILE_SAVE_MAX_BYTES) {
+			throw new Error(`File content exceeds the ${PROJECT_FILE_SAVE_MAX_BYTES} byte save limit.`);
+		}
+
+		const relativePath = safeRelativeProjectPath(filename);
+		const targetPath = resolve(projectDir, relativePath);
+		assertInside(projectDir, targetPath);
+		if (!existsSync(targetPath)) throw new Error(`File not found: ${normalizeProjectFilePath(relativePath)}`);
+		const stat = statSync(targetPath);
+		if (!stat.isFile()) throw new Error(`Project path is not a file: ${normalizeProjectFilePath(relativePath)}`);
+		const currentPrefix = stat.size > 0 ? readFilePrefix(targetPath, Math.min(stat.size, DEFAULT_PROJECT_FILE_PREVIEW_MAX_BYTES)) : Buffer.alloc(0);
+		if (isProbablyBinary(currentPrefix)) throw new Error(`Cannot edit binary file: ${normalizeProjectFilePath(relativePath)}`);
+		const currentHash = fileHash(targetPath);
+		if (currentHash !== baseHash) throw new Error("File has changed since it was opened. Reload before saving.");
+
+		writeFileSync(targetPath, content, "utf8");
+		return { ...this.readProjectFilePreview(body), action: "saved" };
 	}
 
 	handle(body: ProjectFileRequest): ProjectFileResult {
@@ -125,6 +156,7 @@ export class WorkspaceFileService {
 
 const DEFAULT_PROJECT_FILE_PREVIEW_MAX_BYTES = 512 * 1024;
 const PROJECT_FILE_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+const PROJECT_FILE_SAVE_MAX_BYTES = 2 * 1024 * 1024;
 
 function normalizeProjectFilePath(path: string): string {
 	return path.replace(/\\/g, "/");
@@ -149,6 +181,10 @@ function readFilePrefix(path: string, bytesToRead: number): Buffer {
 
 function isProbablyBinary(buffer: Buffer): boolean {
 	return buffer.includes(0);
+}
+
+function fileHash(path: string): string {
+	return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function languageForFilename(filename: string): string {

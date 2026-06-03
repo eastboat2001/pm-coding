@@ -24,6 +24,11 @@ export type CurrentProjectFilePreviewRequest = CurrentProjectFileContext & {
 	filename: string;
 };
 
+export type CurrentProjectFileSaveRequest = CurrentProjectFilePreviewRequest & {
+	content: string;
+	baseHash: string;
+};
+
 export type CurrentProjectFilePreview = {
 	filename: string;
 	content: string;
@@ -31,6 +36,7 @@ export type CurrentProjectFilePreview = {
 	language: string;
 	binary: boolean;
 	truncated: boolean;
+	hash: string;
 };
 
 export type CurrentProjectFileTreeNode = {
@@ -59,6 +65,7 @@ type PreviewResponse = {
 	language?: unknown;
 	binary?: unknown;
 	truncated?: unknown;
+	hash?: unknown;
 };
 
 export async function loadCurrentProjectFiles(
@@ -90,6 +97,28 @@ export async function loadCurrentProjectFilePreview(
 			sessionId: request.sessionId,
 			title: request.title || "",
 			filename: request.filename,
+		}),
+	});
+	const result = (await response.json().catch(() => ({}))) as PreviewResponse;
+	if (!response.ok) throw new Error(apiErrorMessage(result, response.status));
+	return toCurrentProjectFilePreview(result);
+}
+
+export async function saveCurrentProjectFile(
+	request: CurrentProjectFileSaveRequest,
+	fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+	origin = globalThis.location?.origin || "http://localhost",
+): Promise<CurrentProjectFilePreview> {
+	const endpoint = new URL("/api/pi-projects/workspace/file-save", origin).toString();
+	const response = await fetchImpl(endpoint, {
+		method: "POST",
+		headers: { Accept: "application/json", "Content-Type": "application/json" },
+		body: JSON.stringify({
+			sessionId: request.sessionId,
+			title: request.title || "",
+			filename: request.filename,
+			content: request.content,
+			baseHash: request.baseHash,
 		}),
 	});
 	const result = (await response.json().catch(() => ({}))) as PreviewResponse;
@@ -138,6 +167,42 @@ export function filterCurrentProjectFiles(files: string[], query: string): strin
 	const needle = normalizeSearchText(query);
 	if (!needle) return files;
 	return files.filter((file) => normalizeSearchText(file).includes(needle));
+}
+
+export function monacoLanguageForProjectFile(filename: string, serverLanguage = ""): string {
+	const extension = fileExtension(filename).toLowerCase();
+	const normalizedLanguage = serverLanguage.trim().toLowerCase();
+	const byExtension: Record<string, string> = {
+		cjs: "javascript",
+		css: "css",
+		html: "html",
+		js: "javascript",
+		json: "json",
+		jsx: "javascript",
+		md: "markdown",
+		mjs: "javascript",
+		scss: "scss",
+		ts: "typescript",
+		tsx: "typescript",
+		txt: "plaintext",
+		vue: "html",
+		xml: "xml",
+		yaml: "yaml",
+		yml: "yaml",
+	};
+	const byServerLanguage: Record<string, string> = {
+		css: "css",
+		html: "html",
+		javascript: "javascript",
+		json: "json",
+		markdown: "markdown",
+		text: "plaintext",
+		typescript: "typescript",
+		vue: "html",
+		xml: "xml",
+		yaml: "yaml",
+	};
+	return byExtension[extension] || byServerLanguage[normalizedLanguage] || "plaintext";
 }
 
 export function clampCurrentProjectFilesPanelWidth(width: number, viewportWidth: number): number {
@@ -245,6 +310,7 @@ function toCurrentProjectFilePreview(value: PreviewResponse): CurrentProjectFile
 		language: stringValue(value.language) || "text",
 		binary: value.binary === true,
 		truncated: value.truncated === true,
+		hash: stringValue(value.hash),
 	};
 }
 

@@ -8,6 +8,7 @@ import { isObject, readJsonBody, sendJson } from "./json.js";
 import type {
 	ProjectFilePreviewRequest,
 	ProjectFileRequest,
+	ProjectFileSaveRequest,
 	ProjectRequestContext,
 	ProjectPreviewRenameRequest,
 	ProjectTaskRequest,
@@ -160,6 +161,11 @@ async function handleProjectsApi(
 	if (method === "POST" && route === "/workspace/file-preview") {
 		const body = await readJsonBody(req);
 		sendJson(res, files.readProjectFilePreview(body as unknown as ProjectFilePreviewRequest));
+		return;
+	}
+	if (method === "POST" && route === "/workspace/file-save") {
+		const body = await readJsonBody(req);
+		sendJson(res, files.saveProjectFile(body as unknown as ProjectFileSaveRequest));
 		return;
 	}
 	if (method === "POST" && route === "/workspace/file") {

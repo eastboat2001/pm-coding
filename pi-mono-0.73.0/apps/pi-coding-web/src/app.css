@@ -581,6 +581,11 @@ pi-generated-apps-panel {
 	color: var(--primary);
 }
 
+.current-project-file-preview-drawer__close:disabled {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
 .current-project-files-panel__spin {
 	display: inline-flex;
 	animation: generated-apps-spin 800ms linear infinite;
@@ -746,6 +751,7 @@ pi-current-project-file-preview-drawer {
 
 .current-project-file-preview-drawer__title {
 	display: grid;
+	flex: 1 1 auto;
 	min-width: 0;
 	grid-template-columns: 22px minmax(0, 1fr);
 	gap: 3px 8px;
@@ -778,6 +784,60 @@ pi-current-project-file-preview-drawer {
 	line-height: 1.2;
 }
 
+.current-project-file-preview-drawer__actions {
+	display: flex;
+	flex: 0 0 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+.current-project-file-preview-drawer__button {
+	display: inline-flex;
+	min-width: 0;
+	height: 32px;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 0 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--background);
+	color: var(--foreground);
+	font: inherit;
+	font-size: 12px;
+	font-weight: 650;
+	line-height: 1;
+	cursor: pointer;
+	transition:
+		background-color 120ms ease,
+		border-color 120ms ease,
+		color 120ms ease;
+}
+
+.current-project-file-preview-drawer__button:hover {
+	border-color: color-mix(in oklab, var(--primary) 24%, var(--border));
+	background: var(--secondary);
+	color: var(--primary);
+}
+
+.current-project-file-preview-drawer__button:disabled {
+	cursor: not-allowed;
+	opacity: 0.58;
+}
+
+.current-project-file-preview-drawer__button--primary {
+	border-color: color-mix(in oklab, var(--primary) 34%, var(--border));
+	background: var(--primary);
+	color: var(--primary-foreground);
+}
+
+.current-project-file-preview-drawer__button--primary:hover {
+	background: color-mix(in oklab, var(--primary) 88%, black 12%);
+	color: var(--primary-foreground);
+}
+
 .current-project-file-preview-drawer__body {
 	display: flex;
 	min-height: 0;
@@ -806,6 +866,26 @@ pi-current-project-file-preview-drawer {
 	padding: 4px 7px;
 }
 
+.current-project-file-preview-drawer__save-error {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 10px 14px 0;
+	padding: 9px 10px;
+	border: 1px solid color-mix(in oklab, #f04438 38%, var(--border));
+	border-radius: 8px;
+	background: color-mix(in oklab, #f04438 8%, var(--card));
+	color: #b42318;
+	font-size: 12px;
+	line-height: 1.35;
+}
+
+.current-project-file-preview-drawer__save-error span:last-child {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
 .current-project-file-preview-drawer__code {
 	flex: 1 1 auto;
 	min-height: 0;
@@ -819,6 +899,48 @@ pi-current-project-file-preview-drawer {
 	line-height: 1.55;
 	white-space: pre;
 	tab-size: 2;
+}
+
+pi-monaco-file-viewer {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: 0;
+}
+
+.monaco-file-viewer {
+	position: relative;
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: 0;
+	background: color-mix(in oklab, var(--background) 96%, black 4%);
+}
+
+.monaco-file-viewer__editor {
+	width: 100%;
+	min-width: 0;
+	min-height: 0;
+	flex: 1 1 auto;
+}
+
+.monaco-file-viewer__overlay {
+	position: absolute;
+	inset: 12px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px dashed color-mix(in oklab, var(--border) 80%, var(--muted-foreground));
+	border-radius: 8px;
+	background: color-mix(in oklab, var(--card) 88%, transparent);
+	color: var(--muted-foreground);
+	font-size: 13px;
+	pointer-events: none;
+}
+
+.monaco-file-viewer__overlay--error {
+	border-color: color-mix(in oklab, #f04438 45%, var(--border));
+	color: #b42318;
 }
 
 .current-project-file-preview-drawer__state {

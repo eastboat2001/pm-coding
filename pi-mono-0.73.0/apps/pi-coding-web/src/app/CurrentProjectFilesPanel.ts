@@ -9,7 +9,10 @@ import {
 	FileCode,
 	FileText,
 	Folder,
+	Pencil,
 	RefreshCw,
+	RotateCcw,
+	Save,
 	Search,
 	X,
 } from "lucide";
@@ -21,7 +24,11 @@ import {
 	type CurrentProjectFileTreeNode,
 	loadCurrentProjectFilePreview,
 	loadCurrentProjectFiles,
+	monacoLanguageForProjectFile,
+	saveCurrentProjectFile,
 } from "./current-project-files-state.js";
+import type { MonacoFileViewer } from "./MonacoFileViewer.js";
+import "./MonacoFileViewer.js";
 
 @customElement("pi-current-project-files-panel")
 export class CurrentProjectFilesPanel extends LitElement {
@@ -245,6 +252,10 @@ export class CurrentProjectFilePreviewDrawer extends LitElement {
 	@state() private preview: CurrentProjectFilePreview | null = null;
 	@state() private loading = false;
 	@state() private error = "";
+	@state() private editing = false;
+	@state() private saving = false;
+	@state() private saveError = "";
+	@state() private editorRevision = 0;
 
 	private lastLoadKey = "";
 
@@ -272,18 +283,65 @@ export class CurrentProjectFilePreviewDrawer extends LitElement {
 						<strong>${basename(this.filename) || t("File preview")}</strong>
 						<small>${this.filename}</small>
 					</div>
-					<button
-						type="button"
-						class="current-project-file-preview-drawer__close"
-						@click=${() => this.close()}
-						title=${t("Close preview")}
-						aria-label=${t("Close preview")}
-					>
-						${icon(X, "sm")}
-					</button>
+					<div class="current-project-file-preview-drawer__actions">
+						${this.renderHeaderActions()}
+						<button
+							type="button"
+							class="current-project-file-preview-drawer__close"
+							@click=${() => this.close()}
+							?disabled=${this.saving}
+							title=${t("Close preview")}
+							aria-label=${t("Close preview")}
+						>
+							${icon(X, "sm")}
+						</button>
+					</div>
 				</header>
 				<div class="current-project-file-preview-drawer__body">${this.renderPreviewBody()}</div>
 			</aside>
+		`;
+	}
+
+	private renderHeaderActions(): TemplateResult | string {
+		if (!this.preview || this.preview.binary || this.preview.truncated) return "";
+		if (this.editing) {
+			return html`
+				<button
+					type="button"
+					class="current-project-file-preview-drawer__button current-project-file-preview-drawer__button--primary"
+					@click=${() => void this.saveEdit()}
+					?disabled=${this.saving}
+					title=${t("Save changes")}
+					aria-label=${t("Save changes")}
+				>
+					${icon(Save, "sm")}
+					<span>${this.saving ? t("Saving") : t("Save")}</span>
+				</button>
+				<button
+					type="button"
+					class="current-project-file-preview-drawer__button"
+					@click=${() => this.cancelEdit()}
+					?disabled=${this.saving}
+					title=${t("Cancel editing")}
+					aria-label=${t("Cancel editing")}
+				>
+					${icon(RotateCcw, "sm")}
+					<span>${t("Cancel")}</span>
+				</button>
+			`;
+		}
+		return html`
+			<button
+				type="button"
+				class="current-project-file-preview-drawer__button"
+				@click=${() => this.startEdit()}
+				?disabled=${!this.canEditPreview()}
+				title=${t("Edit file")}
+				aria-label=${t("Edit file")}
+			>
+				${icon(Pencil, "sm")}
+				<span>${t("Edit")}</span>
+			</button>
 		`;
 	}
 
@@ -320,9 +378,26 @@ export class CurrentProjectFilePreviewDrawer extends LitElement {
 			<div class="current-project-file-preview-drawer__meta">
 				<span>${this.preview.language || t("text")}</span>
 				<span>${formatBytes(this.preview.size)}</span>
+				<span>${this.editing ? t("editing") : t("read only")}</span>
 				${this.preview.truncated ? html`<span>${t("truncated")}</span>` : ""}
 			</div>
-			<pre class="current-project-file-preview-drawer__code"><code>${this.preview.content}</code></pre>
+			${
+				this.saveError
+					? html`
+							<div class="current-project-file-preview-drawer__save-error">
+								<span>${icon(AlertCircle, "sm")}</span>
+								<span>${this.saveError}</span>
+							</div>
+						`
+					: ""
+			}
+			<pi-monaco-file-viewer
+				.filename=${this.preview.filename}
+				.language=${monacoLanguageForProjectFile(this.preview.filename, this.preview.language)}
+				.content=${this.preview.content}
+				.readOnly=${!this.editing}
+				.revision=${this.editorRevision}
+			></pi-monaco-file-viewer>
 		`;
 	}
 
@@ -332,6 +407,9 @@ export class CurrentProjectFilePreviewDrawer extends LitElement {
 		this.lastLoadKey = loadKey;
 		this.preview = null;
 		this.error = "";
+		this.editing = false;
+		this.saving = false;
+		this.saveError = "";
 		if (!this.sessionId || !this.filename) return;
 		this.loading = true;
 		try {
@@ -340,6 +418,7 @@ export class CurrentProjectFilePreviewDrawer extends LitElement {
 				title: this.title,
 				filename: this.filename,
 			});
+			this.editorRevision += 1;
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -347,7 +426,56 @@ export class CurrentProjectFilePreviewDrawer extends LitElement {
 		}
 	}
 
+	private canEditPreview(): boolean {
+		return Boolean(
+			this.preview && this.preview.hash && !this.preview.binary && !this.preview.truncated && !this.loading && !this.saving,
+		);
+	}
+
+	private startEdit(): void {
+		if (!this.canEditPreview()) return;
+		this.saveError = "";
+		this.editing = true;
+	}
+
+	private cancelEdit(): void {
+		if (this.saving) return;
+		this.editing = false;
+		this.saveError = "";
+		this.editorRevision += 1;
+	}
+
+	private async saveEdit(): Promise<void> {
+		if (!this.preview || this.saving) return;
+		const viewer = this.querySelector<MonacoFileViewer>("pi-monaco-file-viewer");
+		const content = viewer?.getValue() ?? this.preview.content;
+		if (content === this.preview.content) {
+			this.editing = false;
+			this.saveError = "";
+			this.editorRevision += 1;
+			return;
+		}
+		this.saving = true;
+		this.saveError = "";
+		try {
+			this.preview = await saveCurrentProjectFile({
+				sessionId: this.sessionId,
+				title: this.title,
+				filename: this.preview.filename,
+				content,
+				baseHash: this.preview.hash,
+			});
+			this.editing = false;
+			this.editorRevision += 1;
+		} catch (error) {
+			this.saveError = error instanceof Error ? error.message : String(error);
+		} finally {
+			this.saving = false;
+		}
+	}
+
 	private close(): void {
+		if (this.saving) return;
 		this.dispatchEvent(new CustomEvent("pi-close-current-project-file-preview", { bubbles: true, composed: true }));
 	}
 }

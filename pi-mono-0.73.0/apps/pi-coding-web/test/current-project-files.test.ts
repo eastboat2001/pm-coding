@@ -6,6 +6,8 @@ import {
 	filterCurrentProjectFiles,
 	loadCurrentProjectFilePreview,
 	loadCurrentProjectFiles,
+	monacoLanguageForProjectFile,
+	saveCurrentProjectFile,
 } from "../src/app/current-project-files-state.js";
 
 describe("current project files state", () => {
@@ -57,6 +59,7 @@ describe("current project files state", () => {
 					language: "typescript",
 					binary: false,
 					truncated: false,
+					hash: "a".repeat(64),
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
 			);
@@ -78,6 +81,56 @@ describe("current project files state", () => {
 		});
 		expect(result.content).toBe("export const answer = 42;\n");
 		expect(result.language).toBe("typescript");
+		expect(result.hash).toBe("a".repeat(64));
+	});
+
+	it("saves a current session file through the hash-protected workspace endpoint", async () => {
+		const calls: Array<{ url: string; init?: RequestInit }> = [];
+		const fetchImpl: typeof fetch = async (input, init) => {
+			calls.push({ url: String(input), init });
+			return new Response(
+				JSON.stringify({
+					action: "saved",
+					filename: "src/main.ts",
+					content: "export const answer = 43;\n",
+					size: 26,
+					language: "typescript",
+					binary: false,
+					truncated: false,
+					hash: "b".repeat(64),
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		};
+
+		const result = await saveCurrentProjectFile(
+			{
+				sessionId: "session-123",
+				title: "Demo App",
+				filename: "src/main.ts",
+				content: "export const answer = 43;\n",
+				baseHash: "a".repeat(64),
+			},
+			fetchImpl,
+			"http://localhost:5173",
+		);
+
+		expect(calls[0]).toEqual({
+			url: "http://localhost:5173/api/pi-projects/workspace/file-save",
+			init: {
+				method: "POST",
+				headers: { Accept: "application/json", "Content-Type": "application/json" },
+				body: JSON.stringify({
+					sessionId: "session-123",
+					title: "Demo App",
+					filename: "src/main.ts",
+					content: "export const answer = 43;\n",
+					baseHash: "a".repeat(64),
+				}),
+			},
+		});
+		expect(result.content).toBe("export const answer = 43;\n");
+		expect(result.hash).toBe("b".repeat(64));
 	});
 
 	it("builds a directory-first project file tree with file counts", () => {
@@ -112,5 +165,13 @@ describe("current project files state", () => {
 		expect(clampCurrentProjectFilePreviewDrawerWidth(120, 1600)).toBe(320);
 		expect(clampCurrentProjectFilePreviewDrawerWidth(560, 1600)).toBe(560);
 		expect(clampCurrentProjectFilePreviewDrawerWidth(1200, 1000)).toBe(550);
+	});
+
+	it("maps project files to bundled Monaco language ids", () => {
+		expect(monacoLanguageForProjectFile("src/main.tsx", "typescript")).toBe("typescript");
+		expect(monacoLanguageForProjectFile("src/App.vue", "vue")).toBe("html");
+		expect(monacoLanguageForProjectFile("package.json", "json")).toBe("json");
+		expect(monacoLanguageForProjectFile("README.md", "markdown")).toBe("markdown");
+		expect(monacoLanguageForProjectFile("assets/logo.unknown", "unknown")).toBe("plaintext");
 	});
 });

@@ -263,8 +263,55 @@ await test("WorkspaceFileService previews a current project text file without wr
 	assert.equal(preview.language, "typescript");
 	assert.equal(preview.binary, false);
 	assert.equal(preview.truncated, false);
+	assert.equal(preview.hash.length, 64);
 	assert.equal(existsSync(siblingDir), true);
 	assert.throws(() => service.readProjectFilePreview({ ...context, filename: "../outside.txt" }), /Project path component/);
+});
+
+await test("WorkspaceFileService saves a text file preview with hash conflict protection", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const service = new WorkspaceFileService(config);
+	const context = { sessionId: "session-save", title: "Save App" };
+
+	service.handle({ ...context, command: "create", filename: "src/main.ts", content: "export const answer = 42;\n" });
+	const preview = service.readProjectFilePreview({ ...context, filename: "src/main.ts" });
+	const saved = service.saveProjectFile({
+		...context,
+		filename: "src/main.ts",
+		content: "export const answer = 43;\n",
+		baseHash: preview.hash,
+	});
+	const read = service.readProjectFilePreview({ ...context, filename: "src/main.ts" });
+
+	assert.equal(saved.filename, "src/main.ts");
+	assert.equal(saved.content, "export const answer = 43;\n");
+	assert.equal(saved.hash, read.hash);
+	assert.notEqual(saved.hash, preview.hash);
+	assert.equal(read.content, "export const answer = 43;\n");
+});
+
+await test("WorkspaceFileService rejects saving when the base hash is stale", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const service = new WorkspaceFileService(config);
+	const context = { sessionId: "session-save-conflict", title: "Save Conflict" };
+
+	service.handle({ ...context, command: "create", filename: "src/main.ts", content: "export const answer = 42;\n" });
+	const preview = service.readProjectFilePreview({ ...context, filename: "src/main.ts" });
+	service.handle({ ...context, command: "rewrite", filename: "src/main.ts", content: "export const answer = 99;\n" });
+
+	assert.throws(
+		() =>
+			service.saveProjectFile({
+				...context,
+				filename: "src/main.ts",
+				content: "export const answer = 43;\n",
+				baseHash: preview.hash,
+			}),
+		/File has changed since it was opened/,
+	);
+	assert.equal(service.readProjectFilePreview({ ...context, filename: "src/main.ts" }).content, "export const answer = 99;\n");
 });
 
 await test("WorkspaceFileService rejects update when old_str is not unique", () => {

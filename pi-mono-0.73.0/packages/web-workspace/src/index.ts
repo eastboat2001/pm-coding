@@ -7,6 +7,8 @@ export type {
 	ProjectFilePreviewResult,
 	ProjectFileRequest,
 	ProjectFileResult,
+	ProjectFileSaveRequest,
+	ProjectFileSaveResult,
 	ProjectFilesListResult,
 	ProjectPreviewListResult,
 	ProjectPreviewRenameRequest,

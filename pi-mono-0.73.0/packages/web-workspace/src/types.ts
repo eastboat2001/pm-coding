@@ -73,7 +73,18 @@ export interface ProjectFilePreviewResult extends JsonObject {
 	language: string;
 	binary: boolean;
 	truncated: boolean;
+	hash: string;
 	projectRoot: string;
+}
+
+export interface ProjectFileSaveRequest extends ProjectRequestContext {
+	filename: string;
+	content: string;
+	baseHash: string;
+}
+
+export interface ProjectFileSaveResult extends ProjectFilePreviewResult {
+	action: "saved";
 }
 
 export interface ProjectBashRequest extends ProjectRequestContext {

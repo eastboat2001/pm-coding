@@ -11,6 +11,7 @@ packages/*/dist-firefox/
 
 # Environment
 .env
+*.secrets.env
 
 # Editor files
 .vscode/
@@ -38,10 +39,11 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
-
+.packages/
 
 apps/pi-coding-web/data/projects/
 apps/pi-coding-web/data/sessions/
+apps/pi-coding-web/data/logs/
 apps/pi-coding-web/data/skills/*
 !apps/pi-coding-web/data/skills/.gitkeep
 apps/pi-coding-web/data/default-skills/*

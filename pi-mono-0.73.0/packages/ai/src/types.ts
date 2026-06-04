@@ -104,6 +104,12 @@ export interface StreamOptions {
 	 */
 	onResponse?: (response: ProviderResponse, model: Model<Api>) => void | Promise<void>;
 	/**
+	 * Optional callback invoked for provider stream chunks after the HTTP response
+	 * is accepted and before the chunk is mapped into PI assistant events.
+	 * Providers that do not expose structured chunks may ignore this option.
+	 */
+	onChunk?: (chunk: unknown, model: Model<Api>) => void | Promise<void>;
+	/**
 	 * Optional custom HTTP headers to include in API requests.
 	 * Merged with provider defaults; can override default headers.
 	 * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).

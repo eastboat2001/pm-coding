@@ -18,10 +18,10 @@ import {
 } from "lucide";
 import {
 	buildCurrentProjectFileTree,
-	filterCurrentProjectFiles,
 	type CurrentProjectFilePreview,
 	type CurrentProjectFilesResult,
 	type CurrentProjectFileTreeNode,
+	filterCurrentProjectFiles,
 	loadCurrentProjectFilePreview,
 	loadCurrentProjectFiles,
 	monacoLanguageForProjectFile,
@@ -121,11 +121,7 @@ export class CurrentProjectFilesPanel extends LitElement {
 		`;
 	}
 
-	private renderBody(
-		allFiles: string[],
-		visibleFiles: string[],
-		tree: CurrentProjectFileTreeNode,
-	): TemplateResult {
+	private renderBody(allFiles: string[], visibleFiles: string[], tree: CurrentProjectFileTreeNode): TemplateResult {
 		if (this.error) {
 			return html`
 				<div class="current-project-files-panel__state current-project-files-panel__state--error">
@@ -428,7 +424,7 @@ export class CurrentProjectFilePreviewDrawer extends LitElement {
 
 	private canEditPreview(): boolean {
 		return Boolean(
-			this.preview && this.preview.hash && !this.preview.binary && !this.preview.truncated && !this.loading && !this.saving,
+			this.preview?.hash && !this.preview.binary && !this.preview.truncated && !this.loading && !this.saving,
 		);
 	}
 

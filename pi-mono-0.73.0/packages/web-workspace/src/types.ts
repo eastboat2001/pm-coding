@@ -17,6 +17,128 @@ export interface StorageConfig {
 	defaultModelProvider: string;
 	defaultModelId: string;
 	handoffDefaultThinkingLevel: string;
+	secretsEnvFile: string;
+	logsDbFile: string;
+	loggingEnabled: boolean;
+	logStdoutEnabled: boolean;
+	rawProviderLoggingEnabled: boolean;
+	rawProviderLogMaxChars: number;
+	promptSnapshotLoggingEnabled: boolean;
+	promptSnapshotMaxChars: number;
+	modelOutputSnapshotLoggingEnabled: boolean;
+	modelOutputSnapshotMaxChars: number;
+	logRetentionDays: number;
+	logMaxEvents: number;
+	logCleanupIntervalMs: number;
+	logVacuumIntervalMs: number;
+	langfuseEnabled: boolean;
+	langfuseHost: string;
+	langfusePublicKey: string;
+	langfuseSecretKey: string;
+	langfuseOtelEndpoint: string;
+	langfuseFlushIntervalMs: number;
+	langfuseBatchSize: number;
+	langfuseExportPromptSnapshots: boolean;
+	langfuseExportRawChunks: boolean;
+	langfuseExportModelOutputSnapshots: boolean;
+	otelServiceName: string;
+	otelDeploymentEnvironment: string;
+}
+
+export type DiagnosticLogLevel = "debug" | "info" | "warn" | "error";
+
+export type DiagnosticLogCategory =
+	| "agent"
+	| "handoff"
+	| "model"
+	| "project"
+	| "provider"
+	| "skill"
+	| "storage"
+	| "system"
+	| "tool";
+
+export interface DiagnosticLogEventInput extends JsonObject {
+	timestamp?: string;
+	level?: DiagnosticLogLevel;
+	category?: DiagnosticLogCategory;
+	eventType?: string;
+	sessionId?: string;
+	traceId?: string;
+	spanId?: string;
+	parentSpanId?: string;
+	requestId?: string;
+	provider?: string;
+	model?: string;
+	durationMs?: number;
+	data?: JsonObject;
+}
+
+export interface DiagnosticLogEventRecord extends JsonObject {
+	id: number;
+	timestamp: string;
+	level: DiagnosticLogLevel;
+	category: DiagnosticLogCategory;
+	eventType: string;
+	sessionId?: string;
+	traceId?: string;
+	spanId?: string;
+	parentSpanId?: string;
+	requestId?: string;
+	provider?: string;
+	model?: string;
+	durationMs?: number;
+	data: JsonObject;
+}
+
+export interface DiagnosticLogWriteRequest extends JsonObject {
+	events?: DiagnosticLogEventInput[];
+}
+
+export interface DiagnosticLogWriteResult extends JsonObject {
+	accepted: number;
+	dropped: number;
+}
+
+export interface DiagnosticLogQuery extends JsonObject {
+	sessionId?: string;
+	traceId?: string;
+	level?: DiagnosticLogLevel;
+	category?: DiagnosticLogCategory;
+	eventType?: string;
+	limit?: number;
+}
+
+export interface DiagnosticLogQueryResult extends JsonObject {
+	events: DiagnosticLogEventRecord[];
+}
+
+export interface DiagnosticLogStatus extends JsonObject {
+	enabled: boolean;
+	databaseFile: string;
+	eventCount: number;
+	rawProviderLoggingEnabled?: boolean;
+	rawProviderLogMaxChars?: number;
+	promptSnapshotLoggingEnabled?: boolean;
+	promptSnapshotMaxChars?: number;
+	modelOutputSnapshotLoggingEnabled?: boolean;
+	modelOutputSnapshotMaxChars?: number;
+	logRetentionDays?: number;
+	logMaxEvents?: number;
+	lastCleanupAt?: string;
+	lastVacuumAt?: string;
+	langfuseEnabled?: boolean;
+	langfuseConfigured?: boolean;
+	langfuseHost?: string;
+	langfuseOtelEndpoint?: string;
+	langfuseQueuedEvents?: number;
+	langfuseLastFlushAt?: string;
+	langfuseLastError?: string;
+	langfuseExportPromptSnapshots?: boolean;
+	langfuseExportRawChunks?: boolean;
+	langfuseExportModelOutputSnapshots?: boolean;
+	otelServiceName?: string;
+	otelDeploymentEnvironment?: string;
 }
 
 export interface ProjectWorkspaceContext {

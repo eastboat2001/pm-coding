@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, extname, relative, resolve } from "node:path";
 import type {
 	ProjectFilePreviewRequest,
@@ -25,7 +35,9 @@ export class WorkspaceFileService {
 
 	listProjectFiles(body: ProjectRequestContext): ProjectFilesListResult {
 		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
-		const files = listProjectSourceFiles(projectDir).map((file) => normalizeProjectFilePath(relative(projectDir, file)));
+		const files = listProjectSourceFiles(projectDir).map((file) =>
+			normalizeProjectFilePath(relative(projectDir, file)),
+		);
 		return { projectId, sessionId, title, projectRoot: projectDir, files, fileCount: files.length };
 	}
 
@@ -77,8 +89,12 @@ export class WorkspaceFileService {
 		if (!existsSync(targetPath)) throw new Error(`File not found: ${normalizeProjectFilePath(relativePath)}`);
 		const stat = statSync(targetPath);
 		if (!stat.isFile()) throw new Error(`Project path is not a file: ${normalizeProjectFilePath(relativePath)}`);
-		const currentPrefix = stat.size > 0 ? readFilePrefix(targetPath, Math.min(stat.size, DEFAULT_PROJECT_FILE_PREVIEW_MAX_BYTES)) : Buffer.alloc(0);
-		if (isProbablyBinary(currentPrefix)) throw new Error(`Cannot edit binary file: ${normalizeProjectFilePath(relativePath)}`);
+		const currentPrefix =
+			stat.size > 0
+				? readFilePrefix(targetPath, Math.min(stat.size, DEFAULT_PROJECT_FILE_PREVIEW_MAX_BYTES))
+				: Buffer.alloc(0);
+		if (isProbablyBinary(currentPrefix))
+			throw new Error(`Cannot edit binary file: ${normalizeProjectFilePath(relativePath)}`);
 		const currentHash = fileHash(targetPath);
 		if (currentHash !== baseHash) throw new Error("File has changed since it was opened. Reload before saving.");
 

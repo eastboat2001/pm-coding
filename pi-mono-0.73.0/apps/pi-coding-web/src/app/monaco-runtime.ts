@@ -11,10 +11,7 @@ import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker.js?worker
 import "monaco-editor/esm/vs/language/json/monaco.contribution.js";
 import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker.js?worker";
 import "monaco-editor/esm/vs/language/typescript/monaco.contribution.js";
-import {
-	MONACO_FILE_PREVIEW_DARK_THEME,
-	MONACO_FILE_PREVIEW_LIGHT_THEME,
-} from "./monaco-theme-state.js";
+import { MONACO_FILE_PREVIEW_DARK_THEME, MONACO_FILE_PREVIEW_LIGHT_THEME } from "./monaco-theme-state.js";
 
 type MonacoWorkerLabel = "css" | "html" | "json" | "javascript" | "typescript" | string;
 

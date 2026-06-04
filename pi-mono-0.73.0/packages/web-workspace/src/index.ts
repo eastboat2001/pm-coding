@@ -1,5 +1,17 @@
 export { loadStorageConfig } from "./config.js";
+export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
+export type { LangfuseDiagnosticEvent, LangfuseExporterStatus } from "./langfuse-exporter.js";
+export { LangfuseDiagnosticExporter } from "./langfuse-exporter.js";
 export type {
+	DiagnosticLogCategory,
+	DiagnosticLogEventInput,
+	DiagnosticLogEventRecord,
+	DiagnosticLogLevel,
+	DiagnosticLogQuery,
+	DiagnosticLogQueryResult,
+	DiagnosticLogStatus,
+	DiagnosticLogWriteRequest,
+	DiagnosticLogWriteResult,
 	JsonObject,
 	ProjectBashRequest,
 	ProjectBashResult,

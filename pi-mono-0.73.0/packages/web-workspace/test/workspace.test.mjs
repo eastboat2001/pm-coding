@@ -7,6 +7,7 @@ import {
 	isUnsafeProjectCommand,
 	loadStorageConfig,
 	WorkspaceCommandService,
+	WorkspaceDiagnosticLogService,
 	WorkspaceFileService,
 	WorkspacePreviewService,
 	WorkspaceSessionService,
@@ -33,6 +34,32 @@ function testConfig(root, overrides = {}) {
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
+		secretsEnvFile: "",
+		logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
+		loggingEnabled: true,
+		logStdoutEnabled: false,
+		rawProviderLoggingEnabled: false,
+		rawProviderLogMaxChars: 12000,
+		promptSnapshotLoggingEnabled: false,
+		promptSnapshotMaxChars: 20000,
+		modelOutputSnapshotLoggingEnabled: false,
+		modelOutputSnapshotMaxChars: 20000,
+		logRetentionDays: 30,
+		logMaxEvents: 50000,
+		logCleanupIntervalMs: 3600000,
+		logVacuumIntervalMs: 86400000,
+		langfuseEnabled: false,
+		langfuseHost: "",
+		langfusePublicKey: "",
+		langfuseSecretKey: "",
+		langfuseOtelEndpoint: "",
+		langfuseFlushIntervalMs: 5000,
+		langfuseBatchSize: 50,
+		langfuseExportPromptSnapshots: false,
+		langfuseExportRawChunks: false,
+		langfuseExportModelOutputSnapshots: false,
+		otelServiceName: "pi-coding-web",
+		otelDeploymentEnvironment: "",
 		...overrides,
 	};
 }
@@ -71,6 +98,31 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 	assert.equal(config.defaultModelProvider, "openai");
 	assert.equal(config.defaultModelId, "gpt-5.1");
 	assert.equal(config.handoffDefaultThinkingLevel, "medium");
+	assert.equal(config.logsDbFile, resolve(root, "data/logs/pi-diagnostics.sqlite"));
+	assert.equal(config.loggingEnabled, true);
+	assert.equal(config.logStdoutEnabled, false);
+	assert.equal(config.rawProviderLoggingEnabled, false);
+	assert.equal(config.rawProviderLogMaxChars, 12000);
+	assert.equal(config.promptSnapshotLoggingEnabled, false);
+	assert.equal(config.promptSnapshotMaxChars, 20000);
+	assert.equal(config.modelOutputSnapshotLoggingEnabled, false);
+	assert.equal(config.modelOutputSnapshotMaxChars, 20000);
+	assert.equal(config.logRetentionDays, 30);
+	assert.equal(config.logMaxEvents, 50000);
+	assert.equal(config.logCleanupIntervalMs, 3600000);
+	assert.equal(config.logVacuumIntervalMs, 86400000);
+	assert.equal(config.langfuseEnabled, false);
+	assert.equal(config.langfuseHost, "");
+	assert.equal(config.langfusePublicKey, "");
+	assert.equal(config.langfuseSecretKey, "");
+	assert.equal(config.langfuseOtelEndpoint, "");
+	assert.equal(config.langfuseFlushIntervalMs, 5000);
+	assert.equal(config.langfuseBatchSize, 50);
+	assert.equal(config.langfuseExportPromptSnapshots, false);
+	assert.equal(config.langfuseExportRawChunks, false);
+	assert.equal(config.langfuseExportModelOutputSnapshots, false);
+	assert.equal(config.otelServiceName, "pi-coding-web");
+	assert.equal(config.otelDeploymentEnvironment, "");
 });
 
 await test("loadStorageConfig supports legacy storageDir defaults", () => {
@@ -87,6 +139,410 @@ await test("loadStorageConfig supports legacy storageDir defaults", () => {
 	assert.equal(config.defaultModelProvider, "");
 	assert.equal(config.defaultModelId, "");
 	assert.equal(config.handoffDefaultThinkingLevel, "high");
+	assert.equal(config.logsDbFile, resolve(root, "data/logs/pi-diagnostics.sqlite"));
+	assert.equal(config.loggingEnabled, true);
+	assert.equal(config.logStdoutEnabled, false);
+	assert.equal(config.rawProviderLoggingEnabled, false);
+	assert.equal(config.promptSnapshotLoggingEnabled, false);
+	assert.equal(config.modelOutputSnapshotLoggingEnabled, false);
+	assert.equal(config.logRetentionDays, 30);
+	assert.equal(config.logMaxEvents, 50000);
+	assert.equal(config.langfuseEnabled, false);
+	assert.equal(config.langfuseHost, "");
+	assert.equal(config.langfuseOtelEndpoint, "");
+	assert.equal(config.otelServiceName, "pi-coding-web");
+});
+
+await test("loadStorageConfig loads Langfuse keys from a configured secrets env file", () => {
+	const root = tempRoot();
+	writeFileSync(
+		join(root, "pi-storage.config.json"),
+		JSON.stringify({
+			secretsEnvFile: "pi-storage.secrets.env",
+			langfusePublicKey: "pk-config",
+			langfuseSecretKey: "sk-config",
+		}),
+		"utf8",
+	);
+	writeFileSync(
+		join(root, "pi-storage.secrets.env"),
+		[
+			"# local secret file",
+			"LANGFUSE_PUBLIC_KEY=pk-from-file",
+			"LANGFUSE_SECRET_KEY=\"sk from file\"",
+			"PI_LANGFUSE_HOST=https://cloud.langfuse.com/",
+		].join("\n"),
+		"utf8",
+	);
+
+	const previousPublicKey = process.env.LANGFUSE_PUBLIC_KEY;
+	const previousSecretKey = process.env.LANGFUSE_SECRET_KEY;
+	const previousHost = process.env.PI_LANGFUSE_HOST;
+	try {
+		delete process.env.LANGFUSE_PUBLIC_KEY;
+		process.env.LANGFUSE_SECRET_KEY = "sk-from-env";
+		delete process.env.PI_LANGFUSE_HOST;
+
+		const config = loadStorageConfig(root);
+
+		assert.equal(config.secretsEnvFile, resolve(root, "pi-storage.secrets.env"));
+		assert.equal(config.langfusePublicKey, "pk-from-file");
+		assert.equal(config.langfuseSecretKey, "sk-from-env");
+		assert.equal(config.langfuseHost, "https://cloud.langfuse.com");
+	} finally {
+		if (previousPublicKey === undefined) delete process.env.LANGFUSE_PUBLIC_KEY;
+		else process.env.LANGFUSE_PUBLIC_KEY = previousPublicKey;
+		if (previousSecretKey === undefined) delete process.env.LANGFUSE_SECRET_KEY;
+		else process.env.LANGFUSE_SECRET_KEY = previousSecretKey;
+		if (previousHost === undefined) delete process.env.PI_LANGFUSE_HOST;
+		else process.env.PI_LANGFUSE_HOST = previousHost;
+	}
+});
+
+await test("loadStorageConfig supports diagnostic log database settings", () => {
+	const root = tempRoot();
+	writeFileSync(
+		join(root, "pi-storage.config.json"),
+		JSON.stringify({
+			logsDbFile: "runtime/logs/diagnostics.sqlite",
+			loggingEnabled: false,
+			logStdoutEnabled: true,
+			rawProviderLoggingEnabled: true,
+			rawProviderLogMaxChars: 1234,
+			promptSnapshotLoggingEnabled: true,
+			promptSnapshotMaxChars: 5678,
+			modelOutputSnapshotLoggingEnabled: true,
+			modelOutputSnapshotMaxChars: 8765,
+			logRetentionDays: 7,
+			logMaxEvents: 4321,
+			logCleanupIntervalMs: 111,
+			logVacuumIntervalMs: 222,
+			langfuseEnabled: true,
+			langfuseHost: "http://langfuse.local/",
+			langfusePublicKey: "pk-test",
+			langfuseSecretKey: "sk-test",
+			langfuseOtelEndpoint: "http://otel-collector.local/v1/traces/",
+			langfuseFlushIntervalMs: 333,
+			langfuseBatchSize: 9,
+			langfuseExportPromptSnapshots: true,
+			langfuseExportRawChunks: true,
+			langfuseExportModelOutputSnapshots: true,
+			otelServiceName: "pi-worker",
+			otelDeploymentEnvironment: "staging",
+		}),
+		"utf8",
+	);
+
+	const config = loadStorageConfig(root);
+
+	assert.equal(config.logsDbFile, resolve(root, "runtime/logs/diagnostics.sqlite"));
+	assert.equal(config.loggingEnabled, false);
+	assert.equal(config.logStdoutEnabled, true);
+	assert.equal(config.rawProviderLoggingEnabled, true);
+	assert.equal(config.rawProviderLogMaxChars, 1234);
+	assert.equal(config.promptSnapshotLoggingEnabled, true);
+	assert.equal(config.promptSnapshotMaxChars, 5678);
+	assert.equal(config.modelOutputSnapshotLoggingEnabled, true);
+	assert.equal(config.modelOutputSnapshotMaxChars, 8765);
+	assert.equal(config.logRetentionDays, 7);
+	assert.equal(config.logMaxEvents, 4321);
+	assert.equal(config.logCleanupIntervalMs, 111);
+	assert.equal(config.logVacuumIntervalMs, 222);
+	assert.equal(config.langfuseEnabled, true);
+	assert.equal(config.langfuseHost, "http://langfuse.local");
+	assert.equal(config.langfusePublicKey, "pk-test");
+	assert.equal(config.langfuseSecretKey, "sk-test");
+	assert.equal(config.langfuseOtelEndpoint, "http://otel-collector.local/v1/traces");
+	assert.equal(config.langfuseFlushIntervalMs, 333);
+	assert.equal(config.langfuseBatchSize, 9);
+	assert.equal(config.langfuseExportPromptSnapshots, true);
+	assert.equal(config.langfuseExportRawChunks, true);
+	assert.equal(config.langfuseExportModelOutputSnapshots, true);
+	assert.equal(config.otelServiceName, "pi-worker");
+	assert.equal(config.otelDeploymentEnvironment, "staging");
+});
+
+await test("WorkspaceDiagnosticLogService stores sanitized events and filters by session", () => {
+	const root = tempRoot();
+	const service = new WorkspaceDiagnosticLogService(testConfig(root));
+	service.ensureDirs();
+
+	const written = service.writeEvents({
+		events: [
+			{
+				timestamp: "2026-06-04T00:00:00.000Z",
+				level: "info",
+				category: "provider",
+				eventType: "provider.payload",
+				sessionId: "session-a",
+				traceId: "trace-a",
+				spanId: "span-a",
+				data: {
+					Authorization: "Bearer secret",
+					apiKey: "secret-key",
+					nested: { cookie: "abc", ok: "kept" },
+				},
+			},
+			{
+				timestamp: "2026-06-04T00:01:00.000Z",
+				level: "error",
+				category: "model",
+				eventType: "stream.error",
+				sessionId: "session-b",
+				traceId: "trace-b",
+				spanId: "span-b",
+				data: { message: "failed" },
+			},
+		],
+	});
+
+	assert.equal(written.accepted, 2);
+	const result = service.queryEvents({ sessionId: "session-a", limit: 10 });
+	assert.equal(result.events.length, 1);
+	assert.equal(result.events[0].data.Authorization, "[redacted]");
+	assert.equal(result.events[0].data.apiKey, "[redacted]");
+	assert.equal(result.events[0].data.nested.cookie, "[redacted]");
+	assert.equal(result.events[0].data.nested.ok, "kept");
+	assert.equal(result.events[0].eventType, "provider.payload");
+});
+
+await test("WorkspaceDiagnosticLogService reports disabled status without writing events", () => {
+	const root = tempRoot();
+	const service = new WorkspaceDiagnosticLogService(testConfig(root, { loggingEnabled: false }));
+	service.ensureDirs();
+
+	const written = service.writeEvents({
+		events: [
+			{
+				level: "warn",
+				category: "system",
+				eventType: "system.warning",
+				data: { message: "ignored" },
+			},
+		],
+	});
+
+	assert.equal(written.accepted, 0);
+	const status = service.status();
+	assert.equal(status.enabled, false);
+	assert.equal(status.eventCount, 0);
+});
+
+await test("WorkspaceDiagnosticLogService prunes old events and caps retained rows", () => {
+	const root = tempRoot();
+	const service = new WorkspaceDiagnosticLogService(
+		testConfig(root, {
+			logRetentionDays: 1,
+			logMaxEvents: 3,
+			logCleanupIntervalMs: 0,
+			logVacuumIntervalMs: 0,
+		}),
+	);
+	const oldTimestamp = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+	const freshTimestamp = new Date().toISOString();
+
+	service.writeEvents({
+		events: [
+			{
+				timestamp: oldTimestamp,
+				level: "info",
+				category: "system",
+				eventType: "old.event",
+			},
+			...Array.from({ length: 5 }, (_, index) => ({
+				timestamp: freshTimestamp,
+				level: "info",
+				category: "system",
+				eventType: `fresh.event.${index}`,
+			})),
+		],
+	});
+
+	const status = service.status();
+	const result = service.queryEvents({ category: "system", limit: 10 });
+	assert.equal(status.eventCount, 3);
+	assert.equal(result.events.length, 3);
+	assert.deepEqual(
+		result.events.map((event) => event.eventType),
+		["fresh.event.4", "fresh.event.3", "fresh.event.2"],
+	);
+	assert.equal(result.events.some((event) => event.eventType === "old.event"), false);
+});
+
+await test("WorkspaceDiagnosticLogService exports sanitized Langfuse OTLP trace batches", async () => {
+	const root = tempRoot();
+	const requests = [];
+	const service = new WorkspaceDiagnosticLogService(
+		testConfig(root, {
+			langfuseEnabled: true,
+			langfuseHost: "http://langfuse.local",
+			langfusePublicKey: "pk-test",
+			langfuseSecretKey: "sk-test",
+			langfuseBatchSize: 20,
+			langfuseFlushIntervalMs: 0,
+			langfuseExportPromptSnapshots: false,
+			langfuseExportRawChunks: false,
+		}),
+		{
+			fetch: async (url, init) => {
+				requests.push({
+					url,
+					authorization: init?.headers?.Authorization,
+					ingestionVersion: init?.headers?.["x-langfuse-ingestion-version"],
+					contentType: init?.headers?.["Content-Type"],
+					body: JSON.parse(String(init?.body || "{}")),
+				});
+				return new Response(JSON.stringify({}), { status: 200 });
+			},
+		},
+	);
+
+	service.writeEvents({
+		events: [
+			{
+				timestamp: "2026-06-04T00:00:00.000Z",
+				level: "info",
+				category: "provider",
+				eventType: "provider.request.start",
+				sessionId: "session-a",
+				traceId: "trace-a",
+				requestId: "request-a",
+				provider: "Local vLLM",
+				model: "qwen",
+				data: { messageCount: 2, apiKey: "secret" },
+			},
+			{
+				timestamp: "2026-06-04T00:00:01.000Z",
+				level: "debug",
+				category: "provider",
+				eventType: "provider.payload.snapshot",
+				sessionId: "session-a",
+				traceId: "trace-a",
+				requestId: "request-a",
+				data: { payloadChunks: ["prompt text"] },
+			},
+			{
+				timestamp: "2026-06-04T00:00:02.000Z",
+				level: "debug",
+				category: "provider",
+				eventType: "provider.raw_chunk",
+				sessionId: "session-a",
+				traceId: "trace-a",
+				requestId: "request-a",
+				data: { chunkChunks: ["raw chunk"] },
+			},
+			{
+				timestamp: "2026-06-04T00:00:03.000Z",
+				level: "info",
+				category: "model",
+				eventType: "model.stream.summary",
+				sessionId: "session-a",
+				traceId: "trace-a",
+				requestId: "request-a",
+				provider: "Local vLLM",
+				model: "qwen",
+				durationMs: 3000,
+				data: { textChars: 10, thinkingChars: 20, stopReason: "stop" },
+			},
+		],
+	});
+
+	await service.flushLangfuse();
+
+	assert.equal(requests.length, 1);
+	assert.equal(requests[0].url, "http://langfuse.local/api/public/otel/v1/traces");
+	assert.equal(requests[0].authorization, `Basic ${Buffer.from("pk-test:sk-test").toString("base64")}`);
+	assert.equal(requests[0].ingestionVersion, "4");
+	assert.equal(requests[0].contentType, "application/json");
+	const resourceSpan = requests[0].body.resourceSpans[0];
+	assert.equal(attributeValue(resourceSpan.resource.attributes, "service.name"), "pi-coding-web");
+	assert.equal(attributeValue(resourceSpan.resource.attributes, "telemetry.sdk.name"), "pi-diagnostic-logger");
+	const spans = resourceSpan.scopeSpans.flatMap((scopeSpan) => scopeSpan.spans);
+	assert.ok(spans.every((span) => /^[a-f0-9]{32}$/.test(span.traceId)));
+	assert.ok(spans.every((span) => /^[a-f0-9]{16}$/.test(span.spanId)));
+	assert.ok(spans.some((span) => span.name === "PI model request: Local vLLM / qwen"));
+	assert.ok(
+		spans.some(
+			(span) =>
+				attributeValue(span.attributes, "langfuse.observation.type") === "generation" &&
+				attributeValue(span.attributes, "gen_ai.request.model") === "qwen",
+		),
+	);
+	assert.ok(spans.some((span) => attributeValue(span.attributes, "pi.event_type") === "model.stream.summary"));
+	const serialized = JSON.stringify(spans);
+	assert.match(serialized, /Local vLLM/);
+	assert.doesNotMatch(serialized, /prompt text/);
+	assert.doesNotMatch(serialized, /raw chunk/);
+	assert.doesNotMatch(serialized, /secret/);
+});
+
+await test("WorkspaceDiagnosticLogService exports readable generation input and output when snapshots are allowed", async () => {
+	const root = tempRoot();
+	const requests = [];
+	const service = new WorkspaceDiagnosticLogService(
+		testConfig(root, {
+			langfuseEnabled: true,
+			langfuseHost: "http://langfuse.local",
+			langfusePublicKey: "pk-test",
+			langfuseSecretKey: "sk-test",
+			langfuseBatchSize: 20,
+			langfuseFlushIntervalMs: 0,
+			langfuseExportPromptSnapshots: true,
+			langfuseExportModelOutputSnapshots: true,
+		}),
+		{
+			fetch: async (url, init) => {
+				requests.push({
+					url,
+					body: JSON.parse(String(init?.body || "{}")),
+				});
+				return new Response(JSON.stringify({}), { status: 200 });
+			},
+		},
+	);
+
+	service.writeEvents({
+		events: [
+			{
+				timestamp: "2026-06-04T00:00:03.000Z",
+				level: "info",
+				category: "model",
+				eventType: "model.stream.summary",
+				sessionId: "session-readable",
+				traceId: "trace-readable",
+				requestId: "request-readable",
+				provider: "Local vLLM",
+				model: "qwen",
+				durationMs: 3000,
+				data: {
+					textChars: 17,
+					thinkingChars: 14,
+					stopReason: "stop",
+					inputSnapshot: {
+						payloadChunks: ['{"messages":[{"role":"user","content":"build a dashboard"}]}'],
+						truncated: false,
+					},
+					outputSnapshot: {
+						textChunks: ["Here is the app."],
+						thinkingChunks: ["I will build it"],
+						toolCalls: [{ name: "project_file", arguments: '{"filename":"index.html"}' }],
+						truncated: false,
+					},
+				},
+			},
+		],
+	});
+
+	await service.flushLangfuse();
+
+	const spans = requests[0].body.resourceSpans[0].scopeSpans.flatMap((scopeSpan) => scopeSpan.spans);
+	const generation = spans.find((span) => attributeValue(span.attributes, "langfuse.observation.type") === "generation");
+	const input = JSON.parse(attributeValue(generation.attributes, "langfuse.observation.input"));
+	const output = JSON.parse(attributeValue(generation.attributes, "langfuse.observation.output"));
+	assert.match(JSON.stringify(input), /build a dashboard/);
+	assert.match(JSON.stringify(output), /Here is the app/);
+	assert.match(JSON.stringify(output), /I will build it/);
+	assert.match(JSON.stringify(output), /project_file/);
 });
 
 await test("WorkspaceSkillService loads global skills and hides disabled skills from prompt metadata", () => {
@@ -434,6 +890,7 @@ await test("configuredStoragePlugin ignores generated storage directories in the
 			settingsFile: join(root, "runtime", "settings.json"),
 			projectsRootDir: join(root, "runtime", "projects"),
 			skillsDir: join(root, "runtime", "skills"),
+			logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
 		}),
 		"utf8",
 	);
@@ -446,6 +903,7 @@ await test("configuredStoragePlugin ignores generated storage directories in the
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "sessions")) + "/**"));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "projects")) + "/**"));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "skills")) + "/**"));
+	assert.ok(ignored.includes(normalizeWatchPath(join(root, "data", "logs", "pi-diagnostics.sqlite"))));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "settings.json"))));
 });
 
@@ -772,4 +1230,16 @@ await test("WorkspacePreviewService does not return a clickable URL for an unpre
 
 function normalizeWatchPath(path) {
 	return resolve(path).replace(/\\/g, "/");
+}
+
+function attributeValue(attributes, key) {
+	const attribute = attributes.find((item) => item.key === key);
+	const value = attribute?.value;
+	if (!value) return undefined;
+	if ("stringValue" in value) return value.stringValue;
+	if ("intValue" in value) return Number(value.intValue);
+	if ("doubleValue" in value) return Number(value.doubleValue);
+	if ("boolValue" in value) return value.boolValue;
+	if ("arrayValue" in value) return value.arrayValue.values.map((item) => Object.values(item)[0]);
+	return undefined;
 }

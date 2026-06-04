@@ -1,5 +1,7 @@
 .git
 .github
+.codegraph
+.packages
 .vscode
 .zed
 .idea
@@ -12,6 +14,8 @@ dist
 **/dist-firefox
 
 *.log
+*.env
+*.secrets.env
 *.tsbuildinfo
 *.cpuprofile
 .DS_Store
@@ -23,6 +27,7 @@ dist
 apps/pi-coding-web/data
 packages/web-ui/example/data
 docker/**/data
+docker/**/secrets
 docker/**/*.tar
 docker/**/*.tar.gz
 packages/coding-agent/binaries

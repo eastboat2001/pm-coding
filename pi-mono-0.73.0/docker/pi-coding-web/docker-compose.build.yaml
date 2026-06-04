@@ -1,0 +1,5 @@
+services:
+  pi-coding-web:
+    build:
+      context: ../..
+      dockerfile: apps/pi-coding-web/Dockerfile

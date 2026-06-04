@@ -117,7 +117,10 @@ export class MonacoFileViewer extends LitElement {
 	private observeThemeChanges(): void {
 		this.themeObserver?.disconnect();
 		this.themeObserver = new MutationObserver(() => this.syncTheme());
-		this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme"] });
+		this.themeObserver.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ["class", "data-theme"],
+		});
 	}
 
 	private syncTheme(): void {

@@ -147,9 +147,9 @@ export function buildCurrentProjectFileTree(files: string[], projectName: string
 					extension: fileExtension(part),
 				});
 			} else {
-				let directory = current.children.find(
-					(child) => child.type === "directory" && child.name === part,
-				) as CurrentProjectFileTreeNode | undefined;
+				let directory = current.children.find((child) => child.type === "directory" && child.name === part) as
+					| CurrentProjectFileTreeNode
+					| undefined;
 				if (!directory) {
 					directory = createDirectoryNode(part, path);
 					current.children.push(directory);

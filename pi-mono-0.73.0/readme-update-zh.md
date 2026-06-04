@@ -221,8 +221,182 @@ apps/pi-coding-web/pi-storage.config.json
 - `projectBuildCommand`：`project_task build_static` 执行时使用的构建命令，默认 `npm run build`。
 - `projectInstallTimeoutMs`：安装超时时间。
 - `projectBuildTimeoutMs`：构建超时时间。
+- `secretsEnvFile`：本地 secret env 文件路径，默认空；用于保存 Langfuse key 等不应提交的密钥。
+- `logsDbFile`：PI 诊断日志 SQLite 数据库路径，默认 `data/logs/pi-diagnostics.sqlite`。
+- `loggingEnabled`：是否启用后台诊断日志，默认启用。
+- `logStdoutEnabled`：是否把 warn/error 诊断摘要输出到服务端 stdout，默认关闭。
+- `rawProviderLoggingEnabled`：是否记录 PI 解析后的原始流事件，默认关闭，仅建议临时调试。
+- `rawProviderLogMaxChars`：单次模型请求原始流事件日志的字符预算，默认 `12000`。
+- `promptSnapshotLoggingEnabled`：是否记录 prompt 和 provider payload 快照，默认关闭，仅建议临时调试。
+- `promptSnapshotMaxChars`：单次模型请求 prompt/payload 快照字符预算，默认 `20000`。
+- `modelOutputSnapshotLoggingEnabled`：是否记录模型输出快照，默认关闭，仅建议临时调试。
+- `modelOutputSnapshotMaxChars`：单次模型请求输出快照字符预算，默认 `20000`。
+- `logRetentionDays`：日志保留天数，默认 `30`，设为 `0` 表示不按天数清理。
+- `logMaxEvents`：最多保留日志条数，默认 `50000`，设为 `0` 表示不按条数清理。
+- `logCleanupIntervalMs`：写入后触发清理检查的最小间隔，默认 `3600000`。
+- `logVacuumIntervalMs`：SQLite `VACUUM` 压缩的最小间隔，默认 `86400000`，设为 `0` 表示不执行 `VACUUM`。
+- `langfuseEnabled`：是否启用后台异步 Langfuse 导出，默认关闭。
+- `langfuseHost`：Langfuse 服务地址，默认 `http://localhost:3000`。
+- `langfusePublicKey`、`langfuseSecretKey`：Langfuse API key；不建议直接写入 Git 跟踪的配置文件，优先使用 `secretsEnvFile` 或环境变量。
+- `langfuseOtelEndpoint`：显式 OTLP trace endpoint；为空时使用 `<langfuseHost>/api/public/otel/v1/traces`。
+- `langfuseFlushIntervalMs`：Langfuse 批量导出间隔，默认 `5000`。
+- `langfuseBatchSize`：单次 Langfuse OTEL 导出批量大小，默认 `50`。
+- `langfuseExportPromptSnapshots`：是否把 prompt/payload 快照上传到 Langfuse，默认关闭。
+- `langfuseExportModelOutputSnapshots`：是否把模型输出快照上传到 Langfuse，默认关闭。
+- `langfuseExportRawChunks`：是否把 provider raw chunk 和 PI raw stream event 上传到 Langfuse，默认关闭。
+- `otelServiceName`：OTEL `service.name`，默认 `pi-coding-web`。
+- `otelDeploymentEnvironment`：OTEL/Langfuse environment 标识，默认空。
 
 相对路径基于 `apps/pi-coding-web/` 解析。
+
+### PI 诊断日志系统
+
+当前 PI 已增加后台诊断日志系统，用于排查模型连接、流式输出、thinking/text 分布、工具调用、PM handoff、skill 加载、project task、preview 和服务端存储等问题。日志不会暴露到前端界面，配置已显式写入 `apps/pi-coding-web/pi-storage.config.json`：
+
+```json
+"logsDbFile": "./data/logs/pi-diagnostics.sqlite",
+"secretsEnvFile": "./pi-storage.secrets.env",
+"loggingEnabled": true,
+"logStdoutEnabled": false,
+"rawProviderLoggingEnabled": false,
+"rawProviderLogMaxChars": 12000,
+"promptSnapshotLoggingEnabled": false,
+"promptSnapshotMaxChars": 20000,
+"modelOutputSnapshotLoggingEnabled": false,
+"modelOutputSnapshotMaxChars": 20000,
+"logRetentionDays": 30,
+"logMaxEvents": 50000,
+"logCleanupIntervalMs": 3600000,
+"logVacuumIntervalMs": 86400000,
+"langfuseEnabled": false,
+"langfuseHost": "http://localhost:3000",
+"langfusePublicKey": "",
+"langfuseSecretKey": "",
+"langfuseOtelEndpoint": "",
+"langfuseFlushIntervalMs": 5000,
+"langfuseBatchSize": 50,
+"langfuseExportPromptSnapshots": false,
+"langfuseExportModelOutputSnapshots": false,
+"langfuseExportRawChunks": false,
+"otelServiceName": "pi-coding-web",
+"otelDeploymentEnvironment": ""
+```
+
+默认写入：
+
+```text
+apps/pi-coding-web/data/logs/pi-diagnostics.sqlite
+```
+
+常用查看命令：
+
+```bash
+cd apps/pi-coding-web
+npm run logs -- --level error --limit 50
+npm run logs -- --event model.stream.summary --limit 50
+npm run logs -- --event provider.raw_chunk --limit 100
+npm run logs -- --event model.stream.raw_event --limit 100
+npm run logs -- --event provider.payload.snapshot --limit 20
+npm run logs -- --session <sessionId>
+```
+
+环境变量：
+
+- `PI_LOG_ENABLED=false`：关闭日志。
+- `PI_LOG_DB=/path/to/pi-diagnostics.sqlite`：覆盖 SQLite 日志库路径。
+- `PI_STORAGE_SECRETS_ENV_FILE=/path/to/pi-storage.secrets.env`：覆盖本地 secret env 文件路径。
+- `PI_LOG_STDOUT=true`：把 warn/error 摘要输出到服务端 stdout。
+- `PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true`：记录模型输出快照。
+- `PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS=20000`：覆盖单次模型输出快照字符预算。
+- `PI_LANGFUSE_ENABLED=true`：启用 Langfuse 导出。
+- `PI_LANGFUSE_HOST=http://localhost:3000`：覆盖 Langfuse 地址。
+- `PI_LANGFUSE_OTEL_ENDPOINT=http://otel-collector:4318/v1/traces`：覆盖最终 OTLP trace endpoint。
+- `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：Langfuse API key；优先级高于 `secretsEnvFile`。
+- `PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS=true`：允许上传 prompt/payload 快照。
+- `PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS=true`：允许上传模型输出快照。
+- `PI_LANGFUSE_EXPORT_RAW_CHUNKS=true`：允许上传 raw chunk/raw event。
+- `PI_OTEL_SERVICE_NAME=pi-coding-web`：覆盖 OTEL service name。
+- `PI_OTEL_DEPLOYMENT_ENVIRONMENT=production`：覆盖部署环境标识。
+
+本地开发时不要把 Langfuse key 写进 `pi-storage.config.json`。推荐复制 `apps/pi-coding-web/pi-storage.secrets.env.example` 为 `apps/pi-coding-web/pi-storage.secrets.env`，然后在其中填写：
+
+```env
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+```
+
+`pi-storage.secrets.env` 已被 `.gitignore` 忽略。密钥加载优先级为：系统环境变量 > `secretsEnvFile` 文件 > `pi-storage.config.json` 普通字段。
+
+Docker 部署时应挂载 `apps/pi-coding-web/data`，否则默认日志库会随容器重建丢失。深度 raw/prompt/output 日志默认关闭，排查模型问题时可临时开启；raw 模式会记录 OpenAI-compatible provider 的结构化 stream chunk 和 PI 解析后的 stream event，但不是 HTTP SSE 字节级原文。长期运行依赖 `logRetentionDays`、`logMaxEvents` 和 SQLite `VACUUM` 控制磁盘增长。完整使用说明见：
+
+```text
+docs/pi-diagnostic-logging-zh.md
+```
+
+### Langfuse 观测集成
+
+当前 PI 诊断日志已支持通过 OTLP/HTTP JSON 异步导出到 Langfuse。SQLite 本地日志仍保留为兜底排障数据；Langfuse 用于集中查看模型请求、generation 生命周期和关键异常事件。
+
+启用时优先修改配置文件：
+
+```json
+"langfuseEnabled": true,
+"langfuseHost": "http://localhost:3000",
+"langfuseOtelEndpoint": "",
+"otelServiceName": "pi-coding-web",
+"otelDeploymentEnvironment": "development"
+```
+
+`langfuseOtelEndpoint` 为空时会自动使用：
+
+```text
+<langfuseHost>/api/public/otel/v1/traces
+```
+
+如果后续统一接入 OpenTelemetry Collector，可以把它改成 Collector 的 trace endpoint，例如：
+
+```json
+"langfuseOtelEndpoint": "http://otel-collector:4318/v1/traces"
+```
+
+密钥建议通过 `secretsEnvFile` 或环境变量注入：
+
+```bash
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+```
+
+本地默认配置已指向 `./pi-storage.secrets.env`，该文件不提交到 Git；系统环境变量仍可覆盖文件中的值。
+
+测试是否正常：
+
+```bash
+cd apps/pi-coding-web
+npm run dev
+# 发起一次模型对话后检查：
+# GET http://127.0.0.1:5173/api/pi-logs/status
+```
+
+状态里重点看 `langfuseEnabled`、`langfuseConfigured`、`langfuseOtelEndpoint`、`otelServiceName`、`langfuseQueuedEvents`、`langfuseLastFlushAt` 和 `langfuseLastError`。默认不会上传完整 prompt/payload、模型输出快照或 raw chunk；如确需在 Langfuse 里分析 prompt 拼接、模型输出或流式协议细节，必须显式开启 `langfuseExportPromptSnapshots`、`langfuseExportModelOutputSnapshots` 或 `langfuseExportRawChunks`，并确认 Langfuse 的访问权限和数据保留策略。
+
+要让 Langfuse generation observation 的 Input / Output 显示可读内容，需要同时开启本地采集和上传：
+
+```json
+"promptSnapshotLoggingEnabled": true,
+"modelOutputSnapshotLoggingEnabled": true,
+"langfuseExportPromptSnapshots": true,
+"langfuseExportModelOutputSnapshots": true
+```
+
+`agent.*` observation 是 PI 生命周期事件，不是模型请求；这些事件没有 LLM input/output，Langfuse 显示 `null` 或 `undefined` 属于正常表现。模型输入输出应查看带 generation 图标的 `model.stream.summary`、`provider.response` 或 `provider.request.error` observation。
+
+导出路径：
+
+```text
+PI diagnostic event -> OTEL resourceSpans/scopeSpans/spans -> Langfuse /api/public/otel/v1/traces
+```
+
+每个 PI trace 会生成一个 root span；模型 summary、provider response 和 provider error 会生成 `langfuse.observation.type=generation` 的 span；普通诊断事件会生成 `langfuse.observation.type=event` 的 span。这样后续 PM、PI、模型网关和 worker 都可以用 `service.name`、trace id 和 OTEL 属性做全链路观测。
 
 全局 skill 使用目录形式：
 
@@ -295,7 +469,49 @@ data/skills/<skill-name>/SKILL.md
 
 该机制是上下文裁剪，不是智能代码摘要。后续如果要进一步提升小模型稳定性，可以考虑把压缩占位符变得更强约束，或者在编辑已有文件前由工具层强制读取当前文件。
 
-## 6. PM Handoff 流程
+## 6. PI 扩展资源知识库
+
+本仓库还包含一套本地 PI 扩展资源知识库：
+
+```text
+.packages/pi_extension_knowledge_base
+```
+
+该目录来自 `https://pi.dev/packages` 的目录元数据抓取结果，用于辅助 PI 二次开发时筛选值得研究的扩展包。它不是运行时资产，也不是源码审计结论；只能用于候选包选型和调研入口。
+
+关键文件：
+
+- `README.md`：知识库文件说明和推荐使用流程。
+- `taxonomy.md`：20 个能力分类的定义、中文标签和关键词口径。
+- `category_summaries.json`：每个分类的统计、关键词和推荐研究包。
+- `packages_ai.jsonl`：一行一个包的主明细，适合按二次开发目标筛选候选包。
+- `rag_chunks.jsonl`：面向检索/RAG 的分块数据。
+- `categories/*.md`：按分类生成的 Markdown 导览。
+- `study_candidates.md`：按二次开发主题整理的优先研究清单。
+
+后续如果提出新的 PI 二次开发目标，应先按以下顺序使用这套资料：
+
+1. 先阅读 `README.md`、`taxonomy.md`、`category_summaries.json`，把目标映射到一个或多个能力分类。
+2. 再从 `packages_ai.jsonl`、`rag_chunks.jsonl` 或对应 `categories/*.md` 中筛选候选包。
+3. 候选包优先选择 `repo_available=true`、`reference_score` 较高、描述与目标能力明确相关的包。
+4. 目录元数据只能回答“哪些包值得进一步看”；源码级实现、API 形态、安全边界和可借鉴方案必须再查看 npm 包或 GitHub repo。
+5. 如果候选包能力涉及安全、权限、文件系统、命令执行、浏览器自动化、外部账号或网络访问，必须把源码验证作为正式设计前置步骤。
+
+当前知识库覆盖 3,523 条 pi.dev 目录记录，分类包括：
+
+- `theme_prompt_skill`：Theme、Prompt 与 Skill 资产。
+- `model_provider_runtime`：模型、Provider 与运行时。
+- `browser_web_access`：浏览器、搜索与网页访问。
+- `memory_context_knowledge`：上下文、记忆与知识检索。
+- `agent_orchestration`：Agent 编排与多代理。
+- `ui_human_interaction`：人机交互、确认与 UI。
+- `security_guardrails`：安全、权限与 Guardrails。
+- `mcp_integration`：MCP 与外部工具接入。
+- `code_repo_git`、`code_intelligence_quality`、`planning_tdd_spec` 等工程辅助分类。
+
+这套知识库的主要价值是减少 PI 扩展设计前的盲目搜索。它不应直接驱动产品代码，也不应替代对上游 PI 包边界、当前 `apps/pi-coding-web` 产品化约束和 `packages/web-workspace` 服务端安全边界的判断。
+
+## 7. PM Handoff 流程
 
 PM 平台可以通过以下 URL 打开 PI：
 
@@ -324,7 +540,7 @@ PM 文档是需求主依据；PI 自身提示词只补充执行方式，不应�
 - PM 文档中出现的后端服务、数据库、认证、队列、第三方 API、部署拓扑等内容，应作为目标系统背景，在静态前端中用示例数据、本地状态、mock 响应和清晰 UI 状态模拟。
 - 不支持由 Agent 生成并运行真实后端服务、数据库、Docker、多进程服务或长驻开发服务器。
 
-## 7. 后续建议
+## 8. 后续建议
 
 ### 运行安全隔离
 
@@ -368,7 +584,7 @@ PM 文档是需求主依据；PI 自身提示词只补充执行方式，不应�
 - PM、handoff、server workspace、Docker 部署等本地产品逻辑优先放在 `apps/pi-coding-web` 或 `packages/web-workspace`。
 - 修改上游核心包时，应单独记录原因和影响范围。
 
-## 8. 当前验证状态
+## 9. 当前验证状态
 
 当前整理完成后，以下检查已经通过：
 
@@ -391,7 +607,7 @@ npm run check
 
 `check:browser-smoke` 在当前沙箱环境中由于 esbuild spawn 被拒绝而无法完成，需要在允许子进程执行的本地环境中复跑。
 
-## 9. 维护原则
+## 10. 维护原则
 
 - 原 `README.md` 尽量保持上游 PI-mono 项目说明，不承载大量本地产品说明。
 - 本地改造说明优先更新本文档。

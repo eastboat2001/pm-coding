@@ -11,12 +11,15 @@ RUN npm run build --workspace=@mariozechner/pi-ai
 RUN npm run build --workspace=@mariozechner/pi-agent-core
 RUN npm run build --workspace=@mariozechner/pi-web-workspace
 RUN npm run build --workspace=@mariozechner/pi-web-ui
-RUN npm run build --workspace=pi-coding-web
+RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build --workspace=pi-coding-web
 
 ENV NODE_ENV=production
 
 RUN mkdir -p /app/apps/pi-coding-web/data/sessions \
-  /app/apps/pi-coding-web/data/projects
+  /app/apps/pi-coding-web/data/projects \
+  /app/apps/pi-coding-web/data/logs \
+  /app/apps/pi-coding-web/data/skills \
+  /app/apps/pi-coding-web/data/default-skills
 
 WORKDIR /app/apps/pi-coding-web
 

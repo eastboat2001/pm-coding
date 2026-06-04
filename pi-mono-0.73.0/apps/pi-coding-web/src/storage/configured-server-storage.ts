@@ -16,6 +16,30 @@ export interface ConfiguredStorageStatus {
 	defaultModelProvider?: string;
 	defaultModelId?: string;
 	handoffDefaultThinkingLevel?: string;
+	logsDbFile?: string;
+	loggingEnabled?: boolean;
+	logStdoutEnabled?: boolean;
+	rawProviderLoggingEnabled?: boolean;
+	rawProviderLogMaxChars?: number;
+	promptSnapshotLoggingEnabled?: boolean;
+	promptSnapshotMaxChars?: number;
+	modelOutputSnapshotLoggingEnabled?: boolean;
+	modelOutputSnapshotMaxChars?: number;
+	logRetentionDays?: number;
+	logMaxEvents?: number;
+	logCleanupIntervalMs?: number;
+	logVacuumIntervalMs?: number;
+	langfuseEnabled?: boolean;
+	langfuseHost?: string;
+	langfuseOtelEndpoint?: string;
+	langfuseConfigured?: boolean;
+	langfuseFlushIntervalMs?: number;
+	langfuseBatchSize?: number;
+	langfuseExportPromptSnapshots?: boolean;
+	langfuseExportRawChunks?: boolean;
+	langfuseExportModelOutputSnapshots?: boolean;
+	otelServiceName?: string;
+	otelDeploymentEnvironment?: string;
 }
 
 export interface ConfiguredSessionRecord {

@@ -12,6 +12,7 @@ export function buildBaseOptions(model: Model<Api>, options?: SimpleStreamOption
 		headers: options?.headers,
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,
+		onChunk: options?.onChunk,
 		timeoutMs: options?.timeoutMs,
 		maxRetries: options?.maxRetries,
 		maxRetryDelayMs: options?.maxRetryDelayMs,

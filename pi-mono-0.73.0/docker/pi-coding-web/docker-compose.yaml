@@ -1,15 +1,19 @@
 services:
   pi-coding-web:
-    image: pi-coding-web:0.73.0
-    pull_policy: never
+    image: ${PI_CODING_WEB_IMAGE:-pi-coding-web:0.73.0}
+    pull_policy: ${PI_CODING_WEB_PULL_POLICY:-never}
     container_name: pi-coding-web
     init: true
     restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PI_STORAGE_SECRETS_ENV_FILE: /app/apps/pi-coding-web/secrets/pi-storage.secrets.env
     ports:
       - "${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
       - ./data:/app/apps/pi-coding-web/data
       - ./pi-storage.config.json:/app/apps/pi-coding-web/pi-storage.config.json:ro
+      - ./secrets:/app/apps/pi-coding-web/secrets:ro
     healthcheck:
       test:
         [

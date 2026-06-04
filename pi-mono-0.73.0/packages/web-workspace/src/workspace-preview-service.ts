@@ -2,6 +2,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, sta
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, join, resolve } from "node:path";
 import { PREVIEW_PREFIX, PROJECT_METADATA_FILE } from "./constants.js";
+import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { readJsonFile, sendJson, writeJsonFile } from "./json.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import type {
@@ -22,7 +23,10 @@ import {
 } from "./workspace-paths.js";
 
 export class WorkspacePreviewService {
-	constructor(private readonly config: StorageConfig) {}
+	constructor(
+		private readonly config: StorageConfig,
+		private readonly diagnostics?: WorkspaceDiagnosticLogService,
+	) {}
 
 	async preview(body: ProjectPreviewRequest, req: PreviewRequestLike): Promise<ProjectPreviewResult> {
 		const { sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
@@ -184,6 +188,13 @@ export class WorkspacePreviewService {
 			logs,
 		};
 		writeJsonFile(join(projectDir, PROJECT_METADATA_FILE), metadata);
+		this.writeProjectLogEvent("project.preview.logs", metadata.sessionId, metadata.projectId, {
+			status,
+			title: metadata.title,
+			logs,
+			serveRoot,
+			fileCount: metadata.fileCount,
+		});
 		return metadata;
 	}
 
@@ -193,6 +204,22 @@ export class WorkspacePreviewService {
 		const metadataPath = join(this.config.projectsRootDir, safeProjectId, PROJECT_METADATA_FILE);
 		if (!existsSync(metadataPath)) return undefined;
 		return readJsonFile(metadataPath);
+	}
+
+	private writeProjectLogEvent(eventType: string, sessionId: string, projectId: string, data: JsonObject): void {
+		this.diagnostics?.writeEvents({
+			events: [
+				{
+					level: data.status === "failed" ? "error" : "info",
+					category: "project",
+					eventType,
+					sessionId,
+					traceId: sessionId,
+					spanId: projectId,
+					data: { projectId, ...data },
+				},
+			],
+		});
 	}
 }
 

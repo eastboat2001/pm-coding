@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonFile } from "./json.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import type {
@@ -21,6 +22,7 @@ export class WorkspaceTaskService {
 		private readonly config: StorageConfig,
 		private readonly previews = new WorkspacePreviewService(config),
 		private readonly runProjectCommand: ProjectCommandRunner = runCommand,
+		private readonly diagnostics?: WorkspaceDiagnosticLogService,
 	) {}
 
 	async run(body: ProjectTaskRequest, req?: PreviewRequestLike): Promise<ProjectTaskResult> {
@@ -31,13 +33,13 @@ export class WorkspaceTaskService {
 		if (body.task === "preview") {
 			if (!req) throw new Error("Preview task requires request headers.");
 			const preview = await this.previews.preview(body, req);
-			return { task: "preview", ...preview };
+			return this.recordTaskResult({ task: "preview", ...preview });
 		}
 
 		const { sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
 		if (body.task === "logs") {
 			const logs = this.previews.readProjectLogs(projectId);
-			return { ...logs, task: "logs", status: String(logs.status || "ready") };
+			return this.recordTaskResult({ ...logs, task: "logs", status: String(logs.status || "ready") });
 		}
 
 		mkdirSync(projectDir, { recursive: true });
@@ -45,7 +47,9 @@ export class WorkspaceTaskService {
 		const files = listProjectSourceFiles(projectDir).map((file) => relative(projectDir, file));
 		const hasPackageJson = existsSync(join(projectDir, "package.json"));
 		if (body.task === "build_static") {
-			return await this.buildStaticProject({ projectId, sessionId, title, projectDir, files });
+			return this.recordTaskResult(
+				await this.buildStaticProject({ projectId, sessionId, title, projectDir, files }),
+			);
 		}
 
 		const staticRoot = findStaticServeRoot(projectDir, staticServeRootCandidates(hasPackageJson));
@@ -63,7 +67,7 @@ export class WorkspaceTaskService {
 			serveRoot: staticRoot || "",
 		};
 
-		if (body.task === "inspect") return base;
+		if (body.task === "inspect") return this.recordTaskResult(base);
 
 		const errors: string[] = [];
 		if (files.length === 0) errors.push("Project workspace is empty.");
@@ -75,7 +79,7 @@ export class WorkspaceTaskService {
 					: "Static preview requires an index.html in the project root, dist, build, or public. Package scripts, npm install, npm run build, and Node services are not started.",
 			);
 		}
-		return { ...base, valid: errors.length === 0, errors };
+		return this.recordTaskResult({ ...base, valid: errors.length === 0, errors });
 	}
 
 	private async buildStaticProject(options: {
@@ -124,6 +128,32 @@ export class WorkspaceTaskService {
 				logs,
 			);
 		}
+	}
+
+	private recordTaskResult(result: ProjectTaskResult): ProjectTaskResult {
+		this.diagnostics?.writeEvents({
+			events: [
+				{
+					level: result.status === "failed" ? "error" : "info",
+					category: "project",
+					eventType: "project.task.end",
+					sessionId: result.sessionId,
+					traceId: result.sessionId,
+					spanId: result.projectId,
+					data: {
+						task: result.task,
+						status: result.status,
+						title: result.title,
+						projectId: result.projectId,
+						fileCount: result.fileCount,
+						valid: result.valid,
+						errors: result.errors,
+						logs: result.logs,
+					},
+				},
+			],
+		});
+		return result;
 	}
 }
 

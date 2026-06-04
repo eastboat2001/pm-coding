@@ -31,6 +31,8 @@ import "../app.css";
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
+import { createDiagnosticClient, type DiagnosticData, type DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
+import { createLoggedStreamFn, type DiagnosticStreamLoggingConfig } from "../diagnostics/model-stream-logger.js";
 import { LocalSessionListDialog } from "../dialogs/LocalSessionListDialog.js";
 import {
 	buildCodingHandoffPrompt,
@@ -51,13 +53,14 @@ import { ConfiguredServerStorage } from "../storage/configured-server-storage.js
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
+import { sessionLastMessageModifiedAt } from "../storage/session-timestamps.js";
 import "./CurrentProjectFilesPanel.js";
 import type { CurrentProjectFilesPanel } from "./CurrentProjectFilesPanel.js";
 import {
-	clampCurrentProjectFilePreviewDrawerWidth,
-	clampCurrentProjectFilesPanelWidth,
 	CURRENT_PROJECT_FILE_PREVIEW_DRAWER_DEFAULT_WIDTH,
 	CURRENT_PROJECT_FILES_PANEL_DEFAULT_WIDTH,
+	clampCurrentProjectFilePreviewDrawerWidth,
+	clampCurrentProjectFilesPanelWidth,
 	readCurrentProjectFilePreviewDrawerWidth,
 	readCurrentProjectFilesPanelWidth,
 	writeCurrentProjectFilePreviewDrawerWidth,
@@ -82,6 +85,14 @@ const piRuntimeConfig = {
 	defaultSkills: [] as SkillSummary[],
 	skillDiagnostics: [] as SkillDiagnostic[],
 	skillSlashSuggestions: [] as SkillSlashSuggestion[],
+	diagnosticLogging: {
+		rawProviderLoggingEnabled: false,
+		rawProviderLogMaxChars: 12000,
+		promptSnapshotLoggingEnabled: false,
+		promptSnapshotMaxChars: 20000,
+		modelOutputSnapshotLoggingEnabled: false,
+		modelOutputSnapshotMaxChars: 20000,
+	} as DiagnosticStreamLoggingConfig,
 };
 
 type SkillSlashSuggestion = {
@@ -135,6 +146,7 @@ sessions.setBackend(backend);
 const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 setAppStorage(storage);
 const modelController = new ModelController(storage, configuredStorage);
+const diagnosticClient = createDiagnosticClient();
 
 const getProviderApiKey = async (provider: string): Promise<string | undefined> => {
 	return (await storage.providerKeys.get(provider)) ?? undefined;
@@ -157,10 +169,33 @@ const loadPiRuntimeConfig = async () => {
 	piRuntimeConfig.globalSkills = promptSkills;
 	piRuntimeConfig.defaultSkills = defaultSkills;
 	piRuntimeConfig.skillDiagnostics = diagnostics;
+	piRuntimeConfig.diagnosticLogging = {
+		rawProviderLoggingEnabled: status?.rawProviderLoggingEnabled === true,
+		rawProviderLogMaxChars: normalizePositiveInteger(status?.rawProviderLogMaxChars, 12000),
+		promptSnapshotLoggingEnabled: status?.promptSnapshotLoggingEnabled === true,
+		promptSnapshotMaxChars: normalizePositiveInteger(status?.promptSnapshotMaxChars, 20000),
+		modelOutputSnapshotLoggingEnabled: status?.modelOutputSnapshotLoggingEnabled === true,
+		modelOutputSnapshotMaxChars: normalizePositiveInteger(status?.modelOutputSnapshotMaxChars, 20000),
+	};
 	piRuntimeConfig.skillSlashSuggestions = [
 		createSkillSlashCommand(skillApiErrorDetail(diagnostics)),
 		...selectableSkills.map(skillToSlashSuggestion),
 	];
+	if (diagnostics.length > 0) {
+		writeDiagnosticEvent({
+			level: diagnostics.some((diagnostic) => diagnostic.type === "error") ? "error" : "warn",
+			category: "skill",
+			eventType: "skill.diagnostics.loaded",
+			data: {
+				diagnosticCount: diagnostics.length,
+				diagnostics: diagnostics.map((diagnostic) => ({
+					type: diagnostic.type,
+					message: diagnostic.message,
+					path: diagnostic.path,
+				})),
+			},
+		});
+	}
 };
 
 const syncRuntimeConfigAfterRender = async () => {
@@ -193,6 +228,9 @@ const normalizeThinkingLevel = (value?: string): ThinkingLevel => {
 	return "high";
 };
 
+const normalizePositiveInteger = (value: unknown, fallback: number): number =>
+	typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+
 let currentSessionId: string | undefined;
 let currentSessionCreatedAt: string | undefined;
 let currentTitle = "";
@@ -208,6 +246,20 @@ let currentProjectFilePreviewFilename = "";
 let currentProjectFilePreviewDrawerWidth = safeReadCurrentProjectFilePreviewDrawerWidth();
 
 const getDisplayTitle = () => (isDefaultNewSessionTitle(currentTitle) ? i18n("New Session") : currentTitle);
+
+const writeDiagnosticEvent = (event: DiagnosticEvent): void => {
+	diagnosticClient.write({
+		sessionId: currentSessionId,
+		traceId: currentSessionId,
+		...event,
+		data: event.data || {},
+	});
+};
+
+const errorDiagnosticData = (error: unknown, extra: DiagnosticData = {}): DiagnosticData => ({
+	...extra,
+	message: error instanceof Error ? error.message : String(error),
+});
 
 function safeReadCurrentProjectFilesPanelWidth(): number {
 	try {
@@ -336,10 +388,10 @@ const saveSession = async () => {
 	if (!storage.sessions || !currentSessionId || !agent) return;
 
 	const state = agent.state;
-	const createdAt = currentSessionCreatedAt || new Date().toISOString();
-	currentSessionCreatedAt = createdAt;
-	const resolvedTitle = sessionTitle(currentTitle, state.messages);
-	const lastModified = new Date().toISOString();
+		const createdAt = currentSessionCreatedAt || new Date().toISOString();
+		currentSessionCreatedAt = createdAt;
+		const resolvedTitle = sessionTitle(currentTitle, state.messages);
+		const lastModified = sessionLastMessageModifiedAt(state.messages, createdAt, createdAt);
 
 	try {
 		const sessionData = {
@@ -382,6 +434,12 @@ const saveSession = async () => {
 		}
 	} catch (err) {
 		console.error("Failed to save session:", err);
+		writeDiagnosticEvent({
+			level: "error",
+			category: "storage",
+			eventType: "storage.session.save.error",
+			data: errorDiagnosticData(err, { sessionId: currentSessionId }),
+		});
 	}
 };
 
@@ -417,6 +475,7 @@ const deleteSessionEverywhere = async (sessionId: string) => {
 };
 
 const handleAgentEvent = async (event: AgentEvent) => {
+	recordAgentEvent(event);
 	switch (event.type) {
 		case "tool_execution_end": {
 			if (activeSidebarPanel === "files" && event.toolName === "project_file") {
@@ -442,6 +501,84 @@ const handleAgentEvent = async (event: AgentEvent) => {
 		}
 	}
 };
+
+function recordAgentEvent(event: AgentEvent): void {
+	if (event.type === "message_update" || event.type === "tool_execution_update") return;
+	if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
+		writeDiagnosticEvent({
+			level: event.type === "tool_execution_end" && event.isError ? "error" : "info",
+			category: "tool",
+			eventType: `agent.${event.type}`,
+			data: summarizeAgentEvent(event),
+		});
+		return;
+	}
+	writeDiagnosticEvent({
+		level: event.type === "turn_end" && messageHasError(event.message) ? "error" : "info",
+		category: "agent",
+		eventType: `agent.${event.type}`,
+		data: summarizeAgentEvent(event),
+	});
+}
+
+function summarizeAgentEvent(event: AgentEvent): DiagnosticData {
+	switch (event.type) {
+		case "agent_start":
+		case "turn_start":
+			return {};
+		case "agent_end":
+			return { messageCount: event.messages.length };
+		case "turn_end":
+			return {
+				message: summarizeAgentMessage(event.message),
+				toolResultCount: event.toolResults.length,
+			};
+		case "message_start":
+		case "message_end":
+			return { message: summarizeAgentMessage(event.message) };
+		case "tool_execution_start":
+			return {
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				argsSummary: summarizeUnknown(event.args),
+			};
+		case "tool_execution_end":
+			return {
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				isError: event.isError,
+				resultSummary: summarizeUnknown(event.result),
+			};
+		default:
+			return {};
+	}
+}
+
+function summarizeAgentMessage(message: unknown): DiagnosticData {
+	if (!isRecord(message)) return { role: "unknown" };
+	return {
+		role: typeof message.role === "string" ? message.role : "unknown",
+		contentSummary: summarizeUnknown(message.content),
+		stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined,
+		hasError: typeof message.errorMessage === "string" && message.errorMessage.length > 0,
+	};
+}
+
+function messageHasError(message: unknown): boolean {
+	return isRecord(message) && typeof message.errorMessage === "string" && message.errorMessage.length > 0;
+}
+
+function summarizeUnknown(value: unknown): string {
+	if (typeof value === "string") return `string:${value.length}`;
+	if (Array.isArray(value)) return `array:${value.length}`;
+	if (isRecord(value)) return `object:${Object.keys(value).length}`;
+	if (value === undefined || value === null) return "empty";
+	return typeof value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function toggleCurrentProjectFilesPanel(): void {
 	activeSidebarPanel = activeSidebarPanel === "files" ? null : "files";
@@ -597,6 +734,12 @@ const resumeInterruptedSessionIfNeeded = () => {
 	resumedInterruptedSessions.add(sessionId);
 	void agent.continue().catch((error) => {
 		console.error("Failed to resume interrupted session:", error);
+		writeDiagnosticEvent({
+			level: "error",
+			category: "agent",
+			eventType: "agent.resume.error",
+			data: errorDiagnosticData(error, { sessionId }),
+		});
 		resumedInterruptedSessions.delete(sessionId);
 	});
 };
@@ -617,7 +760,15 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 					defaultSkillNames: piRuntimeConfig.defaultSkills.map((skill) => skill.name),
 				}),
 			),
-		streamFn: createStreamFn(getProxyUrl),
+		streamFn: createLoggedStreamFn(
+			createStreamFn(getProxyUrl),
+			diagnosticClient,
+			() => ({
+				sessionId: currentSessionId,
+				traceId: currentSessionId,
+			}),
+			() => piRuntimeConfig.diagnosticLogging,
+		),
 		getApiKey: getProviderApiKey,
 	});
 	(agent as Agent & { repairToolCalls: boolean }).repairToolCalls = true;
@@ -672,6 +823,12 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 	}
 	if (!sessionData) {
 		console.error("Session not found:", sessionId);
+		writeDiagnosticEvent({
+			level: "error",
+			category: "storage",
+			eventType: "storage.session.not_found",
+			data: { sessionId },
+		});
 		return false;
 	}
 
@@ -760,8 +917,25 @@ const restoreInitialSession = async () => {
 	const handoffToken = urlParams.get("handoff_token");
 	if (handoffToken) {
 		await loadPiRuntimeConfig();
-		const payload = await fetchPmHandoffPayload(handoffToken);
+		let payload: PmHandoffPayload;
+		try {
+			payload = await fetchPmHandoffPayload(handoffToken);
+		} catch (error) {
+			writeDiagnosticEvent({
+				level: "error",
+				category: "handoff",
+				eventType: "handoff.fetch.error",
+				data: errorDiagnosticData(error),
+			});
+			throw error;
+		}
 		if (!payload.documents_ready) {
+			writeDiagnosticEvent({
+				level: "error",
+				category: "handoff",
+				eventType: "handoff.documents.not_ready",
+				data: { title: payload.title, documentCount: payload.documents?.length ?? 0 },
+			});
 			throw new Error("PM handoff documents are not ready");
 		}
 		await bootstrapHandoffSession(payload);

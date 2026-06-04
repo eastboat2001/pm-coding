@@ -4,6 +4,7 @@ import { i18n } from "@mariozechner/pi-web-ui";
 import { html } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
+import { formatSessionUpdatedAt } from "../storage/session-timestamps.js";
 
 @customElement("local-session-list-dialog")
 export class LocalSessionListDialog extends DialogBase {
@@ -48,6 +49,11 @@ export class LocalSessionListDialog extends DialogBase {
 		await this.refresh();
 	}
 
+	private sessionSubtitle(session: MergedSessionEntry): string {
+		const messages = `${session.messageCount} ${i18n("messages")}`;
+		return [messages, session.preferredSource, formatSessionUpdatedAt(session.lastModified)].filter(Boolean).join(" · ");
+	}
+
 	protected override renderContent() {
 		return html`
 			${DialogContent({
@@ -68,7 +74,7 @@ export class LocalSessionListDialog extends DialogBase {
 												>
 													<div class="flex-1 min-w-0">
 														<div class="font-medium text-sm text-foreground truncate">${session.title}</div>
-														<div class="text-xs text-muted-foreground mt-1">${session.messageCount} ${i18n("messages")} · ${session.preferredSource}</div>
+														<div class="text-xs text-muted-foreground mt-1">${this.sessionSubtitle(session)}</div>
 													</div>
 													<button
 														class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/10 text-destructive transition-opacity"

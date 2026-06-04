@@ -3,14 +3,17 @@ import type { ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import type { Connect, Plugin } from "vite";
 import { loadStorageConfig } from "./config.js";
-import { API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, SKILLS_API_PREFIX } from "./constants.js";
+import { API_PREFIX, LOGS_API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, SKILLS_API_PREFIX } from "./constants.js";
+import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson } from "./json.js";
 import type {
+	DiagnosticLogQuery,
+	DiagnosticLogWriteRequest,
 	ProjectFilePreviewRequest,
 	ProjectFileRequest,
 	ProjectFileSaveRequest,
-	ProjectRequestContext,
 	ProjectPreviewRenameRequest,
+	ProjectRequestContext,
 	ProjectTaskRequest,
 	SkillLoadRequest,
 	SkillResourceRequest,
@@ -25,17 +28,19 @@ import { WorkspaceTaskService } from "./workspace-task-service.js";
 export function configuredStoragePlugin(configFile?: string): Plugin {
 	const rootDir = process.cwd();
 	const config = loadStorageConfig(rootDir, configFile);
+	const diagnostics = new WorkspaceDiagnosticLogService(config);
 	const sessions = new WorkspaceSessionService(config);
 	const files = new WorkspaceFileService(config);
-	const previews = new WorkspacePreviewService(config);
-	const tasks = new WorkspaceTaskService(config, previews);
-	const skills = new WorkspaceSkillService(config);
+	const previews = new WorkspacePreviewService(config, diagnostics);
+	const tasks = new WorkspaceTaskService(config, previews, undefined, diagnostics);
+	const skills = new WorkspaceSkillService(config, diagnostics);
 
 	const ensureStorageDirs = () => {
 		sessions.ensureDirs();
 		mkdirSync(dirname(config.settingsFile), { recursive: true });
 		mkdirSync(config.skillsDir, { recursive: true });
 		mkdirSync(config.defaultSkillsDir, { recursive: true });
+		diagnostics.ensureDirs();
 	};
 
 	const handler: Connect.NextHandleFunction = async (req, res, next) => {
@@ -52,7 +57,8 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 		if (
 			!req.url?.startsWith(API_PREFIX) &&
 			!req.url?.startsWith(PROJECTS_API_PREFIX) &&
-			!req.url?.startsWith(SKILLS_API_PREFIX)
+			!req.url?.startsWith(SKILLS_API_PREFIX) &&
+			!req.url?.startsWith(LOGS_API_PREFIX)
 		) {
 			next();
 			return;
@@ -63,7 +69,14 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 			const url = new URL(req.url, "http://localhost");
 			const isProjectsApi = url.pathname.startsWith(PROJECTS_API_PREFIX);
 			const isSkillsApi = url.pathname.startsWith(SKILLS_API_PREFIX);
-			const prefix = isProjectsApi ? PROJECTS_API_PREFIX : isSkillsApi ? SKILLS_API_PREFIX : API_PREFIX;
+			const isLogsApi = url.pathname.startsWith(LOGS_API_PREFIX);
+			const prefix = isProjectsApi
+				? PROJECTS_API_PREFIX
+				: isSkillsApi
+					? SKILLS_API_PREFIX
+					: isLogsApi
+						? LOGS_API_PREFIX
+						: API_PREFIX;
 			const route = url.pathname.slice(prefix.length) || "/";
 			const method = req.method || "GET";
 
@@ -73,6 +86,10 @@ export function configuredStoragePlugin(configFile?: string): Plugin {
 			}
 			if (isSkillsApi) {
 				await handleSkillsApi(method, route, req, res, skills);
+				return;
+			}
+			if (isLogsApi) {
+				await handleLogsApi(method, route, url, req, res, diagnostics);
 				return;
 			}
 
@@ -108,6 +125,7 @@ function storageWatchIgnoredPaths(config: StorageConfig): string[] {
 		`${normalizeWatchPath(config.projectsRootDir)}/**`,
 		`${normalizeWatchPath(config.skillsDir)}/**`,
 		`${normalizeWatchPath(config.defaultSkillsDir)}/**`,
+		normalizeWatchPath(config.logsDbFile),
 		normalizeWatchPath(config.settingsFile),
 	];
 }
@@ -231,6 +249,34 @@ async function handleStorageApi(
 			defaultModelProvider: config.defaultModelProvider,
 			defaultModelId: config.defaultModelId,
 			handoffDefaultThinkingLevel: config.handoffDefaultThinkingLevel,
+			logsDbFile: config.logsDbFile,
+			loggingEnabled: config.loggingEnabled,
+			logStdoutEnabled: config.logStdoutEnabled,
+			rawProviderLoggingEnabled: config.rawProviderLoggingEnabled,
+			rawProviderLogMaxChars: config.rawProviderLogMaxChars,
+			promptSnapshotLoggingEnabled: config.promptSnapshotLoggingEnabled,
+			promptSnapshotMaxChars: config.promptSnapshotMaxChars,
+			modelOutputSnapshotLoggingEnabled: config.modelOutputSnapshotLoggingEnabled,
+			modelOutputSnapshotMaxChars: config.modelOutputSnapshotMaxChars,
+			logRetentionDays: config.logRetentionDays,
+			logMaxEvents: config.logMaxEvents,
+			logCleanupIntervalMs: config.logCleanupIntervalMs,
+			logVacuumIntervalMs: config.logVacuumIntervalMs,
+			langfuseEnabled: config.langfuseEnabled,
+			langfuseHost: config.langfuseHost,
+			langfuseOtelEndpoint: config.langfuseOtelEndpoint || computedLangfuseOtelEndpoint(config.langfuseHost),
+			langfuseConfigured: Boolean(
+				(config.langfuseHost || config.langfuseOtelEndpoint) &&
+					config.langfusePublicKey &&
+					config.langfuseSecretKey,
+			),
+			langfuseFlushIntervalMs: config.langfuseFlushIntervalMs,
+			langfuseBatchSize: config.langfuseBatchSize,
+			langfuseExportPromptSnapshots: config.langfuseExportPromptSnapshots,
+			langfuseExportRawChunks: config.langfuseExportRawChunks,
+			langfuseExportModelOutputSnapshots: config.langfuseExportModelOutputSnapshots,
+			otelServiceName: config.otelServiceName,
+			otelDeploymentEnvironment: config.otelDeploymentEnvironment,
 		});
 		return;
 	}
@@ -274,6 +320,57 @@ async function handleStorageApi(
 	}
 
 	sendJson(res, { error: "Not found." }, 404);
+}
+
+async function handleLogsApi(
+	method: string,
+	route: string,
+	url: URL,
+	req: Connect.IncomingMessage,
+	res: ServerResponse,
+	diagnostics: WorkspaceDiagnosticLogService,
+): Promise<void> {
+	if (method === "GET" && route === "/status") {
+		sendJson(res, diagnostics.status());
+		return;
+	}
+	if (method === "POST" && route === "/events") {
+		const body = await readJsonBody(req);
+		sendJson(res, diagnostics.writeEvents(body as DiagnosticLogWriteRequest));
+		return;
+	}
+	if (method === "GET" && route === "/events") {
+		sendJson(res, diagnostics.queryEvents(toDiagnosticLogQuery(url)));
+		return;
+	}
+	sendJson(res, { error: "Not found." }, 404);
+}
+
+function toDiagnosticLogQuery(url: URL): DiagnosticLogQuery {
+	return {
+		sessionId: queryString(url, "sessionId"),
+		traceId: queryString(url, "traceId"),
+		level: queryString(url, "level") as DiagnosticLogQuery["level"],
+		category: queryString(url, "category") as DiagnosticLogQuery["category"],
+		eventType: queryString(url, "eventType"),
+		limit: queryNumber(url, "limit"),
+	};
+}
+
+function queryString(url: URL, key: string): string | undefined {
+	const value = url.searchParams.get(key);
+	return value?.trim() || undefined;
+}
+
+function queryNumber(url: URL, key: string): number | undefined {
+	const value = url.searchParams.get(key);
+	if (!value) return undefined;
+	const number = Number(value);
+	return Number.isFinite(number) ? number : undefined;
+}
+
+function computedLangfuseOtelEndpoint(host: string): string {
+	return host ? `${host}/api/public/otel/v1/traces` : "";
 }
 
 function errorMessage(error: unknown): string {

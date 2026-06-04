@@ -1068,6 +1068,12 @@ pi-monaco-file-viewer {
 	color: var(--primary);
 }
 
+.generated-app-card__action--danger:hover:not(:disabled) {
+	border-color: color-mix(in oklab, #f04438 32%, var(--border));
+	background: color-mix(in oklab, #f04438 10%, var(--secondary));
+	color: #b42318;
+}
+
 .generated-apps-panel__spin {
 	display: inline-flex;
 	animation: generated-apps-spin 800ms linear infinite;
@@ -1090,12 +1096,25 @@ pi-monaco-file-viewer {
 	display: grid;
 	grid-template-columns: 44px minmax(0, 1fr) auto;
 	gap: 12px;
-	align-items: start;
+	align-items: center;
 	padding: 14px;
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	background: color-mix(in oklab, var(--card) 92%, var(--background) 8%);
 	box-shadow: 0 8px 20px rgba(10, 26, 61, 0.06);
+	cursor: pointer;
+	transition:
+		background-color 120ms ease,
+		border-color 120ms ease,
+		box-shadow 120ms ease;
+}
+
+.generated-app-card:hover,
+.generated-app-card:focus-visible {
+	border-color: color-mix(in oklab, var(--primary) 24%, var(--border));
+	background: color-mix(in oklab, var(--card) 86%, var(--primary) 6%);
+	box-shadow: 0 10px 24px rgba(10, 26, 61, 0.1);
+	outline: 0;
 }
 
 .generated-app-card__icon {
@@ -1247,6 +1266,12 @@ pi-monaco-file-viewer {
 	white-space: nowrap;
 }
 
+.generated-apps-delete-dialog__text {
+	color: var(--foreground);
+	font-size: 13px;
+	line-height: 1.45;
+}
+
 .generated-apps-rename-dialog__field {
 	display: flex;
 	flex-direction: column;
@@ -1314,6 +1339,17 @@ pi-monaco-file-viewer {
 
 .generated-apps-rename-dialog__button--primary:hover:not(:disabled) {
 	color: var(--primary-foreground);
+}
+
+.generated-apps-rename-dialog__button--danger {
+	border-color: color-mix(in oklab, #f04438 62%, var(--border));
+	background: #d92d20;
+	color: white;
+}
+
+.generated-apps-rename-dialog__button--danger:hover:not(:disabled) {
+	color: white;
+	background: #b42318;
 }
 
 .generated-apps-rename-dialog__button:disabled,

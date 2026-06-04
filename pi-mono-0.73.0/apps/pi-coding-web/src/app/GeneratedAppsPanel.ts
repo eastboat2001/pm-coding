@@ -1,7 +1,7 @@
 import { icon } from "@mariozechner/mini-lit";
 import { html, LitElement, type TemplateResult } from "lit";
-import { customElement, state } from "lit/decorators.js";
-import { AlertCircle, Check, Copy, PanelsTopLeft, Pencil, RefreshCw, Search, X } from "lucide";
+import { customElement, property, state } from "lit/decorators.js";
+import { AlertCircle, ExternalLink, PanelsTopLeft, Pencil, RefreshCw, Search, Trash2, X } from "lucide";
 import {
 	filterGeneratedApps,
 	type GeneratedAppRecord,
@@ -11,15 +11,20 @@ import {
 
 @customElement("pi-generated-apps-panel")
 export class GeneratedAppsPanel extends LitElement {
+	@property({ attribute: false }) openSession: (sessionId: string) => Promise<unknown> | unknown = () => undefined;
+	@property({ attribute: false }) deleteSession: (sessionId: string) => Promise<unknown> | unknown = () => undefined;
+
 	@state() private projects: GeneratedAppRecord[] = [];
 	@state() private loading = false;
 	@state() private error = "";
-	@state() private copiedProjectId = "";
 	@state() private query = "";
 	@state() private editingProjectId = "";
 	@state() private editingTitle = "";
 	@state() private renamingProjectId = "";
 	@state() private renameError = "";
+	@state() private deleteProjectId = "";
+	@state() private deletingProjectId = "";
+	@state() private deleteError = "";
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
 		return this;
@@ -82,6 +87,7 @@ export class GeneratedAppsPanel extends LitElement {
 					${this.renderBody(visibleProjects)}
 				</div>
 				${this.renderRenameDialog()}
+				${this.renderDeleteDialog()}
 			</div>
 		`;
 	}
@@ -125,18 +131,25 @@ export class GeneratedAppsPanel extends LitElement {
 
 	private renderProject(project: GeneratedAppRecord): TemplateResult {
 		const canOpen = Boolean(project.previewUrl);
-		const copied = this.copiedProjectId === project.projectId;
 		const editing = this.editingProjectId === project.projectId;
 		const renaming = this.renamingProjectId === project.projectId;
+		const deleting = this.deletingProjectId === project.projectId;
 		const statusLabel = projectStatusLabel(project.status);
 		return html`
-			<article class="generated-app-card">
+			<article
+				class="generated-app-card"
+				role="button"
+				tabindex="0"
+				title=${t("Open session")}
+				@click=${() => void this.openProjectSession(project)}
+				@keydown=${(event: KeyboardEvent) => this.handleProjectKeydown(event, project)}
+			>
 				<div class="generated-app-card__icon">${icon(PanelsTopLeft, "md")}</div>
 				<div class="generated-app-card__main">
 					<div class="generated-app-card__title" title=${project.title}>${project.title}</div>
 					${
 						canOpen
-							? html`<a class="generated-app-card__url" href=${project.previewUrl} target="_blank" rel="noreferrer">${project.previewUrl}</a>`
+							? html`<div class="generated-app-card__url">${project.previewUrl}</div>`
 							: html`<div class="generated-app-card__url generated-app-card__url--muted">${t("Preview unavailable")}</div>`
 					}
 					<div class="generated-app-card__meta">
@@ -147,12 +160,19 @@ export class GeneratedAppsPanel extends LitElement {
 						<span>${formatUpdatedAt(project.updatedAt)}</span>
 					</div>
 				</div>
-				<div class="generated-app-card__actions">
+				<div
+					class="generated-app-card__actions"
+					@click=${(event: MouseEvent) => event.stopPropagation()}
+					@keydown=${(event: KeyboardEvent) => event.stopPropagation()}
+				>
 					<button
 						type="button"
 						class="generated-app-card__action"
-						?disabled=${editing || renaming}
-						@click=${() => this.startRename(project)}
+						?disabled=${editing || renaming || deleting}
+						@click=${(event: MouseEvent) => {
+							event.stopPropagation();
+							this.startRename(project);
+						}}
 						title=${t("Rename APP")}
 						aria-label=${t("Rename APP")}
 					>
@@ -161,12 +181,28 @@ export class GeneratedAppsPanel extends LitElement {
 					<button
 						type="button"
 						class="generated-app-card__action"
-						?disabled=${!canOpen}
-						@click=${() => void this.copyPreviewUrl(project)}
-						title=${t("Copy URL")}
-						aria-label=${t("Copy URL")}
+						?disabled=${!canOpen || deleting}
+						@click=${(event: MouseEvent) => {
+							event.stopPropagation();
+							this.openPreview(project);
+						}}
+						title=${t("Open preview")}
+						aria-label=${t("Open preview")}
 					>
-						${copied ? icon(Check, "sm") : icon(Copy, "sm")}
+						${icon(ExternalLink, "sm")}
+					</button>
+					<button
+						type="button"
+						class="generated-app-card__action generated-app-card__action--danger"
+						?disabled=${editing || renaming || deleting}
+						@click=${(event: MouseEvent) => {
+							event.stopPropagation();
+							this.startDelete(project);
+						}}
+						title=${t("Delete APP")}
+						aria-label=${t("Delete APP")}
+					>
+						${icon(Trash2, "sm")}
 					</button>
 				</div>
 			</article>
@@ -238,6 +274,55 @@ export class GeneratedAppsPanel extends LitElement {
 		`;
 	}
 
+	private renderDeleteDialog(): TemplateResult | string {
+		if (!this.deleteProjectId) return "";
+		const project = this.projects.find((candidate) => candidate.projectId === this.deleteProjectId);
+		if (!project) return "";
+		const deleting = this.deletingProjectId === project.projectId;
+		return html`
+			<div class="generated-apps-rename-backdrop" @click=${() => this.cancelDelete()}>
+				<div class="generated-apps-rename-dialog" @click=${(event: MouseEvent) => event.stopPropagation()}>
+					<div class="generated-apps-rename-dialog__header">
+						<h3>${t("Delete APP")}</h3>
+						<button
+							type="button"
+							class="generated-apps-rename-dialog__icon-button"
+							?disabled=${deleting}
+							@click=${() => this.cancelDelete()}
+							title=${t("Cancel")}
+							aria-label=${t("Cancel")}
+						>
+							${icon(X, "sm")}
+						</button>
+					</div>
+					<div class="generated-apps-rename-dialog__current" title=${project.title}>${project.title}</div>
+					<div class="generated-apps-delete-dialog__text">
+						${t("Deleting this app will also delete the linked session and its project files.")}
+					</div>
+					${this.deleteError ? html`<div class="generated-apps-rename-dialog__error">${this.deleteError}</div>` : ""}
+					<div class="generated-apps-rename-dialog__actions">
+						<button
+							type="button"
+							class="generated-apps-rename-dialog__button"
+							?disabled=${deleting}
+							@click=${() => this.cancelDelete()}
+						>
+							${t("Cancel")}
+						</button>
+						<button
+							type="button"
+							class="generated-apps-rename-dialog__button generated-apps-rename-dialog__button--danger"
+							?disabled=${deleting}
+							@click=${() => void this.confirmDelete(project)}
+						>
+							${deleting ? t("Deleting...") : t("Delete")}
+						</button>
+					</div>
+				</div>
+			</div>
+		`;
+	}
+
 	private startRename(project: GeneratedAppRecord): void {
 		this.editingProjectId = project.projectId;
 		this.editingTitle = project.title;
@@ -281,13 +366,45 @@ export class GeneratedAppsPanel extends LitElement {
 		}
 	}
 
-	private async copyPreviewUrl(project: GeneratedAppRecord): Promise<void> {
-		if (!project.previewUrl || !navigator.clipboard) return;
-		await navigator.clipboard.writeText(project.previewUrl);
-		this.copiedProjectId = project.projectId;
-		window.setTimeout(() => {
-			if (this.copiedProjectId === project.projectId) this.copiedProjectId = "";
-		}, 1200);
+	private openPreview(project: GeneratedAppRecord): void {
+		if (!project.previewUrl) return;
+		window.open(project.previewUrl, "_blank", "noopener,noreferrer");
+	}
+
+	private handleProjectKeydown(event: KeyboardEvent, project: GeneratedAppRecord): void {
+		if (event.key !== "Enter" && event.key !== " ") return;
+		event.preventDefault();
+		void this.openProjectSession(project);
+	}
+
+	private async openProjectSession(project: GeneratedAppRecord): Promise<void> {
+		if (this.editingProjectId || this.deleteProjectId || this.deletingProjectId) return;
+		await this.openSession(project.sessionId);
+	}
+
+	private startDelete(project: GeneratedAppRecord): void {
+		this.deleteProjectId = project.projectId;
+		this.deleteError = "";
+	}
+
+	private cancelDelete(): void {
+		if (this.deletingProjectId) return;
+		this.deleteProjectId = "";
+		this.deleteError = "";
+	}
+
+	private async confirmDelete(project: GeneratedAppRecord): Promise<void> {
+		this.deletingProjectId = project.projectId;
+		this.deleteError = "";
+		try {
+			await this.deleteSession(project.sessionId);
+			this.projects = this.projects.filter((candidate) => candidate.projectId !== project.projectId);
+			this.deleteProjectId = "";
+		} catch (error) {
+			this.deleteError = error instanceof Error ? error.message : String(error);
+		} finally {
+			if (this.deletingProjectId === project.projectId) this.deletingProjectId = "";
+		}
 	}
 }
 

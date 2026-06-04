@@ -396,11 +396,24 @@ const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
 		.sort((a, b) => b.lastModified.localeCompare(a.lastModified));
 };
 
-const deleteBrowserSession = async (sessionId: string) => {
-	await storage.sessions.deleteSession(sessionId);
-	if (isServerSessionSyncEnabled()) {
-		await configuredStorage.deleteSession(sessionId);
+const deleteSessionEverywhere = async (sessionId: string) => {
+	if (storage.sessions) {
+		await storage.sessions.deleteSession(sessionId);
 	}
+	await configuredStorage.deleteSession(sessionId);
+	if (sessionId === currentSessionId) {
+		currentProjectFilePreviewFilename = "";
+		await setCurrentSessionId(undefined);
+		const browserSessions = await getBrowserSessions();
+		if (browserSessions.length > 0) {
+			const loaded = await loadSession(browserSessions[0].id);
+			if (loaded) return;
+		}
+		await startFreshSession(true);
+		return;
+	}
+	refreshGeneratedAppsPanel();
+	if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 };
 
 const handleAgentEvent = async (event: AgentEvent) => {
@@ -649,7 +662,14 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 const loadSession = async (sessionId: string): Promise<boolean> => {
 	if (!storage.sessions) return false;
 
-	const sessionData = await storage.sessions.get(sessionId);
+	let sessionData = await storage.sessions.get(sessionId);
+	if (!sessionData) {
+		const serverSession = await configuredStorage.readSession(sessionId);
+		if (serverSession) {
+			await storage.sessions.save(serverSession.data, serverSession.metadata);
+			sessionData = serverSession.data;
+		}
+	}
 	if (!sessionData) {
 		console.error("Session not found:", sessionId);
 		return false;
@@ -810,19 +830,8 @@ const renderApp = () => {
 								async (sessionId) => {
 									await loadSession(sessionId);
 								},
-								(deletedSessionId) => {
-									void (async () => {
-										await deleteBrowserSession(deletedSessionId);
-										if (deletedSessionId === currentSessionId) {
-											await setCurrentSessionId(undefined);
-											const browserSessions = await getBrowserSessions();
-											if (browserSessions.length > 0) {
-												const loaded = await loadSession(browserSessions[0].id);
-												if (loaded) return;
-											}
-											await startFreshSession(true);
-										}
-									})();
+								async (deletedSessionId) => {
+									await deleteSessionEverywhere(deletedSessionId);
 								},
 							);
 						},
@@ -964,7 +973,10 @@ const renderApp = () => {
 					activeSidebarPanel === "apps"
 						? html`
 							<aside class="generated-apps-sidebar" style=${`width: ${generatedAppsPanelWidth}px;`}>
-								<pi-generated-apps-panel></pi-generated-apps-panel>
+								<pi-generated-apps-panel
+									.openSession=${(sessionId: string) => loadSession(sessionId)}
+									.deleteSession=${(sessionId: string) => deleteSessionEverywhere(sessionId)}
+								></pi-generated-apps-panel>
 							</aside>
 							<div
 								class="generated-apps-resizer"

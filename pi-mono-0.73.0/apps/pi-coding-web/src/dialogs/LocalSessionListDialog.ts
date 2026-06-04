@@ -11,7 +11,7 @@ export class LocalSessionListDialog extends DialogBase {
 	@state() private loading = true;
 
 	private onSelectCallback?: (sessionId: string) => void;
-	private onDeleteCallback?: (sessionId: string) => void;
+	private onDeleteCallback?: (sessionId: string) => Promise<unknown> | unknown;
 	private loadSessionsCallback?: () => Promise<MergedSessionEntry[]>;
 
 	protected modalWidth = "min(600px, 90vw)";
@@ -20,7 +20,7 @@ export class LocalSessionListDialog extends DialogBase {
 	static async open(
 		loadSessions: () => Promise<MergedSessionEntry[]>,
 		onSelect: (sessionId: string) => void,
-		onDelete?: (sessionId: string) => void,
+		onDelete?: (sessionId: string) => Promise<unknown> | unknown,
 	) {
 		const dialog = new LocalSessionListDialog();
 		dialog.loadSessionsCallback = loadSessions;
@@ -44,7 +44,7 @@ export class LocalSessionListDialog extends DialogBase {
 	private async handleDelete(sessionId: string, event: Event) {
 		event.stopPropagation();
 		if (!confirm(i18n("Delete this session?"))) return;
-		this.onDeleteCallback?.(sessionId);
+		await this.onDeleteCallback?.(sessionId);
 		await this.refresh();
 	}
 

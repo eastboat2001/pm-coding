@@ -201,6 +201,60 @@ await test("WorkspaceSessionService stores server-backed custom providers in set
 	assert.deepEqual(settings.customProviders, providers);
 });
 
+await test("WorkspaceSessionService deletes only project directories whose metadata matches the full session id", () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const service = new WorkspaceSessionService(config);
+	const targetSessionId = "abcdef12-target";
+	const otherSessionId = "abcdef12-other";
+	const targetProjectDir = join(config.projectsRootDir, "target-app-abcdef12");
+	const otherProjectDir = join(config.projectsRootDir, "other-app-abcdef12");
+	mkdirSync(targetProjectDir, { recursive: true });
+	mkdirSync(otherProjectDir, { recursive: true });
+	writeFileSync(
+		join(targetProjectDir, ".pi-project.json"),
+		JSON.stringify({
+			projectId: "target-app-abcdef12",
+			sessionId: targetSessionId,
+			title: "Target App",
+			status: "running",
+			mode: "static",
+			previewUrl: "",
+			projectRoot: targetProjectDir,
+			serveRoot: targetProjectDir,
+			fileCount: 1,
+			updatedAt: "2026-06-03T00:00:00.000Z",
+		}),
+		"utf8",
+	);
+	writeFileSync(
+		join(otherProjectDir, ".pi-project.json"),
+		JSON.stringify({
+			projectId: "other-app-abcdef12",
+			sessionId: otherSessionId,
+			title: "Other App",
+			status: "running",
+			mode: "static",
+			previewUrl: "",
+			projectRoot: otherProjectDir,
+			serveRoot: otherProjectDir,
+			fileCount: 1,
+			updatedAt: "2026-06-03T00:00:00.000Z",
+		}),
+		"utf8",
+	);
+
+	service.writeSession(
+		targetSessionId,
+		{ id: targetSessionId, title: "Target App", messages: [] },
+		{ id: targetSessionId, title: "Target App" },
+	);
+
+	assert.equal(service.deleteSession(targetSessionId), true);
+	assert.equal(existsSync(targetProjectDir), false);
+	assert.equal(existsSync(otherProjectDir), true);
+});
+
 await test("WorkspaceFileService creates, rewrites, updates, lists, reads, and deletes files inside a session project", () => {
 	const root = tempRoot();
 	const service = new WorkspaceFileService(testConfig(root));

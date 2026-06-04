@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PROJECT_MANIFEST_FILE, PROJECT_METADATA_FILE } from "./constants.js";
 import type { ProjectWorkspaceContext, StorageConfig } from "./types.js";
@@ -99,13 +99,32 @@ export function deleteSessionAndProjects(projectsRootDir: string, sessionPath: s
 	const suffix = `-${(sanitizePathComponent(sessionId) || sessionId).slice(0, 8)}`;
 	if (existsSync(projectsRootDir)) {
 		for (const name of readdirSync(projectsRootDir)) {
-			if (name === `project${suffix}` || name.endsWith(suffix)) {
+			const projectPath = join(projectsRootDir, name);
+			if (projectDirectoryBelongsToSession(projectPath, sessionId, suffix, name)) {
 				rmSync(join(projectsRootDir, name), { recursive: true, force: true });
 				deleted = true;
 			}
 		}
 	}
 	return deleted;
+}
+
+function projectDirectoryBelongsToSession(
+	projectPath: string,
+	sessionId: string,
+	legacySuffix: string,
+	directoryName: string,
+): boolean {
+	const metadataPath = join(projectPath, PROJECT_METADATA_FILE);
+	if (existsSync(metadataPath)) {
+		try {
+			const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as { sessionId?: unknown };
+			return metadata.sessionId === sessionId;
+		} catch {
+			return false;
+		}
+	}
+	return directoryName === `project${legacySuffix}` || directoryName.endsWith(legacySuffix);
 }
 
 export function listProjectSourceFiles(root: string): string[] {

@@ -17,7 +17,7 @@ export interface StorageConfig {
 	defaultModelProvider: string;
 	defaultModelId: string;
 	handoffDefaultThinkingLevel: string;
-	secretsEnvFile: string;
+	envFile: string;
 	logsDbFile: string;
 	loggingEnabled: boolean;
 	logStdoutEnabled: boolean;

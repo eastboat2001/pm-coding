@@ -6,9 +6,7 @@
 
 - `docker-compose.yaml`：服务器运行用 Compose 文件，只运行已有镜像。
 - `docker-compose.build.yaml`：有完整源码时用于本地构建镜像。
-- `.env.example`：Compose 变量示例，复制为 `.env` 后使用。
-- `pi-storage.config.json`：PI 服务端运行配置模板。
-- `secrets/pi-storage.secrets.env.example`：密钥文件示例，复制为 `secrets/pi-storage.secrets.env` 后使用。
+- `.env.example`：统一配置模板，复制为 `.env` 后使用。
 - `data/`：服务器运行数据目录，挂载到容器内 `/app/apps/pi-coding-web/data`。
 - `pi-coding-web-0.73.0.tar`：可选的离线镜像包，由 `docker save` 生成，不应提交到 Git。
 
@@ -32,7 +30,6 @@ docker compose version
 ```bash
 cd /opt/pi-coding-web
 cp .env.example .env
-cp secrets/pi-storage.secrets.env.example secrets/pi-storage.secrets.env
 ```
 
 编辑 `.env`：
@@ -41,6 +38,13 @@ cp secrets/pi-storage.secrets.env.example secrets/pi-storage.secrets.env
 PI_CODING_WEB_IMAGE=pi-coding-web:0.73.0
 PI_CODING_WEB_PORT=5173
 PI_CODING_WEB_PULL_POLICY=never
+
+PI_SERVER_SESSION_SYNC_ENABLED=true
+PI_PREVIEW_BASE_URL=
+PI_LOG_ENABLED=true
+PI_LANGFUSE_ENABLED=false
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
 ```
 
 含义：
@@ -48,35 +52,22 @@ PI_CODING_WEB_PULL_POLICY=never
 - `PI_CODING_WEB_IMAGE`：运行的镜像名和 tag。
 - `PI_CODING_WEB_PORT`：服务器对外暴露端口。
 - `PI_CODING_WEB_PULL_POLICY`：默认 `never`，表示只使用本地镜像，不从 registry 拉取。
+- `PI_SERVER_SESSION_SYNC_ENABLED`：Docker 部署建议保持 `true`，会话和设置会保存到挂载的 `data/` 目录。
+- `PI_PREVIEW_BASE_URL`：留空时，PI 会按当前请求 Host 生成预览链接；若经过反向代理或域名访问，也可以显式写成 `https://pi.example.com`。
+- `PI_LOG_ENABLED`：是否启用后台诊断日志。
+- `PI_LANGFUSE_ENABLED`：是否启用 Langfuse 导出。
+- `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：Langfuse 密钥。`PI_LANGFUSE_ENABLED=false` 时可以留空。
 
-编辑 `pi-storage.config.json`：
-
-```json
-"previewBaseUrl": "",
-"serverSessionSyncEnabled": true,
-"secretsEnvFile": "./secrets/pi-storage.secrets.env",
-"logsDbFile": "./data/logs/pi-diagnostics.sqlite"
-```
+Docker 部署统一使用一个 `.env`。这个文件同时给 Docker Compose 提供镜像名、端口等部署变量，也作为 PI 的运行时配置文件被只读挂载到容器内。`.env` 已被 Git 忽略，不要提交真实密钥。
 
 建议：
 
-- `serverSessionSyncEnabled` 保持 `true`，会话和设置会保存到挂载的 `data/` 目录。
-- `previewBaseUrl` 留空时，PI 会按当前请求 Host 生成预览链接。若经过反向代理或域名访问，也可以显式写成 `https://pi.example.com`。
-- 不要使用 `0.0.0.0` 作为 `previewBaseUrl`；它只能作为监听地址，浏览器不能用它访问。
+- 不要使用 `0.0.0.0` 作为 `PI_PREVIEW_BASE_URL`；它只能作为监听地址，浏览器不能用它访问。
 
-编辑 `secrets/pi-storage.secrets.env`：
-
-```env
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-```
-
-如果 `langfuseEnabled` 为 `false`，可以留空。若启用 Langfuse，把 key 写在这里，不要写进 `pi-storage.config.json`。
-
-密钥加载优先级：
+配置加载优先级：
 
 ```text
-容器环境变量 > secrets/pi-storage.secrets.env > pi-storage.config.json
+容器环境变量 > .env > 代码内默认值
 ```
 
 ## 在线构建部署
@@ -88,7 +79,6 @@ LANGFUSE_SECRET_KEY=
 ```bash
 cd /path/to/pi-mono-0.73.0/docker/pi-coding-web
 cp .env.example .env
-cp secrets/pi-storage.secrets.env.example secrets/pi-storage.secrets.env
 ```
 
 构建镜像：
@@ -123,10 +113,8 @@ docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.
 /opt/pi-coding-web/
   docker-compose.yaml
   .env
-  pi-storage.config.json
   pi-coding-web-0.73.0.tar
   data/
-  secrets/
 ```
 
 在服务器加载镜像：
@@ -218,24 +206,24 @@ curl http://127.0.0.1:5173/api/pi-logs/status
 
 ## Langfuse
 
-默认 `langfuseEnabled` 为 `false`。启用时修改 `pi-storage.config.json`：
+默认 `PI_LANGFUSE_ENABLED=false`。启用时修改 `.env`：
 
-```json
-"langfuseEnabled": true,
-"langfuseHost": "https://cloud.langfuse.com",
-"langfuseOtelEndpoint": "",
-"otelServiceName": "pi-coding-web",
-"otelDeploymentEnvironment": "production"
+```env
+PI_LANGFUSE_ENABLED=true
+PI_LANGFUSE_HOST=https://cloud.langfuse.com
+PI_LANGFUSE_OTEL_ENDPOINT=
+PI_OTEL_SERVICE_NAME=pi-coding-web
+PI_OTEL_DEPLOYMENT_ENVIRONMENT=production
 ```
 
-再把 key 写入 `secrets/pi-storage.secrets.env`：
+再把 key 写入 `.env`：
 
 ```env
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
-如果使用自建 Langfuse，把 `langfuseHost` 改为自建地址。`langfuseOtelEndpoint` 留空时会自动使用：
+如果使用自建 Langfuse，把 `PI_LANGFUSE_HOST` 改为自建地址。`PI_LANGFUSE_OTEL_ENDPOINT` 留空时会自动使用：
 
 ```text
 <langfuseHost>/api/public/otel/v1/traces
@@ -243,47 +231,47 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 
 如果后续接 OpenTelemetry Collector，可以显式设置：
 
-```json
-"langfuseOtelEndpoint": "http://otel-collector:4318/v1/traces"
+```env
+PI_LANGFUSE_OTEL_ENDPOINT=http://otel-collector:4318/v1/traces
 ```
 
 ## 深度调试开关
 
 生产环境默认关闭深度内容日志：
 
-```json
-"rawProviderLoggingEnabled": false,
-"promptSnapshotLoggingEnabled": false,
-"modelOutputSnapshotLoggingEnabled": false,
-"langfuseExportPromptSnapshots": false,
-"langfuseExportModelOutputSnapshots": false,
-"langfuseExportRawChunks": false
+```env
+PI_LOG_RAW_PROVIDER_ENABLED=false
+PI_LOG_PROMPT_SNAPSHOT_ENABLED=false
+PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=false
+PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS=false
+PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS=false
+PI_LANGFUSE_EXPORT_RAW_CHUNKS=false
 ```
 
 排查模型问题时可以临时开启：
 
-```json
-"promptSnapshotLoggingEnabled": true,
-"modelOutputSnapshotLoggingEnabled": true,
-"langfuseExportPromptSnapshots": true,
-"langfuseExportModelOutputSnapshots": true
+```env
+PI_LOG_PROMPT_SNAPSHOT_ENABLED=true
+PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true
+PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS=true
+PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS=true
 ```
 
 如果要看 provider raw chunk 和 PI raw stream event，再开启：
 
-```json
-"rawProviderLoggingEnabled": true,
-"langfuseExportRawChunks": true
+```env
+PI_LOG_RAW_PROVIDER_ENABLED=true
+PI_LANGFUSE_EXPORT_RAW_CHUNKS=true
 ```
 
 这些开关可能记录 prompt、模型输出、工具参数和 raw chunk，排查结束后建议关闭。
 
 ## 反向代理
 
-如果通过 Nginx、Traefik 或网关访问 PI，需要把外部地址写入 `previewBaseUrl`，例如：
+如果通过 Nginx、Traefik 或网关访问 PI，需要把外部地址写入 `PI_PREVIEW_BASE_URL`，例如：
 
-```json
-"previewBaseUrl": "https://pi.example.com"
+```env
+PI_PREVIEW_BASE_URL=https://pi.example.com
 ```
 
 反向代理需要转发：
@@ -294,11 +282,11 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 - `/api/pi-projects/*`
 - 预览项目相关路径。
 
-同时建议转发 `X-Forwarded-Proto` 和 `Host`，这样 `previewBaseUrl` 留空时也能生成正确链接。
+同时建议转发 `X-Forwarded-Proto` 和 `Host`，这样 `PI_PREVIEW_BASE_URL` 留空时也能生成正确链接。
 
 ## 升级
 
-保留 `data/`、`.env`、`pi-storage.config.json` 和 `secrets/`。
+保留 `data/` 和 `.env`。
 
 在线构建升级：
 

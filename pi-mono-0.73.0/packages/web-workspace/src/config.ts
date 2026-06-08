@@ -1,142 +1,130 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { CONFIG_FILE } from "./constants.js";
-import { isObject } from "./json.js";
-import type { JsonObject, StorageConfig } from "./types.js";
+import { CONFIG_ENV_FILE } from "./constants.js";
+import type { StorageConfig } from "./types.js";
 
-export function loadStorageConfig(rootDir: string, configFile = CONFIG_FILE): StorageConfig {
-	const configPath = isAbsolute(configFile) ? configFile : join(rootDir, configFile);
-	const raw = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {};
-	const record: JsonObject = isObject(raw) ? raw : {};
-	const secrets = loadSecretsEnvFile(
+export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): StorageConfig {
+	const configEnv = loadConfigEnvFile(
 		rootDir,
-		stringValue(process.env.PI_STORAGE_SECRETS_ENV_FILE) || record.secretsEnvFile,
+		stringValue(process.env.PI_STORAGE_ENV_FILE) || stringValue(envFile) || CONFIG_ENV_FILE,
 	);
-	const env = (name: string) => envValue(name, secrets.values);
-	const legacyStorageDir =
-		typeof record.storageDir === "string" ? resolveConfiguredPath(rootDir, record.storageDir) : undefined;
+	const env = (name: string) => envValue(name, configEnv.values);
+	const envStorageDir = stringValue(env("PI_STORAGE_DIR"));
+	const storageDir = envStorageDir ? resolveConfiguredPath(rootDir, envStorageDir) : undefined;
 	return {
 		sessionsDir: resolveConfiguredPath(
 			rootDir,
-			stringValue(record.sessionsDir) || (legacyStorageDir ? join(legacyStorageDir, "sessions") : "data/sessions"),
+			stringValue(env("PI_SESSIONS_DIR")) || (storageDir ? join(storageDir, "sessions") : "data/sessions"),
 		),
 		settingsFile: resolveConfiguredPath(
 			rootDir,
-			stringValue(record.settingsFile) ||
-				(legacyStorageDir ? join(legacyStorageDir, "settings.json") : "data/settings.json"),
+			stringValue(env("PI_SETTINGS_FILE")) || (storageDir ? join(storageDir, "settings.json") : "data/settings.json"),
 		),
-		projectsRootDir: resolveConfiguredPath(rootDir, stringValue(record.projectsRootDir) || "data/projects"),
-		skillsDir: resolveConfiguredPath(rootDir, stringValue(record.skillsDir) || "data/skills"),
-		defaultSkillsDir: resolveConfiguredPath(rootDir, stringValue(record.defaultSkillsDir) || "data/default-skills"),
-		previewBaseUrl: (stringValue(record.previewBaseUrl) || "").replace(/\/+$/, ""),
-		projectInstallCommand: stringValue(record.projectInstallCommand) || "npm install",
-		projectBuildCommand: stringValue(record.projectBuildCommand) || "npm run build",
-		projectInstallTimeoutMs: numberValue(record.projectInstallTimeoutMs) || 120000,
-		projectBuildTimeoutMs: numberValue(record.projectBuildTimeoutMs) || 120000,
-		serverSessionSyncEnabled: booleanValue(record.serverSessionSyncEnabled),
-		defaultModelProvider: stringValue(record.defaultModelProvider),
-		defaultModelId: stringValue(record.defaultModelId),
-		handoffDefaultThinkingLevel: thinkingLevelValue(record.handoffDefaultThinkingLevel),
-		secretsEnvFile: secrets.file,
+		projectsRootDir: resolveConfiguredPath(
+			rootDir,
+			stringValue(env("PI_PROJECTS_ROOT_DIR")) || "data/projects",
+		),
+		skillsDir: resolveConfiguredPath(
+			rootDir,
+			stringValue(env("PI_SKILLS_DIR")) || "data/skills",
+		),
+		defaultSkillsDir: resolveConfiguredPath(
+			rootDir,
+			stringValue(env("PI_DEFAULT_SKILLS_DIR")) || "data/default-skills",
+		),
+		previewBaseUrl: normalizedHostValue(stringValue(env("PI_PREVIEW_BASE_URL"))),
+		projectInstallCommand:
+			stringValue(env("PI_PROJECT_INSTALL_COMMAND")) || "npm install",
+		projectBuildCommand:
+			stringValue(env("PI_PROJECT_BUILD_COMMAND")) || "npm run build",
+		projectInstallTimeoutMs: positiveIntegerValue(
+			env("PI_PROJECT_INSTALL_TIMEOUT_MS"),
+			120000,
+		),
+		projectBuildTimeoutMs: positiveIntegerValue(
+			env("PI_PROJECT_BUILD_TIMEOUT_MS"),
+			120000,
+		),
+		serverSessionSyncEnabled:
+			envBooleanValue(env("PI_SERVER_SESSION_SYNC_ENABLED")) ?? false,
+		defaultModelProvider: stringValue(env("PI_DEFAULT_MODEL_PROVIDER")),
+		defaultModelId: stringValue(env("PI_DEFAULT_MODEL_ID")),
+		handoffDefaultThinkingLevel: thinkingLevelValue(env("PI_HANDOFF_DEFAULT_THINKING_LEVEL")),
+		envFile: configEnv.file,
 		logsDbFile: resolveConfiguredPath(
 			rootDir,
-			stringValue(env("PI_LOG_DB")) || stringValue(record.logsDbFile) || "data/logs/pi-diagnostics.sqlite",
+			stringValue(env("PI_LOG_DB")) || "data/logs/pi-diagnostics.sqlite",
 		),
-		loggingEnabled: envBooleanValue(env("PI_LOG_ENABLED")) ?? optionalBooleanValue(record.loggingEnabled) ?? true,
-		logStdoutEnabled:
-			envBooleanValue(env("PI_LOG_STDOUT")) ?? optionalBooleanValue(record.logStdoutEnabled) ?? false,
+		loggingEnabled: envBooleanValue(env("PI_LOG_ENABLED")) ?? true,
+		logStdoutEnabled: envBooleanValue(env("PI_LOG_STDOUT")) ?? false,
 		rawProviderLoggingEnabled:
-			envBooleanValue(env("PI_LOG_RAW_PROVIDER_ENABLED")) ??
-			optionalBooleanValue(record.rawProviderLoggingEnabled) ??
-			false,
+			envBooleanValue(env("PI_LOG_RAW_PROVIDER_ENABLED")) ?? false,
 		rawProviderLogMaxChars: positiveIntegerValue(
 			env("PI_LOG_RAW_PROVIDER_MAX_CHARS"),
-			record.rawProviderLogMaxChars,
 			12000,
 		),
 		promptSnapshotLoggingEnabled:
-			envBooleanValue(env("PI_LOG_PROMPT_SNAPSHOT_ENABLED")) ??
-			optionalBooleanValue(record.promptSnapshotLoggingEnabled) ??
-			false,
+			envBooleanValue(env("PI_LOG_PROMPT_SNAPSHOT_ENABLED")) ?? false,
 		promptSnapshotMaxChars: positiveIntegerValue(
 			env("PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS"),
-			record.promptSnapshotMaxChars,
 			20000,
 		),
 		modelOutputSnapshotLoggingEnabled:
-			envBooleanValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED")) ??
-			optionalBooleanValue(record.modelOutputSnapshotLoggingEnabled) ??
-			false,
+			envBooleanValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED")) ?? false,
 		modelOutputSnapshotMaxChars: positiveIntegerValue(
 			env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS"),
-			record.modelOutputSnapshotMaxChars,
 			20000,
 		),
-		logRetentionDays: nonNegativeIntegerValue(env("PI_LOG_RETENTION_DAYS"), record.logRetentionDays, 30),
-		logMaxEvents: nonNegativeIntegerValue(env("PI_LOG_MAX_EVENTS"), record.logMaxEvents, 50000),
+		logRetentionDays: nonNegativeIntegerValue(env("PI_LOG_RETENTION_DAYS"), 30),
+		logMaxEvents: nonNegativeIntegerValue(env("PI_LOG_MAX_EVENTS"), 50000),
 		logCleanupIntervalMs: nonNegativeIntegerValue(
 			env("PI_LOG_CLEANUP_INTERVAL_MS"),
-			record.logCleanupIntervalMs,
 			3600000,
 		),
 		logVacuumIntervalMs: nonNegativeIntegerValue(
 			env("PI_LOG_VACUUM_INTERVAL_MS"),
-			record.logVacuumIntervalMs,
 			86400000,
 		),
-		langfuseEnabled: envBooleanValue(env("PI_LANGFUSE_ENABLED")) ?? optionalBooleanValue(record.langfuseEnabled) ?? false,
+		langfuseEnabled: envBooleanValue(env("PI_LANGFUSE_ENABLED")) ?? false,
 		langfuseHost: normalizedHostValue(
 			stringValue(env("PI_LANGFUSE_HOST")) ||
 				stringValue(env("LANGFUSE_HOST")) ||
-				stringValue(env("LANGFUSE_BASE_URL")) ||
-				stringValue(record.langfuseHost),
+				stringValue(env("LANGFUSE_BASE_URL")),
 		),
 		langfusePublicKey:
 			stringValue(env("PI_LANGFUSE_PUBLIC_KEY")) ||
-			stringValue(env("LANGFUSE_PUBLIC_KEY")) ||
-			stringValue(record.langfusePublicKey),
+			stringValue(env("LANGFUSE_PUBLIC_KEY")),
 		langfuseSecretKey:
 			stringValue(env("PI_LANGFUSE_SECRET_KEY")) ||
-			stringValue(env("LANGFUSE_SECRET_KEY")) ||
-			stringValue(record.langfuseSecretKey),
+			stringValue(env("LANGFUSE_SECRET_KEY")),
 		langfuseOtelEndpoint: normalizedHostValue(
 			stringValue(env("PI_LANGFUSE_OTEL_ENDPOINT")) ||
 				stringValue(env("LANGFUSE_OTEL_ENDPOINT")) ||
-				stringValue(env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")) ||
-				stringValue(record.langfuseOtelEndpoint),
+				stringValue(env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")),
 		),
 		langfuseFlushIntervalMs: nonNegativeIntegerValue(
 			env("PI_LANGFUSE_FLUSH_INTERVAL_MS"),
-			record.langfuseFlushIntervalMs,
 			5000,
 		),
-		langfuseBatchSize: positiveIntegerValue(env("PI_LANGFUSE_BATCH_SIZE"), record.langfuseBatchSize, 50),
+		langfuseBatchSize: positiveIntegerValue(env("PI_LANGFUSE_BATCH_SIZE"), 50),
 		langfuseExportPromptSnapshots:
-			envBooleanValue(env("PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS")) ??
-			optionalBooleanValue(record.langfuseExportPromptSnapshots) ??
-			false,
+			envBooleanValue(env("PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS")) ?? false,
 		langfuseExportRawChunks:
-			envBooleanValue(env("PI_LANGFUSE_EXPORT_RAW_CHUNKS")) ??
-			optionalBooleanValue(record.langfuseExportRawChunks) ??
-			false,
+			envBooleanValue(env("PI_LANGFUSE_EXPORT_RAW_CHUNKS")) ?? false,
 		langfuseExportModelOutputSnapshots:
-			envBooleanValue(env("PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS")) ??
-			optionalBooleanValue(record.langfuseExportModelOutputSnapshots) ??
-			false,
+			envBooleanValue(env("PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS")) ?? false,
 		otelServiceName:
 			stringValue(env("PI_OTEL_SERVICE_NAME")) ||
 			stringValue(env("OTEL_SERVICE_NAME")) ||
-			stringValue(record.otelServiceName) ||
 			"pi-coding-web",
 		otelDeploymentEnvironment:
 			stringValue(env("PI_OTEL_DEPLOYMENT_ENVIRONMENT")) ||
 			stringValue(env("OTEL_DEPLOYMENT_ENVIRONMENT")) ||
-			stringValue(env("DEPLOYMENT_ENVIRONMENT")) ||
-			stringValue(record.otelDeploymentEnvironment),
+			stringValue(env("DEPLOYMENT_ENVIRONMENT")),
 	};
 }
 
-function loadSecretsEnvFile(rootDir: string, value: unknown): { file: string; values: Record<string, string> } {
+function loadConfigEnvFile(rootDir: string, value: unknown): { file: string; values: Record<string, string> } {
 	const configured = stringValue(value).trim();
 	if (!configured) return { file: "", values: {} };
 	const file = resolveConfiguredPath(rootDir, configured);
@@ -203,42 +191,22 @@ function normalizedHostValue(value: string): string {
 	return value.trim().replace(/\/+$/, "");
 }
 
-function numberValue(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function positiveIntegerValue(envValue: string | undefined, configValue: unknown, defaultValue: number): number {
+function positiveIntegerValue(envValue: string | undefined, defaultValue: number): number {
 	const envNumber = integerFromString(envValue);
 	if (envNumber !== undefined && envNumber > 0) return envNumber;
-	const configNumber = optionalNumberValue(configValue);
-	if (configNumber !== undefined && configNumber > 0) return Math.round(configNumber);
 	return defaultValue;
 }
 
-function nonNegativeIntegerValue(envValue: string | undefined, configValue: unknown, defaultValue: number): number {
+function nonNegativeIntegerValue(envValue: string | undefined, defaultValue: number): number {
 	const envNumber = integerFromString(envValue);
 	if (envNumber !== undefined && envNumber >= 0) return envNumber;
-	const configNumber = optionalNumberValue(configValue);
-	if (configNumber !== undefined && configNumber >= 0) return Math.round(configNumber);
 	return defaultValue;
-}
-
-function optionalNumberValue(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function integerFromString(value: string | undefined): number | undefined {
 	if (value === undefined) return undefined;
 	const parsed = Number(value.trim());
 	return Number.isFinite(parsed) ? Math.round(parsed) : undefined;
-}
-
-function booleanValue(value: unknown): boolean {
-	return value === true;
-}
-
-function optionalBooleanValue(value: unknown): boolean | undefined {
-	return typeof value === "boolean" ? value : undefined;
 }
 
 function envBooleanValue(value: string | undefined): boolean | undefined {

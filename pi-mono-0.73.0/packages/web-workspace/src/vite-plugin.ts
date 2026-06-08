@@ -25,9 +25,9 @@ import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 
-export function configuredStoragePlugin(configFile?: string): Plugin {
+export function configuredStoragePlugin(envFile?: string): Plugin {
 	const rootDir = process.cwd();
-	const config = loadStorageConfig(rootDir, configFile);
+	const config = loadStorageConfig(rootDir, envFile);
 	const diagnostics = new WorkspaceDiagnosticLogService(config);
 	const sessions = new WorkspaceSessionService(config);
 	const files = new WorkspaceFileService(config);

@@ -24,63 +24,40 @@ apps/pi-coding-web/data/logs/pi-diagnostics.sqlite
 
 相对路径基于 `apps/pi-coding-web/` 解析。默认日志目录已加入 `.gitignore`，不应提交到 Git。
 
-日志配置应优先显式写在 `apps/pi-coding-web/pi-storage.config.json` 中：
+日常配置统一写在 `apps/pi-coding-web/.env`。`.env.example` 已列出完整配置并按用途分组。诊断日志相关变量示例：
 
-```json
-{
-  "logsDbFile": "./data/logs/pi-diagnostics.sqlite",
-  "secretsEnvFile": "./pi-storage.secrets.env",
-  "loggingEnabled": true,
-  "logStdoutEnabled": false,
-  "rawProviderLoggingEnabled": false,
-  "rawProviderLogMaxChars": 12000,
-  "promptSnapshotLoggingEnabled": false,
-  "promptSnapshotMaxChars": 20000,
-  "modelOutputSnapshotLoggingEnabled": false,
-  "modelOutputSnapshotMaxChars": 20000,
-  "logRetentionDays": 30,
-  "logMaxEvents": 50000,
-  "logCleanupIntervalMs": 3600000,
-  "logVacuumIntervalMs": 86400000,
-  "langfuseEnabled": false,
-  "langfuseHost": "http://localhost:3000",
-  "langfusePublicKey": "",
-  "langfuseSecretKey": "",
-  "langfuseOtelEndpoint": "",
-  "langfuseFlushIntervalMs": 5000,
-  "langfuseBatchSize": 50,
-  "langfuseExportPromptSnapshots": false,
-  "langfuseExportModelOutputSnapshots": false,
-  "langfuseExportRawChunks": false,
-  "otelServiceName": "pi-coding-web",
-  "otelDeploymentEnvironment": ""
-}
+```env
+PI_LOG_DB=./data/logs/pi-diagnostics.sqlite
+PI_LOG_ENABLED=true
+PI_LOG_STDOUT=false
+PI_LOG_RAW_PROVIDER_ENABLED=false
+PI_LOG_RAW_PROVIDER_MAX_CHARS=12000
+PI_LOG_PROMPT_SNAPSHOT_ENABLED=false
+PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS=20000
+PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=false
+PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS=20000
+PI_LOG_RETENTION_DAYS=30
+PI_LOG_MAX_EVENTS=50000
+PI_LOG_CLEANUP_INTERVAL_MS=3600000
+PI_LOG_VACUUM_INTERVAL_MS=86400000
 ```
 
-环境变量仍可用于 Docker、CI 或临时调试时覆盖配置文件：
+系统环境变量仍可用于 Docker、CI 或临时调试时覆盖 `.env`：
 
 ```powershell
 $env:PI_LOG_DB="C:\data\pi\logs\pi-diagnostics.sqlite"
 ```
 
-环境变量优先级高于配置文件，但常规部署建议把默认行为写进配置文件，避免依赖隐式默认值。
+系统环境变量优先级高于 `.env`，但常规部署建议把默认行为写进 `.env`，避免依赖隐式默认值。
 
-密钥不建议直接写进 `pi-storage.config.json`。本地开发推荐把密钥写入 `apps/pi-coding-web/pi-storage.secrets.env`，并在配置文件中保留：
-
-```json
-"secretsEnvFile": "./pi-storage.secrets.env",
-"langfusePublicKey": "",
-"langfuseSecretKey": ""
-```
-
-`pi-storage.secrets.env` 使用 `.env` 格式：
+密钥写入 `apps/pi-coding-web/.env`：
 
 ```env
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
-该文件已被 `.gitignore` 忽略。密钥加载优先级为：系统环境变量 > `secretsEnvFile` 文件 > `pi-storage.config.json` 普通字段。
+该文件已被 `.gitignore` 忽略。配置加载优先级为：系统环境变量 > `.env` > 代码内默认值。
 
 ## 3. 启用与关闭
 
@@ -124,9 +101,9 @@ $env:PI_LOG_STDOUT="true"
 
 开启：
 
-```json
-"promptSnapshotLoggingEnabled": true,
-"promptSnapshotMaxChars": 20000
+```env
+PI_LOG_PROMPT_SNAPSHOT_ENABLED=true
+PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS=20000
 ```
 
 开启后会新增：
@@ -148,9 +125,9 @@ $env:PI_LOG_STDOUT="true"
 
 开启：
 
-```json
-"modelOutputSnapshotLoggingEnabled": true,
-"modelOutputSnapshotMaxChars": 20000
+```env
+PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true
+PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS=20000
 ```
 
 开启后，`model.stream.summary` 会额外保存一次可读输出快照，包含截断后的 `text_delta`、`thinking_delta` 和工具调用名称/参数片段。
@@ -163,23 +140,23 @@ $env:PI_LOG_STDOUT="true"
 注意：
 
 - 输出快照可能包含模型生成的用户数据、代码、文件名和工具参数，默认关闭。
-- `modelOutputSnapshotMaxChars` 是单次模型请求输出快照的字符预算，超过后会截断。
+- `PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS` 是单次模型请求输出快照的字符预算，超过后会截断。
 
 ### 原始流事件调试
 
 开启：
 
-```json
-"rawProviderLoggingEnabled": true,
-"rawProviderLogMaxChars": 12000
+```env
+PI_LOG_RAW_PROVIDER_ENABLED=true
+PI_LOG_RAW_PROVIDER_MAX_CHARS=12000
 ```
 
 开启后会新增：
 
 - `provider.raw_chunk`：OpenAI-compatible provider 在映射成 PI 事件前拿到的结构化 stream chunk。
-- `provider.raw_chunk.truncated`：单次请求达到 `rawProviderLogMaxChars` 后的 provider chunk 截断提示。
+- `provider.raw_chunk.truncated`：单次请求达到 `PI_LOG_RAW_PROVIDER_MAX_CHARS` 后的 provider chunk 截断提示。
 - `model.stream.raw_event`：PI 解析后的流式事件序列，例如 `thinking_delta`、`text_delta`、`toolcall_delta`。
-- `model.stream.raw_event.truncated`：单次请求达到 `rawProviderLogMaxChars` 后的截断提示。
+- `model.stream.raw_event.truncated`：单次请求达到 `PI_LOG_RAW_PROVIDER_MAX_CHARS` 后的截断提示。
 
 用途：
 
@@ -298,7 +275,7 @@ services:
     environment:
       PI_LOG_ENABLED: "true"
       PI_LOG_DB: "/app/apps/pi-coding-web/data/logs/pi-diagnostics.sqlite"
-      PI_STORAGE_SECRETS_ENV_FILE: ""
+      PI_STORAGE_ENV_FILE: "/app/apps/pi-coding-web/.env"
       PI_LOG_STDOUT: "false"
       PI_LOG_PROMPT_SNAPSHOT_ENABLED: "false"
       PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED: "false"
@@ -400,8 +377,8 @@ npm run logs -- --event model.stream.summary --limit 50
 
 如果需要进一步看流式事件序列，临时打开：
 
-```json
-"rawProviderLoggingEnabled": true
+```env
+PI_LOG_RAW_PROVIDER_ENABLED=true
 ```
 
 然后查看：
@@ -430,8 +407,8 @@ npm run logs -- --event model.stream.summary --limit 100
 
 如果需要确认最终发给 provider 的工具 schema 和消息结构，临时打开：
 
-```json
-"promptSnapshotLoggingEnabled": true
+```env
+PI_LOG_PROMPT_SNAPSHOT_ENABLED=true
 ```
 
 然后查看：
@@ -469,7 +446,7 @@ npm run logs -- --category handoff --level error --limit 50
 
 默认 provider payload 不保存完整消息正文，而是保存摘要，例如消息数量、内容类型和长度、工具数量和工具名。字符串会被截断，对象深度、数组长度和 key 数量也有限制。
 
-打开 `promptSnapshotLoggingEnabled` 后，日志会保存截断后的 prompt/payload 快照。打开 `modelOutputSnapshotLoggingEnabled` 后，`model.stream.summary` 会保存截断后的可读输出快照。打开 `rawProviderLoggingEnabled` 后，日志会保存截断后的流式事件 delta。这些深度开关都应该只在定位问题时临时开启。
+打开 `PI_LOG_PROMPT_SNAPSHOT_ENABLED` 后，日志会保存截断后的 prompt/payload 快照。打开 `PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED` 后，`model.stream.summary` 会保存截断后的可读输出快照。打开 `PI_LOG_RAW_PROVIDER_ENABLED` 后，日志会保存截断后的流式事件 delta。这些深度开关都应该只在定位问题时临时开启。
 
 注意：
 
@@ -483,36 +460,35 @@ npm run logs -- --category handoff --level error --limit 50
 
 默认配置：
 
-```json
-"langfuseEnabled": false,
-"langfuseHost": "http://localhost:3000",
-"langfusePublicKey": "",
-"langfuseSecretKey": "",
-"secretsEnvFile": "./pi-storage.secrets.env",
-"langfuseOtelEndpoint": "",
-"langfuseFlushIntervalMs": 5000,
-"langfuseBatchSize": 50,
-"langfuseExportPromptSnapshots": false,
-"langfuseExportModelOutputSnapshots": false,
-"langfuseExportRawChunks": false,
-"otelServiceName": "pi-coding-web",
-"otelDeploymentEnvironment": ""
+```env
+PI_LANGFUSE_ENABLED=false
+PI_LANGFUSE_HOST=http://localhost:3000
+PI_LANGFUSE_OTEL_ENDPOINT=
+PI_LANGFUSE_FLUSH_INTERVAL_MS=5000
+PI_LANGFUSE_BATCH_SIZE=50
+PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS=false
+PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS=false
+PI_LANGFUSE_EXPORT_RAW_CHUNKS=false
+PI_OTEL_SERVICE_NAME=pi-coding-web
+PI_OTEL_DEPLOYMENT_ENVIRONMENT=development
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
 ```
 
 启用步骤：
 
 1. 在 Langfuse 项目中创建 API key，取得 public key 和 secret key。
-2. 修改 `apps/pi-coding-web/pi-storage.config.json`：
+2. 修改 `apps/pi-coding-web/.env`：
 
-```json
-"langfuseEnabled": true,
-"langfuseHost": "http://localhost:3000",
-"langfuseOtelEndpoint": "",
-"otelServiceName": "pi-coding-web",
-"otelDeploymentEnvironment": "development"
+```env
+PI_LANGFUSE_ENABLED=true
+PI_LANGFUSE_HOST=http://localhost:3000
+PI_LANGFUSE_OTEL_ENDPOINT=
+PI_OTEL_SERVICE_NAME=pi-coding-web
+PI_OTEL_DEPLOYMENT_ENVIRONMENT=development
 ```
 
-`langfuseOtelEndpoint` 为空时，PI 会自动使用：
+`PI_LANGFUSE_OTEL_ENDPOINT` 为空时，PI 会自动使用：
 
 ```text
 <langfuseHost>/api/public/otel/v1/traces
@@ -520,16 +496,16 @@ npm run logs -- --category handoff --level error --limit 50
 
 如果你后续要先发到 OpenTelemetry Collector，再由 Collector 转发到 Langfuse，可以显式设置：
 
-```json
-"langfuseOtelEndpoint": "http://otel-collector:4318/v1/traces"
+```env
+PI_LANGFUSE_OTEL_ENDPOINT=http://otel-collector:4318/v1/traces
 ```
 
-3. 使用环境变量或 `secretsEnvFile` 注入密钥，避免把 secret key 写进仓库。
+3. 在 `.env` 中填写密钥，避免把 secret key 写进仓库跟踪文件。
 
 本地开发推荐创建：
 
 ```text
-apps/pi-coding-web/pi-storage.secrets.env
+apps/pi-coding-web/.env
 ```
 
 内容：
@@ -537,14 +513,6 @@ apps/pi-coding-web/pi-storage.secrets.env
 ```env
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
-```
-
-并在 `pi-storage.config.json` 中配置：
-
-```json
-"secretsEnvFile": "./pi-storage.secrets.env",
-"langfusePublicKey": "",
-"langfuseSecretKey": ""
 ```
 
 Docker、CI 或临时调试也可以直接使用环境变量：
@@ -609,18 +577,18 @@ Invoke-RestMethod http://127.0.0.1:5173/api/pi-logs/status
 
 如果要在 Langfuse 的 generation observation 中看到可读 Input / Output，而不是只看到统计元数据，需要同时开启本地采集和 Langfuse 上传：
 
-```json
-"promptSnapshotLoggingEnabled": true,
-"modelOutputSnapshotLoggingEnabled": true,
-"langfuseExportPromptSnapshots": true,
-"langfuseExportModelOutputSnapshots": true
+```env
+PI_LOG_PROMPT_SNAPSHOT_ENABLED=true
+PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true
+PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS=true
+PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS=true
 ```
 
 如果还要分析 provider chunk 或 PI raw stream event 的中间过程，再临时开启：
 
-```json
-"rawProviderLoggingEnabled": true,
-"langfuseExportRawChunks": true
+```env
+PI_LOG_RAW_PROVIDER_ENABLED=true
+PI_LANGFUSE_EXPORT_RAW_CHUNKS=true
 ```
 
 Langfuse trace 左侧的 `agent.*` observation 是 PI 生命周期事件，不是模型请求；这些事件没有 LLM input/output，界面里出现 `null` 或 `undefined` 是正常的。模型输入输出应查看带粉色 generation 图标的 `model.stream.summary`、`provider.response` 或 `provider.request.error` observation。
@@ -630,7 +598,7 @@ Langfuse trace 左侧的 `agent.*` observation 是 PI 生命周期事件，不�
 - 每个 PI trace 会转换为一个 OTEL root span。
 - `model.stream.summary`、`provider.response`、`provider.request.error` 会转换为带 `langfuse.observation.type=generation` 的 OTEL span。
 - 其他诊断事件会转换为带 `langfuse.observation.type=event` 的 OTEL span。
-- PI 会通过 OTLP/HTTP JSON POST 到 `langfuseOtelEndpoint`，并带上 `x-langfuse-ingestion-version: 4`。
+- PI 会通过 OTLP/HTTP JSON POST 到最终 `langfuseOtelEndpoint`，并带上 `x-langfuse-ingestion-version: 4`。
 - 导出是后台异步队列，Langfuse 网络失败不会中断 PI 对话或项目生成。
 - secret、cookie、authorization、api key 等敏感字段会在写入 SQLite 前脱敏，导出前也会再次过滤。
 
@@ -639,9 +607,9 @@ Langfuse trace 左侧的 `agent.*` observation 是 PI 生命周期事件，不�
 - 默认不会把完整 prompt/payload snapshot 上传到 Langfuse。
 - 默认不会把模型输出快照上传到 Langfuse。
 - 默认不会把 provider raw chunk 或 PI raw stream event 上传到 Langfuse。
-- 即使本地开启了 `promptSnapshotLoggingEnabled`，仍需同时开启 `langfuseExportPromptSnapshots` 才会上传 prompt/payload 快照。
-- 即使本地开启了 `modelOutputSnapshotLoggingEnabled`，仍需同时开启 `langfuseExportModelOutputSnapshots` 才会上传模型输出快照。
-- 即使本地开启了 `rawProviderLoggingEnabled`，仍需同时开启 `langfuseExportRawChunks` 才会上传 raw chunk/raw event。
+- 即使本地开启了 `PI_LOG_PROMPT_SNAPSHOT_ENABLED`，仍需同时开启 `PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS` 才会上传 prompt/payload 快照。
+- 即使本地开启了 `PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED`，仍需同时开启 `PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS` 才会上传模型输出快照。
+- 即使本地开启了 `PI_LOG_RAW_PROVIDER_ENABLED`，仍需同时开启 `PI_LANGFUSE_EXPORT_RAW_CHUNKS` 才会上传 raw chunk/raw event。
 - 开启上述上传前，应确认 Langfuse 部署、访问权限和数据保留策略满足当前项目的隐私要求。
 
 当前实现直接发送 OTLP/HTTP JSON 到 Langfuse `/api/public/otel/v1/traces`，没有引入 SDK 依赖。这样 PI、PM、模型网关和 worker 后续都可以按 OpenTelemetry trace/span 语义对齐；如果后续需要自动上下文传播、采样、Collector、metrics 或 logs，再引入标准 OpenTelemetry SDK 和 Collector 会更合适。

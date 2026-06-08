@@ -7,13 +7,11 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      PI_STORAGE_SECRETS_ENV_FILE: /app/apps/pi-coding-web/secrets/pi-storage.secrets.env
     ports:
       - "${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
       - ./data:/app/apps/pi-coding-web/data
-      - ./pi-storage.config.json:/app/apps/pi-coding-web/pi-storage.config.json:ro
-      - ./secrets:/app/apps/pi-coding-web/secrets:ro
+      - ./.env:/app/apps/pi-coding-web/.env:ro
     healthcheck:
       test:
         [

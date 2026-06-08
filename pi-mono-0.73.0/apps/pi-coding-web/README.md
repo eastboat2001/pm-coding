@@ -34,9 +34,9 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 This image runs Vite preview instead of a static nginx server because the application depends on Vite server middleware for session storage, server-side project files, controlled project tasks, and `/preview/<project-id>/` URLs.
 
-When deploying behind a domain or reverse proxy, set `previewBaseUrl` in `pi-storage.config.json` to the public PI origin, for example `https://pi.example.com`. Generated projects and optional server-synced sessions should stay in the mounted `data` volume, not inside the image.
+When deploying behind a domain or reverse proxy, set `PI_PREVIEW_BASE_URL` in `.env` to the public PI origin, for example `https://pi.example.com`. Generated projects and optional server-synced sessions should stay in the mounted `data` volume, not inside the image.
 
-For server deployment with an offline image, use the deployment package under `docker/pi-coding-web`. Copy `docker-compose.yaml` and `pi-storage.config.json` from that directory to the same server directory, load the image, then start the service:
+For server deployment with an offline image, use the deployment package under `docker/pi-coding-web`. Copy `docker-compose.yaml` and `.env.example` from that directory to the same server directory, copy `.env.example` to `.env`, load the image, then start the service:
 
 ```bash
 docker load -i pi-coding-web-0.73.0.tar
@@ -68,33 +68,27 @@ ports:
 ```
 
 3. **Public browser URL**
-   - Configured in `pi-storage.config.json` as `previewBaseUrl`.
+   - Configured in `.env` as `PI_PREVIEW_BASE_URL`.
    - This must be the address that users can open from their own computers.
    - Do **not** use `0.0.0.0` here. `0.0.0.0` is only a listen address, not a browser address.
    - Use `localhost` only for local testing on the same machine.
 
 Local test:
 
-```json
-{
-  "previewBaseUrl": "http://localhost:5173"
-}
+```env
+PI_PREVIEW_BASE_URL=http://localhost:5173
 ```
 
 Server IP:
 
-```json
-{
-  "previewBaseUrl": "http://SERVER_IP:5173"
-}
+```env
+PI_PREVIEW_BASE_URL=http://SERVER_IP:5173
 ```
 
 Domain or reverse proxy:
 
-```json
-{
-  "previewBaseUrl": "https://pi.example.com"
-}
+```env
+PI_PREVIEW_BASE_URL=https://pi.example.com
 ```
 
 If PI is launched from PM, PM must point to the same public PI address:
@@ -120,7 +114,7 @@ This application includes:
 - **Server workspace tools** - The normal Web UI agent flow creates files and runs controlled static project tasks in a fixed server project root
 - **Browser-private session persistence** - Active and recent sessions are restored from browser IndexedDB only
 - **Model persistence** - The selected model is remembered across refreshes and new sessions
-- **Configured server storage** - Model configuration and generated project files use fixed paths from `pi-storage.config.json`
+- **Configured server storage** - Model configuration and generated project files use fixed paths from `.env`
 
 ## Configuration
 
@@ -158,7 +152,7 @@ Temporary multi-user deployment behavior:
 - The session list shows only sessions saved in the current browser.
 - A `session=<id>` URL only restores the session if that browser already has the session in IndexedDB.
 - This avoids exposing one user's chat history to another user on the same PI server.
-- The server-session sync code path is controlled by `serverSessionSyncEnabled` in `pi-storage.config.json` for a future authenticated deployment where sessions can be scoped by user.
+- The server-session sync code path is controlled by `PI_SERVER_SESSION_SYNC_ENABLED` in `.env` for a future authenticated deployment where sessions can be scoped by user.
 
 Behavioral details:
 
@@ -183,7 +177,7 @@ The application uses the Vite dev/preview server for generated project files, pr
 ### How it works
 
 - Browser IndexedDB is the only active session store in the current temporary multi-user mode.
-- Saved chat sessions are not mirrored to disk while `serverSessionSyncEnabled` is `false`.
+- Saved chat sessions are not mirrored to disk while `PI_SERVER_SESSION_SYNC_ENABLED=false`.
 - The session list only reads browser-backed records.
 - The Web UI agent can call read-only global skill tools: `skill_load` and `skill_resource`.
 - The Web UI agent can call server workspace tools: `project_file` and `project_task`.
@@ -194,24 +188,22 @@ The application uses the Vite dev/preview server for generated project files, pr
 
 ### Configuration
 
-Edit `pi-storage.config.json`:
+Edit `.env`:
 
-```json
-{
-  "sessionsDir": "./data/sessions",
-  "settingsFile": "./data/settings.json",
-  "projectsRootDir": "./data/projects",
-  "skillsDir": "./data/skills",
-  "previewBaseUrl": "",
-  "serverSessionSyncEnabled": false,
-  "defaultModelProvider": "",
-  "defaultModelId": "",
-  "handoffDefaultThinkingLevel": "high",
-  "projectInstallCommand": "npm install",
-  "projectBuildCommand": "npm run build",
-  "projectInstallTimeoutMs": 120000,
-  "projectBuildTimeoutMs": 120000
-}
+```env
+PI_SESSIONS_DIR=./data/sessions
+PI_SETTINGS_FILE=./data/settings.json
+PI_PROJECTS_ROOT_DIR=./data/projects
+PI_SKILLS_DIR=./data/skills
+PI_PREVIEW_BASE_URL=
+PI_SERVER_SESSION_SYNC_ENABLED=false
+PI_DEFAULT_MODEL_PROVIDER=
+PI_DEFAULT_MODEL_ID=
+PI_HANDOFF_DEFAULT_THINKING_LEVEL=high
+PI_PROJECT_INSTALL_COMMAND=npm install
+PI_PROJECT_BUILD_COMMAND=npm run build
+PI_PROJECT_INSTALL_TIMEOUT_MS=120000
+PI_PROJECT_BUILD_TIMEOUT_MS=120000
 ```
 
 Relative paths are resolved from `apps/pi-coding-web/`. Absolute paths are also supported.
@@ -261,7 +253,7 @@ Expected conversation flow:
 4. For app/site/project work, it calls `project_file` repeatedly to create or update server-side files.
 5. For dependency-free static projects, it calls `project_task validate` and then `project_task preview`.
 6. For build-based static frontend projects, it calls `project_task build_static`, then `project_task validate`, and finally `project_task preview`.
-7. `build_static` runs only the server-configured `projectInstallCommand` and `projectBuildCommand`; `preview` never runs package scripts.
+7. `build_static` runs only the server-configured `PI_PROJECT_INSTALL_COMMAND` and `PI_PROJECT_BUILD_COMMAND`; `preview` never runs package scripts.
 8. The server serves `dist/`, `build/`, `public/`, or a root static `index.html` when present.
 9. The browser displays skill, file, and task tool cards plus the final assistant message with the preview URL.
 
@@ -271,12 +263,10 @@ Preview URLs are served from this PI server at:
 /preview/<project-id>/
 ```
 
-Set `previewBaseUrl` in `pi-storage.config.json` when the server is behind a domain or reverse proxy, for example:
+Set `PI_PREVIEW_BASE_URL` in `.env` when the server is behind a domain or reverse proxy, for example:
 
-```json
-{
-  "previewBaseUrl": "https://coding.example.com"
-}
+```env
+PI_PREVIEW_BASE_URL=https://coding.example.com
 ```
 
 This is optimized for generated static projects and build-based static frontend projects. Projects with static build output in `dist/` or `build/` are served from that directory. Static projects without `package.json` are served from the project root. `project_task preview` does not start Node services, run `npm start`, run `npm run dev`, or run arbitrary package scripts.
@@ -285,7 +275,7 @@ Because preview URLs may live under `/preview/<project-id>/`, generated apps sho
 
 If a project root `index.html` still references build-source files such as `src/main.tsx` or `src/main.jsx`, static preview rejects the project and returns logs that tell the agent to run `project_task build_static` before previewing.
 
-`project_task` never accepts raw shell commands. The only task that runs configured commands is `build_static`, and those commands come from `pi-storage.config.json`.
+`project_task` never accepts raw shell commands. The only task that runs configured commands is `build_static`, and those commands come from `.env`.
 
 ### Limitations
 
@@ -312,7 +302,7 @@ apps/pi-coding-web/
 │   └── prompts/                    # PI coding system prompt and PM handoff instructions
 ├── index.html        # HTML entry point
 ├── package.json      # Dependencies
-├── pi-storage.config.json
+├── .env.example
 ├── vite.config.ts    # Vite configuration
 └── tsconfig.json     # TypeScript configuration
 ```

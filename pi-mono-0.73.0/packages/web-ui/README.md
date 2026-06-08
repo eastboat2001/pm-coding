@@ -217,7 +217,7 @@ The example app is intentionally more opinionated than the library:
 - failed server workspace shell commands return output plus the PI server platform and shell so the agent can adjust and retry
 - preview URLs are served from `/preview/<project-id>/`
 
-Configured local disk mirroring, server-side workspace tools, and background project build/preview are implemented by `@mariozechner/pi-web-workspace` and wired into `apps/pi-coding-web`. Edit `apps/pi-coding-web/pi-storage.config.json` to change session, project, build command, and preview URL settings.
+Configured local disk mirroring, server-side workspace tools, and background project build/preview are implemented by `@mariozechner/pi-web-workspace` and wired into `apps/pi-coding-web`. Edit `apps/pi-coding-web/.env` to change session, project, build command, and preview URL settings.
 
 ### Agent (from pi-agent-core)
 

@@ -34,7 +34,7 @@ function testConfig(root, overrides = {}) {
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
-		secretsEnvFile: "",
+		envFile: "",
 		logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
 		loggingEnabled: true,
 		logStdoutEnabled: false,
@@ -69,26 +69,27 @@ async function test(name, fn) {
 	console.log(`ok - ${name}`);
 }
 
-await test("loadStorageConfig resolves relative paths from the app root and strips preview trailing slash", () => {
+await test("loadStorageConfig reads .env from the app root and strips preview trailing slash", () => {
 	const root = tempRoot();
 	writeFileSync(
-		join(root, "pi-storage.config.json"),
-		JSON.stringify({
-			sessionsDir: "runtime/sessions",
-			settingsFile: "runtime/settings.json",
-			projectsRootDir: "runtime/projects",
-			skillsDir: "runtime/skills",
-			previewBaseUrl: "http://localhost:5173/",
-			serverSessionSyncEnabled: true,
-			defaultModelProvider: "openai",
-			defaultModelId: "gpt-5.1",
-			handoffDefaultThinkingLevel: "medium",
-		}),
+		join(root, ".env"),
+		[
+			"PI_SESSIONS_DIR=runtime/sessions",
+			"PI_SETTINGS_FILE=runtime/settings.json",
+			"PI_PROJECTS_ROOT_DIR=runtime/projects",
+			"PI_SKILLS_DIR=runtime/skills",
+			"PI_PREVIEW_BASE_URL=http://localhost:5173/",
+			"PI_SERVER_SESSION_SYNC_ENABLED=true",
+			"PI_DEFAULT_MODEL_PROVIDER=openai",
+			"PI_DEFAULT_MODEL_ID=gpt-5.1",
+			"PI_HANDOFF_DEFAULT_THINKING_LEVEL=medium",
+		].join("\n"),
 		"utf8",
 	);
 
 	const config = loadStorageConfig(root);
 
+	assert.equal(config.envFile, resolve(root, ".env"));
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "runtime/projects"));
@@ -125,12 +126,93 @@ await test("loadStorageConfig resolves relative paths from the app root and stri
 	assert.equal(config.otelDeploymentEnvironment, "");
 });
 
-await test("loadStorageConfig supports legacy storageDir defaults", () => {
+await test("loadStorageConfig supports an explicit env file path", () => {
 	const root = tempRoot();
-	writeFileSync(join(root, "pi-storage.config.json"), JSON.stringify({ storageDir: "runtime" }), "utf8");
+	writeFileSync(
+		join(root, "pi.runtime.env"),
+		[
+			"PI_SESSIONS_DIR=env/sessions",
+			"PI_SETTINGS_FILE=env/settings.json",
+			"PI_PROJECTS_ROOT_DIR=env/projects",
+			"PI_SKILLS_DIR=env/skills",
+			"PI_DEFAULT_SKILLS_DIR=env/default-skills",
+			"PI_PREVIEW_BASE_URL=http://env.local/",
+			"PI_PROJECT_INSTALL_COMMAND=pnpm install",
+			"PI_PROJECT_BUILD_COMMAND=pnpm build",
+			"PI_PROJECT_INSTALL_TIMEOUT_MS=300000",
+			"PI_PROJECT_BUILD_TIMEOUT_MS=310000",
+			"PI_SERVER_SESSION_SYNC_ENABLED=true",
+			"PI_DEFAULT_MODEL_PROVIDER=env-provider",
+			"PI_DEFAULT_MODEL_ID=env-model",
+			"PI_HANDOFF_DEFAULT_THINKING_LEVEL=low",
+			"PI_LOG_DB=env/logs.sqlite",
+			"PI_LANGFUSE_ENABLED=true",
+			"LANGFUSE_PUBLIC_KEY=pk-from-env-file",
+			"LANGFUSE_SECRET_KEY=sk-from-env-file",
+		].join("\n"),
+		"utf8",
+	);
+
+	const envNames = [
+		"PI_STORAGE_ENV_FILE",
+		"PI_SESSIONS_DIR",
+		"PI_SETTINGS_FILE",
+		"PI_PROJECTS_ROOT_DIR",
+		"PI_SKILLS_DIR",
+		"PI_DEFAULT_SKILLS_DIR",
+		"PI_PREVIEW_BASE_URL",
+		"PI_PROJECT_INSTALL_COMMAND",
+		"PI_PROJECT_BUILD_COMMAND",
+		"PI_PROJECT_INSTALL_TIMEOUT_MS",
+		"PI_PROJECT_BUILD_TIMEOUT_MS",
+		"PI_SERVER_SESSION_SYNC_ENABLED",
+		"PI_DEFAULT_MODEL_PROVIDER",
+		"PI_DEFAULT_MODEL_ID",
+		"PI_HANDOFF_DEFAULT_THINKING_LEVEL",
+		"PI_LOG_DB",
+		"PI_LANGFUSE_ENABLED",
+		"LANGFUSE_PUBLIC_KEY",
+		"LANGFUSE_SECRET_KEY",
+	];
+	const previousEnv = new Map(envNames.map((name) => [name, process.env[name]]));
+	try {
+		for (const name of envNames) delete process.env[name];
+		const config = loadStorageConfig(root, "pi.runtime.env");
+
+		assert.equal(config.envFile, resolve(root, "pi.runtime.env"));
+		assert.equal(config.sessionsDir, resolve(root, "env/sessions"));
+		assert.equal(config.settingsFile, resolve(root, "env/settings.json"));
+		assert.equal(config.projectsRootDir, resolve(root, "env/projects"));
+		assert.equal(config.skillsDir, resolve(root, "env/skills"));
+		assert.equal(config.defaultSkillsDir, resolve(root, "env/default-skills"));
+		assert.equal(config.previewBaseUrl, "http://env.local");
+		assert.equal(config.projectInstallCommand, "pnpm install");
+		assert.equal(config.projectBuildCommand, "pnpm build");
+		assert.equal(config.projectInstallTimeoutMs, 300000);
+		assert.equal(config.projectBuildTimeoutMs, 310000);
+		assert.equal(config.serverSessionSyncEnabled, true);
+		assert.equal(config.defaultModelProvider, "env-provider");
+		assert.equal(config.defaultModelId, "env-model");
+		assert.equal(config.handoffDefaultThinkingLevel, "low");
+		assert.equal(config.logsDbFile, resolve(root, "env/logs.sqlite"));
+		assert.equal(config.langfuseEnabled, true);
+		assert.equal(config.langfusePublicKey, "pk-from-env-file");
+		assert.equal(config.langfuseSecretKey, "sk-from-env-file");
+	} finally {
+		for (const [name, value] of previousEnv) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
+	}
+});
+
+await test("loadStorageConfig supports PI_STORAGE_DIR defaults", () => {
+	const root = tempRoot();
+	writeFileSync(join(root, ".env"), "PI_STORAGE_DIR=runtime\n", "utf8");
 
 	const config = loadStorageConfig(root);
 
+	assert.equal(config.envFile, resolve(root, ".env"));
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "data/projects"));
@@ -153,21 +235,12 @@ await test("loadStorageConfig supports legacy storageDir defaults", () => {
 	assert.equal(config.otelServiceName, "pi-coding-web");
 });
 
-await test("loadStorageConfig loads Langfuse keys from a configured secrets env file", () => {
+await test("loadStorageConfig lets process env override .env values", () => {
 	const root = tempRoot();
 	writeFileSync(
-		join(root, "pi-storage.config.json"),
-		JSON.stringify({
-			secretsEnvFile: "pi-storage.secrets.env",
-			langfusePublicKey: "pk-config",
-			langfuseSecretKey: "sk-config",
-		}),
-		"utf8",
-	);
-	writeFileSync(
-		join(root, "pi-storage.secrets.env"),
+		join(root, ".env"),
 		[
-			"# local secret file",
+			"# local config file",
 			"LANGFUSE_PUBLIC_KEY=pk-from-file",
 			"LANGFUSE_SECRET_KEY=\"sk from file\"",
 			"PI_LANGFUSE_HOST=https://cloud.langfuse.com/",
@@ -185,7 +258,7 @@ await test("loadStorageConfig loads Langfuse keys from a configured secrets env 
 
 		const config = loadStorageConfig(root);
 
-		assert.equal(config.secretsEnvFile, resolve(root, "pi-storage.secrets.env"));
+		assert.equal(config.envFile, resolve(root, ".env"));
 		assert.equal(config.langfusePublicKey, "pk-from-file");
 		assert.equal(config.langfuseSecretKey, "sk-from-env");
 		assert.equal(config.langfuseHost, "https://cloud.langfuse.com");
@@ -199,42 +272,43 @@ await test("loadStorageConfig loads Langfuse keys from a configured secrets env 
 	}
 });
 
-await test("loadStorageConfig supports diagnostic log database settings", () => {
+await test("loadStorageConfig supports diagnostic log and Langfuse env settings", () => {
 	const root = tempRoot();
 	writeFileSync(
-		join(root, "pi-storage.config.json"),
-		JSON.stringify({
-			logsDbFile: "runtime/logs/diagnostics.sqlite",
-			loggingEnabled: false,
-			logStdoutEnabled: true,
-			rawProviderLoggingEnabled: true,
-			rawProviderLogMaxChars: 1234,
-			promptSnapshotLoggingEnabled: true,
-			promptSnapshotMaxChars: 5678,
-			modelOutputSnapshotLoggingEnabled: true,
-			modelOutputSnapshotMaxChars: 8765,
-			logRetentionDays: 7,
-			logMaxEvents: 4321,
-			logCleanupIntervalMs: 111,
-			logVacuumIntervalMs: 222,
-			langfuseEnabled: true,
-			langfuseHost: "http://langfuse.local/",
-			langfusePublicKey: "pk-test",
-			langfuseSecretKey: "sk-test",
-			langfuseOtelEndpoint: "http://otel-collector.local/v1/traces/",
-			langfuseFlushIntervalMs: 333,
-			langfuseBatchSize: 9,
-			langfuseExportPromptSnapshots: true,
-			langfuseExportRawChunks: true,
-			langfuseExportModelOutputSnapshots: true,
-			otelServiceName: "pi-worker",
-			otelDeploymentEnvironment: "staging",
-		}),
+		join(root, ".env"),
+		[
+			"PI_LOG_DB=runtime/logs/diagnostics.sqlite",
+			"PI_LOG_ENABLED=false",
+			"PI_LOG_STDOUT=true",
+			"PI_LOG_RAW_PROVIDER_ENABLED=true",
+			"PI_LOG_RAW_PROVIDER_MAX_CHARS=1234",
+			"PI_LOG_PROMPT_SNAPSHOT_ENABLED=true",
+			"PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS=5678",
+			"PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true",
+			"PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS=8765",
+			"PI_LOG_RETENTION_DAYS=7",
+			"PI_LOG_MAX_EVENTS=4321",
+			"PI_LOG_CLEANUP_INTERVAL_MS=111",
+			"PI_LOG_VACUUM_INTERVAL_MS=222",
+			"PI_LANGFUSE_ENABLED=true",
+			"PI_LANGFUSE_HOST=http://langfuse.local/",
+			"LANGFUSE_PUBLIC_KEY=pk-test",
+			"LANGFUSE_SECRET_KEY=sk-test",
+			"PI_LANGFUSE_OTEL_ENDPOINT=http://otel-collector.local/v1/traces/",
+			"PI_LANGFUSE_FLUSH_INTERVAL_MS=333",
+			"PI_LANGFUSE_BATCH_SIZE=9",
+			"PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS=true",
+			"PI_LANGFUSE_EXPORT_RAW_CHUNKS=true",
+			"PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS=true",
+			"PI_OTEL_SERVICE_NAME=pi-worker",
+			"PI_OTEL_DEPLOYMENT_ENVIRONMENT=staging",
+		].join("\n"),
 		"utf8",
 	);
 
 	const config = loadStorageConfig(root);
 
+	assert.equal(config.envFile, resolve(root, ".env"));
 	assert.equal(config.logsDbFile, resolve(root, "runtime/logs/diagnostics.sqlite"));
 	assert.equal(config.loggingEnabled, false);
 	assert.equal(config.logStdoutEnabled, true);
@@ -882,20 +956,19 @@ await test("WorkspaceCommandService rejects commands that can stop the PI server
 
 await test("configuredStoragePlugin ignores generated storage directories in the Vite watcher", async () => {
 	const root = tempRoot();
-	const configFile = join(root, "pi-storage.config.json");
 	writeFileSync(
-		configFile,
-		JSON.stringify({
-			sessionsDir: join(root, "runtime", "sessions"),
-			settingsFile: join(root, "runtime", "settings.json"),
-			projectsRootDir: join(root, "runtime", "projects"),
-			skillsDir: join(root, "runtime", "skills"),
-			logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
-		}),
+		join(root, "workspace.env"),
+		[
+			`PI_SESSIONS_DIR=${join(root, "runtime", "sessions")}`,
+			`PI_SETTINGS_FILE=${join(root, "runtime", "settings.json")}`,
+			`PI_PROJECTS_ROOT_DIR=${join(root, "runtime", "projects")}`,
+			`PI_SKILLS_DIR=${join(root, "runtime", "skills")}`,
+			`PI_LOG_DB=${join(root, "data", "logs", "pi-diagnostics.sqlite")}`,
+		].join("\n"),
 		"utf8",
 	);
 
-	const plugin = configuredStoragePlugin(configFile);
+	const plugin = configuredStoragePlugin(join(root, "workspace.env"));
 	const viteConfig = plugin.config?.();
 	const ignored = viteConfig?.server?.watch?.ignored;
 

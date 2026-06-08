@@ -25,7 +25,7 @@ function testConfig(root: string): StorageConfig {
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
-		secretsEnvFile: "",
+		envFile: "",
 		logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
 		loggingEnabled: true,
 		logStdoutEnabled: false,

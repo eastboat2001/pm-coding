@@ -53,7 +53,7 @@
 
 主要职责：
 
-- 读取 `pi-storage.config.json`。
+- 读取 `.env`。
 - 解析 session、settings、projects 等数据目录。
 - 提供会话 JSON 存储。
 - 提供服务端 project 文件操作。
@@ -207,80 +207,25 @@ docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.
 产品应用使用：
 
 ```text
-apps/pi-coding-web/pi-storage.config.json
+apps/pi-coding-web/.env
 ```
 
-主要字段：
+`.env.example` 已列出完整变量并按用途分组，包括：
 
-- `sessionsDir`：会话 JSON 存储目录。
-- `settingsFile`：服务端镜像设置文件。
-- `projectsRootDir`：生成项目根目录。
-- `skillsDir`：服务端全局 skill 目录，默认 `./data/skills`。
-- `previewBaseUrl`：对浏览器可访问的 PI 公开地址。
-- `projectInstallCommand`：`project_task build_static` 执行时使用的安装命令，默认 `npm install`。
-- `projectBuildCommand`：`project_task build_static` 执行时使用的构建命令，默认 `npm run build`。
-- `projectInstallTimeoutMs`：安装超时时间。
-- `projectBuildTimeoutMs`：构建超时时间。
-- `secretsEnvFile`：本地 secret env 文件路径，默认空；用于保存 Langfuse key 等不应提交的密钥。
-- `logsDbFile`：PI 诊断日志 SQLite 数据库路径，默认 `data/logs/pi-diagnostics.sqlite`。
-- `loggingEnabled`：是否启用后台诊断日志，默认启用。
-- `logStdoutEnabled`：是否把 warn/error 诊断摘要输出到服务端 stdout，默认关闭。
-- `rawProviderLoggingEnabled`：是否记录 PI 解析后的原始流事件，默认关闭，仅建议临时调试。
-- `rawProviderLogMaxChars`：单次模型请求原始流事件日志的字符预算，默认 `12000`。
-- `promptSnapshotLoggingEnabled`：是否记录 prompt 和 provider payload 快照，默认关闭，仅建议临时调试。
-- `promptSnapshotMaxChars`：单次模型请求 prompt/payload 快照字符预算，默认 `20000`。
-- `modelOutputSnapshotLoggingEnabled`：是否记录模型输出快照，默认关闭，仅建议临时调试。
-- `modelOutputSnapshotMaxChars`：单次模型请求输出快照字符预算，默认 `20000`。
-- `logRetentionDays`：日志保留天数，默认 `30`，设为 `0` 表示不按天数清理。
-- `logMaxEvents`：最多保留日志条数，默认 `50000`，设为 `0` 表示不按条数清理。
-- `logCleanupIntervalMs`：写入后触发清理检查的最小间隔，默认 `3600000`。
-- `logVacuumIntervalMs`：SQLite `VACUUM` 压缩的最小间隔，默认 `86400000`，设为 `0` 表示不执行 `VACUUM`。
-- `langfuseEnabled`：是否启用后台异步 Langfuse 导出，默认关闭。
-- `langfuseHost`：Langfuse 服务地址，默认 `http://localhost:3000`。
-- `langfusePublicKey`、`langfuseSecretKey`：Langfuse API key；不建议直接写入 Git 跟踪的配置文件，优先使用 `secretsEnvFile` 或环境变量。
-- `langfuseOtelEndpoint`：显式 OTLP trace endpoint；为空时使用 `<langfuseHost>/api/public/otel/v1/traces`。
-- `langfuseFlushIntervalMs`：Langfuse 批量导出间隔，默认 `5000`。
-- `langfuseBatchSize`：单次 Langfuse OTEL 导出批量大小，默认 `50`。
-- `langfuseExportPromptSnapshots`：是否把 prompt/payload 快照上传到 Langfuse，默认关闭。
-- `langfuseExportModelOutputSnapshots`：是否把模型输出快照上传到 Langfuse，默认关闭。
-- `langfuseExportRawChunks`：是否把 provider raw chunk 和 PI raw stream event 上传到 Langfuse，默认关闭。
-- `otelServiceName`：OTEL `service.name`，默认 `pi-coding-web`。
-- `otelDeploymentEnvironment`：OTEL/Langfuse environment 标识，默认空。
+- `PI_SESSIONS_DIR`、`PI_SETTINGS_FILE`、`PI_PROJECTS_ROOT_DIR`：会话、设置、生成项目目录。
+- `PI_SKILLS_DIR`、`PI_DEFAULT_SKILLS_DIR`：服务端 skill 目录。
+- `PI_PREVIEW_BASE_URL`：对浏览器可访问的 PI 公开地址。
+- `PI_PROJECT_INSTALL_COMMAND`、`PI_PROJECT_BUILD_COMMAND`：生成项目安装和构建命令。
+- `PI_SERVER_SESSION_SYNC_ENABLED`：是否启用服务端会话同步。
+- `PI_LOG_*`：诊断日志、深度调试、保留周期和 SQLite 清理策略。
+- `PI_LANGFUSE_*`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`：Langfuse/OTEL 配置和密钥。
+- `PI_OTEL_SERVICE_NAME`、`PI_OTEL_DEPLOYMENT_ENVIRONMENT`：OTEL 标识。
 
-相对路径基于 `apps/pi-coding-web/` 解析。
+`.env` 中的相对路径基于 `apps/pi-coding-web/` 解析。真实 `.env` 已被 `.gitignore` 忽略，不应提交到 Git。配置加载优先级为：系统环境变量 > `.env` > 代码内默认值。
 
 ### PI 诊断日志系统
 
-当前 PI 已增加后台诊断日志系统，用于排查模型连接、流式输出、thinking/text 分布、工具调用、PM handoff、skill 加载、project task、preview 和服务端存储等问题。日志不会暴露到前端界面，配置已显式写入 `apps/pi-coding-web/pi-storage.config.json`：
-
-```json
-"logsDbFile": "./data/logs/pi-diagnostics.sqlite",
-"secretsEnvFile": "./pi-storage.secrets.env",
-"loggingEnabled": true,
-"logStdoutEnabled": false,
-"rawProviderLoggingEnabled": false,
-"rawProviderLogMaxChars": 12000,
-"promptSnapshotLoggingEnabled": false,
-"promptSnapshotMaxChars": 20000,
-"modelOutputSnapshotLoggingEnabled": false,
-"modelOutputSnapshotMaxChars": 20000,
-"logRetentionDays": 30,
-"logMaxEvents": 50000,
-"logCleanupIntervalMs": 3600000,
-"logVacuumIntervalMs": 86400000,
-"langfuseEnabled": false,
-"langfuseHost": "http://localhost:3000",
-"langfusePublicKey": "",
-"langfuseSecretKey": "",
-"langfuseOtelEndpoint": "",
-"langfuseFlushIntervalMs": 5000,
-"langfuseBatchSize": 50,
-"langfuseExportPromptSnapshots": false,
-"langfuseExportModelOutputSnapshots": false,
-"langfuseExportRawChunks": false,
-"otelServiceName": "pi-coding-web",
-"otelDeploymentEnvironment": ""
-```
+当前 PI 已增加后台诊断日志系统，用于排查模型连接、流式输出、thinking/text 分布、工具调用、PM handoff、skill 加载、project task、preview 和服务端存储等问题。日志不会暴露到前端界面，配置统一写入 `apps/pi-coding-web/.env`。
 
 默认写入：
 
@@ -304,28 +249,28 @@ npm run logs -- --session <sessionId>
 
 - `PI_LOG_ENABLED=false`：关闭日志。
 - `PI_LOG_DB=/path/to/pi-diagnostics.sqlite`：覆盖 SQLite 日志库路径。
-- `PI_STORAGE_SECRETS_ENV_FILE=/path/to/pi-storage.secrets.env`：覆盖本地 secret env 文件路径。
+- `PI_STORAGE_ENV_FILE=/path/to/.env`：覆盖默认 `.env` 文件路径。
 - `PI_LOG_STDOUT=true`：把 warn/error 摘要输出到服务端 stdout。
 - `PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true`：记录模型输出快照。
 - `PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS=20000`：覆盖单次模型输出快照字符预算。
 - `PI_LANGFUSE_ENABLED=true`：启用 Langfuse 导出。
 - `PI_LANGFUSE_HOST=http://localhost:3000`：覆盖 Langfuse 地址。
 - `PI_LANGFUSE_OTEL_ENDPOINT=http://otel-collector:4318/v1/traces`：覆盖最终 OTLP trace endpoint。
-- `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：Langfuse API key；优先级高于 `secretsEnvFile`。
+- `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：Langfuse API key。
 - `PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS=true`：允许上传 prompt/payload 快照。
 - `PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS=true`：允许上传模型输出快照。
 - `PI_LANGFUSE_EXPORT_RAW_CHUNKS=true`：允许上传 raw chunk/raw event。
 - `PI_OTEL_SERVICE_NAME=pi-coding-web`：覆盖 OTEL service name。
 - `PI_OTEL_DEPLOYMENT_ENVIRONMENT=production`：覆盖部署环境标识。
 
-本地开发时不要把 Langfuse key 写进 `pi-storage.config.json`。推荐复制 `apps/pi-coding-web/pi-storage.secrets.env.example` 为 `apps/pi-coding-web/pi-storage.secrets.env`，然后在其中填写：
+本地开发时推荐复制 `apps/pi-coding-web/.env.example` 为 `apps/pi-coding-web/.env`，然后在其中填写：
 
 ```env
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
-`pi-storage.secrets.env` 已被 `.gitignore` 忽略。密钥加载优先级为：系统环境变量 > `secretsEnvFile` 文件 > `pi-storage.config.json` 普通字段。
+`apps/pi-coding-web/.env` 已被 `.gitignore` 忽略。
 
 Docker 部署时应挂载 `apps/pi-coding-web/data`，否则默认日志库会随容器重建丢失。深度 raw/prompt/output 日志默认关闭，排查模型问题时可临时开启；raw 模式会记录 OpenAI-compatible provider 的结构化 stream chunk 和 PI 解析后的 stream event，但不是 HTTP SSE 字节级原文。长期运行依赖 `logRetentionDays`、`logMaxEvents` 和 SQLite `VACUUM` 控制磁盘增长。完整使用说明见：
 
@@ -339,15 +284,15 @@ docs/pi-diagnostic-logging-zh.md
 
 启用时优先修改配置文件：
 
-```json
-"langfuseEnabled": true,
-"langfuseHost": "http://localhost:3000",
-"langfuseOtelEndpoint": "",
-"otelServiceName": "pi-coding-web",
-"otelDeploymentEnvironment": "development"
+```env
+PI_LANGFUSE_ENABLED=true
+PI_LANGFUSE_HOST=http://localhost:3000
+PI_LANGFUSE_OTEL_ENDPOINT=
+PI_OTEL_SERVICE_NAME=pi-coding-web
+PI_OTEL_DEPLOYMENT_ENVIRONMENT=development
 ```
 
-`langfuseOtelEndpoint` 为空时会自动使用：
+`PI_LANGFUSE_OTEL_ENDPOINT` 为空时会自动使用：
 
 ```text
 <langfuseHost>/api/public/otel/v1/traces
@@ -355,18 +300,18 @@ docs/pi-diagnostic-logging-zh.md
 
 如果后续统一接入 OpenTelemetry Collector，可以把它改成 Collector 的 trace endpoint，例如：
 
-```json
-"langfuseOtelEndpoint": "http://otel-collector:4318/v1/traces"
+```env
+PI_LANGFUSE_OTEL_ENDPOINT=http://otel-collector:4318/v1/traces
 ```
 
-密钥建议通过 `secretsEnvFile` 或环境变量注入：
+密钥写在 `.env` 或系统环境变量中：
 
 ```bash
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
-本地默认配置已指向 `./pi-storage.secrets.env`，该文件不提交到 Git；系统环境变量仍可覆盖文件中的值。
+本地默认配置已指向 `./.env`，该文件不提交到 Git；系统环境变量仍可覆盖文件中的值。
 
 测试是否正常：
 
@@ -377,15 +322,15 @@ npm run dev
 # GET http://127.0.0.1:5173/api/pi-logs/status
 ```
 
-状态里重点看 `langfuseEnabled`、`langfuseConfigured`、`langfuseOtelEndpoint`、`otelServiceName`、`langfuseQueuedEvents`、`langfuseLastFlushAt` 和 `langfuseLastError`。默认不会上传完整 prompt/payload、模型输出快照或 raw chunk；如确需在 Langfuse 里分析 prompt 拼接、模型输出或流式协议细节，必须显式开启 `langfuseExportPromptSnapshots`、`langfuseExportModelOutputSnapshots` 或 `langfuseExportRawChunks`，并确认 Langfuse 的访问权限和数据保留策略。
+状态里重点看 `langfuseEnabled`、`langfuseConfigured`、`langfuseOtelEndpoint`、`otelServiceName`、`langfuseQueuedEvents`、`langfuseLastFlushAt` 和 `langfuseLastError`。默认不会上传完整 prompt/payload、模型输出快照或 raw chunk；如确需在 Langfuse 里分析 prompt 拼接、模型输出或流式协议细节，必须在 `.env` 中显式开启 `PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS`、`PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS` 或 `PI_LANGFUSE_EXPORT_RAW_CHUNKS`，并确认 Langfuse 的访问权限和数据保留策略。
 
 要让 Langfuse generation observation 的 Input / Output 显示可读内容，需要同时开启本地采集和上传：
 
-```json
-"promptSnapshotLoggingEnabled": true,
-"modelOutputSnapshotLoggingEnabled": true,
-"langfuseExportPromptSnapshots": true,
-"langfuseExportModelOutputSnapshots": true
+```env
+PI_LOG_PROMPT_SNAPSHOT_ENABLED=true
+PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true
+PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS=true
+PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS=true
 ```
 
 `agent.*` observation 是 PI 生命周期事件，不是模型请求；这些事件没有 LLM input/output，Langfuse 显示 `null` 或 `undefined` 属于正常表现。模型输入输出应查看带 generation 图标的 `model.stream.summary`、`provider.response` 或 `provider.request.error` observation。

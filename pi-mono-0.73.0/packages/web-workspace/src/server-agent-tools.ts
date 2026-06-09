@@ -224,7 +224,7 @@ function createServerDirectPreviewRequest(config: StorageConfig): PreviewRequest
 		const url = new URL(config.previewBaseUrl);
 		return { headers: { host: url.host, "x-forwarded-proto": url.protocol.replace(/:$/, "") } };
 	}
-	return { headers: { host: "localhost", "x-forwarded-proto": "http" } };
+	return { headers: { host: "localhost:5173", "x-forwarded-proto": "http" } };
 }
 
 function createSkillLoadTool(

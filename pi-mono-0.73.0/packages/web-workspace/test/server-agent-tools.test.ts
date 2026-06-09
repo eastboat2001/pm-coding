@@ -117,4 +117,28 @@ describe("server-direct agent project tools", () => {
 			previewUrl: "http://localhost:5173/preview/demo-s1/",
 		});
 	});
+
+	it("uses the local PI dev port for server-direct previews when no base URL is configured", async () => {
+		const root = tempRoot();
+		const config = { ...testConfig(root), previewBaseUrl: "" };
+		const tools = createServerDirectProjectTools(config, {
+			sessionId: "s1",
+			title: "Demo",
+		});
+		const projectFile = tools.find((tool) => tool.name === "project_file");
+		const projectTask = tools.find((tool) => tool.name === "project_task");
+
+		await projectFile!.execute("tc1", {
+			command: "create",
+			filename: "index.html",
+			content: "<h1>ok</h1>",
+		});
+		const result = await projectTask!.execute("tc2", { task: "preview" });
+
+		expect(result.details).toMatchObject({
+			task: "preview",
+			status: "running",
+			previewUrl: "http://localhost:5173/preview/demo-s1/",
+		});
+	});
 });

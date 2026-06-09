@@ -18,105 +18,66 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		),
 		settingsFile: resolveConfiguredPath(
 			rootDir,
-			stringValue(env("PI_SETTINGS_FILE")) || (storageDir ? join(storageDir, "settings.json") : "data/settings.json"),
+			stringValue(env("PI_SETTINGS_FILE")) ||
+				(storageDir ? join(storageDir, "settings.json") : "data/settings.json"),
 		),
-		projectsRootDir: resolveConfiguredPath(
-			rootDir,
-			stringValue(env("PI_PROJECTS_ROOT_DIR")) || "data/projects",
-		),
-		skillsDir: resolveConfiguredPath(
-			rootDir,
-			stringValue(env("PI_SKILLS_DIR")) || "data/skills",
-		),
+		projectsRootDir: resolveConfiguredPath(rootDir, stringValue(env("PI_PROJECTS_ROOT_DIR")) || "data/projects"),
+		skillsDir: resolveConfiguredPath(rootDir, stringValue(env("PI_SKILLS_DIR")) || "data/skills"),
 		defaultSkillsDir: resolveConfiguredPath(
 			rootDir,
 			stringValue(env("PI_DEFAULT_SKILLS_DIR")) || "data/default-skills",
 		),
+		runtimeDbFile: resolveConfiguredPath(rootDir, stringValue(env("PI_DB_FILE")) || "data/pi-runtime.sqlite"),
+		redisUrl: stringValue(env("PI_REDIS_URL")) || "redis://127.0.0.1:6379",
+		runsEnabled: envBooleanValue(env("PI_RUNS_ENABLED")) ?? false,
+		workerId: stringValue(env("PI_WORKER_ID")) || `worker-${process.pid}`,
+		workerConcurrency: positiveIntegerValue(env("PI_WORKER_CONCURRENCY"), 2),
+		runQueueName: stringValue(env("PI_RUN_QUEUE_NAME")) || "pi:runs",
+		runEventRetentionDays: nonNegativeIntegerValue(env("PI_RUN_EVENT_RETENTION_DAYS"), 30),
+		clientIdRequired: envBooleanValue(env("PI_CLIENT_ID_REQUIRED")) ?? true,
 		previewBaseUrl: normalizedHostValue(stringValue(env("PI_PREVIEW_BASE_URL"))),
-		projectInstallCommand:
-			stringValue(env("PI_PROJECT_INSTALL_COMMAND")) || "npm install",
-		projectBuildCommand:
-			stringValue(env("PI_PROJECT_BUILD_COMMAND")) || "npm run build",
-		projectInstallTimeoutMs: positiveIntegerValue(
-			env("PI_PROJECT_INSTALL_TIMEOUT_MS"),
-			120000,
-		),
-		projectBuildTimeoutMs: positiveIntegerValue(
-			env("PI_PROJECT_BUILD_TIMEOUT_MS"),
-			120000,
-		),
-		serverSessionSyncEnabled:
-			envBooleanValue(env("PI_SERVER_SESSION_SYNC_ENABLED")) ?? false,
+		projectInstallCommand: stringValue(env("PI_PROJECT_INSTALL_COMMAND")) || "npm install",
+		projectBuildCommand: stringValue(env("PI_PROJECT_BUILD_COMMAND")) || "npm run build",
+		projectInstallTimeoutMs: positiveIntegerValue(env("PI_PROJECT_INSTALL_TIMEOUT_MS"), 120000),
+		projectBuildTimeoutMs: positiveIntegerValue(env("PI_PROJECT_BUILD_TIMEOUT_MS"), 120000),
+		serverSessionSyncEnabled: envBooleanValue(env("PI_SERVER_SESSION_SYNC_ENABLED")) ?? false,
 		defaultModelProvider: stringValue(env("PI_DEFAULT_MODEL_PROVIDER")),
 		defaultModelId: stringValue(env("PI_DEFAULT_MODEL_ID")),
 		handoffDefaultThinkingLevel: thinkingLevelValue(env("PI_HANDOFF_DEFAULT_THINKING_LEVEL")),
 		envFile: configEnv.file,
-		logsDbFile: resolveConfiguredPath(
-			rootDir,
-			stringValue(env("PI_LOG_DB")) || "data/logs/pi-diagnostics.sqlite",
-		),
+		logsDbFile: resolveConfiguredPath(rootDir, stringValue(env("PI_LOG_DB")) || "data/logs/pi-diagnostics.sqlite"),
 		loggingEnabled: envBooleanValue(env("PI_LOG_ENABLED")) ?? true,
 		logStdoutEnabled: envBooleanValue(env("PI_LOG_STDOUT")) ?? false,
-		rawProviderLoggingEnabled:
-			envBooleanValue(env("PI_LOG_RAW_PROVIDER_ENABLED")) ?? false,
-		rawProviderLogMaxChars: positiveIntegerValue(
-			env("PI_LOG_RAW_PROVIDER_MAX_CHARS"),
-			12000,
-		),
-		promptSnapshotLoggingEnabled:
-			envBooleanValue(env("PI_LOG_PROMPT_SNAPSHOT_ENABLED")) ?? false,
-		promptSnapshotMaxChars: positiveIntegerValue(
-			env("PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS"),
-			20000,
-		),
-		modelOutputSnapshotLoggingEnabled:
-			envBooleanValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED")) ?? false,
-		modelOutputSnapshotMaxChars: positiveIntegerValue(
-			env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS"),
-			20000,
-		),
+		rawProviderLoggingEnabled: envBooleanValue(env("PI_LOG_RAW_PROVIDER_ENABLED")) ?? false,
+		rawProviderLogMaxChars: positiveIntegerValue(env("PI_LOG_RAW_PROVIDER_MAX_CHARS"), 12000),
+		promptSnapshotLoggingEnabled: envBooleanValue(env("PI_LOG_PROMPT_SNAPSHOT_ENABLED")) ?? false,
+		promptSnapshotMaxChars: positiveIntegerValue(env("PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS"), 20000),
+		modelOutputSnapshotLoggingEnabled: envBooleanValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED")) ?? false,
+		modelOutputSnapshotMaxChars: positiveIntegerValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS"), 20000),
 		logRetentionDays: nonNegativeIntegerValue(env("PI_LOG_RETENTION_DAYS"), 30),
 		logMaxEvents: nonNegativeIntegerValue(env("PI_LOG_MAX_EVENTS"), 50000),
-		logCleanupIntervalMs: nonNegativeIntegerValue(
-			env("PI_LOG_CLEANUP_INTERVAL_MS"),
-			3600000,
-		),
-		logVacuumIntervalMs: nonNegativeIntegerValue(
-			env("PI_LOG_VACUUM_INTERVAL_MS"),
-			86400000,
-		),
+		logCleanupIntervalMs: nonNegativeIntegerValue(env("PI_LOG_CLEANUP_INTERVAL_MS"), 3600000),
+		logVacuumIntervalMs: nonNegativeIntegerValue(env("PI_LOG_VACUUM_INTERVAL_MS"), 86400000),
 		langfuseEnabled: envBooleanValue(env("PI_LANGFUSE_ENABLED")) ?? false,
 		langfuseHost: normalizedHostValue(
 			stringValue(env("PI_LANGFUSE_HOST")) ||
 				stringValue(env("LANGFUSE_HOST")) ||
 				stringValue(env("LANGFUSE_BASE_URL")),
 		),
-		langfusePublicKey:
-			stringValue(env("PI_LANGFUSE_PUBLIC_KEY")) ||
-			stringValue(env("LANGFUSE_PUBLIC_KEY")),
-		langfuseSecretKey:
-			stringValue(env("PI_LANGFUSE_SECRET_KEY")) ||
-			stringValue(env("LANGFUSE_SECRET_KEY")),
+		langfusePublicKey: stringValue(env("PI_LANGFUSE_PUBLIC_KEY")) || stringValue(env("LANGFUSE_PUBLIC_KEY")),
+		langfuseSecretKey: stringValue(env("PI_LANGFUSE_SECRET_KEY")) || stringValue(env("LANGFUSE_SECRET_KEY")),
 		langfuseOtelEndpoint: normalizedHostValue(
 			stringValue(env("PI_LANGFUSE_OTEL_ENDPOINT")) ||
 				stringValue(env("LANGFUSE_OTEL_ENDPOINT")) ||
 				stringValue(env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")),
 		),
-		langfuseFlushIntervalMs: nonNegativeIntegerValue(
-			env("PI_LANGFUSE_FLUSH_INTERVAL_MS"),
-			5000,
-		),
+		langfuseFlushIntervalMs: nonNegativeIntegerValue(env("PI_LANGFUSE_FLUSH_INTERVAL_MS"), 5000),
 		langfuseBatchSize: positiveIntegerValue(env("PI_LANGFUSE_BATCH_SIZE"), 50),
-		langfuseExportPromptSnapshots:
-			envBooleanValue(env("PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS")) ?? false,
-		langfuseExportRawChunks:
-			envBooleanValue(env("PI_LANGFUSE_EXPORT_RAW_CHUNKS")) ?? false,
-		langfuseExportModelOutputSnapshots:
-			envBooleanValue(env("PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS")) ?? false,
+		langfuseExportPromptSnapshots: envBooleanValue(env("PI_LANGFUSE_EXPORT_PROMPT_SNAPSHOTS")) ?? false,
+		langfuseExportRawChunks: envBooleanValue(env("PI_LANGFUSE_EXPORT_RAW_CHUNKS")) ?? false,
+		langfuseExportModelOutputSnapshots: envBooleanValue(env("PI_LANGFUSE_EXPORT_MODEL_OUTPUT_SNAPSHOTS")) ?? false,
 		otelServiceName:
-			stringValue(env("PI_OTEL_SERVICE_NAME")) ||
-			stringValue(env("OTEL_SERVICE_NAME")) ||
-			"pi-coding-web",
+			stringValue(env("PI_OTEL_SERVICE_NAME")) || stringValue(env("OTEL_SERVICE_NAME")) || "pi-coding-web",
 		otelDeploymentEnvironment:
 			stringValue(env("PI_OTEL_DEPLOYMENT_ENVIRONMENT")) ||
 			stringValue(env("OTEL_DEPLOYMENT_ENVIRONMENT")) ||

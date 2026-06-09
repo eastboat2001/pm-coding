@@ -272,6 +272,177 @@ describe("Agent", () => {
 		expect(agent.state.isStreaming).toBe(false);
 	});
 
+	it("applies remote lifecycle events without running a prompt", async () => {
+		const events: AgentEvent[] = [];
+		const agent = new Agent({
+			streamFn: () => {
+				throw new Error("remote events should not run a prompt");
+			},
+		});
+		const message = createAssistantMessage("remote response");
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+
+		agent.beginRemoteRun();
+		await agent.applyRemoteEvent({ type: "agent_start" });
+		await agent.applyRemoteEvent({ type: "message_start", message });
+		await agent.applyRemoteEvent({ type: "message_end", message });
+		await agent.applyRemoteEvent({ type: "agent_end", messages: [message] });
+		await agent.endRemoteRun();
+
+		expect(events.map((event) => event.type)).toEqual(["agent_start", "message_start", "message_end", "agent_end"]);
+		expect(agent.state.messages).toEqual([message]);
+		expect(agent.state.isStreaming).toBe(false);
+		expect(agent.state.streamingMessage).toBeUndefined();
+		expect(agent.state.pendingToolCalls).toEqual(new Set());
+	});
+
+	it("remote events pass an abort signal to subscribers and waitForIdle resolves after endRemoteRun", async () => {
+		const agent = new Agent();
+		let receivedSignal: AbortSignal | undefined;
+		let idleResolved = false;
+
+		agent.subscribe((_event, signal) => {
+			receivedSignal = signal;
+		});
+
+		agent.beginRemoteRun();
+		const idlePromise = agent.waitForIdle().then(() => {
+			idleResolved = true;
+		});
+
+		await agent.applyRemoteEvent({
+			type: "tool_execution_start",
+			toolCallId: "tool-1",
+			toolName: "remoteTool",
+			args: {},
+		});
+		expect(receivedSignal).toBeDefined();
+		expect(receivedSignal?.aborted).toBe(false);
+		expect(agent.state.pendingToolCalls).toEqual(new Set(["tool-1"]));
+
+		agent.abort();
+		expect(receivedSignal?.aborted).toBe(true);
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(idleResolved).toBe(false);
+
+		await expect(agent.endRemoteRun()).rejects.toThrow("Remote run cannot end before an agent_end event.");
+		expect(agent.state.isStreaming).toBe(true);
+		expect(agent.state.pendingToolCalls).toEqual(new Set(["tool-1"]));
+		expect(idleResolved).toBe(false);
+
+		await agent.applyRemoteEvent({
+			type: "tool_execution_end",
+			toolCallId: "tool-1",
+			toolName: "remoteTool",
+			result: { content: [], details: undefined },
+			isError: false,
+		});
+		await agent.applyRemoteEvent({ type: "agent_end", messages: [] });
+		await agent.endRemoteRun();
+		await idlePromise;
+
+		expect(idleResolved).toBe(true);
+		expect(agent.state.isStreaming).toBe(false);
+		expect(agent.state.pendingToolCalls).toEqual(new Set());
+	});
+
+	it("endRemoteRun waits for queued agent_end listeners before resolving idle", async () => {
+		const barrier = createDeferred();
+		const agent = new Agent();
+		const message = createAssistantMessage("remote done");
+		let listenerFinished = false;
+		let eventResolved = false;
+		let endResolved = false;
+		let idleResolved = false;
+
+		agent.subscribe(async (event) => {
+			if (event.type === "agent_end") {
+				await barrier.promise;
+				listenerFinished = true;
+			}
+		});
+
+		agent.beginRemoteRun();
+		const idlePromise = agent.waitForIdle().then(() => {
+			idleResolved = true;
+		});
+		const eventPromise = agent.applyRemoteEvent({ type: "agent_end", messages: [message] }).then(() => {
+			eventResolved = true;
+		});
+		const endPromise = agent.endRemoteRun().then(() => {
+			endResolved = true;
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(listenerFinished).toBe(false);
+		expect(eventResolved).toBe(false);
+		expect(endResolved).toBe(false);
+		expect(idleResolved).toBe(false);
+		expect(agent.state.isStreaming).toBe(true);
+
+		barrier.resolve();
+		await Promise.all([eventPromise, endPromise, idlePromise]);
+
+		expect(listenerFinished).toBe(true);
+		expect(eventResolved).toBe(true);
+		expect(endResolved).toBe(true);
+		expect(idleResolved).toBe(true);
+		expect(agent.state.isStreaming).toBe(false);
+	});
+
+	it("endRemoteRun before agent_end rejects", async () => {
+		const agent = new Agent();
+
+		agent.beginRemoteRun();
+
+		await expect(agent.endRemoteRun()).rejects.toThrow("Remote run cannot end before an agent_end event.");
+		expect(agent.state.isStreaming).toBe(true);
+
+		await agent.applyRemoteEvent({ type: "agent_end", messages: [] });
+		await agent.endRemoteRun();
+
+		expect(agent.state.isStreaming).toBe(false);
+	});
+
+	it("beginRemoteRun rejects while local prompt active and applyRemoteEvent before begin rejects", async () => {
+		const started = createDeferred();
+		const agent = new Agent({
+			streamFn: (_model, _context, options) => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					const abort = () => {
+						stream.push({
+							type: "error",
+							reason: "aborted",
+							error: createAssistantMessage("", "aborted", "Request aborted by user"),
+						});
+					};
+					options?.signal?.addEventListener("abort", abort, { once: true });
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					started.resolve();
+					if (options?.signal?.aborted) abort();
+				});
+				return stream;
+			},
+		});
+		const remoteOnlyAgent = new Agent();
+
+		await expect(remoteOnlyAgent.applyRemoteEvent({ type: "agent_start" })).rejects.toThrow(
+			"beginRemoteRun() must be called before applyRemoteEvent().",
+		);
+
+		const promptPromise = agent.prompt("hello");
+		await started.promise;
+
+		expect(() => agent.beginRemoteRun()).toThrow("Agent is already processing.");
+
+		agent.abort();
+		await promptPromise;
+	});
+
 	it("should pass the active abort signal to subscribers", async () => {
 		let receivedSignal: AbortSignal | undefined;
 		const agent = new Agent({

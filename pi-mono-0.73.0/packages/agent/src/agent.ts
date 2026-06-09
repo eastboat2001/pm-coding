@@ -148,6 +148,7 @@ type ActiveRun = {
 	promise: Promise<void>;
 	resolve: () => void;
 	abortController: AbortController;
+	mode: "local" | "remote";
 };
 
 /**
@@ -178,6 +179,8 @@ export class Agent {
 	) => Promise<AfterToolCallResult | undefined>;
 	public repairToolCalls: boolean;
 	private activeRun?: ActiveRun;
+	private remoteEventQueue: Promise<void> = Promise.resolve();
+	private remoteAgentEndApplied = false;
 	/** Session identifier forwarded to providers for cache-aware backends. */
 	public sessionId?: string;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
@@ -310,6 +313,55 @@ export class Agent {
 		this._state.errorMessage = undefined;
 		this.clearFollowUpQueue();
 		this.clearSteeringQueue();
+	}
+
+	/** Begin ingesting events produced by a remote agent run. */
+	beginRemoteRun(): void {
+		if (this.activeRun) {
+			throw new Error("Agent is already processing.");
+		}
+
+		this.activeRun = this.createActiveRun("remote");
+		this.remoteEventQueue = Promise.resolve();
+		this.remoteAgentEndApplied = false;
+		this._state.isStreaming = true;
+		this._state.streamingMessage = undefined;
+		this._state.errorMessage = undefined;
+	}
+
+	/** Apply one event produced by a remote agent run. */
+	async applyRemoteEvent(event: AgentEvent): Promise<void> {
+		if (!this.activeRun || this.activeRun.mode !== "remote") {
+			throw new Error("beginRemoteRun() must be called before applyRemoteEvent().");
+		}
+
+		const activeRun = this.activeRun;
+		const eventPromise = this.remoteEventQueue.then(async () => {
+			if (this.activeRun !== activeRun) {
+				throw new Error("Remote run is no longer active.");
+			}
+
+			await this.processEvents(event);
+			if (event.type === "agent_end") {
+				this.remoteAgentEndApplied = true;
+			}
+		});
+		this.remoteEventQueue = eventPromise.catch(() => {});
+		return eventPromise;
+	}
+
+	/** Finish ingesting events produced by a remote agent run. */
+	async endRemoteRun(): Promise<void> {
+		if (!this.activeRun || this.activeRun.mode !== "remote") {
+			throw new Error("beginRemoteRun() must be called before endRemoteRun().");
+		}
+
+		await this.remoteEventQueue;
+		if (!this.remoteAgentEndApplied) {
+			throw new Error("Remote run cannot end before an agent_end event.");
+		}
+
+		this.finishRun();
 	}
 
 	/** Start a new prompt from text, a single message, or a batch of messages. */
@@ -448,24 +500,29 @@ export class Agent {
 			throw new Error("Agent is already processing.");
 		}
 
-		const abortController = new AbortController();
-		let resolvePromise = () => {};
-		const promise = new Promise<void>((resolve) => {
-			resolvePromise = resolve;
-		});
-		this.activeRun = { promise, resolve: resolvePromise, abortController };
+		const activeRun = this.createActiveRun("local");
+		this.activeRun = activeRun;
 
 		this._state.isStreaming = true;
 		this._state.streamingMessage = undefined;
 		this._state.errorMessage = undefined;
 
 		try {
-			await executor(abortController.signal);
+			await executor(activeRun.abortController.signal);
 		} catch (error) {
-			await this.handleRunFailure(error, abortController.signal.aborted);
+			await this.handleRunFailure(error, activeRun.abortController.signal.aborted);
 		} finally {
 			this.finishRun();
 		}
+	}
+
+	private createActiveRun(mode: ActiveRun["mode"]): ActiveRun {
+		const abortController = new AbortController();
+		let resolvePromise = () => {};
+		const promise = new Promise<void>((resolve) => {
+			resolvePromise = resolve;
+		});
+		return { promise, resolve: resolvePromise, abortController, mode };
 	}
 
 	private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
@@ -489,6 +546,8 @@ export class Agent {
 		this._state.isStreaming = false;
 		this._state.streamingMessage = undefined;
 		this._state.pendingToolCalls = new Set<string>();
+		this.remoteEventQueue = Promise.resolve();
+		this.remoteAgentEndApplied = false;
 		this.activeRun?.resolve();
 		this.activeRun = undefined;
 	}

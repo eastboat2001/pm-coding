@@ -15,7 +15,13 @@ import { isUnsafeProjectCommand, runCommand } from "./workspace-command-service.
 import { listProjectSourceFiles, removeSiblingProjectDirs, workspaceContext } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 
-type ProjectCommandRunner = (command: string, cwd: string, timeoutMs: number, logs: string[]) => Promise<void>;
+type ProjectCommandRunner = (
+	command: string,
+	cwd: string,
+	timeoutMs: number,
+	logs: string[],
+	signal?: AbortSignal,
+) => Promise<void>;
 
 export class WorkspaceTaskService {
 	constructor(
@@ -25,7 +31,7 @@ export class WorkspaceTaskService {
 		private readonly diagnostics?: WorkspaceDiagnosticLogService,
 	) {}
 
-	async run(body: ProjectTaskRequest, req?: PreviewRequestLike): Promise<ProjectTaskResult> {
+	async run(body: ProjectTaskRequest, req?: PreviewRequestLike, signal?: AbortSignal): Promise<ProjectTaskResult> {
 		if (!isProjectTaskName(body.task)) {
 			throw new Error("Field `task` must be one of: inspect, validate, build_static, preview, logs.");
 		}
@@ -48,7 +54,7 @@ export class WorkspaceTaskService {
 		const hasPackageJson = existsSync(join(projectDir, "package.json"));
 		if (body.task === "build_static") {
 			return this.recordTaskResult(
-				await this.buildStaticProject({ projectId, sessionId, title, projectDir, files }),
+				await this.buildStaticProject({ projectId, sessionId, title, projectDir, files }, signal),
 			);
 		}
 
@@ -82,13 +88,16 @@ export class WorkspaceTaskService {
 		return this.recordTaskResult({ ...base, valid: errors.length === 0, errors });
 	}
 
-	private async buildStaticProject(options: {
-		projectId: string;
-		sessionId: string;
-		title: string;
-		projectDir: string;
-		files: string[];
-	}): Promise<ProjectTaskResult> {
+	private async buildStaticProject(
+		options: {
+			projectId: string;
+			sessionId: string;
+			title: string;
+			projectDir: string;
+			files: string[];
+		},
+		signal?: AbortSignal,
+	): Promise<ProjectTaskResult> {
 		const logs: string[] = [`Project root: ${options.projectDir}\n`];
 		const packageJsonPath = join(options.projectDir, "package.json");
 		const errors = validateBuildStaticProject(packageJsonPath, this.config);
@@ -101,12 +110,14 @@ export class WorkspaceTaskService {
 				options.projectDir,
 				this.config.projectInstallTimeoutMs,
 				logs,
+				signal,
 			);
 			await this.runProjectCommand(
 				this.config.projectBuildCommand,
 				options.projectDir,
 				this.config.projectBuildTimeoutMs,
 				logs,
+				signal,
 			);
 			const staticRoot = findStaticServeRoot(options.projectDir, staticServeRootCandidates(true));
 			if (!staticRoot) {

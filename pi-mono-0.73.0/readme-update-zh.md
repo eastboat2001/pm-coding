@@ -202,6 +202,32 @@ docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.
 /app/apps/pi-coding-web/data
 ```
 
+### 后台 worker、队列和会话隔离
+
+PI 当前的代码生成执行路径已经从“浏览器页面内直接运行 Agent”改为“Web 进程创建 run，独立 worker 从 Redis 队列消费 run”。这样刷新页面、关闭页面、切换会话后，服务端 worker 仍可继续处理已经入队或正在运行的生成任务；前端重新打开会话时通过 run events 回放模型消息和工具事件。
+
+部署形态：
+
+- `pi-coding-web`：负责 Web UI、PI session/run API、项目文件 API 和运行事件查询。
+- `pi-worker`：独立 Node 进程，执行真实 Agent run，写入 SQLite runtime DB，并通过 Redis 队列接收任务和取消信号。
+- `redis`：run 队列和取消标记，不存储会话正文；会话、消息、run、run events 存在 `PI_DB_FILE` 指向的 SQLite 文件中。
+
+PM handoff 仍保持 URL token 方式，PM 请求不需要携带 `X-PI-Client-ID`，也不需要修改 PM API。handoff 解析完成后，PI 浏览器端会生成并持久化 `PI_CLIENT_ID`，之后 PI 自己的 session、run、project API 都会带 `X-PI-Client-ID`。这个 client id 只用于会话/任务隔离，防止同一 PI 服务上的不同浏览器互相看到或操作 run；它不是认证机制，不能替代登录、权限校验或网络访问控制。
+
+Docker Compose 部署现在包含 Web、worker 和 Redis 三个服务。离线部署时仍使用同一个 `pi-coding-web:0.73.0` 镜像，`pi-worker` 通过 `npm run worker --workspace=pi-coding-web` 启动。生产环境至少应设置：
+
+```env
+PI_RUNS_ENABLED=true
+PI_DB_FILE=./data/pi-runtime.sqlite
+PI_REDIS_URL=redis://redis:6379
+PI_WORKER_ID=pi-worker
+PI_WORKER_CONCURRENCY=2
+PI_RUN_QUEUE_NAME=pi:runs
+PI_CLIENT_ID_REQUIRED=true
+```
+
+如果部署多个 worker，应给每个 worker 配置稳定且不同的 `PI_WORKER_ID`，用于重启后标记该 worker 遗留的 running/cancelling run。
+
 ## 5. 配置文件说明
 
 产品应用使用：
@@ -217,6 +243,8 @@ apps/pi-coding-web/.env
 - `PI_PREVIEW_BASE_URL`：对浏览器可访问的 PI 公开地址。
 - `PI_PROJECT_INSTALL_COMMAND`、`PI_PROJECT_BUILD_COMMAND`：生成项目安装和构建命令。
 - `PI_SERVER_SESSION_SYNC_ENABLED`：是否启用服务端会话同步。
+- `PI_RUNS_ENABLED`、`PI_DB_FILE`、`PI_REDIS_URL`、`PI_WORKER_*`、`PI_RUN_QUEUE_NAME`：后台 worker run、SQLite runtime DB 和 Redis 队列配置。
+- `PI_CLIENT_ID_REQUIRED`：是否强制 PI-owned API 携带 `X-PI-Client-ID`。
 - `PI_LOG_*`：诊断日志、深度调试、保留周期和 SQLite 清理策略。
 - `PI_LANGFUSE_*`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`：Langfuse/OTEL 配置和密钥。
 - `PI_OTEL_SERVICE_NAME`、`PI_OTEL_DEPLOYMENT_ENVIRONMENT`：OTEL 标识。

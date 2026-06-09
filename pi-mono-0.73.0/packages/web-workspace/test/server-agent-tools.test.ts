@@ -1,0 +1,120 @@
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { createServerDirectProjectTools } from "../src/server-agent-tools.js";
+import type { StorageConfig } from "../src/types.js";
+
+function tempRoot(): string {
+	return mkdtempSync(join(tmpdir(), "pi-web-workspace-server-tools-"));
+}
+
+function testConfig(root: string): StorageConfig {
+	return {
+		sessionsDir: join(root, "data", "sessions"),
+		settingsFile: join(root, "data", "settings.json"),
+		projectsRootDir: join(root, "data", "projects"),
+		skillsDir: join(root, "data", "skills"),
+		defaultSkillsDir: join(root, "data", "default-skills"),
+		runtimeDbFile: join(root, "data", "pi-runtime.sqlite"),
+		redisUrl: "redis://127.0.0.1:6379",
+		runsEnabled: false,
+		workerId: "test-worker",
+		workerConcurrency: 2,
+		runQueueName: "pi:runs",
+		runEventRetentionDays: 30,
+		clientIdRequired: true,
+		previewBaseUrl: "http://localhost:5173",
+		projectInstallCommand: "npm install",
+		projectBuildCommand: "npm run build",
+		projectInstallTimeoutMs: 120000,
+		projectBuildTimeoutMs: 120000,
+		serverSessionSyncEnabled: false,
+		defaultModelProvider: "",
+		defaultModelId: "",
+		handoffDefaultThinkingLevel: "high",
+		envFile: "",
+		logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
+		loggingEnabled: true,
+		logStdoutEnabled: false,
+		rawProviderLoggingEnabled: false,
+		rawProviderLogMaxChars: 12000,
+		promptSnapshotLoggingEnabled: false,
+		promptSnapshotMaxChars: 20000,
+		modelOutputSnapshotLoggingEnabled: false,
+		modelOutputSnapshotMaxChars: 20000,
+		logRetentionDays: 30,
+		logMaxEvents: 50000,
+		logCleanupIntervalMs: 3600000,
+		logVacuumIntervalMs: 86400000,
+		langfuseEnabled: false,
+		langfuseHost: "",
+		langfusePublicKey: "",
+		langfuseSecretKey: "",
+		langfuseOtelEndpoint: "",
+		langfuseFlushIntervalMs: 5000,
+		langfuseBatchSize: 50,
+		langfuseExportPromptSnapshots: false,
+		langfuseExportRawChunks: false,
+		langfuseExportModelOutputSnapshots: false,
+		otelServiceName: "pi-coding-web",
+		otelDeploymentEnvironment: "",
+	};
+}
+
+describe("server-direct agent project tools", () => {
+	it("creates project files without browser fetch", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const tools = createServerDirectProjectTools(config, {
+			sessionId: "s1",
+			title: "Demo",
+			activeSkillNames: [],
+		});
+		const projectFile = tools.find((tool) => tool.name === "project_file");
+
+		expect(projectFile).toBeDefined();
+		const result = await projectFile!.execute("tc1", {
+			command: "create",
+			filename: "index.html",
+			content: "<h1>ok</h1>",
+		});
+
+		expect(result.content[0]).toMatchObject({ type: "text", text: "created: index.html" });
+		expect(result.details).toMatchObject({ filename: "index.html", action: "created" });
+		expect(existsSync(join(String(result.details.projectRoot), "index.html"))).toBe(true);
+
+		const listResult = await projectFile!.execute("tc2", { command: "list" });
+		expect(listResult.content[0]).toMatchObject({ type: "text", text: "index.html" });
+	});
+
+	it("exposes preview through server-direct project tasks using the configured preview base URL", async () => {
+		const root = tempRoot();
+		const tools = createServerDirectProjectTools(testConfig(root), {
+			sessionId: "s1",
+			title: "Demo",
+		});
+		const projectFile = tools.find((tool) => tool.name === "project_file");
+		const projectTask = tools.find((tool) => tool.name === "project_task");
+
+		expect(projectTask).toBeDefined();
+		expect(JSON.stringify(projectTask!.parameters)).toContain('"preview"');
+
+		await projectFile!.execute("tc1", {
+			command: "create",
+			filename: "index.html",
+			content: "<h1>ok</h1>",
+		});
+		const result = await projectTask!.execute("tc2", { task: "preview" });
+
+		expect(result.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringContaining("Preview URL: http://localhost:5173/preview/demo-s1/"),
+		});
+		expect(result.details).toMatchObject({
+			task: "preview",
+			status: "running",
+			previewUrl: "http://localhost:5173/preview/demo-s1/",
+		});
+	});
+});

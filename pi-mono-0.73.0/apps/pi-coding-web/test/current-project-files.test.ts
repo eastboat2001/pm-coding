@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	buildCurrentProjectFileTree,
 	clampCurrentProjectFilePreviewDrawerWidth,
@@ -11,6 +11,13 @@ import {
 } from "../src/app/current-project-files-state.js";
 
 describe("current project files state", () => {
+	const clientId = "550e8400-e29b-41d4-a716-446655440000";
+
+	beforeEach(() => {
+		vi.restoreAllMocks();
+		vi.stubGlobal("window", { localStorage: createStorage(clientId) });
+	});
+
 	it("loads current session files from the readonly workspace endpoint", async () => {
 		const calls: Array<{ url: string; init?: RequestInit }> = [];
 		const fetchImpl: typeof fetch = async (input, init) => {
@@ -38,7 +45,11 @@ describe("current project files state", () => {
 				url: "http://localhost:5173/api/pi-projects/workspace/files",
 				init: {
 					method: "POST",
-					headers: { Accept: "application/json", "Content-Type": "application/json" },
+					headers: {
+						Accept: "application/json",
+						"Content-Type": "application/json",
+						"X-PI-Client-ID": clientId,
+					},
 					body: JSON.stringify({ sessionId: "session-123", title: "Demo App" }),
 				},
 			},
@@ -75,7 +86,11 @@ describe("current project files state", () => {
 			url: "http://localhost:5173/api/pi-projects/workspace/file-preview",
 			init: {
 				method: "POST",
-				headers: { Accept: "application/json", "Content-Type": "application/json" },
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					"X-PI-Client-ID": clientId,
+				},
 				body: JSON.stringify({ sessionId: "session-123", title: "Demo App", filename: "src/main.ts" }),
 			},
 		});
@@ -119,7 +134,11 @@ describe("current project files state", () => {
 			url: "http://localhost:5173/api/pi-projects/workspace/file-save",
 			init: {
 				method: "POST",
-				headers: { Accept: "application/json", "Content-Type": "application/json" },
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					"X-PI-Client-ID": clientId,
+				},
 				body: JSON.stringify({
 					sessionId: "session-123",
 					title: "Demo App",
@@ -175,3 +194,27 @@ describe("current project files state", () => {
 		expect(monacoLanguageForProjectFile("assets/logo.unknown", "unknown")).toBe("plaintext");
 	});
 });
+
+function createStorage(clientId: string): Storage {
+	const values = new Map<string, string>([["pi.clientId", clientId]]);
+	return {
+		get length() {
+			return values.size;
+		},
+		clear() {
+			values.clear();
+		},
+		getItem(key) {
+			return values.get(key) ?? null;
+		},
+		key(index) {
+			return Array.from(values.keys())[index] ?? null;
+		},
+		removeItem(key) {
+			values.delete(key);
+		},
+		setItem(key, value) {
+			values.set(key, value);
+		},
+	};
+}

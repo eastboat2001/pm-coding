@@ -8,10 +8,12 @@
   "scripts": {
     "clean": "shx rm -rf dist",
     "build": "tsgo -p tsconfig.build.json",
-    "test": "npm run build && node test/workspace.test.mjs && tsx ../../node_modules/vitest/dist/cli.js --run test/workspace-skill-service.test.ts",
+    "test": "npm run build && node test/workspace.test.mjs && tsx ../../node_modules/vitest/dist/cli.js --run test/*.test.ts",
     "check": "tsgo --noEmit"
   },
   "dependencies": {
+    "redis": "^4.7.0",
+    "typebox": "^1.1.24",
     "vite": "^7.1.6"
   },
   "devDependencies": {

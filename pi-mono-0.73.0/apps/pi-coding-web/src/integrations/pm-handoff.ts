@@ -27,6 +27,7 @@ export function buildPmApiUrl(path: string, currentHref = window.location.href):
 }
 
 export async function fetchPmHandoffPayload(token: string): Promise<PmHandoffPayload> {
+	// PM handoff requests intentionally do not include X-PI-Client-ID. The client id scopes only PI-owned session/run/project APIs after the handoff is resolved.
 	const response = await fetch(buildPmApiUrl(`/api/coding-handoffs/${encodeURIComponent(token)}`));
 	const data = (await response.json().catch(() => ({}))) as PmHandoffPayload & { error?: string };
 	if (!response.ok) throw new Error(data.error || `Failed to resolve handoff: ${response.status}`);

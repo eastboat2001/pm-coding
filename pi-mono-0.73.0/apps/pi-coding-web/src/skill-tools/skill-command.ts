@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { requestSkillApi } from "./client.js";
 import type { SkillLoadDetails } from "./schemas.js";
 
 type ParsedSkillCommandPrefix = {
@@ -7,9 +6,15 @@ type ParsedSkillCommandPrefix = {
 	args: string;
 };
 
-type ExpandSkillCommandOptions = {
+export type SkillLoader = (name: string, signal?: AbortSignal) => Promise<SkillLoadDetails> | SkillLoadDetails;
+
+export type ExpandSkillCommandOptions = {
 	defaultSkillNames?: string[];
+	loadSkill?: SkillLoader;
+	signal?: AbortSignal;
 };
+
+const TOOL_REQUEST_TIMEOUT_MS = 5000;
 
 export async function expandSkillCommandsInMessages(
 	messages: AgentMessage[],
@@ -20,6 +25,7 @@ export async function expandSkillCommandsInMessages(
 	const latestExpandableMessageIndex = findLatestExpandableMessageIndex(messages);
 	const defaultSkillNames = uniqueNames(options.defaultSkillNames ?? []);
 	for (let index = 0; index < messages.length; index++) {
+		throwIfAborted(options.signal);
 		const message = messages[index];
 		const content = readExpandableTextContent(message);
 		if (content === undefined) {
@@ -29,6 +35,7 @@ export async function expandSkillCommandsInMessages(
 		const expanded = await expandSkillCommandText(
 			content,
 			index === latestExpandableMessageIndex ? defaultSkillNames : [],
+			options,
 		);
 		if (expanded === content) {
 			expandedMessages.push(message);
@@ -53,12 +60,22 @@ export function getLatestExplicitSkillNames(messages: AgentMessage[]): string[] 
 	return [];
 }
 
-async function expandSkillCommandText(text: string, defaultSkillNames: string[] = []): Promise<string> {
+async function expandSkillCommandText(
+	text: string,
+	defaultSkillNames: string[] = [],
+	options: ExpandSkillCommandOptions = {},
+): Promise<string> {
 	const parsed = parseSkillCommandPrefix(text);
 	if (!parsed && defaultSkillNames.length === 0) return text;
 
-	const defaultSkills = await loadSkills(defaultSkillNames);
-	const explicitSkills = await loadSkills(parsed?.skillNames ?? [], new Set(defaultSkills.map((skill) => skill.name)));
+	const loadSkill = options.loadSkill ?? defaultLoadSkill;
+	const defaultSkills = await loadSkills(defaultSkillNames, new Set(), loadSkill, options.signal);
+	const explicitSkills = await loadSkills(
+		parsed?.skillNames ?? [],
+		new Set(defaultSkills.map((skill) => skill.name)),
+		loadSkill,
+		options.signal,
+	);
 
 	if (defaultSkills.length > 0) {
 		return formatRequiredSkillSelection(defaultSkills, explicitSkills, parsed?.args ?? text);
@@ -66,17 +83,85 @@ async function expandSkillCommandText(text: string, defaultSkillNames: string[] 
 	return formatExplicitSkillSelection(explicitSkills, parsed?.args ?? text);
 }
 
-async function loadSkills(skillNames: string[], seen = new Set<string>()): Promise<SkillLoadDetails[]> {
+async function loadSkills(
+	skillNames: string[],
+	seen: Set<string>,
+	loadSkill: SkillLoader,
+	signal?: AbortSignal,
+): Promise<SkillLoadDetails[]> {
 	const skills: SkillLoadDetails[] = [];
 	for (const skillName of skillNames) {
+		throwIfAborted(signal);
 		if (seen.has(skillName)) continue;
-		const skill = await requestSkillApi<SkillLoadDetails>("/load", {
-			body: { name: skillName },
-		});
+		const skill = await loadSkill(skillName, signal);
+		throwIfAborted(signal);
 		skills.push(skill);
 		seen.add(skill.name);
 	}
 	return skills;
+}
+
+async function defaultLoadSkill(name: string, signal?: AbortSignal): Promise<SkillLoadDetails> {
+	throwIfAborted(signal);
+	const endpoint = new URL("/api/pi-skills/load", readBrowserOrigin()).toString();
+	const timeoutController = new AbortController();
+	const timeoutId = setTimeout(() => timeoutController.abort(), TOOL_REQUEST_TIMEOUT_MS);
+	const requestSignal = mergeAbortSignals(timeoutController.signal, signal);
+	try {
+		const response = await fetch(endpoint, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name }),
+			signal: requestSignal,
+		});
+		const data = (await response.json().catch(() => ({}))) as SkillLoadDetails & { error?: string };
+		if (!response.ok) throw new Error(data.error || `Skill API failed with HTTP ${response.status}`);
+		return data;
+	} catch (error) {
+		if (isAbortError(error)) throw createAbortError();
+		throw new Error(
+			`无法连接 PI Skill API：${endpoint}。原始错误：${error instanceof Error ? error.message : String(error)}`,
+		);
+	} finally {
+		clearTimeout(timeoutId);
+	}
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw createAbortError();
+}
+
+function createAbortError(): Error {
+	const error = new Error("Skill command expansion aborted.");
+	error.name = "AbortError";
+	return error;
+}
+
+function readBrowserOrigin(): string {
+	const globalValue = globalThis as {
+		location?: { origin?: string };
+		window?: { location?: { origin?: string } };
+	};
+	const origin = globalValue.location?.origin ?? globalValue.window?.location?.origin;
+	if (!origin) throw new Error("PI Skill API requires a browser origin. Pass loadSkill outside the browser.");
+	return origin;
+}
+
+function mergeAbortSignals(timeoutSignal: AbortSignal, callerSignal?: AbortSignal): AbortSignal {
+	if (!callerSignal) return timeoutSignal;
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	if (timeoutSignal.aborted || callerSignal.aborted) {
+		controller.abort();
+		return controller.signal;
+	}
+	timeoutSignal.addEventListener("abort", abort, { once: true });
+	callerSignal.addEventListener("abort", abort, { once: true });
+	return controller.signal;
+}
+
+function isAbortError(error: unknown): boolean {
+	return typeof error === "object" && error !== null && (error as { name?: unknown }).name === "AbortError";
 }
 
 export function parseSkillCommandPrefix(text: string): ParsedSkillCommandPrefix | undefined {

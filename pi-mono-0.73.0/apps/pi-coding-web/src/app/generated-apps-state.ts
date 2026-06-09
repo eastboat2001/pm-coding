@@ -1,3 +1,5 @@
+import { piClientHeaders } from "../runtime/client-id.js";
+
 export const GENERATED_APPS_PANEL_WIDTH_KEY = "pi-generated-apps-panel-width";
 export const GENERATED_APPS_PANEL_DEFAULT_WIDTH = 360;
 export const GENERATED_APPS_PANEL_MIN_WIDTH = 280;
@@ -23,7 +25,10 @@ export async function loadGeneratedApps(
 	origin = globalThis.location?.origin || "http://localhost",
 ): Promise<GeneratedAppRecord[]> {
 	const endpoint = new URL("/api/pi-projects", origin).toString();
-	const response = await fetchImpl(endpoint, { method: "GET", headers: { Accept: "application/json" } });
+	const response = await fetchImpl(endpoint, {
+		method: "GET",
+		headers: { Accept: "application/json", ...piClientHeaders() },
+	});
 	const result = (await response.json().catch(() => ({}))) as GeneratedAppsResponse;
 	if (!response.ok) {
 		const message =
@@ -48,7 +53,7 @@ export async function renameGeneratedApp(
 	const endpoint = new URL(`/api/pi-projects/${encodeURIComponent(projectId)}`, origin).toString();
 	const response = await fetchImpl(endpoint, {
 		method: "PUT",
-		headers: { Accept: "application/json", "Content-Type": "application/json" },
+		headers: { Accept: "application/json", "Content-Type": "application/json", ...piClientHeaders() },
 		body: JSON.stringify({ title }),
 	});
 	const result = (await response.json().catch(() => ({}))) as GeneratedAppsResponse & { error?: unknown };

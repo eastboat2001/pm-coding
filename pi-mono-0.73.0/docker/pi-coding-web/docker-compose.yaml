@@ -1,4 +1,11 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: pi-coding-redis
+    restart: unless-stopped
+    volumes:
+      - ./data/redis:/data
+
   pi-coding-web:
     image: ${PI_CODING_WEB_IMAGE:-pi-coding-web:0.73.0}
     pull_policy: ${PI_CODING_WEB_PULL_POLICY:-never}
@@ -7,11 +14,14 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      PI_REDIS_URL: redis://redis:6379
     ports:
       - "${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
       - ./data:/app/apps/pi-coding-web/data
       - ./.env:/app/apps/pi-coding-web/.env:ro
+    depends_on:
+      - redis
     healthcheck:
       test:
         [
@@ -24,3 +34,20 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  pi-worker:
+    image: ${PI_CODING_WEB_IMAGE:-pi-coding-web:0.73.0}
+    pull_policy: ${PI_CODING_WEB_PULL_POLICY:-never}
+    container_name: pi-worker
+    init: true
+    restart: unless-stopped
+    command: ["npm", "run", "worker", "--workspace=pi-coding-web"]
+    environment:
+      NODE_ENV: production
+      PI_REDIS_URL: redis://redis:6379
+      PI_WORKER_ID: ${PI_WORKER_ID:-pi-worker}
+    volumes:
+      - ./data:/app/apps/pi-coding-web/data
+      - ./.env:/app/apps/pi-coding-web/.env:ro
+    depends_on:
+      - redis

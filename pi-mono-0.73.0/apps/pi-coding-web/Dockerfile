@@ -12,6 +12,7 @@ RUN npm run build --workspace=@mariozechner/pi-agent-core
 RUN npm run build --workspace=@mariozechner/pi-web-workspace
 RUN npm run build --workspace=@mariozechner/pi-web-ui
 RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build --workspace=pi-coding-web
+RUN npm run build:worker --workspace=pi-coding-web
 
 ENV NODE_ENV=production
 

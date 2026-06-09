@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import type { ProjectBashRequest, ProjectBashResult, StorageConfig } from "./types.js";
 import { removeSiblingProjectDirs, workspaceContext } from "./workspace-paths.js";
@@ -27,7 +27,13 @@ export class WorkspaceCommandService {
 	}
 }
 
-export function runCommand(command: string, cwd: string, timeoutMs: number, logs: string[]): Promise<void> {
+export function runCommand(
+	command: string,
+	cwd: string,
+	timeoutMs: number,
+	logs: string[],
+	signal?: AbortSignal,
+): Promise<void> {
 	const trimmedCommand = command.trim();
 	if (!trimmedCommand) return Promise.resolve();
 	if (isUnsafeProjectCommand(trimmedCommand)) {
@@ -35,34 +41,83 @@ export function runCommand(command: string, cwd: string, timeoutMs: number, logs
 			"Refusing to run a command that can stop the PI server. Use project_task preview to manage static previews instead.",
 		);
 	}
+	if (signal?.aborted) return Promise.reject(new Error("Command aborted"));
 	logs.push(`$ ${trimmedCommand}`);
 	return new Promise((resolveCommand, rejectCommand) => {
-		const child = spawn(trimmedCommand, {
+		let child: ChildProcess | undefined;
+		let settled = false;
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		const cleanup = () => {
+			if (timeout) clearTimeout(timeout);
+			signal?.removeEventListener("abort", onAbort);
+		};
+		const settle = (callback: () => void): void => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			callback();
+		};
+		const stopChild = (): void => {
+			if (!child?.pid) return;
+			killProcessTree(child);
+		};
+		const onAbort = () => {
+			settle(() => {
+				stopChild();
+				rejectCommand(new Error("Command aborted"));
+			});
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (signal?.aborted) {
+			onAbort();
+			return;
+		}
+		const spawned = spawn(trimmedCommand, {
 			cwd,
 			shell: true,
 			stdio: ["ignore", "pipe", "pipe"],
 			env: { ...process.env, CI: "true" },
 			windowsHide: true,
+			detached: process.platform !== "win32",
 		});
-		const timeout = setTimeout(() => {
-			child.kill();
-			rejectCommand(new Error(`Command timed out after ${timeoutMs}ms: ${trimmedCommand}`));
+		child = spawned;
+		timeout = setTimeout(() => {
+			settle(() => {
+				stopChild();
+				rejectCommand(new Error(`Command timed out after ${timeoutMs}ms: ${trimmedCommand}`));
+			});
 		}, timeoutMs);
-		child.stdout?.on("data", (chunk) => logs.push(String(chunk)));
-		child.stderr?.on("data", (chunk) => logs.push(String(chunk)));
-		child.on("error", (error) => {
-			clearTimeout(timeout);
-			rejectCommand(error);
+		spawned.stdout?.on("data", (chunk) => logs.push(String(chunk)));
+		spawned.stderr?.on("data", (chunk) => logs.push(String(chunk)));
+		spawned.on("error", (error) => {
+			settle(() => rejectCommand(error));
 		});
-		child.on("close", (code) => {
-			clearTimeout(timeout);
-			if (code === 0) {
-				resolveCommand();
-			} else {
-				rejectCommand(new Error(`Command failed with exit code ${code}: ${trimmedCommand}`));
-			}
+		spawned.on("close", (code) => {
+			settle(() => {
+				if (code === 0) {
+					resolveCommand();
+				} else {
+					rejectCommand(new Error(`Command failed with exit code ${code}: ${trimmedCommand}`));
+				}
+			});
 		});
 	});
+}
+
+function killProcessTree(child: ChildProcess): void {
+	if (!child.pid) return;
+	if (process.platform === "win32") {
+		spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+			stdio: "ignore",
+			windowsHide: true,
+		}).on("error", () => child.kill());
+		return;
+	}
+	try {
+		process.kill(-child.pid, "SIGTERM");
+	} catch {
+		child.kill();
+	}
 }
 
 export function isUnsafeProjectCommand(command: string): boolean {

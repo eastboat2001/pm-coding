@@ -1,10 +1,12 @@
+import { piClientHeaders } from "../runtime/client-id.js";
+
 export async function requestProjectApi<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
 	const endpoint = new URL(path, window.location.origin).toString();
 	let response: Response;
 	try {
 		response = await fetch(endpoint, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", ...piClientHeaders() },
 			body: JSON.stringify(body),
 			signal,
 		});

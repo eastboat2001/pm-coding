@@ -152,6 +152,28 @@ describe("parseSkillCommandPrefix", () => {
 		expect(content).toContain("User request:\nbuild a page");
 	});
 
+	it("rejects instead of returning partially expanded default skills when aborted", async () => {
+		const controller = new AbortController();
+
+		await expect(
+			expandSkillCommandsInMessages([{ role: "user", content: "build a page" }], {
+				defaultSkillNames: ["platform-defaults", "second-default"],
+				loadSkill: (name) => {
+					if (name === "platform-defaults") {
+						controller.abort();
+					}
+					return {
+						name,
+						location: `skill://${name}/SKILL.md`,
+						content: "# Platform Defaults\n\nAlways apply PI platform defaults.",
+						resources: [],
+					};
+				},
+				signal: controller.signal,
+			}),
+		).rejects.toMatchObject({ name: "AbortError" });
+	});
+
 	it("adds a Chinese language hint when the user request is Chinese", async () => {
 		vi.stubGlobal("window", { location: { origin: "http://pi.test" } });
 		vi.stubGlobal(

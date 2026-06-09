@@ -1,10 +1,27 @@
 import { DialogContent, DialogHeader } from "@mariozechner/mini-lit/dist/Dialog.js";
 import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
-import { i18n } from "@mariozechner/pi-web-ui";
+import type { RunStatus } from "@mariozechner/pi-web-workspace";
 import { html } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { formatSessionUpdatedAt } from "../storage/session-timestamps.js";
+
+const CANCELLABLE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running"]);
+const i18n = (text: string) => text;
+
+export function sessionRunStatusLabel(status: RunStatus | undefined): string {
+	if (status === "queued") return i18n("Queued");
+	if (status === "running") return i18n("Running");
+	if (status === "cancelling") return i18n("Cancelling");
+	if (status === "failed") return i18n("Failed");
+	if (status === "cancelled") return i18n("Cancelled");
+	if (status === "interrupted") return i18n("Interrupted");
+	return "";
+}
+
+export function isCancellableRunStatus(status: RunStatus | undefined): status is RunStatus {
+	return status !== undefined && CANCELLABLE_RUN_STATUSES.has(status);
+}
 
 @customElement("local-session-list-dialog")
 export class LocalSessionListDialog extends DialogBase {
@@ -13,6 +30,7 @@ export class LocalSessionListDialog extends DialogBase {
 
 	private onSelectCallback?: (sessionId: string) => void;
 	private onDeleteCallback?: (sessionId: string) => Promise<unknown> | unknown;
+	private onCancelRunCallback?: (runId: string) => Promise<unknown> | unknown;
 	private loadSessionsCallback?: () => Promise<MergedSessionEntry[]>;
 
 	protected modalWidth = "min(600px, 90vw)";
@@ -22,17 +40,21 @@ export class LocalSessionListDialog extends DialogBase {
 		loadSessions: () => Promise<MergedSessionEntry[]>,
 		onSelect: (sessionId: string) => void,
 		onDelete?: (sessionId: string) => Promise<unknown> | unknown,
+		onCancelRun?: (runId: string) => Promise<unknown> | unknown,
 	) {
 		const dialog = new LocalSessionListDialog();
 		dialog.loadSessionsCallback = loadSessions;
 		dialog.onSelectCallback = onSelect;
 		dialog.onDeleteCallback = onDelete;
+		dialog.onCancelRunCallback = onCancelRun;
 		dialog.open();
 		await dialog.refresh();
 	}
 
-	private async refresh() {
-		this.loading = true;
+	private async refresh(showLoading = true) {
+		if (showLoading) {
+			this.loading = true;
+		}
 		this.sessions = this.loadSessionsCallback ? await this.loadSessionsCallback() : [];
 		this.loading = false;
 	}
@@ -45,13 +67,40 @@ export class LocalSessionListDialog extends DialogBase {
 	private async handleDelete(sessionId: string, event: Event) {
 		event.stopPropagation();
 		if (!confirm(i18n("Delete this session?"))) return;
-		await this.onDeleteCallback?.(sessionId);
-		await this.refresh();
+		const previousSessions = this.sessions;
+		this.sessions = this.sessions.filter((session) => session.id !== sessionId);
+		try {
+			await this.onDeleteCallback?.(sessionId);
+			await this.refresh(false);
+		} catch (error) {
+			this.sessions = previousSessions;
+			throw error;
+		}
+	}
+
+	private async handleCancelRun(session: MergedSessionEntry, event: Event) {
+		event.stopPropagation();
+		if (!session.activeRunId) return;
+		const previousSessions = this.sessions;
+		this.sessions = this.sessions.map((candidate) =>
+			candidate.id === session.id
+				? { ...candidate, activeRunId: undefined, runStatus: "cancelling" as RunStatus }
+				: candidate,
+		);
+		try {
+			await this.onCancelRunCallback?.(session.activeRunId);
+			await this.refresh(false);
+		} catch (error) {
+			this.sessions = previousSessions;
+			throw error;
+		}
 	}
 
 	private sessionSubtitle(session: MergedSessionEntry): string {
 		const messages = `${session.messageCount} ${i18n("messages")}`;
-		return [messages, session.preferredSource, formatSessionUpdatedAt(session.lastModified)].filter(Boolean).join(" · ");
+		return [messages, session.preferredSource, formatSessionUpdatedAt(session.lastModified)]
+			.filter(Boolean)
+			.join(" · ");
 	}
 
 	protected override renderContent() {
@@ -69,15 +118,38 @@ export class LocalSessionListDialog extends DialogBase {
 									: this.sessions.map(
 											(session) => html`
 												<div
-													class="group flex items-start gap-3 p-3 rounded-lg border border-border hover:bg-secondary/50 cursor-pointer transition-colors"
-													@click=${() => this.handleSelect(session.id)}
+													class="group flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-secondary/50 transition-colors"
 												>
-													<div class="flex-1 min-w-0">
-														<div class="font-medium text-sm text-foreground truncate">${session.title}</div>
+													<div class="flex-1 min-w-0 cursor-pointer" @click=${() => this.handleSelect(session.id)}>
+														<div class="flex items-center gap-2 min-w-0">
+															<div class="font-medium text-sm text-foreground truncate">${session.title}</div>
+														</div>
 														<div class="text-xs text-muted-foreground mt-1">${this.sessionSubtitle(session)}</div>
 													</div>
+													${
+														session.activeRunId && isCancellableRunStatus(session.runStatus)
+															? html`<button
+																type="button"
+																class="shrink-0"
+																style="appearance: none; -webkit-appearance: none; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; min-width: 36px; min-height: 36px; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; line-height: 1; position: relative; z-index: 2; pointer-events: auto;"
+																@pointerdown=${(e: Event) => e.stopPropagation()}
+																@pointerup=${(e: Event) => e.stopPropagation()}
+																@click=${(e: Event) => this.handleCancelRun(session, e)}
+																title=${i18n("Cancel run")}
+																aria-label=${i18n("Cancel run")}
+															>
+																<span
+																	aria-hidden="true"
+																	style="display: block; width: 14px; height: 14px; border-radius: 2px; background: var(--destructive); pointer-events: none;"
+																></span>
+															</button>`
+															: ""
+													}
 													<button
 														class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/10 text-destructive transition-opacity"
+														type="button"
+														@pointerdown=${(e: Event) => e.stopPropagation()}
+														@pointerup=${(e: Event) => e.stopPropagation()}
 														@click=${(e: Event) => this.handleDelete(session.id, e)}
 														title=${i18n("Delete")}
 													>

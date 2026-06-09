@@ -1,3 +1,5 @@
+import { piClientHeaders } from "../runtime/client-id.js";
+
 export const CURRENT_PROJECT_FILES_PANEL_WIDTH_KEY = "pi-current-project-files-panel-width";
 export const CURRENT_PROJECT_FILES_PANEL_DEFAULT_WIDTH = 380;
 export const CURRENT_PROJECT_FILES_PANEL_MIN_WIDTH = 300;
@@ -76,7 +78,7 @@ export async function loadCurrentProjectFiles(
 	const endpoint = new URL("/api/pi-projects/workspace/files", origin).toString();
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
-		headers: { Accept: "application/json", "Content-Type": "application/json" },
+		headers: { Accept: "application/json", "Content-Type": "application/json", ...piClientHeaders() },
 		body: JSON.stringify({ sessionId: context.sessionId, title: context.title || "" }),
 	});
 	const result = (await response.json().catch(() => ({}))) as FilesResponse;
@@ -92,7 +94,7 @@ export async function loadCurrentProjectFilePreview(
 	const endpoint = new URL("/api/pi-projects/workspace/file-preview", origin).toString();
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
-		headers: { Accept: "application/json", "Content-Type": "application/json" },
+		headers: { Accept: "application/json", "Content-Type": "application/json", ...piClientHeaders() },
 		body: JSON.stringify({
 			sessionId: request.sessionId,
 			title: request.title || "",
@@ -112,7 +114,7 @@ export async function saveCurrentProjectFile(
 	const endpoint = new URL("/api/pi-projects/workspace/file-save", origin).toString();
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
-		headers: { Accept: "application/json", "Content-Type": "application/json" },
+		headers: { Accept: "application/json", "Content-Type": "application/json", ...piClientHeaders() },
 		body: JSON.stringify({
 			sessionId: request.sessionId,
 			title: request.title || "",

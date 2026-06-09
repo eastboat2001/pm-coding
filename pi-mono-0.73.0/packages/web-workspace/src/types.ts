@@ -2,12 +2,160 @@ import type { IncomingMessage } from "node:http";
 
 export type JsonObject = Record<string, unknown>;
 
+export type RunStatus = "queued" | "running" | "cancelling" | "cancelled" | "completed" | "failed" | "interrupted";
+
+export interface RuntimeSessionRecord extends JsonObject {
+	sessionId: string;
+	clientId: string;
+	title: string;
+	model: JsonObject;
+	thinkingLevel: string;
+	createdAt: string;
+	updatedAt: string;
+	lastRunStatus?: RunStatus;
+	lastRunId?: string;
+}
+
+export interface RuntimeMessageRecord extends JsonObject {
+	messageId: number;
+	sessionId: string;
+	clientId: string;
+	role: string;
+	payload: JsonObject;
+	createdAt: string;
+}
+
+export interface RuntimeRunRecord extends JsonObject {
+	runId: string;
+	sessionId: string;
+	clientId: string;
+	status: RunStatus;
+	workerId?: string;
+	model: JsonObject;
+	thinkingLevel: string;
+	startedAt?: string;
+	updatedAt: string;
+	endedAt?: string;
+	error?: string;
+}
+
+export interface RuntimeRunEventRecord extends JsonObject {
+	eventId: number;
+	runId: string;
+	sessionId: string;
+	clientId: string;
+	seq: number;
+	type: string;
+	payload: JsonObject;
+	createdAt: string;
+}
+
+export interface StartRunRequest extends JsonObject {
+	sessionId?: string;
+	title?: string;
+	message: JsonObject;
+	model?: JsonObject;
+	thinkingLevel?: string;
+}
+
+export interface StartRunResult extends JsonObject {
+	session: RuntimeSessionRecord;
+	message: RuntimeMessageRecord;
+	run: RuntimeRunRecord;
+}
+
+export interface RuntimeSessionDetail extends JsonObject {
+	session: RuntimeSessionRecord;
+	messages: RuntimeMessageRecord[];
+	runs: RuntimeRunRecord[];
+}
+
+export interface DeleteSessionResult extends JsonObject {
+	deleted: boolean;
+	sessionId: string;
+	cancelledRuns?: number;
+}
+
+export interface RuntimeSessionListResult extends JsonObject {
+	sessions: RuntimeSessionRecord[];
+}
+
+export interface RuntimeRunListResult extends JsonObject {
+	runs: RuntimeRunRecord[];
+}
+
+export interface RuntimeRunEventListResult extends JsonObject {
+	events: RuntimeRunEventRecord[];
+}
+
+export interface WorkerAgentInput extends JsonObject {
+	run: RuntimeRunRecord;
+	session: RuntimeSessionRecord;
+	messages: RuntimeMessageRecord[];
+	model: JsonObject;
+	thinkingLevel: string;
+	projectContext?: ProjectWorkspaceContext;
+	signal?: AbortSignal;
+}
+
+export interface CreateSessionInput extends JsonObject {
+	sessionId: string;
+	clientId: string;
+	title: string;
+	model: JsonObject;
+	thinkingLevel: string;
+	createdAt?: string;
+	updatedAt?: string;
+}
+
+export interface AppendMessageInput extends JsonObject {
+	sessionId: string;
+	clientId: string;
+	role: string;
+	payload: JsonObject;
+	createdAt?: string;
+}
+
+export interface CreateRunInput extends JsonObject {
+	runId: string;
+	sessionId: string;
+	clientId: string;
+	model: JsonObject;
+	thinkingLevel: string;
+	createdAt?: string;
+}
+
+export interface RunStatusPatch extends JsonObject {
+	workerId?: string;
+	startedAt?: string;
+	endedAt?: string;
+	error?: string;
+	updatedAt?: string;
+}
+
+export interface AppendRunEventInput extends JsonObject {
+	runId: string;
+	sessionId: string;
+	clientId: string;
+	type: string;
+	payload: JsonObject;
+	createdAt?: string;
+}
+
 export interface StorageConfig {
 	sessionsDir: string;
 	settingsFile: string;
 	projectsRootDir: string;
 	skillsDir: string;
 	defaultSkillsDir: string;
+	runtimeDbFile: string;
+	redisUrl: string;
+	runsEnabled: boolean;
+	workerId: string;
+	workerConcurrency: number;
+	runQueueName: string;
+	runEventRetentionDays: number;
+	clientIdRequired: boolean;
 	previewBaseUrl: string;
 	projectInstallCommand: string;
 	projectBuildCommand: string;

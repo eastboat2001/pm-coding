@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clampGeneratedAppsPanelWidth,
 	filterGeneratedApps,
@@ -7,6 +7,13 @@ import {
 } from "../src/app/generated-apps-state.js";
 
 describe("generated apps state", () => {
+	const clientId = "550e8400-e29b-41d4-a716-446655440000";
+
+	beforeEach(() => {
+		vi.restoreAllMocks();
+		vi.stubGlobal("window", { localStorage: createStorage(clientId) });
+	});
+
 	it("loads generated apps from the server projects endpoint", async () => {
 		const calls: Array<{ url: string; init?: RequestInit }> = [];
 		const fetchImpl: typeof fetch = async (input, init) => {
@@ -35,7 +42,7 @@ describe("generated apps state", () => {
 		expect(calls).toEqual([
 			{
 				url: "http://localhost:5173/api/pi-projects",
-				init: { method: "GET", headers: { Accept: "application/json" } },
+				init: { method: "GET", headers: { Accept: "application/json", "X-PI-Client-ID": clientId } },
 			},
 		]);
 		expect(projects).toHaveLength(1);
@@ -88,7 +95,11 @@ describe("generated apps state", () => {
 				url: "http://localhost:5173/api/pi-projects/ai-safety-app",
 				init: {
 					method: "PUT",
-					headers: { Accept: "application/json", "Content-Type": "application/json" },
+					headers: {
+						Accept: "application/json",
+						"Content-Type": "application/json",
+						"X-PI-Client-ID": clientId,
+					},
 					body: JSON.stringify({ title: "AI Safety Center" }),
 				},
 			},
@@ -107,5 +118,29 @@ function createProject(projectId: string, title: string) {
 		previewUrl: `http://localhost/preview/${projectId}/`,
 		fileCount: 1,
 		updatedAt: "2026-05-29T10:00:00.000Z",
+	};
+}
+
+function createStorage(clientId: string): Storage {
+	const values = new Map<string, string>([["pi.clientId", clientId]]);
+	return {
+		get length() {
+			return values.size;
+		},
+		clear() {
+			values.clear();
+		},
+		getItem(key) {
+			return values.get(key) ?? null;
+		},
+		key(index) {
+			return Array.from(values.keys())[index] ?? null;
+		},
+		removeItem(key) {
+			values.delete(key);
+		},
+		setItem(key, value) {
+			values.set(key, value);
+		},
 	};
 }

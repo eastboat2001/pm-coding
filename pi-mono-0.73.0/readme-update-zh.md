@@ -163,9 +163,32 @@ npm run check --workspace=pi-coding-web
 
 ### 运行 PI Coding Web
 
+当前后台任务能力默认开启。只启动 Vite Web 进程只能打开页面和 API 网关，但模型生成 run 会进入队列；如果没有 Redis 和 worker，发送消息后不会真正被后台执行。因此本地开发推荐同时启动三个进程：Redis、PI Web、PI worker。
+
+第一次运行前复制本地配置：
+
+```bash
+copy apps\pi-coding-web\.env.example apps\pi-coding-web\.env
+```
+
+如果本机没有 Redis，可以用 Docker 启动一个本地 Redis：
+
+```bash
+docker run --name pi-coding-redis -p 6379:6379 -d redis:7-alpine
+```
+
+终端 1：启动 PI Web。
+
 ```bash
 cd apps/pi-coding-web
 npm run dev
+```
+
+终端 2：构建并启动 PI worker。
+
+```bash
+npm run build:worker --workspace=pi-coding-web
+npm run worker --workspace=pi-coding-web
 ```
 
 默认 Vite 地址通常是：
@@ -173,6 +196,10 @@ npm run dev
 ```text
 http://localhost:5173
 ```
+
+如果修改了 `apps/pi-coding-web/src/worker`、`apps/pi-coding-web/src/runtime` 或 worker 依赖的 `packages/web-workspace` 代码，需要重新执行 `npm run build:worker --workspace=pi-coding-web` 并重启 worker。
+
+如果只是临时验证静态页面、不需要后台生成能力，可以在 `.env` 中将 `PI_RUNS_ENABLED=false` 后只启动 `npm run dev`。这种模式不具备刷新页面后继续执行、会话运行状态、后台取消等能力，不建议作为当前 PI 的正常开发/部署模式。
 
 ### Docker 构建
 

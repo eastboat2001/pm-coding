@@ -49,7 +49,9 @@ apps/pi-coding-web/data/skills/*
 apps/pi-coding-web/data/default-skills/*
 !apps/pi-coding-web/data/default-skills/.gitkeep
 apps/pi-coding-web/data/settings.json
+apps/pi-coding-web/data/pi-runtime.sqlite*
 apps/pi-coding-web/dist/
+apps/pi-coding-web/dist-worker/
 packages/web-ui/example/data/projects/
 packages/web-ui/example/data/sessions/
 packages/web-ui/example/data/settings.json

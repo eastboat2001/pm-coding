@@ -4,3 +4,4 @@ smallcode/
 pi-mono-0.73.0/docker/**/data/
 .codegraph/
 .worktrees/
+.npm-cache/

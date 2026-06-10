@@ -59,3 +59,10 @@ docker/pi-web-ui/data/
 docker/pi-web-ui/*.tar
 docker/pi-web-ui/*.tar.gz
 docker/pi-web-ui/*.zip
+
+*.tar
+*.tar.gz
+pi-mono-0.73.0/docker/**/data/
+.codegraph/
+.worktrees/
+.npm-cache/

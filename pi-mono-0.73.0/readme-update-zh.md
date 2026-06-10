@@ -12,7 +12,17 @@
 - `packages/tui`：终端 UI 组件。
 - `packages/web-ui`：浏览器端聊天 UI 组件库。
 
-本地改造的主要目标不是继续维护一个简单 demo，而是把 PI Web UI 扩展成可被 PM 平台调用的产品化编码 Web 应用。它需要支持：
+本地改造的主要目标不是继续维护一个简单 demo，而是把 PI Web UI 扩展成可被 PM 平台调用的产品化编码 Web 应用。这里的 PM 是另一个业务平台，不是 PI 的内部模块。当前本地仓库把 `pm/` 和 `pi-mono-0.73.0/` 放在同一个 Git 工作区下，只是为了联调方便；两者的职责、代码归属和后续演进方向不同：
+
+- PM 负责业务侧项目管理、需求文档、设计文档、应用列表、用户入口和从业务平台跳转到 PI 的 handoff 流程。
+- PI 负责接收 PM handoff 后的编码对话、模型调用、Agent 工具、生成项目文件、静态构建验证、预览发布、会话持久化和后台 run。
+- PM 通过 URL 参数中的 `handoff_token` 和 `pm_api_base_url` 把需求上下文交给 PI；PI 在浏览器端解析 handoff，调用 PM 后端读取 PRD、设计文档和实现提示词。
+- handoff 完成后，PI 进入自己的会话、run、project API 流程。PI 自己的 API 使用浏览器生成的 `PI_CLIENT_ID` 做会话/任务隔离，PM 请求本身不需要携带 `X-PI-Client-ID`。
+- PM 的业务接口、数据库、认证、项目列表、应用列表和权限体系不应被 PI 代码重写；PI 只应在 handoff 适配、跳转兼容和生成结果回传需要时理解这些边界。
+
+后续计划可能会把 PI 作为单独仓库或单独分支维护。届时项目根目录可能就是 PI 本身，不再包含 `pm/` 目录。为了避免 AI 只读取 PI 代码后误判 PM 的存在方式，本文档需要保留 PM 的背景说明：PM 是外部调用方和需求来源，PI 是被调用的编码生成服务。除非明确要求处理 PM -> PI 跳转兼容，否则后续开发应优先改 `apps/pi-coding-web`、`packages/web-workspace` 或 PI 相关包，不应臆测并修改 PM 代码。
+
+产品化后的 PI 需要支持：
 
 - PM 平台通过 handoff token 打开 PI。
 - 自动读取 PM 传入的 PRD、设计文档和实现提示词。
@@ -20,6 +30,8 @@
 - 通过受控任务做静态应用验证、构建和预览。
 - 发布 `/preview/<project-id>/` 静态预览地址。
 - 持久化会话、模型选择和生成项目文件。
+- 通过独立 worker、Redis 队列和 SQLite runtime DB 支持后台运行、刷新恢复、会话状态展示和取消 run。
+- 使用浏览器生成的 `PI_CLIENT_ID` 隔离不同浏览器/用户的 PI session、run 和 project API。
 - 支持 Docker 部署和数据目录挂载。
 
 因此，原来放在 `packages/web-ui/example` 下的代码已经不再是“示例”，而是一个产品应用。目录整理的核心思路是：保留上游核心包边界，把本地产品化代码移动到独立应用和内部支撑包中。
@@ -126,6 +138,12 @@
 - preview 改为静态预览模式，只服务 `index.html` 或 `dist/`、`build/`、`public/` 等静态产物，不再启动 Node 服务。
 - Vite watcher 已忽略 sessions、projects、settings 等运行数据路径，避免 Agent 写文件时触发 Web 应用刷新。
 - Agent 初始化时直接注入模型 API key 读取函数，避免页面刷新后恢复会话时出现 `No API key for provider`。
+- 新增后台 run 能力：PI Web 负责创建 run，独立 PI worker 从 Redis 队列消费任务，run、message 和 run events 持久化到 SQLite runtime DB。
+- 会话列表已经接入 run 状态，支持 running/cancelling 等状态展示，并提供运行中会话的取消按钮。
+- 刷新页面、关闭页面或切换会话后，正在执行的 run 不依赖浏览器页面继续运行；前端重新进入会话时会从服务端恢复 run 事件。
+- PI-owned 的 session、run、project API 已按 `X-PI-Client-ID` 做浏览器级隔离；PM handoff 入口保持 URL token 方式，不要求 PM 调用携带该 header。
+- 空会话清理逻辑已调整：没有任何消息的 0 messages 会话不应长期保留在会话列表中。
+- 预览 URL 生成已依赖 `PI_PREVIEW_BASE_URL` 或 PI Web 的实际 origin；worker 侧没有浏览器 Host 时不应生成裸 `http://localhost/preview/...`。
 - 自定义服务商存储改为服务端 JSON 与浏览器 IndexedDB 双层同步；当服务端 `customProviders` 为空数组但本地仍有服务商时，不再用空数组反向清空本地配置，而是优先把本地配置写回服务端。
 - 小模型工具调用兼容增强：支持工具参数别名归一、缺参时报出更明确的工具调用格式提示，并增加手动可选的非流式工具调用兼容模式。
 - 非流式工具调用兼容模式不是 vLLM 自动默认开启；需要在对应自定义服务商配置中手动开启，避免后续更强模型默认失去流式输出。
@@ -134,6 +152,7 @@
 - `project_file` 失败卡片渲染已调整：失败或中断时优先显示真实错误信息，不再展示模型尝试写入的完整文件正文，避免误判为“文件已成功创建”。
 - Dockerfile 和 compose 挂载路径改为 `apps/pi-coding-web/data`。
 - `.dockerignore` 已排除递归 `*.tar`、`*.tar.gz`，避免离线镜像包被再次加入 Docker build context。
+- Git ignore 已排除 `.npm-cache/`、`.worktrees/`、`apps/pi-coding-web/data/pi-runtime.sqlite*` 和 `apps/pi-coding-web/dist-worker/`，这些都是本地缓存、运行库或 worker 构建产物，不应提交。
 - 原 `packages/web-ui/example/data/*` 运行数据从仓库结构中移除。
 - 原生成项目 `packages/web-ui/example/kanban` 从产品代码路径中移除。
 
@@ -145,13 +164,18 @@
 npm install
 ```
 
+后台队列依赖 `packages/web-workspace` 中的 `redis` npm 包。拉取包含后台 worker 的代码后，如果直接执行 `npm run build` 报 `Cannot find module 'redis'`，说明本地 `node_modules` 还没有同步新增依赖，先执行一次 `npm install`。
+
 ### 构建关键包
 
 ```bash
 npm run build --workspace=@mariozechner/pi-web-workspace
 npm run build --workspace=@mariozechner/pi-web-ui
 npm run build --workspace=pi-coding-web
+npm run build:worker --workspace=pi-coding-web
 ```
+
+根目录的 `npm run build` 会构建 PI Web 前端和关键包，但不会生成 `apps/pi-coding-web/dist-worker/worker/main.js`。只要需要启动 PI worker，仍要执行 `npm run build:worker --workspace=pi-coding-web`。`dist-worker/` 是本地构建产物，已经被 Git 忽略。
 
 ### 检查关键包
 
@@ -240,6 +264,8 @@ PI 当前的代码生成执行路径已经从“浏览器页面内直接运行 A
 - `redis`：run 队列和取消标记，不存储会话正文；会话、消息、run、run events 存在 `PI_DB_FILE` 指向的 SQLite 文件中。
 
 PM handoff 仍保持 URL token 方式，PM 请求不需要携带 `X-PI-Client-ID`，也不需要修改 PM API。handoff 解析完成后，PI 浏览器端会生成并持久化 `PI_CLIENT_ID`，之后 PI 自己的 session、run、project API 都会带 `X-PI-Client-ID`。这个 client id 只用于会话/任务隔离，防止同一 PI 服务上的不同浏览器互相看到或操作 run；它不是认证机制，不能替代登录、权限校验或网络访问控制。
+
+当前 run events 仍以 SQLite runtime DB 为可靠来源，用于刷新恢复、切换会话补历史和服务重启后的状态恢复。后续如果要进一步降低模型回复的前端延迟，可以把 run events API 演进为 SSE：worker 写事件时同时 publish Redis channel，SSE 直接订阅 Redis live channel 做实时显示，SQLite 继续负责批量落库和重连补历史。这个方向不改变当前 Redis 队列 + SQLite 持久化的职责边界。
 
 Docker Compose 部署现在包含 Web、worker 和 Redis 三个服务。离线部署时仍使用同一个 `pi-coding-web:0.73.0` 镜像，`pi-worker` 通过 `npm run worker --workspace=pi-coding-web` 启动。生产环境至少应设置：
 
@@ -558,10 +584,11 @@ PM 文档是需求主依据；PI 自身提示词只补充执行方式，不应�
 
 ### 多用户与任务队列
 
-当前实现更接近单实例或轻量多会话模式。后续如果支持多人同时生成项目，建议增加：
+当前已经具备独立 worker、Redis 队列、SQLite runtime DB、client id 会话隔离和运行中取消能力，可以支持轻量多会话后台生成。后续如果要作为多人共享服务长期运行，建议继续增加：
 
 - workspace lease 或 lock。
-- 构建任务队列。
+- 构建任务队列和构建 worker 隔离。
+- run events SSE 实时通道，Redis 负责 live publish，SQLite 负责重连补历史和持久化。
 - preview 生命周期管理。
 - 项目清理策略。
 - 用户、PM session 与 PI session 的映射表。
@@ -586,26 +613,38 @@ PM 文档是需求主依据；PI 自身提示词只补充执行方式，不应�
 
 ## 9. 当前验证状态
 
-当前整理完成后，以下检查已经通过：
+当前后台 worker、会话隔离、预览 URL 和文档更新相关改造完成后，建议至少执行以下检查：
 
 ```bash
-npm test
-# 在 packages/web-workspace 下执行
+npm install
+npm run build --workspace=@mariozechner/pi-web-workspace
+npm run build --workspace=pi-coding-web
+npm run build:worker --workspace=pi-coding-web
+```
 
-npm run check --workspace=@mariozechner/pi-web-workspace
-npm run check --workspace=@mariozechner/pi-web-ui
-npm run check --workspace=pi-coding-web
+关键测试可以按需缩小范围执行：
+
+```bash
+cd apps/pi-coding-web
+npx tsx ../../node_modules/vitest/dist/cli.js --run test/merged-session-index.test.ts test/session-list-dialog.test.ts test/run-client.test.ts test/remote-agent-controller.test.ts test/client-id.test.ts test/project-client.test.ts test/worker-provider-keys.test.ts
+
+cd ../../packages/web-workspace
+npx tsx ../../node_modules/vitest/dist/cli.js --run test/server-agent-tools.test.ts
 ```
 
 根级：
 
 ```bash
+npm run build
 npm run check
 ```
 
-当前会被 `packages/ai/test/*` 中既有的 `claude-sonnet-4` 类型不匹配问题阻断。该问题不属于本次目录整理引入。
+注意：
 
-`check:browser-smoke` 在当前沙箱环境中由于 esbuild spawn 被拒绝而无法完成，需要在允许子进程执行的本地环境中复跑。
+- 根目录 `npm run build` 会触发 `packages/ai` 的 `generate-models`，可能因为拉取最新模型列表导致 `packages/ai/src/models.generated.ts` 出现变更；提交前需要确认这是否是你想提交的内容。
+- 根目录 `npm run build` 不会构建 `dist-worker/`，启动 worker 前仍要执行 `npm run build:worker --workspace=pi-coding-web`。
+- 如果 `npm run build` 报 `Cannot find module 'redis'`，先执行 `npm install` 同步新增依赖。
+- `check:browser-smoke` 在部分受限沙箱环境中可能因为 esbuild spawn 被拒绝而无法完成，需要在允许子进程执行的本地环境中复跑。
 
 ## 10. 维护原则
 

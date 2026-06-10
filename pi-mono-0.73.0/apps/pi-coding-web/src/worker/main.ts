@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
 	Agent,
 	type AgentEvent,
@@ -9,11 +10,13 @@ import type { Model } from "@mariozechner/pi-ai";
 import {
 	createServerDirectProjectTools,
 	createServerDirectSkillTools,
+	type DiagnosticLogEventInput,
 	loadStorageConfig,
 	RedisRunQueue,
 	RuntimeDbStore,
 	type RuntimeMessageRecord,
 	type SkillSummary,
+	type StorageConfig,
 	type WorkerAgent,
 	type WorkerAgentEvent,
 	type WorkerAgentInput,
@@ -23,6 +26,7 @@ import {
 } from "@mariozechner/pi-web-workspace";
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
+import { convertAgentMessagesToLlm } from "../runtime/agent-message-conversion.js";
 import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
 import { readServerProviderApiKey } from "./provider-keys.js";
 
@@ -32,6 +36,21 @@ async function main(): Promise<void> {
 	const config = loadStorageConfig(process.cwd());
 	const diagnostics = new WorkspaceDiagnosticLogService(config);
 	diagnostics.ensureDirs();
+	diagnostics.writeEvents({
+		events: [
+			...createWorkerStartupDiagnosticEvents(config),
+			{
+				level: "info",
+				category: "system",
+				eventType: "system.worker.starting",
+				data: {
+					workerId: config.workerId,
+					workerConcurrency: config.workerConcurrency,
+					runQueueName: config.runQueueName,
+				},
+			},
+		],
+	});
 
 	const runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
 	runtimeDb.ensureSchema();
@@ -101,6 +120,56 @@ async function main(): Promise<void> {
 	);
 }
 
+function createWorkerStartupDiagnosticEvents(config: StorageConfig): DiagnosticLogEventInput[] {
+	const envFileExists = Boolean(config.envFile && existsSync(config.envFile));
+	const events: DiagnosticLogEventInput[] = [
+		{
+			level: "info",
+			category: "system",
+			eventType: "system.startup.config",
+			data: {
+				envFile: config.envFile,
+				envFileExists,
+				runsEnabled: config.runsEnabled,
+				redisUrl: redactConnectionUrl(config.redisUrl),
+				runQueueName: config.runQueueName,
+				runtimeDbFile: config.runtimeDbFile,
+				workerId: config.workerId,
+				workerConcurrency: config.workerConcurrency,
+				clientIdRequired: config.clientIdRequired,
+				loggingEnabled: config.loggingEnabled,
+				logStdoutEnabled: config.logStdoutEnabled,
+				logsDbFile: config.logsDbFile,
+			},
+		},
+	];
+
+	if (config.envFile && !envFileExists) {
+		events.push({
+			level: "warn",
+			category: "system",
+			eventType: "system.config.env_missing",
+			data: {
+				envFile: config.envFile,
+				message: "PI configuration file was not found; defaults are in use.",
+			},
+		});
+	}
+
+	return events;
+}
+
+function redactConnectionUrl(value: string): string {
+	try {
+		const url = new URL(value);
+		const credentials = url.username || url.password ? "[redacted]@" : "";
+		const path = url.pathname === "/" ? "" : url.pathname;
+		return `${url.protocol}//${credentials}${url.host}${path}${url.search}${url.hash}`;
+	} catch {
+		return value;
+	}
+}
+
 function exitAfterShutdownFailure(error: unknown): never {
 	logCleanupError("shutdown", error);
 	process.exit(1);
@@ -146,6 +215,7 @@ function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentOptions)
 		sessionId: input.session.sessionId,
 		getApiKey: async (provider) => readServerProviderApiKey(options.config, provider),
 		repairToolCalls: true,
+		convertToLlm: convertAgentMessagesToLlm,
 		transformContext: async (contextMessages, signal) =>
 			compactProjectToolHistory(
 				await expandSkillCommandsInMessages(contextMessages, {

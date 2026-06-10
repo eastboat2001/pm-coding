@@ -52,6 +52,35 @@ describe("WorkspaceRunApiService", () => {
 		expect(db.listMessages("client-a", "session-1")).toHaveLength(1);
 	});
 
+	it("seeds request project files into the final runtime session before enqueueing", async () => {
+		const seededFiles: Array<{ sessionId: string; title: string; filename: string; content: string }> = [];
+		const seedingService = new WorkspaceRunApiService(db, queue, undefined, {
+			writeFile: async (context, file) => {
+				seededFiles.push({
+					sessionId: context.sessionId,
+					title: context.title,
+					filename: file.filename,
+					content: file.content,
+				});
+			},
+		});
+
+		const result = await seedingService.startRun("client-a", {
+			sessionId: "session-1",
+			title: "QDM Finish",
+			message: { content: "read docs" },
+			model: {},
+			thinkingLevel: "high",
+			projectFiles: [{ filename: "docs/需求.md", content: "# PRD" }],
+		});
+
+		expect(result.session.sessionId).toBe("session-1");
+		expect(seededFiles).toEqual([
+			{ sessionId: "session-1", title: "QDM Finish", filename: "docs/需求.md", content: "# PRD" },
+		]);
+		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
+	});
+
 	it("lists, details, deletes, runs, cancels, and events with client isolation", async () => {
 		const clientA = await service.startRun("client-a", {
 			sessionId: "shared-session",
@@ -139,7 +168,8 @@ describe("WorkspaceRunApiService", () => {
 
 	it("marks the created run failed when enqueue fails and surfaces a queue unavailable error", async () => {
 		const failingQueue = new FailingRunQueue();
-		const failingService = new WorkspaceRunApiService(db, failingQueue);
+		const diagnostics = new RecordingDiagnostics();
+		const failingService = new WorkspaceRunApiService(db, failingQueue, diagnostics);
 
 		await expect(
 			failingService.startRun("client-a", {
@@ -164,6 +194,19 @@ describe("WorkspaceRunApiService", () => {
 		expect(runs).toHaveLength(1);
 		expect(runs[0]?.status).toBe("failed");
 		expect(runs[0]?.error).toContain("enqueue failed");
+		expect(diagnostics.events).toHaveLength(2);
+		expect(diagnostics.events[0]).toMatchObject({
+			level: "error",
+			category: "agent",
+			eventType: "agent.run.enqueue.error",
+			sessionId: "session-1",
+			traceId: "session-1",
+			data: {
+				clientId: "client-a",
+				runId: runs[0]?.runId,
+				message: "redis unavailable",
+			},
+		});
 		await expect(
 			service.startRun("client-a", {
 				sessionId: "session-1",
@@ -212,4 +255,13 @@ class FailingRunQueue implements RunQueue {
 	}
 
 	async close(): Promise<void> {}
+}
+
+class RecordingDiagnostics {
+	events: Array<Record<string, unknown>> = [];
+
+	writeEvents(input: { events: Array<Record<string, unknown>> }): { accepted: number; dropped: number } {
+		this.events.push(...input.events);
+		return { accepted: input.events.length, dropped: 0 };
+	}
 }

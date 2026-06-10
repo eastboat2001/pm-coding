@@ -19,6 +19,7 @@ import { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunQueue } from "./run-queue.js";
 import { RuntimeDbStore } from "./runtime-db.js";
 import type {
+	DiagnosticLogEventInput,
 	DiagnosticLogQuery,
 	DiagnosticLogWriteRequest,
 	ProjectFilePreviewRequest,
@@ -50,7 +51,18 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 	const skills = new WorkspaceSkillService(config, diagnostics);
 	const runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
 	const runQueue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
-	const runApi = new WorkspaceRunApiService(runtimeDb, runQueue);
+	const runApi = new WorkspaceRunApiService(runtimeDb, runQueue, diagnostics, {
+		writeFile(context, file) {
+			files.handle({
+				sessionId: context.sessionId,
+				title: context.title,
+				command: "create",
+				filename: file.filename,
+				content: file.content,
+			});
+		},
+	});
+	let startupDiagnosticsWritten = false;
 
 	const ensureStorageDirs = () => {
 		sessions.ensureDirs();
@@ -59,6 +71,13 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 		mkdirSync(config.defaultSkillsDir, { recursive: true });
 		diagnostics.ensureDirs();
 		runtimeDb.ensureSchema();
+		writeStartupDiagnosticsOnce();
+	};
+
+	const writeStartupDiagnosticsOnce = () => {
+		if (startupDiagnosticsWritten) return;
+		startupDiagnosticsWritten = true;
+		diagnostics.writeEvents({ events: createStartupDiagnosticEvents(config) });
 	};
 
 	const handler: Connect.NextHandleFunction = async (req, res, next) => {
@@ -151,6 +170,44 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 			server.middlewares.use(handler);
 		},
 	};
+}
+
+export function createStartupDiagnosticEvents(config: StorageConfig): DiagnosticLogEventInput[] {
+	const events: DiagnosticLogEventInput[] = [
+		{
+			level: "info",
+			category: "system",
+			eventType: "system.startup.config",
+			data: {
+				envFile: config.envFile,
+				envFileExists: config.envFileExists,
+				runsEnabled: config.runsEnabled,
+				redisUrl: redactConnectionUrl(config.redisUrl),
+				runQueueName: config.runQueueName,
+				runtimeDbFile: config.runtimeDbFile,
+				workerId: config.workerId,
+				workerConcurrency: config.workerConcurrency,
+				clientIdRequired: config.clientIdRequired,
+				loggingEnabled: config.loggingEnabled,
+				logStdoutEnabled: config.logStdoutEnabled,
+				logsDbFile: config.logsDbFile,
+			},
+		},
+	];
+
+	if (config.envFile && !config.envFileExists) {
+		events.push({
+			level: "warn",
+			category: "system",
+			eventType: "system.config.env_missing",
+			data: {
+				envFile: config.envFile,
+				message: "PI configuration file was not found; defaults are in use.",
+			},
+		});
+	}
+
+	return events;
 }
 
 function storageWatchIgnoredPaths(config: StorageConfig): string[] {
@@ -289,6 +346,16 @@ async function handleStorageApi(
 			defaultModelProvider: config.defaultModelProvider,
 			defaultModelId: config.defaultModelId,
 			handoffDefaultThinkingLevel: config.handoffDefaultThinkingLevel,
+			envFile: config.envFile,
+			envFileExists: config.envFileExists,
+			runtimeDbFile: config.runtimeDbFile,
+			runsEnabled: config.runsEnabled,
+			redisUrl: redactConnectionUrl(config.redisUrl),
+			workerId: config.workerId,
+			workerConcurrency: config.workerConcurrency,
+			runQueueName: config.runQueueName,
+			runEventRetentionDays: config.runEventRetentionDays,
+			clientIdRequired: config.clientIdRequired,
 			logsDbFile: config.logsDbFile,
 			loggingEnabled: config.loggingEnabled,
 			logStdoutEnabled: config.logStdoutEnabled,
@@ -579,6 +646,17 @@ function queryBoolean(url: URL, key: string): boolean {
 
 function computedLangfuseOtelEndpoint(host: string): string {
 	return host ? `${host}/api/public/otel/v1/traces` : "";
+}
+
+function redactConnectionUrl(value: string): string {
+	try {
+		const url = new URL(value);
+		const credentials = url.username || url.password ? "[redacted]@" : "";
+		const path = url.pathname === "/" ? "" : url.pathname;
+		return `${url.protocol}//${credentials}${url.host}${path}${url.search}${url.hash}`;
+	} catch {
+		return value;
+	}
 }
 
 function sendRuntimeApiError(res: ServerResponse, error: unknown): void {

@@ -35,6 +35,7 @@ function testConfig(root, overrides = {}) {
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
 		envFile: "",
+		envFileExists: false,
 		logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
 		loggingEnabled: true,
 		logStdoutEnabled: false,
@@ -90,6 +91,7 @@ await test("loadStorageConfig reads .env from the app root and strips preview tr
 	const config = loadStorageConfig(root);
 
 	assert.equal(config.envFile, resolve(root, ".env"));
+	assert.equal(config.envFileExists, true);
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "runtime/projects"));
@@ -101,7 +103,7 @@ await test("loadStorageConfig reads .env from the app root and strips preview tr
 	assert.equal(config.handoffDefaultThinkingLevel, "medium");
 	assert.equal(config.logsDbFile, resolve(root, "data/logs/pi-diagnostics.sqlite"));
 	assert.equal(config.loggingEnabled, true);
-	assert.equal(config.logStdoutEnabled, false);
+	assert.equal(config.logStdoutEnabled, true);
 	assert.equal(config.rawProviderLoggingEnabled, false);
 	assert.equal(config.rawProviderLogMaxChars, 12000);
 	assert.equal(config.promptSnapshotLoggingEnabled, false);
@@ -180,6 +182,7 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 		const config = loadStorageConfig(root, "pi.runtime.env");
 
 		assert.equal(config.envFile, resolve(root, "pi.runtime.env"));
+		assert.equal(config.envFileExists, true);
 		assert.equal(config.sessionsDir, resolve(root, "env/sessions"));
 		assert.equal(config.settingsFile, resolve(root, "env/settings.json"));
 		assert.equal(config.projectsRootDir, resolve(root, "env/projects"));
@@ -213,6 +216,7 @@ await test("loadStorageConfig supports PI_STORAGE_DIR defaults", () => {
 	const config = loadStorageConfig(root);
 
 	assert.equal(config.envFile, resolve(root, ".env"));
+	assert.equal(config.envFileExists, true);
 	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
 	assert.equal(config.projectsRootDir, resolve(root, "data/projects"));
@@ -223,7 +227,7 @@ await test("loadStorageConfig supports PI_STORAGE_DIR defaults", () => {
 	assert.equal(config.handoffDefaultThinkingLevel, "high");
 	assert.equal(config.logsDbFile, resolve(root, "data/logs/pi-diagnostics.sqlite"));
 	assert.equal(config.loggingEnabled, true);
-	assert.equal(config.logStdoutEnabled, false);
+	assert.equal(config.logStdoutEnabled, true);
 	assert.equal(config.rawProviderLoggingEnabled, false);
 	assert.equal(config.promptSnapshotLoggingEnabled, false);
 	assert.equal(config.modelOutputSnapshotLoggingEnabled, false);
@@ -259,6 +263,7 @@ await test("loadStorageConfig lets process env override .env values", () => {
 		const config = loadStorageConfig(root);
 
 		assert.equal(config.envFile, resolve(root, ".env"));
+		assert.equal(config.envFileExists, true);
 		assert.equal(config.langfusePublicKey, "pk-from-file");
 		assert.equal(config.langfuseSecretKey, "sk-from-env");
 		assert.equal(config.langfuseHost, "https://cloud.langfuse.com");
@@ -309,6 +314,7 @@ await test("loadStorageConfig supports diagnostic log and Langfuse env settings"
 	const config = loadStorageConfig(root);
 
 	assert.equal(config.envFile, resolve(root, ".env"));
+	assert.equal(config.envFileExists, true);
 	assert.equal(config.logsDbFile, resolve(root, "runtime/logs/diagnostics.sqlite"));
 	assert.equal(config.loggingEnabled, false);
 	assert.equal(config.logStdoutEnabled, true);

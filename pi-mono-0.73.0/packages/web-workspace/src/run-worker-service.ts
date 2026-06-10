@@ -5,6 +5,7 @@ import type { JsonObject, RunStatus, RuntimeMessageRecord, RuntimeRunRecord, Wor
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 500;
 const DEFAULT_CLAIM_TIMEOUT_MS = 0;
 const DEFAULT_IDLE_SLEEP_MS = 100;
+const QUEUE_ERROR_DIAGNOSTIC_THROTTLE_MS = 5000;
 
 export interface WorkerAgentEvent extends JsonObject {
 	type: string;
@@ -48,6 +49,7 @@ export class WorkspaceRunWorkerService {
 	private readonly workerId: string;
 	private readonly createAgent: (input: WorkerAgentInput) => WorkerAgent;
 	private loops: Array<Promise<void>> = [];
+	private lastQueueErrorDiagnosticAt = 0;
 	private running = false;
 	private stopping = false;
 
@@ -122,7 +124,7 @@ export class WorkspaceRunWorkerService {
 
 			try {
 				const tailMessage = messages.at(-1);
-				if (tailMessage?.role === "user") {
+				if (tailMessage && isUserPromptRole(tailMessage.role)) {
 					await agent.prompt(tailMessage);
 				} else {
 					await agent.continue();
@@ -222,7 +224,7 @@ export class WorkspaceRunWorkerService {
 	}
 
 	private shouldAppendMessage(message: RuntimeMessageRecord, messageEndKeys: Set<string>): boolean {
-		if (message.role === "user") return false;
+		if (isUserPromptRole(message.role)) return false;
 		const key = messageKey(message);
 		if (messageEndKeys.has(key)) return false;
 		messageEndKeys.add(key);
@@ -247,8 +249,14 @@ export class WorkspaceRunWorkerService {
 
 	private async runLoop(): Promise<void> {
 		while (this.running) {
-			const processed = await this.processOne();
-			if (!processed) await sleep(DEFAULT_IDLE_SLEEP_MS);
+			try {
+				const processed = await this.processOne();
+				if (!processed) await sleep(DEFAULT_IDLE_SLEEP_MS);
+			} catch (error) {
+				if (this.stopping && isQueueClosedError(error)) return;
+				this.writeQueueDiagnostic("worker.queue.claim.error", error);
+				await sleep(DEFAULT_IDLE_SLEEP_MS);
+			}
 		}
 	}
 
@@ -265,12 +273,39 @@ export class WorkspaceRunWorkerService {
 		this.diagnostics?.writeEvents({
 			events: [
 				{
-					clientId: run.clientId,
-					error: errorMessage(error),
 					eventType,
 					level: "error",
-					runId: run.runId,
+					category: "agent",
 					sessionId: run.sessionId,
+					traceId: run.sessionId,
+					data: {
+						clientId: run.clientId,
+						runId: run.runId,
+						workerId: this.workerId,
+						message: errorMessage(error),
+					},
+				},
+			],
+		});
+	}
+
+	private writeQueueDiagnostic(eventType: string, error: unknown): void {
+		const now = Date.now();
+		if (now - this.lastQueueErrorDiagnosticAt < QUEUE_ERROR_DIAGNOSTIC_THROTTLE_MS) {
+			return;
+		}
+		this.lastQueueErrorDiagnosticAt = now;
+		this.diagnostics?.writeEvents({
+			events: [
+				{
+					eventType,
+					level: "error",
+					category: "system",
+					data: {
+						workerId: this.workerId,
+						message: errorMessage(error),
+						hint: "Redis may be unavailable or the run queue connection may be broken.",
+					},
 				},
 			],
 		});
@@ -287,6 +322,10 @@ function isQueueClosedError(error: unknown): boolean {
 
 function isTerminalStatus(status: RunStatus): boolean {
 	return status === "cancelled" || status === "completed" || status === "failed" || status === "interrupted";
+}
+
+function isUserPromptRole(role: string): boolean {
+	return role === "user" || role === "user-with-attachments";
 }
 
 function messageKey(message: RuntimeMessageRecord): string {

@@ -34,6 +34,7 @@ function testConfig(root: string): StorageConfig {
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
 		envFile: "",
+		envFileExists: false,
 		logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
 		loggingEnabled: true,
 		logStdoutEnabled: false,
@@ -163,6 +164,31 @@ description: Make things better.
 		);
 	});
 
+	it("keeps skill diagnostics in the API response without writing backend diagnostic events", () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const diagnostics = new RecordingDiagnostics();
+		const skillDir = join(config.skillsDir, "vague-style");
+		mkdirSync(skillDir, { recursive: true });
+		writeFileSync(
+			join(skillDir, "SKILL.md"),
+			`---
+name: vague-style
+description: Make things better.
+---
+
+# Vague Style
+`,
+			"utf8",
+		);
+
+		const service = new WorkspaceSkillService(config, diagnostics);
+		const list = service.list();
+
+		expect(list.diagnostics.length).toBeGreaterThan(0);
+		expect(diagnostics.events).toEqual([]);
+	});
+
 	it("reports invalid skill files with paths and excludes them from available skills", () => {
 		const root = tempRoot();
 		const config = testConfig(root);
@@ -261,3 +287,12 @@ description: Use this skill when creating UI/UX design. Do not use for backend-o
 		expect(service.load({ name: "platform-defaults" }).content).toContain("Always preserve PI platform defaults.");
 	});
 });
+
+class RecordingDiagnostics {
+	events: Array<Record<string, unknown>> = [];
+
+	writeEvents(input: { events: Array<Record<string, unknown>> }): { accepted: number; dropped: number } {
+		this.events.push(...input.events);
+		return { accepted: input.events.length, dropped: 0 };
+	}
+}

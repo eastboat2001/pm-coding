@@ -241,6 +241,45 @@ docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.
 
 离线部署文件位于 `docker/pi-coding-web`。
 
+当前 Docker 部署不要再使用单容器 `docker run`。PI 的正常运行依赖三类进程：
+
+- `redis`：后台 run 队列和取消标记。
+- `pi-coding-web`：Web UI、Vite middleware、session/run API、project API 和 preview 路由。
+- `pi-worker`：真正执行 Agent run，消费 Redis 队列并写入 SQLite runtime DB。
+
+在线或本机构建部署：
+
+```bash
+cd docker/pi-coding-web
+cp .env.example .env
+docker compose -f docker-compose.yaml -f docker-compose.build.yaml up -d --build
+```
+
+Windows PowerShell 可以用：
+
+```powershell
+cd docker\pi-coding-web
+copy .env.example .env
+docker compose -f docker-compose.yaml -f docker-compose.build.yaml up -d --build
+```
+
+离线镜像部署：
+
+```bash
+cd docker/pi-coding-web
+cp .env.example .env
+docker load -i pi-coding-web-0.73.0.tar
+docker compose up -d
+```
+
+部署后检查：
+
+```bash
+docker compose ps
+docker compose logs -f pi-coding-web pi-worker redis
+docker compose exec pi-coding-web npm run logs -- --level error --limit 50
+```
+
 注意：
 
 - Docker 离线包 `*.tar`、`*.tar.gz` 不应提交到 GitHub。
@@ -277,6 +316,8 @@ PI_WORKER_ID=pi-worker
 PI_WORKER_CONCURRENCY=2
 PI_RUN_QUEUE_NAME=pi:runs
 PI_CLIENT_ID_REQUIRED=true
+PI_LOG_ENABLED=true
+PI_LOG_STDOUT=true
 ```
 
 如果部署多个 worker，应给每个 worker 配置稳定且不同的 `PI_WORKER_ID`，用于重启后标记该 worker 遗留的 running/cancelling run。
@@ -306,7 +347,7 @@ apps/pi-coding-web/.env
 
 ### PI 诊断日志系统
 
-当前 PI 已增加后台诊断日志系统，用于排查模型连接、流式输出、thinking/text 分布、工具调用、PM handoff、skill 加载、project task、preview 和服务端存储等问题。日志不会暴露到前端界面，配置统一写入 `apps/pi-coding-web/.env`。
+当前 PI 已增加后台诊断日志系统，用于排查模型连接、流式输出、thinking/text 分布、工具调用、PM handoff、project task、preview 和服务端存储等问题。Skill 配置质量诊断只在前端 Skill 面板展示，不写入后台日志。日志不会暴露到前端界面，配置统一写入 `apps/pi-coding-web/.env`。
 
 默认写入：
 
@@ -354,6 +395,13 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 `apps/pi-coding-web/.env` 已被 `.gitignore` 忽略。
 
 Docker 部署时应挂载 `apps/pi-coding-web/data`，否则默认日志库会随容器重建丢失。深度 raw/prompt/output 日志默认关闭，排查模型问题时可临时开启；raw 模式会记录 OpenAI-compatible provider 的结构化 stream chunk 和 PI 解析后的 stream event，但不是 HTTP SSE 字节级原文。长期运行依赖 `logRetentionDays`、`logMaxEvents` 和 SQLite `VACUUM` 控制磁盘增长。完整使用说明见：
+
+Docker 下有两类日志：
+
+- 容器 stdout：`docker compose logs -f pi-coding-web pi-worker redis`，适合看启动、退出、Redis 连接和 warn/error 摘要。
+- PI 诊断库：`docker compose exec pi-coding-web npm run logs -- --level error --limit 50`，适合查 run、worker、模型、工具和配置诊断事件。
+
+如果 `.env` 缺失，启动诊断会记录 `system.config.env_missing`。如果 Redis 入队失败，会记录 `agent.run.enqueue.error`。如果 run 长时间停在 queued，前端轮询会记录 `agent.remote_run.queued_timeout`，通常表示 `pi-worker` 没有运行或 Redis/队列不可用。
 
 ```text
 docs/pi-diagnostic-logging-zh.md

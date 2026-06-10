@@ -52,6 +52,38 @@ describe("RemoteAgentController", () => {
 		expect(agent.state.messages).toEqual([userMessage]);
 	});
 
+	it("ignores remote prompt echo events when a handoff attachment message is replayed as a user message", async () => {
+		const localMessage = {
+			role: "user-with-attachments",
+			content: "read docs",
+			timestamp: 123,
+			attachments: [
+				{
+					type: "document",
+					fileName: "需求.md",
+					mimeType: "text/markdown",
+					content: "",
+					extractedText: "# PRD",
+					llmContext: "none",
+					projectFilePath: "docs/需求.md",
+				},
+			],
+		};
+		const remoteEcho = {
+			...localMessage,
+			role: "user",
+		};
+		const agent = createFakeRemoteAgent([localMessage as never]);
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		await controller.applyRunEvent(createRunEventRecord(1, "r1", { type: "message_end", message: remoteEcho }));
+
+		expect(controller.lastSeq).toBe(1);
+		expect(agent.appliedEvents).toEqual([]);
+		expect(agent.state.messages).toEqual([localMessage]);
+	});
+
 	it("hydrates historical events without replaying them through listeners or duplicating persisted messages", () => {
 		const persistedAssistant = createAssistantMessage("already persisted");
 		const streamingAssistant = createAssistantMessage("new partial output");

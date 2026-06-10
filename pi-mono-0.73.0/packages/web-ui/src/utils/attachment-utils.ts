@@ -17,6 +17,8 @@ export interface Attachment {
 	content: string; // base64 encoded original data (without data URL prefix)
 	extractedText?: string; // For documents: <pdf filename="..."><page number="1">text</page></pdf>
 	preview?: string; // base64 image preview (first page for PDFs, or same as content for images)
+	llmContext?: "full" | "none"; // "none" keeps the attachment visible in UI without sending content to the model
+	projectFilePath?: string; // Optional PI project workspace path used by host apps to seed attachments as files
 }
 
 /**

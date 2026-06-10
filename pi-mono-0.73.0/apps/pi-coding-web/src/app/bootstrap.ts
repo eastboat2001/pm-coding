@@ -3,6 +3,7 @@ import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
 import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import {
+	type Attachment,
 	type AgentState,
 	ApiKeyPromptDialog,
 	AppStorage,
@@ -45,12 +46,15 @@ import {
 	buildCodingHandoffPrompt,
 	buildPmApiUrl,
 	fetchPmHandoffPayload,
+	prepareHandoffDocumentFiles,
+	type HandoffDocumentFile,
 	type PmHandoffPayload,
 } from "../integrations/pm-handoff.js";
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import { RemoteAgentController } from "../runtime/remote-agent-controller.js";
+import { collectProjectFilesFromMessages } from "../runtime/project-file-seed.js";
 import {
 	cancelRun as cancelRuntimeRun,
 	connectRunEvents,
@@ -61,6 +65,7 @@ import {
 	type RunEventConnection,
 	startRun as startRuntimeRun,
 } from "../runtime/run-client.js";
+import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
@@ -230,21 +235,6 @@ const loadPiRuntimeConfig = async () => {
 		createSkillSlashCommand(skillApiErrorDetail(diagnostics)),
 		...selectableSkills.map(skillToSlashSuggestion),
 	];
-	if (diagnostics.length > 0) {
-		writeDiagnosticEvent({
-			level: diagnostics.some((diagnostic) => diagnostic.type === "error") ? "error" : "warn",
-			category: "skill",
-			eventType: "skill.diagnostics.loaded",
-			data: {
-				diagnosticCount: diagnostics.length,
-				diagnostics: diagnostics.map((diagnostic) => ({
-					type: diagnostic.type,
-					message: diagnostic.message,
-					path: diagnostic.path,
-				})),
-			},
-		});
-	}
 };
 
 const syncRuntimeConfigAfterRender = async () => {
@@ -299,6 +289,7 @@ let remoteRunStatusPollId: ReturnType<typeof setTimeout> | undefined;
 let currentActiveRunId: string | undefined;
 let currentRunStatus: RunStatus | undefined;
 let currentRunUpdatedAt: string | undefined;
+const reportedQueuedRunTimeouts = new Set<string>();
 const resumedInterruptedSessions = new Set<string>();
 let activeSidebarPanel: "files" | "apps" | null = null;
 let currentProjectFilesPanelWidth = safeReadCurrentProjectFilesPanelWidth();
@@ -340,6 +331,7 @@ const closeRemoteRunConnection = (): void => {
 const resetRemoteRunState = (): void => {
 	closeRemoteRunConnection();
 	remoteAgentController = undefined;
+	reportedQueuedRunTimeouts.clear();
 	trackRemoteRun(undefined);
 };
 
@@ -913,6 +905,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 		if (!run) return false;
 
 		trackRemoteRun(run);
+		reportQueuedRunTimeoutIfNeeded(run);
 		if (!isTerminalRunStatus(run.status)) {
 			if (attempt < attempts - 1) {
 				await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -934,6 +927,15 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 	}
 	return false;
 };
+
+function reportQueuedRunTimeoutIfNeeded(run: RuntimeRunRecord): void {
+	const diagnostic = createQueuedRunTimeoutDiagnostic(run);
+	if (!diagnostic || reportedQueuedRunTimeouts.has(run.runId)) {
+		return;
+	}
+	reportedQueuedRunTimeouts.add(run.runId);
+	writeDiagnosticEvent(diagnostic);
+}
 
 const scheduleRemoteRunStatusPoll = (runId: string): void => {
 	if (remoteRunStatusPollId !== undefined) clearTimeout(remoteRunStatusPollId);
@@ -1053,12 +1055,14 @@ const startRemotePrompt = async (
 
 	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
 	try {
+		const projectFiles = collectProjectFilesFromMessages(messages);
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId,
 			title: sessionTitle(currentTitle, agent.state.messages),
 			message,
-			model: agent.state.model as Record<string, unknown>,
+			model: agent.state.model as unknown as Record<string, unknown>,
 			thinkingLevel: agent.state.thinkingLevel,
+			...(projectFiles.length > 0 ? { projectFiles } : {}),
 		});
 	} catch (error) {
 		agent.state.messages = previousMessages;
@@ -1178,7 +1182,9 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 			currentRunUpdatedAt = runtimeDetail.session.updatedAt;
 		}
 
-		const sessionModel = await modelController.resolveCustomModel(runtimeDetail.session.model as Model<any>);
+		const sessionModel = await modelController.resolveCustomModel(
+			runtimeDetail.session.model as unknown as Model<any>,
+		);
 		if (sessionModel) {
 			await modelController.persistSelectedModel(sessionModel);
 		}
@@ -1186,7 +1192,7 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		await createAgent({
 			...(sessionModel
 				? { model: sessionModel }
-				: { model: (runtimeDetail.session.model as Model<any>) || undefined }),
+				: { model: (runtimeDetail.session.model as unknown as Model<any>) || undefined }),
 			thinkingLevel: normalizeThinkingLevel(runtimeDetail.session.thinkingLevel),
 			messages: runtimeMessages,
 			tools: [],
@@ -1293,6 +1299,16 @@ const applyHandoffDefaultThinkingLevel = async () => {
 	}
 };
 
+const markHandoffAttachmentsUiOnly = (
+	attachments: Attachment[],
+	documentFiles: HandoffDocumentFile[],
+): Attachment[] =>
+	attachments.map((attachment, index) => ({
+		...attachment,
+		llmContext: "none" as const,
+		...(documentFiles[index] ? { projectFilePath: documentFiles[index].filename } : {}),
+	}));
+
 const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 	applyHandoffLanguage(payload.language);
 	const attachments = await Promise.all(
@@ -1300,12 +1316,25 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 			loadAttachment(buildPmApiUrl(document.download_url), document.filename),
 		),
 	);
-	await startFreshSession(true);
+	await startFreshSession(false);
 	if (payload.title) {
 		currentTitle = payload.title;
 	}
+	let documentFiles: HandoffDocumentFile[] = [];
+	try {
+		documentFiles = prepareHandoffDocumentFiles(payload.documents || [], attachments);
+	} catch (error) {
+		writeDiagnosticEvent({
+			level: "error",
+			category: "handoff",
+			eventType: "handoff.documents.prepare.error",
+			data: errorDiagnosticData(error, { documentCount: payload.documents?.length ?? 0 }),
+		});
+	}
+
+	const inputAttachments = documentFiles.length > 0 ? markHandoffAttachmentsUiOnly(attachments, documentFiles) : attachments;
 	await applyHandoffDefaultThinkingLevel();
-	chatPanel.agentInterface?.setInput(buildCodingHandoffPrompt(payload), attachments);
+	chatPanel.agentInterface?.setInput(buildCodingHandoffPrompt(payload, documentFiles), inputAttachments);
 	if (currentSessionId) {
 		await saveSession();
 	}

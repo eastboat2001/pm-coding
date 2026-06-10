@@ -18,32 +18,47 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ## Docker
 
-Build the PI Coding Web application from the repository root:
+PI Coding Web requires three runtime services in Docker:
+
+- `redis`: queue and cancellation state for background runs.
+- `pi-coding-web`: Web UI, Vite middleware, session/run APIs, project APIs, and preview routes.
+- `pi-worker`: background Agent runner that consumes Redis queue items and writes run events to SQLite.
+
+Build the shared image from the repository root:
 
 ```bash
 docker build -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
 ```
 
-Run it with a persistent data volume:
+For server deployment, use the compose package under `docker/pi-coding-web`:
 
 ```bash
-docker run -d --name pi-coding-web -p 5173:5173 -v pi-coding-web-data:/app/apps/pi-coding-web/data pi-coding-web:0.73.0
-```
-
-Open [http://localhost:5173](http://localhost:5173) in your browser.
-
-This image runs Vite preview instead of a static nginx server because the application depends on Vite server middleware for session storage, server-side project files, controlled project tasks, and `/preview/<project-id>/` URLs.
-
-When deploying behind a domain or reverse proxy, set `PI_PREVIEW_BASE_URL` in `.env` to the public PI origin, for example `https://pi.example.com`. Generated projects and optional server-synced sessions should stay in the mounted `data` volume, not inside the image.
-
-For server deployment with an offline image, use the deployment package under `docker/pi-coding-web`. Copy `docker-compose.yaml` and `.env.example` from that directory to the same server directory, copy `.env.example` to `.env`, load the image, then start the service:
-
-```bash
-docker load -i pi-coding-web-0.73.0.tar
+cd docker/pi-coding-web
+cp .env.example .env
 docker compose up -d
 ```
 
-The included compose file mounts `./data` as the persistent runtime directory and exposes PI on port `5173`.
+For an offline server, copy `docker-compose.yaml`, `.env.example`, and the image tar to the same server directory, then run:
+
+```bash
+docker load -i pi-coding-web-0.73.0.tar
+cp .env.example .env
+docker compose up -d
+```
+
+Open [http://localhost:5173](http://localhost:5173) in your browser, or use the address configured by `PI_CODING_WEB_PORT`.
+
+This image runs Vite preview instead of a static nginx server because the application depends on Vite server middleware for session storage, server-side project files, controlled project tasks, run APIs, and `/preview/<project-id>/` URLs.
+
+When deploying behind a domain or reverse proxy, set `PI_PREVIEW_BASE_URL` in `.env` to the public PI origin, for example `https://pi.example.com`. Keep `PI_REDIS_URL=redis://redis:6379` for compose deployment. Generated projects, sessions, runtime DB, Redis data, and diagnostic logs are stored under the mounted `docker/pi-coding-web/data` directory.
+
+Useful deployment checks:
+
+```bash
+docker compose ps
+docker compose logs -f pi-coding-web pi-worker redis
+docker compose exec pi-coding-web npm run logs -- --level error --limit 50
+```
 
 ### Server Configuration
 

@@ -5,6 +5,11 @@ services:
     restart: unless-stopped
     volumes:
       - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   pi-coding-web:
     image: ${PI_CODING_WEB_IMAGE:-pi-coding-web:0.73.0}
@@ -12,6 +17,8 @@ services:
     container_name: pi-coding-web
     init: true
     restart: unless-stopped
+    env_file:
+      - ./.env
     environment:
       NODE_ENV: production
       PI_REDIS_URL: redis://redis:6379
@@ -21,7 +28,8 @@ services:
       - ./data:/app/apps/pi-coding-web/data
       - ./.env:/app/apps/pi-coding-web/.env:ro
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -42,6 +50,8 @@ services:
     init: true
     restart: unless-stopped
     command: ["npm", "run", "worker", "--workspace=pi-coding-web"]
+    env_file:
+      - ./.env
     environment:
       NODE_ENV: production
       PI_REDIS_URL: redis://redis:6379
@@ -50,4 +60,5 @@ services:
       - ./data:/app/apps/pi-coding-web/data
       - ./.env:/app/apps/pi-coding-web/.env:ro
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy

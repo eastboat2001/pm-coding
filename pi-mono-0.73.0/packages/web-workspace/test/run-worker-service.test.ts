@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { InMemoryRunQueue } from "../src/run-queue.js";
+import { type ClaimedRun, InMemoryRunQueue, type RunQueue, type RunQueueItem } from "../src/run-queue.js";
 import { type WorkerAgent, type WorkerAgentEvent, WorkspaceRunWorkerService } from "../src/run-worker-service.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
-import type { RuntimeMessageRecord, RuntimeRunRecord } from "../src/types.js";
+import type { JsonObject, RuntimeMessageRecord, RuntimeRunRecord } from "../src/types.js";
 
 describe("WorkspaceRunWorkerService", () => {
 	let dir: string;
@@ -122,6 +122,25 @@ describe("WorkspaceRunWorkerService", () => {
 			queue,
 			workerId: "w1",
 			createAgent: () => new UserMessageAgent(),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(db.listMessages(run.clientId, run.sessionId).map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+		]);
+	});
+
+	it("does not append user-with-attachments message_end events to the transcript", async () => {
+		const run = createRunFixture(db);
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			createAgent: () => new UserWithAttachmentsMessageAgent(),
 		});
 
 		await expect(worker.processOne()).resolves.toBe(true);
@@ -271,6 +290,34 @@ describe("WorkspaceRunWorkerService", () => {
 
 		expect(db.getRun(run.clientId, run.runId)?.status).toBe("interrupted");
 	});
+
+	it("records queue claim failures without letting the worker loop die silently", async () => {
+		const failingQueue = new ClaimFailingQueue();
+		const diagnostics = new RecordingDiagnostics();
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue: failingQueue,
+			workerId: "w1",
+			diagnostics,
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		await worker.start();
+		await failingQueue.waitForClaims(1);
+
+		await expect(worker.stop()).resolves.toBeUndefined();
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				category: "system",
+				eventType: "worker.queue.claim.error",
+				data: expect.objectContaining({
+					workerId: "w1",
+					message: "redis unavailable",
+				}),
+			}),
+		);
+	});
 });
 
 function createRunFixture(
@@ -403,6 +450,22 @@ class UserMessageAgent extends ScriptedAgent {
 	}
 }
 
+class UserWithAttachmentsMessageAgent extends ScriptedAgent {
+	override async prompt(_message: RuntimeMessageRecord): Promise<void> {
+		const assistant = assistantMessage();
+		this.emit({
+			type: "message_end",
+			message: {
+				role: "user-with-attachments",
+				content: "hello",
+				timestamp: 123,
+				attachments: [],
+			},
+		});
+		this.emit({ type: "message_end", message: assistant });
+	}
+}
+
 class ToolResultMessageAgent extends ScriptedAgent {
 	override async prompt(_message: RuntimeMessageRecord): Promise<void> {
 		const toolResult = toolResultMessage();
@@ -418,6 +481,54 @@ class RawMessageAgent extends ScriptedAgent {
 		this.emit({ type: "message_start", message: assistant });
 		this.emit({ type: "message_end", message: assistant });
 		this.emit({ type: "agent_end", messages: [assistant] });
+	}
+}
+
+class ClaimFailingQueue implements RunQueue {
+	private readonly claimDeferreds: Array<{ count: number; resolve: () => void }> = [];
+	private claimCount = 0;
+
+	async enqueue(_run: RunQueueItem): Promise<void> {}
+
+	async claim(_workerId: string, _timeoutMs: number): Promise<ClaimedRun | undefined> {
+		this.claimCount += 1;
+		this.flushClaimDeferreds();
+		throw new Error("redis unavailable");
+	}
+
+	async complete(_run: RunQueueItem | ClaimedRun, _workerId: string): Promise<void> {}
+
+	async requestCancel(_run: RunQueueItem | ClaimedRun): Promise<void> {}
+
+	async isCancelRequested(_run: RunQueueItem | ClaimedRun): Promise<boolean> {
+		return false;
+	}
+
+	async close(): Promise<void> {}
+
+	async waitForClaims(count: number): Promise<void> {
+		if (this.claimCount >= count) return;
+		await new Promise<void>((resolve) => {
+			this.claimDeferreds.push({ count, resolve });
+		});
+	}
+
+	private flushClaimDeferreds(): void {
+		const ready = this.claimDeferreds.filter((deferred) => this.claimCount >= deferred.count);
+		for (const deferred of ready) deferred.resolve();
+		for (const deferred of ready) {
+			const index = this.claimDeferreds.indexOf(deferred);
+			if (index !== -1) this.claimDeferreds.splice(index, 1);
+		}
+	}
+}
+
+class RecordingDiagnostics {
+	events: JsonObject[] = [];
+
+	writeEvents(input: { events: JsonObject[] }): JsonObject {
+		this.events.push(...input.events);
+		return { accepted: input.events.length, dropped: 0 };
 	}
 }
 

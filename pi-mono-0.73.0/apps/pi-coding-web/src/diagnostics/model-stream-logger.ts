@@ -606,7 +606,10 @@ function appendOutputText(state: OutputSnapshotState, field: "text" | "thinking"
 	if (clipped.length < value.length) state.truncated = true;
 }
 
-function appendOutputToolCall(state: OutputSnapshotState, toolCall: { id: string; name: string; arguments: unknown }): void {
+function appendOutputToolCall(
+	state: OutputSnapshotState,
+	toolCall: { id: string; name: string; arguments: unknown },
+): void {
 	const args = snapshotUnknown(toolCall.arguments, state.remainingChars);
 	state.remainingChars -= args.loggedChars;
 	if (args.truncated) state.truncated = true;

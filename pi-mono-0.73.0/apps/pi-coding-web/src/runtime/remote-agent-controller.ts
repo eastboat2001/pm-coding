@@ -159,5 +159,29 @@ export class RemoteAgentController {
 }
 
 function messageKey(message: unknown): string {
-	return JSON.stringify(message);
+	return JSON.stringify(sortJsonValue(normalizeMessageForKey(message)));
+}
+
+function normalizeMessageForKey(message: unknown): unknown {
+	if (!isRecord(message)) return message;
+	const role = typeof message.role === "string" ? message.role : undefined;
+	if (role !== "user" && role !== "user-with-attachments") return message;
+	return {
+		...message,
+		role: "user",
+	};
+}
+
+function sortJsonValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(sortJsonValue);
+	if (!isRecord(value)) return value;
+	return Object.fromEntries(
+		Object.entries(value)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, entry]) => [key, sortJsonValue(entry)]),
+	);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

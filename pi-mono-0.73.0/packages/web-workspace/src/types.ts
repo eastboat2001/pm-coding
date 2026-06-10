@@ -56,6 +56,12 @@ export interface StartRunRequest extends JsonObject {
 	message: JsonObject;
 	model?: JsonObject;
 	thinkingLevel?: string;
+	projectFiles?: StartRunProjectFile[];
+}
+
+export interface StartRunProjectFile extends JsonObject {
+	filename: string;
+	content: string;
 }
 
 export interface StartRunResult extends JsonObject {
@@ -166,6 +172,7 @@ export interface StorageConfig {
 	defaultModelId: string;
 	handoffDefaultThinkingLevel: string;
 	envFile: string;
+	envFileExists: boolean;
 	logsDbFile: string;
 	loggingEnabled: boolean;
 	logStdoutEnabled: boolean;

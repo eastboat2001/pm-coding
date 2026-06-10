@@ -4,17 +4,30 @@ import type { RunQueue } from "./run-queue.js";
 import type { RuntimeDbStore } from "./runtime-db.js";
 import type {
 	DeleteSessionResult,
+	DiagnosticLogEventInput,
 	JsonObject,
 	RunStatus,
 	RuntimeRunEventRecord,
 	RuntimeRunRecord,
 	RuntimeSessionDetail,
 	RuntimeSessionRecord,
+	StartRunProjectFile,
 	StartRunRequest,
 	StartRunResult,
 } from "./types.js";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running", "cancelling"]);
+
+export interface RunApiDiagnostics {
+	writeEvents(input: { events: DiagnosticLogEventInput[] }): unknown;
+}
+
+export interface RunProjectFileSeeder {
+	writeFile(
+		context: { sessionId: string; title: string },
+		file: StartRunProjectFile,
+	): Promise<void> | void;
+}
 
 export class RunApiError extends Error {
 	constructor(
@@ -30,6 +43,8 @@ export class WorkspaceRunApiService {
 	constructor(
 		private readonly db: RuntimeDbStore,
 		private readonly queue: RunQueue,
+		private readonly diagnostics?: RunApiDiagnostics,
+		private readonly projectFiles?: RunProjectFileSeeder,
 	) {}
 
 	async startRun(clientId: string, request: StartRunRequest): Promise<StartRunResult> {
@@ -50,6 +65,7 @@ export class WorkspaceRunApiService {
 				model,
 				thinkingLevel,
 			});
+		await this.seedProjectFiles(session.sessionId, session.title, request.projectFiles);
 		const message = this.db.appendMessage({
 			clientId,
 			sessionId,
@@ -66,8 +82,27 @@ export class WorkspaceRunApiService {
 		try {
 			await this.queue.enqueue({ clientId, runId: run.runId });
 		} catch (error) {
-			const message = `queue enqueue failed: ${errorMessage(error)}`;
+			const cause = errorMessage(error);
+			const message = `queue enqueue failed: ${cause}`;
 			this.db.updateRunStatus(run.runId, clientId, "failed", { error: message });
+			this.diagnostics?.writeEvents({
+				events: [
+					{
+						level: "error",
+						category: "agent",
+						eventType: "agent.run.enqueue.error",
+						sessionId,
+						traceId: sessionId,
+						data: {
+							clientId,
+							sessionId,
+							runId: run.runId,
+							status: "failed",
+							message: cause,
+						},
+					},
+				],
+			});
 			throw new RunApiError("Run queue unavailable", 503);
 		}
 		return { session, message, run };
@@ -142,6 +177,20 @@ export class WorkspaceRunApiService {
 	private hasActiveRun(clientId: string, sessionId: string): boolean {
 		return this.activeRuns(clientId, sessionId).length > 0;
 	}
+
+	private async seedProjectFiles(sessionId: string, title: string, value: unknown): Promise<void> {
+		const files = normalizeProjectFiles(value);
+		if (files.length === 0) return;
+		if (!this.projectFiles) throw new RunApiError("Project file seeding is not configured", 500);
+		try {
+			for (const file of files) {
+				await this.projectFiles.writeFile({ sessionId, title }, file);
+			}
+		} catch (error) {
+			if (error instanceof RunApiError) throw error;
+			throw new RunApiError(`Project file seed failed: ${errorMessage(error)}`, 500);
+		}
+	}
 }
 
 function normalizeMessage(value: unknown): JsonObject {
@@ -151,6 +200,20 @@ function normalizeMessage(value: unknown): JsonObject {
 
 function normalizeOptionalString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeProjectFiles(value: unknown): StartRunProjectFile[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new RunApiError("Start run projectFiles must be an array", 400);
+	return value.map((entry, index) => {
+		if (!isObject(entry)) throw new RunApiError(`projectFiles[${index}] must be an object`, 400);
+		const filename = normalizeOptionalString(entry.filename);
+		if (!filename) throw new RunApiError(`projectFiles[${index}].filename is required`, 400);
+		if (typeof entry.content !== "string") {
+			throw new RunApiError(`projectFiles[${index}].content is required`, 400);
+		}
+		return { filename, content: entry.content };
+	});
 }
 
 function errorMessage(error: unknown): string {

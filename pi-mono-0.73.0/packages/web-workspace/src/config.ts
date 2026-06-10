@@ -29,7 +29,7 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		),
 		runtimeDbFile: resolveConfiguredPath(rootDir, stringValue(env("PI_DB_FILE")) || "data/pi-runtime.sqlite"),
 		redisUrl: stringValue(env("PI_REDIS_URL")) || "redis://127.0.0.1:6379",
-		runsEnabled: envBooleanValue(env("PI_RUNS_ENABLED")) ?? false,
+		runsEnabled: envBooleanValue(env("PI_RUNS_ENABLED")) ?? true,
 		workerId: stringValue(env("PI_WORKER_ID")) || `worker-${process.pid}`,
 		workerConcurrency: positiveIntegerValue(env("PI_WORKER_CONCURRENCY"), 2),
 		runQueueName: stringValue(env("PI_RUN_QUEUE_NAME")) || "pi:runs",
@@ -45,9 +45,10 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		defaultModelId: stringValue(env("PI_DEFAULT_MODEL_ID")),
 		handoffDefaultThinkingLevel: thinkingLevelValue(env("PI_HANDOFF_DEFAULT_THINKING_LEVEL")),
 		envFile: configEnv.file,
+		envFileExists: configEnv.exists,
 		logsDbFile: resolveConfiguredPath(rootDir, stringValue(env("PI_LOG_DB")) || "data/logs/pi-diagnostics.sqlite"),
 		loggingEnabled: envBooleanValue(env("PI_LOG_ENABLED")) ?? true,
-		logStdoutEnabled: envBooleanValue(env("PI_LOG_STDOUT")) ?? false,
+		logStdoutEnabled: envBooleanValue(env("PI_LOG_STDOUT")) ?? true,
 		rawProviderLoggingEnabled: envBooleanValue(env("PI_LOG_RAW_PROVIDER_ENABLED")) ?? false,
 		rawProviderLogMaxChars: positiveIntegerValue(env("PI_LOG_RAW_PROVIDER_MAX_CHARS"), 12000),
 		promptSnapshotLoggingEnabled: envBooleanValue(env("PI_LOG_PROMPT_SNAPSHOT_ENABLED")) ?? false,
@@ -85,12 +86,15 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 	};
 }
 
-function loadConfigEnvFile(rootDir: string, value: unknown): { file: string; values: Record<string, string> } {
+function loadConfigEnvFile(
+	rootDir: string,
+	value: unknown,
+): { file: string; exists: boolean; values: Record<string, string> } {
 	const configured = stringValue(value).trim();
-	if (!configured) return { file: "", values: {} };
+	if (!configured) return { file: "", exists: false, values: {} };
 	const file = resolveConfiguredPath(rootDir, configured);
-	if (!existsSync(file)) return { file, values: {} };
-	return { file, values: parseEnvFile(readFileSync(file, "utf8")) };
+	if (!existsSync(file)) return { file, exists: false, values: {} };
+	return { file, exists: true, values: parseEnvFile(readFileSync(file, "utf8")) };
 }
 
 function parseEnvFile(content: string): Record<string, string> {

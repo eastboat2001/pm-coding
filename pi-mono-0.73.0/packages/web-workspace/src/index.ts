@@ -68,6 +68,7 @@ export type {
 	SkillResourceResult,
 	SkillResourceSummary,
 	SkillSummary,
+	StartRunProjectFile,
 	StartRunRequest,
 	StartRunResult,
 	StorageConfig,

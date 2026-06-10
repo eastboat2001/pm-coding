@@ -10,7 +10,7 @@ PI 诊断日志用于定位以下问题：
 - 模型一直处于 thinking 但没有正常输出 text。
 - 模型输出进入 thinking 区域，或 text/thinking 事件分布异常。
 - vLLM、llama.cpp、Ollama、LM Studio 等 OpenAI-compatible 服务端的流式输出异常。
-- 工具调用、项目构建、preview、skill 加载、PM handoff、服务端存储等后台流程异常。
+- 工具调用、项目构建、preview、PM handoff、服务端存储等后台流程异常。
 
 日志只写入后台 SQLite 数据库，并可选把 warn/error 摘要输出到服务端 stdout。诊断采集失败不会中断 PI 主流程。
 
@@ -29,7 +29,7 @@ apps/pi-coding-web/data/logs/pi-diagnostics.sqlite
 ```env
 PI_LOG_DB=./data/logs/pi-diagnostics.sqlite
 PI_LOG_ENABLED=true
-PI_LOG_STDOUT=false
+PI_LOG_STDOUT=true
 PI_LOG_RAW_PROVIDER_ENABLED=false
 PI_LOG_RAW_PROVIDER_MAX_CHARS=12000
 PI_LOG_PROMPT_SNAPSHOT_ENABLED=false
@@ -91,7 +91,7 @@ $env:PI_LOG_ENABLED="false"
 $env:PI_LOG_STDOUT="true"
 ```
 
-`PI_LOG_STDOUT` 只输出简短摘要，完整数据仍在 SQLite 中。默认关闭，避免 Docker 日志量过大。
+`PI_LOG_STDOUT` 只输出 warn/error 简短摘要，完整数据仍在 SQLite 中。当前本地和 Docker 示例默认开启，便于第一时间看到 `.env`、Redis、worker、模型 provider 等关键故障。
 
 ## 4. 深度调试开关
 
@@ -276,7 +276,7 @@ services:
       PI_LOG_ENABLED: "true"
       PI_LOG_DB: "/app/apps/pi-coding-web/data/logs/pi-diagnostics.sqlite"
       PI_STORAGE_ENV_FILE: "/app/apps/pi-coding-web/.env"
-      PI_LOG_STDOUT: "false"
+      PI_LOG_STDOUT: "true"
       PI_LOG_PROMPT_SNAPSHOT_ENABLED: "false"
       PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED: "false"
       PI_LOG_RAW_PROVIDER_ENABLED: "false"
@@ -292,6 +292,21 @@ services:
 ```
 
 如果只依赖容器文件系统而不挂载 volume，容器重建后日志会丢失。
+
+当前 Docker 正常部署应使用 `docker/pi-coding-web/docker-compose.yaml`，包含 `redis`、`pi-coding-web`、`pi-worker` 三个服务。常用排查命令：
+
+```bash
+docker compose ps
+docker compose logs -f pi-coding-web pi-worker redis
+docker compose exec pi-coding-web npm run logs -- --level error --limit 50
+```
+
+需要重点关注的运行时事件：
+
+- `system.config.env_missing`：容器或本地进程没有读到 `.env`。
+- `agent.run.enqueue.error`：Web 创建 run 后写入 Redis 队列失败。
+- `worker.queue.claim.error`：worker 从 Redis 队列 claim 任务失败，通常是 Redis 不可用或队列连接断开。
+- `agent.remote_run.queued_timeout`：run 长时间停在 queued，通常表示 worker 没启动或无法消费队列。
 
 ## 7. API 状态检查
 
@@ -319,7 +334,7 @@ GET /api/pi-logs/status
 - `langfuseLastFlushAt`、`langfuseLastError`：最近导出时间和错误摘要。
 - `otelServiceName`、`otelDeploymentEnvironment`：当前 OTEL resource/service 标识。
 
-`/api/pi-storage/status` 也会带出日志相关状态，便于部署排查当前实例是否读到了正确配置。
+`/api/pi-storage/status` 也会带出日志和运行时相关状态，包括 `envFile`、`envFileExists`、`runsEnabled`、`runtimeDbFile`、`redisUrl`、`workerId`、`workerConcurrency`、`runQueueName` 和日志开关，便于部署排查当前实例是否读到了正确配置。
 
 ## 8. 事件分类
 
@@ -330,10 +345,11 @@ GET /api/pi-logs/status
 - `agent`：Agent 生命周期和关键运行事件。
 - `tool`：工具执行相关事件。
 - `project`：项目 preview、project task、构建和日志读取相关事件。
-- `skill`：skill 加载、资源诊断和冲突。
 - `handoff`：PM handoff 读取、下载和注入相关异常。
 - `storage`：会话和设置保存异常。
 - `system`：通用后台事件。
+
+Skill 配置质量诊断，例如 `SKILL.md` frontmatter、description 质量和 skill 重名冲突，只通过 `/api/pi-skills` 返回并显示在前端 Skill 面板，不写入后台诊断日志。
 
 事件等级：
 

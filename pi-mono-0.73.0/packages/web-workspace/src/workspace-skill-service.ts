@@ -1,8 +1,6 @@
 import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, type Stats, statSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import type {
-	JsonObject,
 	ResourceDiagnostic,
 	SkillInterfaceMetadata,
 	SkillListResult,
@@ -69,33 +67,19 @@ type DiscoverResult = {
 export class WorkspaceSkillService {
 	constructor(
 		private readonly config: StorageConfig,
-		private readonly diagnostics?: WorkspaceDiagnosticLogService,
+		_diagnostics?: unknown,
 	) {}
 
 	list(): SkillListResult {
 		const result = this.discover();
 		const skills = result.skills.map(toSummary);
 		const defaultSkills = result.defaultSkills.map(toSummary);
-		this.writeDiagnostics(result.diagnostics);
 		return {
 			skills,
 			defaultSkills,
 			promptSkills: skills.filter((skill) => !skill.disableModelInvocation),
 			diagnostics: result.diagnostics,
 		};
-	}
-
-	private writeDiagnostics(diagnostics: ResourceDiagnostic[]): void {
-		if (diagnostics.length === 0) return;
-		this.diagnostics?.writeEvents({
-			events: diagnostics.map((diagnostic, index) => ({
-				level: diagnostic.type === "error" ? "error" : "warn",
-				category: "skill",
-				eventType: "skill.diagnostic",
-				spanId: `${diagnostic.type}-${index}`,
-				data: toDiagnosticLogData(diagnostic),
-			})),
-		});
 	}
 
 	load(body: SkillLoadRequest): SkillLoadResult {
@@ -165,15 +149,6 @@ export class WorkspaceSkillService {
 		}
 		return { skills: selectableSkills, defaultSkills, diagnostics };
 	}
-}
-
-function toDiagnosticLogData(diagnostic: ResourceDiagnostic): JsonObject {
-	return {
-		type: diagnostic.type,
-		message: diagnostic.message,
-		path: diagnostic.path,
-		collision: diagnostic.collision,
-	};
 }
 
 function discoverSkillsInDir(root: string | undefined, diagnostics: ResourceDiagnostic[]): LoadedSkill[] {

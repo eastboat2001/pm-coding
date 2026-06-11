@@ -81,6 +81,38 @@ describe("WorkspaceRunApiService", () => {
 		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
 	});
 
+	it("preserves user-with-attachments as the runtime message role", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-attachments",
+			title: "Read upload",
+			message: {
+				role: "user-with-attachments",
+				content: "read the upload",
+				attachments: [
+					{
+						id: "doc-1",
+						type: "document",
+						fileName: "requirements.md",
+						mimeType: "text/markdown",
+						size: 5,
+						content: "",
+						extractedText: "# PRD",
+					},
+				],
+			},
+			model: {},
+			thinkingLevel: "high",
+		});
+
+		expect(result.message.role).toBe("user-with-attachments");
+		expect(db.listMessages("client-a", "session-attachments")).toEqual([
+			expect.objectContaining({
+				role: "user-with-attachments",
+				payload: expect.objectContaining({ role: "user-with-attachments" }),
+			}),
+		]);
+	});
+
 	it("lists, details, deletes, runs, cancels, and events with client isolation", async () => {
 		const clientA = await service.startRun("client-a", {
 			sessionId: "shared-session",

@@ -64,13 +64,14 @@ export class WorkspaceRunApiService {
 				title: normalizeOptionalString(request.title) ?? "Untitled session",
 				model,
 				thinkingLevel,
-			});
+		});
 		await this.seedProjectFiles(session.sessionId, session.title, request.projectFiles);
+		const payload = normalizeMessage(request.message);
 		const message = this.db.appendMessage({
 			clientId,
 			sessionId,
-			role: "user",
-			payload: normalizeMessage(request.message),
+			role: normalizeUserMessageRole(payload.role),
+			payload,
 		});
 		const run = this.db.createRun({
 			clientId,
@@ -196,6 +197,10 @@ export class WorkspaceRunApiService {
 function normalizeMessage(value: unknown): JsonObject {
 	if (!isObject(value)) throw new RunApiError("Start run message must be a JSON object", 400);
 	return value;
+}
+
+function normalizeUserMessageRole(value: unknown): "user" | "user-with-attachments" {
+	return value === "user-with-attachments" ? "user-with-attachments" : "user";
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {

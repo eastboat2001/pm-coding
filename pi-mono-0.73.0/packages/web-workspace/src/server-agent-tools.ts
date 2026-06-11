@@ -302,6 +302,8 @@ const commandAliases: Record<string, ProjectFileParams["command"]> = {
 	ls: "list",
 };
 
+const PROJECT_FILE_OMITTED_CONTENT_PATTERN = /^\[project_file content omitted: \d+ chars, \d+ lines from .+\]$/;
+
 function prepareProjectFileArguments(args: unknown): ProjectFileParams {
 	const raw = coerceRecord(args);
 	const command = normalizeCommand(readString(raw, "command", "operation", "action", "op"));
@@ -315,12 +317,14 @@ function prepareProjectFileArguments(args: unknown): ProjectFileParams {
 		if (!filename || content === undefined) {
 			throw new Error(`project_file ${command} requires: ${projectFileExamples[command]}`);
 		}
+		assertWritableProjectFileContent(content, filename);
 		return { command, filename, content };
 	}
 	if (command === "update") {
 		if (!filename || !oldStr || newStr === undefined) {
 			throw new Error(`project_file update requires: ${projectFileExamples.update}`);
 		}
+		assertWritableProjectFileContent(newStr, filename);
 		return { command, filename, old_str: oldStr, new_str: newStr };
 	}
 	if (command === "get" || command === "delete") {
@@ -329,6 +333,13 @@ function prepareProjectFileArguments(args: unknown): ProjectFileParams {
 	}
 	throw new Error(
 		`project_file command must be one of create, rewrite, update, get, delete, list. Example: ${projectFileExamples.create}`,
+	);
+}
+
+function assertWritableProjectFileContent(value: string, filename: string): void {
+	if (!PROJECT_FILE_OMITTED_CONTENT_PATTERN.test(value.trim())) return;
+	throw new Error(
+		`Refusing to write an omitted project_file placeholder to ${filename}. Call project_file get for ${filename} and provide the full current content before writing.`,
 	);
 }
 

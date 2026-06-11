@@ -64,6 +64,69 @@ function testConfig(root: string): StorageConfig {
 }
 
 describe("server-direct agent project tools", () => {
+	it("rejects omitted project_file placeholders as create or rewrite content", () => {
+		const root = tempRoot();
+		const tools = createServerDirectProjectTools(testConfig(root), {
+			sessionId: "s1",
+			title: "Demo",
+		});
+		const projectFile = tools.find((tool) => tool.name === "project_file");
+		const placeholder = "[project_file content omitted: 44099 chars, 1550 lines from index.html]";
+
+		expect(() =>
+			projectFile!.prepareArguments?.({ command: "create", filename: "index.html", content: placeholder }),
+		).toThrow(/Refusing to write an omitted project_file placeholder to index\.html/);
+		expect(() =>
+			projectFile!.prepareArguments?.({ command: "rewrite", filename: "index.html", content: placeholder }),
+		).toThrow(/Refusing to write an omitted project_file placeholder to index\.html/);
+	});
+
+	it("rejects omitted project_file placeholders as update replacement content", () => {
+		const root = tempRoot();
+		const tools = createServerDirectProjectTools(testConfig(root), {
+			sessionId: "s1",
+			title: "Demo",
+		});
+		const projectFile = tools.find((tool) => tool.name === "project_file");
+
+		expect(() =>
+			projectFile!.prepareArguments?.({
+				command: "update",
+				filename: "index.html",
+				old_str: "<h1>old</h1>",
+				new_str: "[project_file content omitted: 44099 chars, 1550 lines from index.html]",
+			}),
+		).toThrow(/Refusing to write an omitted project_file placeholder to index\.html/);
+	});
+
+	it("allows normal project_file create and update operations", async () => {
+		const root = tempRoot();
+		const tools = createServerDirectProjectTools(testConfig(root), {
+			sessionId: "s1",
+			title: "Demo",
+		});
+		const projectFile = tools.find((tool) => tool.name === "project_file");
+
+		const createArgs = projectFile!.prepareArguments?.({
+			command: "create",
+			filename: "index.html",
+			content: "<h1>old</h1>",
+		});
+		const createResult = await projectFile!.execute("tc-create", createArgs!);
+		const updateArgs = projectFile!.prepareArguments?.({
+			command: "update",
+			filename: "index.html",
+			old_str: "old",
+			new_str: "new",
+		});
+		const updateResult = await projectFile!.execute("tc-update", updateArgs!);
+		const getResult = await projectFile!.execute("tc-get", { command: "get", filename: "index.html" });
+
+		expect(createResult.details).toMatchObject({ filename: "index.html", action: "created" });
+		expect(updateResult.details).toMatchObject({ filename: "index.html", action: "updated" });
+		expect(getResult.content[0]).toEqual({ type: "text", text: "<h1>new</h1>" });
+	});
+
 	it("creates project files without browser fetch", async () => {
 		const root = tempRoot();
 		const config = testConfig(root);

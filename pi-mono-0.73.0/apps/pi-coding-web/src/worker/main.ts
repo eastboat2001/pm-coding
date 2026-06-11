@@ -27,6 +27,7 @@ import {
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import { convertAgentMessagesToLlm } from "../runtime/agent-message-conversion.js";
+import { runtimeMessageToAgentMessage } from "../runtime/runtime-message-conversion.js";
 import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
 import { readServerProviderApiKey } from "./provider-keys.js";
 
@@ -257,19 +258,16 @@ class RuntimeAgentAdapter implements WorkerAgent {
 
 function toInitialAgentMessages(messages: RuntimeMessageRecord[]): AgentMessage[] {
 	const tail = messages.at(-1);
-	const initialMessages = tail?.role === "user" ? messages.slice(0, -1) : messages;
+	const initialMessages = tail && isUserPromptRole(tail.role) ? messages.slice(0, -1) : messages;
 	return toAgentMessages(initialMessages);
 }
 
 function toAgentMessages(messages: RuntimeMessageRecord[]): AgentMessage[] {
-	return messages.map(toAgentMessage);
+	return messages.map(runtimeMessageToAgentMessage);
 }
 
-function toAgentMessage(message: RuntimeMessageRecord): AgentMessage {
-	return {
-		...message.payload,
-		role: message.role,
-	} as AgentMessage;
+function isUserPromptRole(role: string): boolean {
+	return role === "user" || role === "user-with-attachments";
 }
 
 function toWorkerAgentEvent(event: AgentEvent): WorkerAgentEvent {

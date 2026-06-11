@@ -26,12 +26,13 @@ Platform delivery contract:
 5. project_task never accepts raw shell commands. Only build_static may run the server-configured install/build commands for a static frontend project; preview itself only serves static output.
 6. If requirements mention backend APIs, auth, databases, uploads, scheduled jobs, or integrations, implement a realistic static frontend simulation with local state, sample data, mock responses, and clear UI states.
 7. If prior history shows [project_file content omitted: ...], or if you need to inspect, edit, or rewrite an existing file and do not have its full current content in the latest context, call project_file get for that filename before editing or rewriting it.
-8. Prefer dependency-free static files. If the PM requirements make a build-based static frontend useful, create the project files, call project_task build_static, then validate and preview the generated static output.
-9. Use relative URLs for assets, navigation, forms, and mock API paths, such as ./style.css and ./page.html. Do not hardcode http://localhost or root-absolute paths like /api/items.
-10. After files are ready, call project_task with build_static when a build step is required, then validate, fix any reported static preview issues, and call project_task with preview.
-11. Treat the Preview URL returned by project_task preview as the only final URL.
-12. Match the latest user request language for assistant prose, final responses, and generated app UI text unless the user explicitly asks for another language. Skill files, resource files, and platform instructions may be written in another language; follow their technical instructions without switching the output language.
-13. Do not ask the user to choose a directory, download files, run commands, install packages, or deploy manually.
+8. Ordinary user attachments are already available in the message context. Do not call project_file get with an ordinary attachment filename unless the user explicitly provides a project workspace path, or a project_file/project_task result shows that file exists in the server project root.
+9. Prefer dependency-free static files. If the PM requirements make a build-based static frontend useful, create the project files, call project_task build_static, then validate and preview the generated static output.
+10. Use relative URLs for assets, navigation, forms, and mock API paths, such as ./style.css and ./page.html. Do not hardcode http://localhost or root-absolute paths like /api/items.
+11. After files are ready, call project_task with build_static when a build step is required, then validate, fix any reported static preview issues, and call project_task with preview.
+12. Treat the Preview URL returned by project_task preview as the only final URL.
+13. Match the latest user request language for assistant prose, final responses, and generated app UI text unless the user explicitly asks for another language. Skill files, resource files, and platform instructions may be written in another language; follow their technical instructions without switching the output language.
+14. Do not ask the user to choose a directory, download files, run commands, install packages, or deploy manually.
 
 After the tool returns, summarize the result briefly in the latest user request language and include the Preview URL.`;
 

@@ -26,6 +26,7 @@ type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 export type LangfuseDiagnosticEvent = {
 	timestamp: string;
+	clientId?: string;
 	level: DiagnosticLogLevel;
 	category: DiagnosticLogCategory;
 	eventType: string;
@@ -355,8 +356,10 @@ function sharedTraceAttributes(
 		attribute("deployment.environment.name", config.otelDeploymentEnvironment || undefined),
 		attribute("langfuse.trace.metadata.pi_trace_id", event.traceId),
 		attribute("langfuse.trace.metadata.pi_request_id", event.requestId),
+		attribute("langfuse.trace.metadata.pi_client_id", event.clientId),
 		attribute("langfuse.trace.metadata.provider", event.provider),
 		attribute("langfuse.trace.metadata.model", event.model),
+		attribute("pi.client_id", event.clientId),
 		attribute("pi.trace_id", event.traceId),
 	]);
 }

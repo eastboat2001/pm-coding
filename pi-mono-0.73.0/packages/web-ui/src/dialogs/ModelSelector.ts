@@ -3,17 +3,19 @@ import { Badge } from "@mariozechner/mini-lit/dist/Badge.js";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { DialogHeader } from "@mariozechner/mini-lit/dist/Dialog.js";
 import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
-import { getModels, getProviders, type Model, modelsAreEqual, type OpenAICompletionsCompat } from "@mariozechner/pi-ai";
+import { getModels, getProviders, type Model, modelsAreEqual } from "@mariozechner/pi-ai";
 import { html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { Brain, Image as ImageIcon } from "lucide";
 import { Input } from "../components/Input.js";
 import { getAppStorage } from "../storage/app-storage.js";
-import type { AutoDiscoveryProviderType } from "../storage/stores/custom-providers-store.js";
 import { formatModelCost } from "../utils/format.js";
 import { i18n } from "../utils/i18n.js";
-import { discoverModels } from "../utils/model-discovery.js";
+import {
+	loadCustomProviderModels,
+	type CustomProviderModelEntry,
+} from "../utils/custom-provider-models.js";
 
 /**
  * Score a query against a text using subsequence matching.
@@ -55,7 +57,7 @@ export class ModelSelector extends DialogBase {
 	@state() customProvidersLoading = false;
 	@state() selectedIndex = 0;
 	@state() private navigationMode: "mouse" | "keyboard" = "mouse";
-	@state() private customProviderModels: Model<any>[] = [];
+	@state() private customProviderModels: CustomProviderModelEntry[] = [];
 
 	private onSelectCallback?: (model: Model<any>) => void;
 	private allowedProviders?: Set<string>;
@@ -143,46 +145,15 @@ export class ModelSelector extends DialogBase {
 
 	private async loadCustomProviders() {
 		this.customProvidersLoading = true;
-		const allCustomModels: Model<any>[] = [];
 
 		try {
 			const storage = getAppStorage();
 			const customProviders = await storage.customProviders.getAll();
-
-			// Load models from custom providers
-			for (const provider of customProviders) {
-				const isAutoDiscovery: boolean =
-					provider.type === "ollama" ||
-					provider.type === "llama.cpp" ||
-					provider.type === "vllm" ||
-					provider.type === "lmstudio";
-
-				if (isAutoDiscovery) {
-					try {
-						const models = await discoverModels(
-							provider.type as AutoDiscoveryProviderType,
-							provider.baseUrl,
-							provider.apiKey,
-						);
-
-						const modelsWithProvider = models.map((model) => ({
-							...applyAutoDiscoveryCompat(model, provider.useNonStreamingToolCalls),
-							provider: provider.name,
-						}));
-
-						allCustomModels.push(...modelsWithProvider);
-					} catch (error) {
-						console.debug(`Failed to load models from ${provider.name}:`, error);
-					}
-				} else if (provider.models) {
-					// Manual provider - models already defined
-					allCustomModels.push(...provider.models);
-				}
-			}
+			this.customProviderModels = await loadCustomProviderModels(customProviders);
 		} catch (error) {
 			console.error("Failed to load custom providers:", error);
+			this.customProviderModels = [];
 		} finally {
-			this.customProviderModels = allCustomModels;
 			this.customProvidersLoading = false;
 			this.requestUpdate();
 		}
@@ -215,8 +186,8 @@ export class ModelSelector extends DialogBase {
 		}
 
 		// Add custom provider models
-		for (const model of this.customProviderModels) {
-			allModels.push({ provider: model.provider, id: model.id, model });
+		for (const { providerLabel, model } of this.customProviderModels) {
+			allModels.push({ provider: providerLabel, id: model.id, model });
 		}
 
 		// Filter by allowed providers if set
@@ -380,30 +351,4 @@ export class ModelSelector extends DialogBase {
 			</div>
 		`;
 	}
-}
-
-type OpenAICompletionsCompatWithToolMode = OpenAICompletionsCompat & {
-	useNonStreamingToolCalls?: boolean;
-};
-
-function applyAutoDiscoveryCompat(model: Model<any>, useNonStreamingToolCalls = false): Model<any> {
-	if (model.api !== "openai-completions") return model;
-
-	const compat: OpenAICompletionsCompatWithToolMode = {
-		...(model.compat as OpenAICompletionsCompat | undefined),
-		supportsStore: false,
-		supportsDeveloperRole: false,
-		supportsReasoningEffort: false,
-		maxTokensField: "max_tokens",
-	};
-	if (useNonStreamingToolCalls) {
-		compat.useNonStreamingToolCalls = true;
-	} else {
-		delete compat.useNonStreamingToolCalls;
-	}
-
-	return {
-		...model,
-		compat: compat as Model<any>["compat"],
-	};
 }

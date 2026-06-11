@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { ModelController } from "../src/app/model-controller.js";
+import { describe, expect, it } from "vitest";
 
 describe("ModelController", () => {
 	it("does not force non-streaming tool calls for auto-created vLLM models", async () => {
@@ -45,13 +45,43 @@ describe("ModelController", () => {
 
 		expect((model?.compat as { useNonStreamingToolCalls?: boolean } | undefined)?.useNonStreamingToolCalls).toBeUndefined();
 	});
+
+	it("resolves duplicate custom provider names by stable provider identity", async () => {
+		const firstProvider = {
+			id: "provider-a",
+			name: "Local",
+			type: "vllm",
+			baseUrl: "http://localhost:8000",
+			apiKey: "first-key",
+		};
+		const secondProvider = {
+			id: "provider-b",
+			name: "Local",
+			type: "vllm",
+			baseUrl: "http://localhost:9000",
+			apiKey: "second-key",
+		};
+		const controller = createController(undefined, [firstProvider, secondProvider]);
+
+		const model = await controller.resolveCustomModel({
+			provider: "custom-provider:provider-b",
+			id: "qwen3",
+		});
+
+		expect(model?.provider).toBe("custom-provider:provider-b");
+		expect(model?.baseUrl).toBe("http://localhost:9000/v1");
+	});
 });
 
-function createController(providerPatch: Record<string, unknown> = {}) {
+function createController(
+	providerPatch: Record<string, unknown> | undefined = {},
+	providers?: Array<Record<string, unknown>>,
+) {
 	return new ModelController(
 		{
 			customProviders: {
-				getAll: async () => [
+				getAll: async () =>
+					providers ?? [
 					{
 						id: "local-vllm",
 						name: "Local vLLM",

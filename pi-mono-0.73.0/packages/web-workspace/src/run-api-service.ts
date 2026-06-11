@@ -24,7 +24,7 @@ export interface RunApiDiagnostics {
 
 export interface RunProjectFileSeeder {
 	writeFile(
-		context: { sessionId: string; title: string },
+		context: { clientId: string; sessionId: string; title: string },
 		file: StartRunProjectFile,
 	): Promise<void> | void;
 }
@@ -53,50 +53,74 @@ export class WorkspaceRunApiService {
 		if (existingSession && this.hasActiveRun(clientId, sessionId)) {
 			throw new RunApiError(`Session ${sessionId} already has an active run`, 409);
 		}
+		if (!existingSession && request.message === undefined) {
+			throw new RunApiError("Start run message is required for new sessions", 400);
+		}
 
 		const model = isObject(request.model) ? request.model : (existingSession?.model ?? {});
 		const thinkingLevel = normalizeOptionalString(request.thinkingLevel) ?? existingSession?.thinkingLevel ?? "high";
-		const session =
-			existingSession ??
-			this.db.createSession({
+		const title = existingSession?.title ?? normalizeOptionalString(request.title) ?? "Untitled session";
+		await this.seedProjectFiles(clientId, sessionId, title, request.projectFiles);
+		if (request.message === undefined) {
+			const run = this.db.createContinuationRun({
 				clientId,
 				sessionId,
-				title: normalizeOptionalString(request.title) ?? "Untitled session",
 				model,
 				thinkingLevel,
-		});
-		await this.seedProjectFiles(session.sessionId, session.title, request.projectFiles);
+				runId: randomUUID(),
+			});
+			if (!run) {
+				throw new RunApiError(`Session ${sessionId} already has an active run`, 409);
+			}
+			await this.enqueueRun(run);
+			return {
+				session: this.requiredSession(clientId, sessionId),
+				run,
+			};
+		}
+
 		const payload = normalizeMessage(request.message);
-		const message = this.db.appendMessage({
+		const result = this.db.createRunWithMessage({
 			clientId,
 			sessionId,
-			role: normalizeUserMessageRole(payload.role),
-			payload,
-		});
-		const run = this.db.createRun({
-			clientId,
-			sessionId,
-			runId: randomUUID(),
+			title,
 			model,
 			thinkingLevel,
+			messageRole: normalizeUserMessageRole(payload.role),
+			payload,
+			runId: randomUUID(),
 		});
+		if (!result) {
+			throw new RunApiError(`Session ${sessionId} already has an active run`, 409);
+		}
+		await this.enqueueRun(result.run);
+		return result;
+	}
+
+	private requiredSession(clientId: string, sessionId: string): RuntimeSessionRecord {
+		const session = this.db.getSession(clientId, sessionId);
+		if (!session) throw new RunApiError("Runtime session not found", 404);
+		return session;
+	}
+
+	private async enqueueRun(run: RuntimeRunRecord): Promise<void> {
 		try {
-			await this.queue.enqueue({ clientId, runId: run.runId });
+			await this.queue.enqueue({ clientId: run.clientId, runId: run.runId });
 		} catch (error) {
 			const cause = errorMessage(error);
 			const message = `queue enqueue failed: ${cause}`;
-			this.db.updateRunStatus(run.runId, clientId, "failed", { error: message });
+			this.db.updateRunStatus(run.runId, run.clientId, "failed", { error: message });
 			this.diagnostics?.writeEvents({
 				events: [
 					{
 						level: "error",
 						category: "agent",
 						eventType: "agent.run.enqueue.error",
-						sessionId,
-						traceId: sessionId,
+						sessionId: run.sessionId,
+						traceId: run.sessionId,
 						data: {
-							clientId,
-							sessionId,
+							clientId: run.clientId,
+							sessionId: run.sessionId,
 							runId: run.runId,
 							status: "failed",
 							message: cause,
@@ -106,7 +130,6 @@ export class WorkspaceRunApiService {
 			});
 			throw new RunApiError("Run queue unavailable", 503);
 		}
-		return { session, message, run };
 	}
 
 	listSessions(clientId: string): RuntimeSessionRecord[] {
@@ -179,13 +202,13 @@ export class WorkspaceRunApiService {
 		return this.activeRuns(clientId, sessionId).length > 0;
 	}
 
-	private async seedProjectFiles(sessionId: string, title: string, value: unknown): Promise<void> {
+	private async seedProjectFiles(clientId: string, sessionId: string, title: string, value: unknown): Promise<void> {
 		const files = normalizeProjectFiles(value);
 		if (files.length === 0) return;
 		if (!this.projectFiles) throw new RunApiError("Project file seeding is not configured", 500);
 		try {
 			for (const file of files) {
-				await this.projectFiles.writeFile({ sessionId, title }, file);
+				await this.projectFiles.writeFile({ clientId, sessionId, title }, file);
 			}
 		} catch (error) {
 			if (error instanceof RunApiError) throw error;

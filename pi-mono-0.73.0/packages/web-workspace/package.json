@@ -5,6 +5,18 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./skill-tool-contract": {
+      "types": "./dist/skill-tool-contract.d.ts",
+      "import": "./dist/skill-tool-contract.js",
+      "default": "./dist/skill-tool-contract.js"
+    }
+  },
   "scripts": {
     "clean": "shx rm -rf dist",
     "build": "tsgo -p tsconfig.build.json",

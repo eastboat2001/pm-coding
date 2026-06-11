@@ -70,6 +70,11 @@ export class WorkspaceRunWorkerService {
 		}
 	}
 
+	async recoverOwnedRuns(): Promise<void> {
+		await this.queue.requeueActive(this.workerId);
+		this.markOwnedRunningRunsInterrupted();
+	}
+
 	async processOne(): Promise<boolean> {
 		let claimed: ClaimedRun | undefined;
 		try {
@@ -173,6 +178,7 @@ export class WorkspaceRunWorkerService {
 	async start(): Promise<void> {
 		if (this.running) return;
 		this.stopping = false;
+		await this.recoverOwnedRuns();
 		this.running = true;
 		this.loops = Array.from({ length: this.concurrency }, () => this.runLoop());
 	}

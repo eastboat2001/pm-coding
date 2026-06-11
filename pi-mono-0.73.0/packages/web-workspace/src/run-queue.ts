@@ -7,6 +7,20 @@ if redis.call("HGET", KEYS[1], ARGV[1]) == ARGV[2] then
 end
 return 0
 `;
+const REQUEUE_ACTIVE_BY_OWNER_SCRIPT = `
+local entries = redis.call("HGETALL", KEYS[1])
+local reclaimed = 0
+for i = 1, #entries, 2 do
+	local runKey = entries[i]
+	local owner = entries[i + 1]
+	if owner == ARGV[1] then
+		redis.call("HDEL", KEYS[1], runKey)
+		redis.call("RPUSH", KEYS[2], runKey)
+		reclaimed = reclaimed + 1
+	end
+end
+return reclaimed
+`;
 
 export interface RunQueueIdentity {
 	clientId: string;
@@ -24,6 +38,7 @@ export interface RunQueue {
 	enqueue(run: RunQueueItem): Promise<void>;
 	claim(workerId: string, timeoutMs: number): Promise<ClaimedRun | undefined>;
 	complete(run: RunQueueItem | ClaimedRun, workerId: string): Promise<void>;
+	requeueActive(workerId: string): Promise<number>;
 	requestCancel(run: RunQueueItem | ClaimedRun): Promise<void>;
 	isCancelRequested(run: RunQueueItem | ClaimedRun): Promise<boolean>;
 	close(): Promise<void>;
@@ -57,6 +72,18 @@ export class InMemoryRunQueue implements RunQueue {
 		if (this.active.get(key) === workerId) {
 			this.active.delete(key);
 		}
+	}
+
+	async requeueActive(workerId: string): Promise<number> {
+		this.assertOpen();
+		const reclaimed: ClaimedRun[] = [];
+		for (const [key, owner] of this.active) {
+			if (owner !== workerId) continue;
+			this.active.delete(key);
+			reclaimed.push(runFromKey(key));
+		}
+		this.queued.unshift(...reclaimed);
+		return reclaimed.length;
 	}
 
 	async requestCancel(run: RunQueueItem | ClaimedRun): Promise<void> {
@@ -147,6 +174,16 @@ export class RedisRunQueue implements RunQueue {
 		this.assertOpen();
 		const client = await this.connectedClient();
 		await this.completeClaimedRun(client, run, workerId);
+	}
+
+	async requeueActive(workerId: string): Promise<number> {
+		this.assertOpen();
+		const client = await this.connectedClient();
+		const result = await client.eval(REQUEUE_ACTIVE_BY_OWNER_SCRIPT, {
+			keys: [this.activeKey, this.queueName],
+			arguments: [workerId],
+		});
+		return typeof result === "number" ? result : Number(result) || 0;
 	}
 
 	async requestCancel(run: RunQueueItem | ClaimedRun): Promise<void> {
@@ -268,6 +305,14 @@ function parseQueueItem(value: string): ClaimedRun {
 	try {
 		const parsed = JSON.parse(value) as unknown;
 		if (
+			Array.isArray(parsed) &&
+			parsed.length === 2 &&
+			typeof parsed[0] === "string" &&
+			typeof parsed[1] === "string"
+		) {
+			return { clientId: parsed[0], runId: parsed[1] };
+		}
+		if (
 			parsed &&
 			typeof parsed === "object" &&
 			"clientId" in parsed &&
@@ -281,6 +326,10 @@ function parseQueueItem(value: string): ClaimedRun {
 		// Existing queues may contain raw run ids.
 	}
 	return { runId: value };
+}
+
+function runFromKey(key: string): ClaimedRun {
+	return parseQueueItem(key);
 }
 
 function runKey(run: RunQueueItem | ClaimedRun): string {

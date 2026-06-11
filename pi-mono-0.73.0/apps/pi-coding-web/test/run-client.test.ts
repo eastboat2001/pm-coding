@@ -191,6 +191,32 @@ describe("run client", () => {
 		expect(connection.lastSeq).toBe(2);
 	});
 
+	it("does not advance the event checkpoint until an async handler resolves", async () => {
+		const event = createRunEventRecord(1);
+		vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ events: [event] })));
+		let releaseHandler: () => void = () => {};
+		const handlerStarted = vi.fn();
+		const handlerGate = new Promise<void>((resolve) => {
+			releaseHandler = resolve;
+		});
+
+		const connection = connectRunEvents("run-1", 0, async (_event) => {
+			handlerStarted();
+			await handlerGate;
+		});
+
+		await vi.waitFor(() => {
+			expect(handlerStarted).toHaveBeenCalledTimes(1);
+		});
+		expect(connection.lastSeq).toBe(0);
+
+		releaseHandler();
+		await vi.waitFor(() => {
+			expect(connection.lastSeq).toBe(1);
+		});
+		connection.close();
+	});
+
 	it("uses low-latency polling while events are flowing and backs off when idle", async () => {
 		vi.useFakeTimers();
 		const fetchMock = vi.fn(async () =>

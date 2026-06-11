@@ -41,4 +41,22 @@ describe("storage config diagnostics", () => {
 			}),
 		]);
 	});
+
+	it("uses a stable default worker id and allows env override", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-config-worker-id-"));
+		const previousWorkerId = process.env.PI_WORKER_ID;
+		try {
+			delete process.env.PI_WORKER_ID;
+			expect(loadStorageConfig(root).workerId).toBe("pi-worker");
+
+			process.env.PI_WORKER_ID = "worker-custom";
+			expect(loadStorageConfig(root).workerId).toBe("worker-custom");
+		} finally {
+			if (previousWorkerId === undefined) {
+				delete process.env.PI_WORKER_ID;
+			} else {
+				process.env.PI_WORKER_ID = previousWorkerId;
+			}
+		}
+	});
 });

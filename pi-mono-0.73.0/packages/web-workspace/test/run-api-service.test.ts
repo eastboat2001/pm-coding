@@ -52,11 +52,55 @@ describe("WorkspaceRunApiService", () => {
 		expect(db.listMessages("client-a", "session-1")).toHaveLength(1);
 	});
 
+	it("allows only one concurrent startRun for the same session to create an active run", async () => {
+		db.createSession({
+			clientId: "client-a",
+			sessionId: "session-1",
+			title: "Concurrent session",
+			model: { provider: "openai", id: "gpt-5" },
+			thinkingLevel: "high",
+		});
+
+		const results = await Promise.allSettled([
+			service.startRun("client-a", {
+				sessionId: "session-1",
+				title: "Concurrent session",
+				message: { content: "first" },
+				model: { provider: "openai", id: "gpt-5" },
+				thinkingLevel: "high",
+			}),
+			service.startRun("client-a", {
+				sessionId: "session-1",
+				title: "Concurrent session",
+				message: { content: "second" },
+				model: { provider: "openai", id: "gpt-5" },
+				thinkingLevel: "high",
+			}),
+		]);
+
+		const fulfilled = results.filter((result) => result.status === "fulfilled");
+		const rejected = results.filter((result) => result.status === "rejected");
+
+		expect(fulfilled).toHaveLength(1);
+		expect(rejected).toHaveLength(1);
+		expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ statusCode: 409 });
+		expect(db.listRunsForSession("client-a", "session-1").map((run) => run.status)).toEqual(["queued"]);
+		expect(db.listMessages("client-a", "session-1")).toHaveLength(1);
+		const runId = (fulfilled[0] as PromiseFulfilledResult<{ run: { runId: string } }>).value.run.runId;
+		await expect(queue.claim("worker-1", 1)).resolves.toEqual({
+			clientId: "client-a",
+			runId,
+		});
+		await expect(queue.claim("worker-1", 1)).resolves.toBeUndefined();
+	});
+
 	it("seeds request project files into the final runtime session before enqueueing", async () => {
-		const seededFiles: Array<{ sessionId: string; title: string; filename: string; content: string }> = [];
+		const seededFiles: Array<{ clientId: string; sessionId: string; title: string; filename: string; content: string }> =
+			[];
 		const seedingService = new WorkspaceRunApiService(db, queue, undefined, {
 			writeFile: async (context, file) => {
 				seededFiles.push({
+					clientId: context.clientId,
 					sessionId: context.sessionId,
 					title: context.title,
 					filename: file.filename,
@@ -76,7 +120,7 @@ describe("WorkspaceRunApiService", () => {
 
 		expect(result.session.sessionId).toBe("session-1");
 		expect(seededFiles).toEqual([
-			{ sessionId: "session-1", title: "QDM Finish", filename: "docs/需求.md", content: "# PRD" },
+			{ clientId: "client-a", sessionId: "session-1", title: "QDM Finish", filename: "docs/需求.md", content: "# PRD" },
 		]);
 		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
 	});
@@ -111,6 +155,35 @@ describe("WorkspaceRunApiService", () => {
 				payload: expect.objectContaining({ role: "user-with-attachments" }),
 			}),
 		]);
+	});
+
+	it("starts a continuation run for an existing interrupted session without appending a prompt message", async () => {
+		db.createSession({
+			clientId: "client-a",
+			sessionId: "session-continue",
+			title: "Continue tool",
+			model: { provider: "openai", id: "gpt-5" },
+			thinkingLevel: "high",
+		});
+		db.appendMessage({
+			clientId: "client-a",
+			sessionId: "session-continue",
+			role: "toolResult",
+			payload: { role: "toolResult", toolCallId: "tool-1", content: "done" },
+		});
+
+		const result = await service.startRun("client-a", {
+			sessionId: "session-continue",
+			title: "Continue tool",
+			model: { provider: "openai", id: "gpt-5" },
+			thinkingLevel: "high",
+		});
+
+		expect(result.session.sessionId).toBe("session-continue");
+		expect(result.message).toBeUndefined();
+		expect(result.run.status).toBe("queued");
+		expect(db.listMessages("client-a", "session-continue").map((message) => message.role)).toEqual(["toolResult"]);
+		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
 	});
 
 	it("lists, details, deletes, runs, cancels, and events with client isolation", async () => {
@@ -279,6 +352,10 @@ class FailingRunQueue implements RunQueue {
 	}
 
 	async complete(_run: RunQueueItem | ClaimedRun, _workerId: string): Promise<void> {}
+
+	async requeueActive(_workerId: string): Promise<number> {
+		return 0;
+	}
 
 	async requestCancel(_run: RunQueueItem | ClaimedRun): Promise<void> {}
 

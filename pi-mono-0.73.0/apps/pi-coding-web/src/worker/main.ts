@@ -1,12 +1,14 @@
 import { existsSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import {
 	Agent,
 	type AgentEvent,
 	type AgentMessage,
 	type AgentTool,
+	type StreamFn,
 	type ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
+import { streamSimple, type Model } from "@mariozechner/pi-ai";
 import {
 	createServerDirectProjectTools,
 	createServerDirectSkillTools,
@@ -24,6 +26,8 @@ import {
 	WorkspaceRunWorkerService,
 	WorkspaceSkillService,
 } from "@mariozechner/pi-web-workspace";
+import type { DiagnosticClient, DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
+import { createLoggedStreamFn } from "../diagnostics/model-stream-logger.js";
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import { convertAgentMessagesToLlm } from "../runtime/agent-message-conversion.js";
@@ -114,7 +118,6 @@ async function main(): Promise<void> {
 		void shutdown("SIGTERM").then((exitCode) => process.exit(exitCode), exitAfterShutdownFailure);
 	});
 
-	worker.markOwnedRunningRunsInterrupted();
 	await worker.start();
 	console.log(
 		`PI worker ${config.workerId} started with concurrency ${config.workerConcurrency} on queue ${config.runQueueName}.`,
@@ -183,12 +186,13 @@ function logCleanupError(step: string, error: unknown): void {
 type CreateRunAgentOptions = {
 	config: ReturnType<typeof loadStorageConfig>;
 	diagnostics: WorkspaceDiagnosticLogService;
-	skills: WorkspaceSkillService;
+	skills: Pick<WorkspaceSkillService, "load">;
 	promptSkills: SkillSummary[];
 	defaultSkills: SkillSummary[];
+	streamFn?: StreamFn;
 };
 
-function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentOptions): WorkerAgent {
+export function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentOptions): WorkerAgent {
 	const messages = toInitialAgentMessages(input.messages);
 	const defaultSkillNames = options.defaultSkills.map((skill) => skill.name);
 	const activeSkillNames = getLatestRequiredSkillNames(toAgentMessages(input.messages), defaultSkillNames);
@@ -197,6 +201,7 @@ function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentOptions)
 		...createServerDirectProjectTools(
 			options.config,
 			{
+				clientId: input.run.clientId,
 				sessionId: input.session.sessionId,
 				title: input.session.title,
 				activeSkillNames,
@@ -217,6 +222,22 @@ function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentOptions)
 		getApiKey: async (provider) => readServerProviderApiKey(options.config, provider),
 		repairToolCalls: true,
 		convertToLlm: convertAgentMessagesToLlm,
+		streamFn: createLoggedStreamFn(
+			options.streamFn ?? streamSimple,
+			createWorkerDiagnosticClient(options.diagnostics, input.run.clientId),
+			() => ({
+				sessionId: input.session.sessionId,
+				traceId: input.session.sessionId,
+			}),
+			() => ({
+				rawProviderLoggingEnabled: options.config.rawProviderLoggingEnabled,
+				rawProviderLogMaxChars: options.config.rawProviderLogMaxChars,
+				promptSnapshotLoggingEnabled: options.config.promptSnapshotLoggingEnabled,
+				promptSnapshotMaxChars: options.config.promptSnapshotMaxChars,
+				modelOutputSnapshotLoggingEnabled: options.config.modelOutputSnapshotLoggingEnabled,
+				modelOutputSnapshotMaxChars: options.config.modelOutputSnapshotMaxChars,
+			}),
+		),
 		transformContext: async (contextMessages, signal) =>
 			compactProjectToolHistory(
 				await expandSkillCommandsInMessages(contextMessages, {
@@ -228,6 +249,22 @@ function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentOptions)
 	});
 
 	return new RuntimeAgentAdapter(agent);
+}
+
+function createWorkerDiagnosticClient(
+	diagnostics: Pick<WorkspaceDiagnosticLogService, "writeEvents">,
+	clientId: string,
+): DiagnosticClient {
+	return {
+		write(event) {
+			this.writeMany([event]);
+		},
+		writeMany(events: DiagnosticEvent[]) {
+			if (events.length === 0) return;
+			diagnostics.writeEvents({ events: events.map((event) => ({ ...event, clientId })) });
+		},
+		async flush() {},
+	};
 }
 
 class RuntimeAgentAdapter implements WorkerAgent {
@@ -278,7 +315,15 @@ function normalizeThinkingLevel(value: string): ThinkingLevel {
 	return THINKING_LEVELS.has(value) ? (value as ThinkingLevel) : "high";
 }
 
-void main().catch((error) => {
-	console.error(error instanceof Error ? error.stack || error.message : error);
-	process.exitCode = 1;
-});
+if (isDirectWorkerEntry()) {
+	void main().catch((error) => {
+		console.error(error instanceof Error ? error.stack || error.message : error);
+		process.exitCode = 1;
+	});
+}
+
+function isDirectWorkerEntry(): boolean {
+	const entry = process.argv[1];
+	if (!entry) return false;
+	return import.meta.url === pathToFileURL(entry).href;
+}

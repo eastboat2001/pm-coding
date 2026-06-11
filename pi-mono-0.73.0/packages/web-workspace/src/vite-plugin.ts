@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import type { Connect, Plugin } from "vite";
-import { readClientIdHeader } from "./client-id.js";
+import { normalizeClientId, readClientIdHeader } from "./client-id.js";
 import { loadStorageConfig } from "./config.js";
 import {
 	API_PREFIX,
@@ -22,6 +22,7 @@ import type {
 	DiagnosticLogEventInput,
 	DiagnosticLogQuery,
 	DiagnosticLogWriteRequest,
+	JsonObject,
 	ProjectFilePreviewRequest,
 	ProjectFileRequest,
 	ProjectFileSaveRequest,
@@ -54,6 +55,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 	const runApi = new WorkspaceRunApiService(runtimeDb, runQueue, diagnostics, {
 		writeFile(context, file) {
 			files.handle({
+				clientId: context.clientId,
 				sessionId: context.sessionId,
 				title: context.title,
 				command: "create",
@@ -134,7 +136,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 				return;
 			}
 			if (isLogsApi) {
-				await handleLogsApi(method, route, url, req, res, diagnostics);
+				await handleLogsApi(method, route, url, req, res, config, diagnostics);
 				return;
 			}
 			if (isSessionsApi) {
@@ -260,36 +262,34 @@ async function handleProjectsApi(
 	previews: WorkspacePreviewService,
 	tasks: WorkspaceTaskService,
 ): Promise<void> {
-	if (config.clientIdRequired) {
-		readClientIdHeader(req);
-	}
+	const clientId = readConfiguredApiClientId(req, config);
 
 	if (method === "GET" && (route === "/" || route === "")) {
-		sendJson(res, previews.listProjects(req));
+		sendJson(res, previews.listProjects(req, clientId));
 		return;
 	}
 	if (method === "POST" && route === "/workspace/files") {
-		const body = await readJsonBody(req);
+		const body = withClientId(await readJsonBody(req), clientId);
 		sendJson(res, files.listProjectFiles(body as unknown as ProjectRequestContext));
 		return;
 	}
 	if (method === "POST" && route === "/workspace/file-preview") {
-		const body = await readJsonBody(req);
+		const body = withClientId(await readJsonBody(req), clientId);
 		sendJson(res, files.readProjectFilePreview(body as unknown as ProjectFilePreviewRequest));
 		return;
 	}
 	if (method === "POST" && route === "/workspace/file-save") {
-		const body = await readJsonBody(req);
+		const body = withClientId(await readJsonBody(req), clientId);
 		sendJson(res, files.saveProjectFile(body as unknown as ProjectFileSaveRequest));
 		return;
 	}
 	if (method === "POST" && route === "/workspace/file") {
-		const body = await readJsonBody(req);
+		const body = withClientId(await readJsonBody(req), clientId);
 		sendJson(res, files.handle(body as unknown as ProjectFileRequest));
 		return;
 	}
 	if (method === "POST" && route === "/workspace/task") {
-		const body = await readJsonBody(req);
+		const body = withClientId(await readJsonBody(req), clientId);
 		sendJson(
 			res,
 			await tasks.run(
@@ -300,7 +300,7 @@ async function handleProjectsApi(
 		return;
 	}
 	if (method === "POST" && route === "/workspace/preview") {
-		const body = await readJsonBody(req);
+		const body = withClientId(await readJsonBody(req), clientId);
 		sendJson(res, await previews.preview({ ...body, sessionId: String(body.sessionId || "") }, req));
 		return;
 	}
@@ -313,13 +313,14 @@ async function handleProjectsApi(
 				decodeURIComponent(renameMatch[1]),
 				String((body as ProjectPreviewRenameRequest).title || ""),
 				req,
+				clientId,
 			),
 		);
 		return;
 	}
 	const logsMatch = route.match(/^\/([^/]+)\/logs$/);
 	if (method === "GET" && logsMatch) {
-		sendJson(res, previews.readProjectLogs(decodeURIComponent(logsMatch[1])));
+		sendJson(res, previews.readProjectLogs(decodeURIComponent(logsMatch[1]), clientId));
 		return;
 	}
 	sendJson(res, { error: "Not found." }, 404);
@@ -387,8 +388,9 @@ async function handleStorageApi(
 		});
 		return;
 	}
+	const clientId = readConfiguredApiClientId(req, config);
 	if (method === "GET" && route === "/sessions") {
-		sendJson(res, { sessions: sessions.listSessions() });
+		sendJson(res, { sessions: sessions.listSessions(clientId) });
 		return;
 	}
 
@@ -396,7 +398,7 @@ async function handleStorageApi(
 	if (sessionMatch) {
 		const sessionId = decodeURIComponent(sessionMatch[1]);
 		if (method === "GET") {
-			const record = sessions.readSession(sessionId);
+			const record = sessions.readSession(sessionId, clientId);
 			sendJson(res, record || { error: "Session not found." }, record ? 200 : 404);
 			return;
 		}
@@ -404,24 +406,24 @@ async function handleStorageApi(
 			const body = await readJsonBody(req);
 			if (!isObject(body.data) || !isObject(body.metadata))
 				throw new Error("Fields `data` and `metadata` are required.");
-			sendJson(res, sessions.writeSession(sessionId, body.data, body.metadata));
+			sendJson(res, sessions.writeSession(sessionId, body.data, body.metadata, clientId));
 			return;
 		}
 		if (method === "DELETE") {
-			sendJson(res, { deleted: sessions.deleteSession(sessionId) });
+			sendJson(res, { deleted: sessions.deleteSession(sessionId, clientId) });
 			return;
 		}
 	}
 
 	if (route === "/settings") {
 		if (method === "GET") {
-			const settings = sessions.readSettings();
+			const settings = sessions.readSettings(clientId);
 			sendJson(res, settings || { error: "Settings not found." }, settings ? 200 : 404);
 			return;
 		}
 		if (method === "PUT") {
 			const body = await readJsonBody(req);
-			sendJson(res, sessions.writeSettings(body));
+			sendJson(res, sessions.writeSettings(body, clientId));
 			return;
 		}
 	}
@@ -435,22 +437,49 @@ async function handleLogsApi(
 	url: URL,
 	req: Connect.IncomingMessage,
 	res: ServerResponse,
+	config: StorageConfig,
 	diagnostics: WorkspaceDiagnosticLogService,
 ): Promise<void> {
 	if (method === "GET" && route === "/status") {
 		sendJson(res, diagnostics.status());
 		return;
 	}
+	const clientId = readConfiguredApiClientId(req, config);
 	if (method === "POST" && route === "/events") {
 		const body = await readJsonBody(req);
-		sendJson(res, diagnostics.writeEvents(body as DiagnosticLogWriteRequest));
+		sendJson(res, diagnostics.writeEvents(withDiagnosticClientId(body, clientId) as DiagnosticLogWriteRequest));
 		return;
 	}
 	if (method === "GET" && route === "/events") {
-		sendJson(res, diagnostics.queryEvents(toDiagnosticLogQuery(url)));
+		sendJson(res, diagnostics.queryEvents(withClientId(toDiagnosticLogQuery(url), clientId)));
 		return;
 	}
 	sendJson(res, { error: "Not found." }, 404);
+}
+
+function readConfiguredApiClientId(req: Connect.IncomingMessage, config: StorageConfig): string | undefined {
+	if (config.clientIdRequired) return readClientIdHeader(req);
+	const value = req.headers["x-pi-client-id"];
+	if (value === undefined) return undefined;
+	return normalizeClientId(Array.isArray(value) ? value[0] : value);
+}
+
+function withClientId<T extends JsonObject>(body: T, clientId: string | undefined): T {
+	return clientId ? ({ ...body, clientId } as T) : body;
+}
+
+function withDiagnosticClientId(body: JsonObject, clientId: string | undefined): JsonObject {
+	if (!clientId) return body;
+	return {
+		...body,
+		events: Array.isArray(body.events)
+			? body.events.map((event: unknown) =>
+					isObject(event)
+						? { ...event, clientId, data: isObject(event.data) ? { ...event.data, clientId } : { clientId } }
+						: event,
+				)
+			: body.events,
+	};
 }
 
 async function handleRuntimeSessionsApi(

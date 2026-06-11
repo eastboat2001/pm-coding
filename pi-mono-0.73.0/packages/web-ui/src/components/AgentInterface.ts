@@ -256,22 +256,31 @@ export class AgentInterface extends LitElement {
 			await this.onBeforeSend();
 		}
 
+		const sentInput = input;
+		const sentAttachments = attachments ? [...attachments] : [];
 		// Only clear editor after we know we can send
 		this._messageEditor.value = "";
 		this._messageEditor.attachments = [];
 		this._autoScroll = true; // Enable auto-scroll when sending a message
 
-		// Compose message with attachments if any
-		if (attachments && attachments.length > 0) {
-			const message: UserMessageWithAttachments = {
-				role: "user-with-attachments",
-				content: input,
-				attachments,
-				timestamp: Date.now(),
-			};
-			await this.session?.prompt(message);
-		} else {
-			await this.session?.prompt(input);
+		try {
+			// Compose message with attachments if any
+			if (attachments && attachments.length > 0) {
+				const message: UserMessageWithAttachments = {
+					role: "user-with-attachments",
+					content: input,
+					attachments,
+					timestamp: Date.now(),
+				};
+				await this.session?.prompt(message);
+			} else {
+				await this.session?.prompt(input);
+			}
+		} catch (error) {
+			this._messageEditor.value = sentInput;
+			this._messageEditor.attachments = sentAttachments;
+			this._messageEditor.requestUpdate();
+			throw error;
 		}
 
 		this.requestUpdate();

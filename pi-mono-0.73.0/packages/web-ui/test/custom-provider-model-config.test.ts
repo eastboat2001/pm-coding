@@ -6,7 +6,7 @@ import {
 	type ManualModelConfig,
 	manualModelConfigFromModel,
 } from "../src/dialogs/custom-provider-model-config.js";
-import type { CustomProvider } from "../src/storage/stores/custom-providers-store.js";
+import { customProviderIdentity, type CustomProvider } from "../src/storage/stores/custom-providers-store.js";
 
 const provider: Omit<CustomProvider, "models"> = {
 	id: "local",
@@ -51,7 +51,7 @@ describe("custom provider manual model config", () => {
 			id: "mimo-v2.5",
 			name: "mimo-v2.5",
 			api: "openai-completions",
-			provider: "Local Provider",
+			provider: customProviderIdentity(provider),
 			baseUrl: "http://localhost:8000/v1",
 			reasoning: true,
 			input: ["text", "image"],

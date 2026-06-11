@@ -2,6 +2,10 @@ import type { Agent, AgentEvent } from "@mariozechner/pi-agent-core";
 import type { RunStatus, RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
+type RuntimeRunEventLoader = (
+	runId: string,
+	afterSeq: number,
+) => RuntimeRunEventRecord[] | Promise<RuntimeRunEventRecord[]>;
 type MutableRemoteState = {
 	errorMessage?: string;
 	pendingToolCalls: ReadonlySet<string>;
@@ -155,6 +159,19 @@ export class RemoteAgentController {
 				state.streamingMessage = undefined;
 				break;
 		}
+	}
+}
+
+export async function drainRemoteRunEvents(
+	runId: string,
+	controller: RemoteAgentController,
+	loadEvents: RuntimeRunEventLoader,
+): Promise<void> {
+	if (controller.activeRunId !== runId) return;
+	const events = await loadEvents(runId, controller.lastSeq);
+	for (const event of [...events].sort((left, right) => left.seq - right.seq)) {
+		if (controller.activeRunId !== runId) return;
+		await controller.applyRunEvent(event);
 	}
 }
 

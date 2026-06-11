@@ -13,7 +13,9 @@ export function readServerProviderApiKey(
 	}
 
 	const customProviders = Array.isArray(settings?.customProviders) ? settings.customProviders : [];
-	const customProvider = customProviders.find((candidate) => isRecord(candidate) && candidate.name === provider);
+	const customProvider = customProviders.find(
+		(candidate) => isRecord(candidate) && customProviderMatchesIdentity(candidate, provider),
+	);
 	if (isRecord(customProvider) && typeof customProvider.apiKey === "string" && customProvider.apiKey) {
 		return customProvider.apiKey;
 	}
@@ -33,4 +35,10 @@ function readSettings(settingsFile: string): Record<string, unknown> | undefined
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function customProviderMatchesIdentity(candidate: Record<string, unknown>, identity: string): boolean {
+	if (candidate.name === identity) return true;
+	if (typeof candidate.id !== "string") return false;
+	return identity === candidate.id || identity === `custom-provider:${candidate.id}`;
 }

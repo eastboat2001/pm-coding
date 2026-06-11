@@ -37,6 +37,22 @@ describe("worker provider keys", () => {
 		expect(readServerProviderApiKey({ settingsFile }, "mimo")).toBe("custom-mimo-key");
 	});
 
+	it("uses stable custom provider identity when duplicate names exist", () => {
+		const firstProvider = {
+			id: "provider-a",
+			name: "mimo",
+			apiKey: "first-key",
+		};
+		const secondProvider = {
+			id: "provider-b",
+			name: "mimo",
+			apiKey: "second-key",
+		};
+		writeSettings({ customProviders: [firstProvider, secondProvider] });
+
+		expect(readServerProviderApiKey({ settingsFile }, "custom-provider:provider-b")).toBe("second-key");
+	});
+
 	it("returns undefined when settings do not contain the provider", () => {
 		writeSettings({ providerKeys: { openai: "openai-key" } });
 

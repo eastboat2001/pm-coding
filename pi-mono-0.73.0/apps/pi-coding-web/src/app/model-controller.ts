@@ -4,6 +4,7 @@ import type { ConfiguredServerStorage } from "../storage/configured-server-stora
 
 export const SELECTED_MODEL_KEY = "example.selectedModel";
 type CustomProviderModelSource = {
+	id: string;
 	name: string;
 	type: string;
 	baseUrl: string;
@@ -47,11 +48,17 @@ export class ModelController {
 		if (!model.provider || !model.id) return undefined;
 
 		const customProviders = await this.storage.customProviders.getAll();
-		const customProvider = customProviders.find((provider) => provider.name === model.provider);
+		const customProvider = customProviders.find((provider) => customProviderMatchesIdentity(provider, model.provider));
 		if (!customProvider) return undefined;
 
 		if (customProvider.models?.length) {
-			return customProvider.models.find((item) => item.id === model.id);
+			const customModel = customProvider.models.find((item) => item.id === model.id);
+			return customModel
+				? applyCustomProviderCompat(customProvider, {
+						...customModel,
+						provider: customProviderIdentity(customProvider),
+					})
+				: undefined;
 		}
 
 		if (isCompleteModel(model)) return applyCustomProviderCompat(customProvider, model as Model<any>);
@@ -110,12 +117,14 @@ function createCustomProviderModel(provider: CustomProviderModelSource, modelId:
 }
 
 function applyCustomProviderCompat(provider: CustomProviderModelSource, model: Model<any>): Model<any> {
+	const identity = customProviderIdentity(provider);
+	const modelWithIdentity = model.provider === identity ? model : { ...model, provider: identity };
 	if (model.api !== "openai-completions" || !["ollama", "llama.cpp", "vllm", "lmstudio"].includes(provider.type)) {
-		return model;
+		return modelWithIdentity;
 	}
 
 	const compat: OpenAICompletionsCompat & { useNonStreamingToolCalls?: boolean } = {
-		...(model.compat as OpenAICompletionsCompat | undefined),
+		...(modelWithIdentity.compat as OpenAICompletionsCompat | undefined),
 		supportsStore: false,
 		supportsDeveloperRole: false,
 		supportsReasoningEffort: false,
@@ -128,7 +137,19 @@ function applyCustomProviderCompat(provider: CustomProviderModelSource, model: M
 	}
 
 	return {
-		...model,
+		...modelWithIdentity,
 		compat: compat as Model<any>["compat"],
 	};
+}
+
+function customProviderIdentity(provider: Pick<CustomProviderModelSource, "id">): string {
+	return `custom-provider:${provider.id}`;
+}
+
+function customProviderMatchesIdentity(
+	provider: Pick<CustomProviderModelSource, "id" | "name">,
+	identity: string | undefined,
+): boolean {
+	if (!identity) return false;
+	return identity === customProviderIdentity(provider) || identity === provider.id || identity === provider.name;
 }

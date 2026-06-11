@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, extname, join, resolve } from "node:path";
-import { PREVIEW_PREFIX, PROJECT_METADATA_FILE } from "./constants.js";
+import { PREVIEW_PREFIX, PROJECT_MANIFEST_FILE, PROJECT_METADATA_FILE } from "./constants.js";
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { readJsonFile, sendJson, writeJsonFile } from "./json.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
@@ -29,25 +29,25 @@ export class WorkspacePreviewService {
 	) {}
 
 	async preview(body: ProjectPreviewRequest, req: PreviewRequestLike): Promise<ProjectPreviewResult> {
-		const { sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
+		const { clientId, sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
 		mkdirSync(projectDir, { recursive: true });
-		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId);
+		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const fileCount = listProjectSourceFiles(projectDir).length;
 		if (fileCount === 0) throw new Error("Cannot preview an empty project workspace.");
-		return await this.buildAndRecordProject(projectDir, { projectId, sessionId, title, req, fileCount });
+		return await this.buildAndRecordProject(projectDir, { clientId, projectId, sessionId, title, req, fileCount });
 	}
 
 	dispose(): void {
 		// Kept as a no-op for callers that previously disposed preview runtimes.
 	}
 
-	readProjectLogs(projectId: string): JsonObject {
-		const metadata = this.readProjectMetadata(projectId);
+	readProjectLogs(projectId: string, clientId?: string): JsonObject {
+		const metadata = this.readProjectMetadata(projectId, clientId);
 		if (!metadata) return { error: "Project not found." };
 		return { projectId, status: metadata.status, logs: metadata.logs || [] };
 	}
 
-	listProjects(req?: PreviewRequestLike): ProjectPreviewListResult {
+	listProjects(req?: PreviewRequestLike, clientId?: string): ProjectPreviewListResult {
 		if (!existsSync(this.config.projectsRootDir)) return { projects: [] };
 		const projects: ProjectPreviewSummary[] = [];
 		for (const entry of readdirSync(this.config.projectsRootDir, { withFileTypes: true })) {
@@ -56,6 +56,7 @@ export class WorkspacePreviewService {
 			if (!existsSync(metadataPath)) continue;
 			try {
 				const summary = projectPreviewSummary(readJsonFile(metadataPath), entry.name);
+				if (clientId && summary?.clientId !== clientId) continue;
 				if (summary && req && summary.status === "running") {
 					summary.previewUrl = buildPreviewUrl(this.config, req, summary.projectId);
 				}
@@ -68,7 +69,7 @@ export class WorkspacePreviewService {
 		return { projects };
 	}
 
-	renameProject(projectId: string, title: string, req?: PreviewRequestLike): ProjectPreviewSummary {
+	renameProject(projectId: string, title: string, req?: PreviewRequestLike, clientId?: string): ProjectPreviewSummary {
 		const safeProjectId = safePreviewProjectId(projectId);
 		if (!safeProjectId) throw new Error("Invalid project id.");
 		const nextTitle = normalizeProjectTitle(title);
@@ -76,7 +77,8 @@ export class WorkspacePreviewService {
 		if (nextTitle.length > 160) throw new Error("App name must be 160 characters or fewer.");
 		const metadataPath = join(this.config.projectsRootDir, safeProjectId, PROJECT_METADATA_FILE);
 		if (!existsSync(metadataPath)) throw new Error("Project not found.");
-		const metadata = readJsonFile(metadataPath);
+		const metadata = this.readProjectMetadata(safeProjectId, clientId);
+		if (!metadata) throw new Error("Project not found.");
 		if (!projectPreviewSummary(metadata, safeProjectId)) throw new Error("Project metadata is invalid.");
 		const nextMetadata: JsonObject = { ...metadata, title: nextTitle };
 		writeJsonFile(metadataPath, nextMetadata);
@@ -113,6 +115,10 @@ export class WorkspacePreviewService {
 
 		const requestedPath =
 			parts.length > 0 ? safeRelativePreviewPath(parts.map((part) => decodeURIComponent(part))) : "index.html";
+		if (isInternalPreviewPath(requestedPath)) {
+			sendJson(res, { error: "Preview not found." }, 404);
+			return true;
+		}
 		let targetPath = resolve(serveRoot, requestedPath);
 		assertInside(serveRoot, targetPath);
 		if (!existsSync(targetPath) || statSync(targetPath).isDirectory()) targetPath = resolve(serveRoot, "index.html");
@@ -134,7 +140,14 @@ export class WorkspacePreviewService {
 
 	private async buildAndRecordProject(
 		projectDir: string,
-		options: { projectId: string; sessionId: string; title: string; req: PreviewRequestLike; fileCount: number },
+		options: {
+			clientId?: string;
+			projectId: string;
+			sessionId: string;
+			title: string;
+			req: PreviewRequestLike;
+			fileCount: number;
+		},
 	): Promise<ProjectPreviewResult> {
 		const logs: string[] = [];
 		logs.push(`Project root: ${projectDir}\n`);
@@ -176,6 +189,7 @@ export class WorkspacePreviewService {
 		const metadata: ProjectPreviewResult = {
 			version: 1,
 			projectId: options.projectId,
+			...(options.clientId ? { clientId: options.clientId } : {}),
 			sessionId: options.sessionId,
 			title: options.title,
 			status,
@@ -188,7 +202,7 @@ export class WorkspacePreviewService {
 			logs,
 		};
 		writeJsonFile(join(projectDir, PROJECT_METADATA_FILE), metadata);
-		this.writeProjectLogEvent("project.preview.logs", metadata.sessionId, metadata.projectId, {
+		this.writeProjectLogEvent("project.preview.logs", metadata.clientId, metadata.sessionId, metadata.projectId, {
 			status,
 			title: metadata.title,
 			logs,
@@ -198,18 +212,27 @@ export class WorkspacePreviewService {
 		return metadata;
 	}
 
-	private readProjectMetadata(projectId: string): JsonObject | undefined {
+	private readProjectMetadata(projectId: string, clientId?: string): JsonObject | undefined {
 		const safeProjectId = safePreviewProjectId(projectId);
 		if (!safeProjectId) return undefined;
 		const metadataPath = join(this.config.projectsRootDir, safeProjectId, PROJECT_METADATA_FILE);
 		if (!existsSync(metadataPath)) return undefined;
-		return readJsonFile(metadataPath);
+		const metadata = readJsonFile(metadataPath);
+		if (clientId && metadata.clientId !== clientId) return undefined;
+		return metadata;
 	}
 
-	private writeProjectLogEvent(eventType: string, sessionId: string, projectId: string, data: JsonObject): void {
+	private writeProjectLogEvent(
+		eventType: string,
+		clientId: string | undefined,
+		sessionId: string,
+		projectId: string,
+		data: JsonObject,
+	): void {
 		this.diagnostics?.writeEvents({
 			events: [
 				{
+					clientId,
 					level: data.status === "failed" ? "error" : "info",
 					category: "project",
 					eventType,
@@ -226,6 +249,7 @@ export class WorkspacePreviewService {
 function projectPreviewSummary(metadata: JsonObject, directoryName: string): ProjectPreviewSummary | undefined {
 	const projectId = stringValue(metadata.projectId);
 	if (!projectId || projectId !== directoryName || safePreviewProjectId(projectId) !== projectId) return undefined;
+	const clientId = stringValue(metadata.clientId);
 	const sessionId = stringValue(metadata.sessionId);
 	const title = stringValue(metadata.title);
 	const status = stringValue(metadata.status);
@@ -235,6 +259,7 @@ function projectPreviewSummary(metadata: JsonObject, directoryName: string): Pro
 	if (metadata.mode !== "static" || fileCount === undefined) return undefined;
 	return {
 		projectId,
+		...(clientId ? { clientId } : {}),
 		sessionId,
 		title,
 		status,
@@ -262,6 +287,14 @@ function numberValue(value: unknown): number | undefined {
 
 function normalizeProjectTitle(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
+}
+
+function isInternalPreviewPath(path: string): boolean {
+	const internalFiles = new Set([PROJECT_METADATA_FILE, PROJECT_MANIFEST_FILE]);
+	return path
+		.replace(/\\/g, "/")
+		.split("/")
+		.some((part) => part === ".pi" || internalFiles.has(part));
 }
 
 export function buildPreviewUrl(config: StorageConfig, req: PreviewRequestLike, projectId: string): string {

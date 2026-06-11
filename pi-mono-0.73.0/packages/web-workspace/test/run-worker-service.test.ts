@@ -28,7 +28,16 @@ describe("WorkspaceRunWorkerService", () => {
 	it("marks owned running runs interrupted on startup recovery", () => {
 		const run = createRunFixture(db);
 		db.updateRunStatus(run.runId, run.clientId, "running", { workerId: "w1" });
-		db.updateRunStatus("other-run", "client-a", "running", { workerId: "w2" });
+		db.updateRunStatus("other-run", "client-a", "running", { workerId: "w1" });
+		db.updateRunStatus("other-run", "client-a", "cancelling");
+		db.createRun({
+			clientId: run.clientId,
+			sessionId: run.sessionId,
+			runId: "foreign-run",
+			model: run.model,
+			thinkingLevel: run.thinkingLevel,
+		});
+		db.updateRunStatus("foreign-run", "client-a", "running", { workerId: "w2" });
 
 		const worker = new WorkspaceRunWorkerService({
 			db,
@@ -40,7 +49,48 @@ describe("WorkspaceRunWorkerService", () => {
 		worker.markOwnedRunningRunsInterrupted();
 
 		expect(db.getRun(run.clientId, run.runId)?.status).toBe("interrupted");
-		expect(db.getRun("client-a", "other-run")?.status).toBe("running");
+		expect(db.getRun("client-a", "other-run")?.status).toBe("interrupted");
+		expect(db.getRun("client-a", "foreign-run")?.status).toBe("running");
+	});
+
+	it("requeues active claims for queued runs during startup recovery", async () => {
+		const run = createRunFixture(db);
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+		await expect(queue.claim("w1", 1)).resolves.toEqual({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		await worker.recoverOwnedRuns();
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
+	});
+
+	it("requeues active claims and interrupts owned running runs during startup recovery", async () => {
+		const run = createRunFixture(db);
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+		await expect(queue.claim("w1", 1)).resolves.toEqual({ clientId: run.clientId, runId: run.runId });
+		db.updateRunStatus(run.runId, run.clientId, "running", { workerId: "w1" });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			createAgent: () => {
+				throw new Error("interrupted recovered runs should not invoke an agent");
+			},
+		});
+
+		await worker.recoverOwnedRuns();
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(db.getRun(run.clientId, run.runId)?.status).toBe("interrupted");
+		await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
 	});
 
 	it("processes one queued run through the fake agent", async () => {
@@ -497,6 +547,10 @@ class ClaimFailingQueue implements RunQueue {
 	}
 
 	async complete(_run: RunQueueItem | ClaimedRun, _workerId: string): Promise<void> {}
+
+	async requeueActive(_workerId: string): Promise<number> {
+		return 0;
+	}
 
 	async requestCancel(_run: RunQueueItem | ClaimedRun): Promise<void> {}
 

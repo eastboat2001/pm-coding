@@ -11,6 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, extname, relative, resolve } from "node:path";
+import { PROJECT_FILE_GET_MAX_BYTES } from "./constants.js";
 import type {
 	ProjectFilePreviewRequest,
 	ProjectFilePreviewResult,
@@ -103,9 +104,9 @@ export class WorkspaceFileService {
 	}
 
 	handle(body: ProjectFileRequest): ProjectFileResult {
-		const { projectDir, sessionId } = workspaceContext(this.config, body);
+		const { clientId, projectDir, sessionId } = workspaceContext(this.config, body);
 		mkdirSync(projectDir, { recursive: true });
-		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId);
+		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 
 		const command = String(body.command || "").trim();
 		const filename = String(body.filename || "").trim();
@@ -122,7 +123,20 @@ export class WorkspaceFileService {
 
 		if (command === "get") {
 			if (!existsSync(targetPath)) throw new Error(`File not found: ${relativePath}`);
-			return { command, filename: relativePath, content: readFileSync(targetPath, "utf8"), projectRoot: projectDir };
+			const stat = statSync(targetPath);
+			if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`);
+			const bytesToRead = Math.min(stat.size, PROJECT_FILE_GET_MAX_BYTES);
+			const content =
+				bytesToRead > 0 ? readFilePrefix(targetPath, bytesToRead).toString("utf8") : "";
+			const truncated = stat.size > bytesToRead;
+			return {
+				command,
+				filename: relativePath,
+				content,
+				size: stat.size,
+				...(truncated ? { truncated, omittedBytes: stat.size - bytesToRead } : { truncated: false }),
+				projectRoot: projectDir,
+			};
 		}
 
 		if (command === "delete") {

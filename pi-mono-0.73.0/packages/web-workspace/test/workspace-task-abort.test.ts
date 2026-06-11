@@ -27,8 +27,8 @@ function testConfig(root: string): StorageConfig {
 		runEventRetentionDays: 30,
 		clientIdRequired: true,
 		previewBaseUrl: "http://localhost:5173",
-		projectInstallCommand: "npm install",
-		projectBuildCommand: "npm run build",
+		projectInstallCommand: "",
+		projectBuildCommand: "node build.js",
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
 		serverSessionSyncEnabled: false,
@@ -71,11 +71,7 @@ describe("WorkspaceTaskService abort handling", () => {
 		const config = testConfig(root);
 		const projectDir = projectDirectory(config.projectsRootDir, "s1", "Abort");
 		mkdirSync(projectDir, { recursive: true });
-		writeFileSync(
-			join(projectDir, "package.json"),
-			JSON.stringify({ scripts: { build: "vite build" }, dependencies: {} }),
-			"utf8",
-		);
+		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }), "utf8");
 
 		const controller = new AbortController();
 		let receivedSignal = false;

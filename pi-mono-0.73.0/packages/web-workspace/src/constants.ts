@@ -8,3 +8,5 @@ export const PREVIEW_PREFIX = "/preview";
 export const CONFIG_ENV_FILE = ".env";
 export const PROJECT_MANIFEST_FILE = ".pi-project-files.json";
 export const PROJECT_METADATA_FILE = ".pi-project.json";
+export const PROJECT_FILE_GET_MAX_BYTES = 512 * 1024;
+export const PROJECT_LOG_MAX_CHARS = 64 * 1024;

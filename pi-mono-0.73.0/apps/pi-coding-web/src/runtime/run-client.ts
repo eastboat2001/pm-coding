@@ -80,7 +80,7 @@ export async function cancelRun(runId: string): Promise<RuntimeRunRecord> {
 export function connectRunEvents(
 	runId: string,
 	afterSeq: number,
-	onEvent: (event: RuntimeRunEventRecord) => void,
+	onEvent: (event: RuntimeRunEventRecord) => void | Promise<void>,
 ): RunEventConnection {
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
 	let abortController: AbortController | undefined;
@@ -123,7 +123,7 @@ export function connectRunEvents(
 				if (connection.closed) return;
 				connection.readyState = connection.OPEN;
 				connection.lastError = undefined;
-				deliverRunEvents(result.events);
+				await deliverRunEvents(result.events);
 				fallbackToPolling = true;
 				return;
 			}
@@ -155,15 +155,15 @@ export function connectRunEvents(
 		}
 	};
 
-	const deliverRunEvent = (event: RuntimeRunEventRecord): void => {
+	const deliverRunEvent = async (event: RuntimeRunEventRecord): Promise<void> => {
 		if (connection.closed) return;
-		onEvent(event);
+		await onEvent(event);
 		connection.lastSeq = Math.max(connection.lastSeq, event.seq);
 	};
 
-	const deliverRunEvents = (events: RuntimeRunEventRecord[]): void => {
+	const deliverRunEvents = async (events: RuntimeRunEventRecord[]): Promise<void> => {
 		for (const event of events) {
-			deliverRunEvent(event);
+			await deliverRunEvent(event);
 			if (connection.closed) return;
 		}
 	};
@@ -179,7 +179,7 @@ export function connectRunEvents(
 				events.length > 0
 					? FAST_POLL_INTERVAL_MS
 					: Math.min(connection.pollIntervalMs + IDLE_POLL_BACKOFF_MS, MAX_POLL_INTERVAL_MS);
-			deliverRunEvents(events);
+			await deliverRunEvents(events);
 		} catch (error) {
 			connection.lastError = toError(error);
 			connection.pollIntervalMs = MAX_POLL_INTERVAL_MS;
@@ -209,7 +209,7 @@ function isEventStreamResponse(response: Response): boolean {
 
 async function readEventStream(
 	body: ReadableStream<Uint8Array>,
-	onEvent: (event: RuntimeRunEventRecord) => void,
+	onEvent: (event: RuntimeRunEventRecord) => void | Promise<void>,
 ): Promise<void> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
@@ -223,12 +223,12 @@ async function readEventStream(
 			while (boundary) {
 				const rawEvent = buffer.slice(0, boundary.index);
 				buffer = buffer.slice(boundary.index + boundary.length);
-				deliverServerSentEvent(rawEvent, onEvent);
+				await deliverServerSentEvent(rawEvent, onEvent);
 				boundary = findServerSentEventBoundary(buffer);
 			}
 		}
 		buffer += decoder.decode();
-		if (buffer.trim()) deliverServerSentEvent(buffer, onEvent);
+		if (buffer.trim()) await deliverServerSentEvent(buffer, onEvent);
 	} finally {
 		reader.releaseLock();
 	}
@@ -246,14 +246,17 @@ function findServerSentEventBoundary(buffer: string): { index: number; length: n
 	return { index: crlfIndex, length: 4 };
 }
 
-function deliverServerSentEvent(rawEvent: string, onEvent: (event: RuntimeRunEventRecord) => void): void {
+async function deliverServerSentEvent(
+	rawEvent: string,
+	onEvent: (event: RuntimeRunEventRecord) => void | Promise<void>,
+): Promise<void> {
 	const data = rawEvent
 		.split(/\r?\n/)
 		.filter((line) => line.startsWith("data:"))
 		.map((line) => line.slice("data:".length).trimStart())
 		.join("\n");
 	if (!data) return;
-	onEvent(JSON.parse(data) as RuntimeRunEventRecord);
+	await onEvent(JSON.parse(data) as RuntimeRunEventRecord);
 }
 
 async function requestRunApi<T>(path: string, init: RequestInit = {}): Promise<T> {

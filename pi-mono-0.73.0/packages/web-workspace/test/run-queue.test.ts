@@ -35,6 +35,16 @@ describe("InMemoryRunQueue", () => {
 		await expect(queue.isCancelRequested({ clientId: "client-b", runId: "r1" })).resolves.toBe(true);
 	});
 
+	it("requeues active claims owned by a worker", async () => {
+		const queue = new InMemoryRunQueue();
+
+		await queue.enqueue({ clientId: "client-a", runId: "r1" });
+		await expect(queue.claim("w1", 10)).resolves.toEqual({ clientId: "client-a", runId: "r1" });
+
+		await expect(queue.requeueActive("w1")).resolves.toBe(1);
+		await expect(queue.claim("w2", 10)).resolves.toEqual({ clientId: "client-a", runId: "r1" });
+	});
+
 	it("rejects operations after close", async () => {
 		const queue = new InMemoryRunQueue();
 

@@ -31,6 +31,7 @@ const SENSITIVE_KEY_PATTERN =
 type DiagnosticEventRow = {
 	id: number;
 	timestamp: string;
+	client_id: string | null;
 	level: DiagnosticLogLevel;
 	category: DiagnosticLogCategory;
 	event_type: string;
@@ -51,6 +52,10 @@ type CountRow = {
 
 type MetadataRow = {
 	value: string;
+};
+
+type TableInfoRow = {
+	name: string;
 };
 
 type RunResult = {
@@ -118,6 +123,7 @@ export class WorkspaceDiagnosticLogService {
 		const insert = this.open().prepare(`
 			INSERT INTO diagnostic_events (
 				timestamp,
+				client_id,
 				level,
 				category,
 				event_type,
@@ -130,7 +136,7 @@ export class WorkspaceDiagnosticLogService {
 				model,
 				duration_ms,
 				data_json
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`);
 
 		let accepted = 0;
@@ -140,6 +146,7 @@ export class WorkspaceDiagnosticLogService {
 			normalizedEvents.push(normalized);
 			insert.run(
 				normalized.timestamp,
+				normalized.clientId ?? null,
 				normalized.level,
 				normalized.category,
 				normalized.eventType,
@@ -165,10 +172,16 @@ export class WorkspaceDiagnosticLogService {
 		await this.langfuse.flush();
 	}
 
+	close(): void {
+		this.database?.close();
+		this.database = undefined;
+	}
+
 	queryEvents(query: DiagnosticLogQuery = {}): DiagnosticLogQueryResult {
 		if (!this.config.loggingEnabled || !existsSync(this.config.logsDbFile)) return { events: [] };
 		const clauses: string[] = [];
 		const values: (string | number)[] = [];
+		addClause(clauses, values, "client_id", stringField(query.clientId));
 		addClause(clauses, values, "session_id", stringField(query.sessionId));
 		addClause(clauses, values, "trace_id", stringField(query.traceId));
 		addClause(clauses, values, "level", diagnosticLevel(query.level));
@@ -179,7 +192,7 @@ export class WorkspaceDiagnosticLogService {
 		const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
 		const rows = this.open()
 			.prepare(
-				`SELECT id, timestamp, level, category, event_type, session_id, trace_id, span_id, parent_span_id, request_id, provider, model, duration_ms, data_json
+				`SELECT id, timestamp, client_id, level, category, event_type, session_id, trace_id, span_id, parent_span_id, request_id, provider, model, duration_ms, data_json
 				FROM diagnostic_events
 				${where}
 				ORDER BY id DESC
@@ -197,6 +210,7 @@ export class WorkspaceDiagnosticLogService {
 				CREATE TABLE IF NOT EXISTS diagnostic_events (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
 					timestamp TEXT NOT NULL,
+					client_id TEXT,
 					level TEXT NOT NULL,
 					category TEXT NOT NULL,
 					event_type TEXT NOT NULL,
@@ -221,8 +235,19 @@ export class WorkspaceDiagnosticLogService {
 					value TEXT NOT NULL
 				);
 			`);
+			this.ensureClientIdColumn();
+			this.database.exec(
+				"CREATE INDEX IF NOT EXISTS idx_diagnostic_events_client_id ON diagnostic_events(client_id);",
+			);
 		}
 		return this.database;
+	}
+
+	private ensureClientIdColumn(): void {
+		const db = this.open();
+		const columns = db.prepare("PRAGMA table_info(diagnostic_events)").all() as TableInfoRow[];
+		if (columns.some((column) => column.name === "client_id")) return;
+		db.exec("ALTER TABLE diagnostic_events ADD COLUMN client_id TEXT;");
 	}
 
 	private cleanupAfterWrite(): void {
@@ -327,8 +352,10 @@ function errorMessage(error: unknown): string {
 type NormalizedDiagnosticEvent = LangfuseDiagnosticEvent;
 
 function normalizeEvent(event: DiagnosticLogEventInput): NormalizedDiagnosticEvent {
+	const data = isObject(event.data) ? event.data : {};
 	return {
 		timestamp: isoTimestamp(event.timestamp) ?? new Date().toISOString(),
+		clientId: stringField(event.clientId) ?? stringField(data.clientId),
 		level: diagnosticLevel(event.level) ?? "info",
 		category: diagnosticCategory(event.category) ?? "system",
 		eventType: stringField(event.eventType) ?? "event",
@@ -340,7 +367,7 @@ function normalizeEvent(event: DiagnosticLogEventInput): NormalizedDiagnosticEve
 		provider: stringField(event.provider),
 		model: stringField(event.model),
 		durationMs: integerField(event.durationMs),
-		data: sanitizeJsonObject(isObject(event.data) ? event.data : {}),
+		data: sanitizeJsonObject(data),
 	};
 }
 
@@ -350,6 +377,7 @@ function toRecord(row: DiagnosticEventRow): DiagnosticLogEventRecord {
 	return {
 		id: row.id,
 		timestamp: row.timestamp,
+		...(row.client_id ? { clientId: row.client_id } : {}),
 		level: row.level,
 		category: row.category,
 		eventType: row.event_type,

@@ -1,5 +1,12 @@
 import { type Static, type TSchema, Type } from "typebox";
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
+import {
+	formatSkillLoadResult,
+	prepareSkillLoadArguments,
+	prepareSkillResourceArguments,
+	skillLoadSchema,
+	skillResourceSchema,
+} from "./skill-tool-contract.js";
 import type {
 	PreviewRequestLike,
 	ProjectFileResult,
@@ -13,7 +20,7 @@ import { WorkspaceFileService } from "./workspace-file-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 
-type ServerDirectProjectToolContext = Pick<ProjectWorkspaceContext, "sessionId" | "title"> & {
+type ServerDirectProjectToolContext = Pick<ProjectWorkspaceContext, "clientId" | "sessionId" | "title"> & {
 	activeSkillNames?: string[];
 };
 
@@ -123,30 +130,7 @@ const projectTaskSchema = Type.Object({
 	),
 });
 
-const skillLoadSchema = Type.Object(
-	{
-		name: Type.String({
-			description: "Configured global skill name, such as ui-polish.",
-		}),
-	},
-	{ additionalProperties: false },
-);
-
-const skillResourceSchema = Type.Object(
-	{
-		name: Type.String({
-			description: "Configured global skill name that owns the resource.",
-		}),
-		path: Type.String({
-			description: "Relative path inside the skill directory, such as references/rules.md.",
-		}),
-	},
-	{ additionalProperties: false },
-);
-
 type ProjectFileParams = Static<typeof projectFileSchema>;
-type SkillLoadParams = Static<typeof skillLoadSchema>;
-type SkillResourceParams = Static<typeof skillResourceSchema>;
 
 export function createServerDirectSkillTools(
 	config: StorageConfig,
@@ -343,23 +327,6 @@ function assertWritableProjectFileContent(value: string, filename: string): void
 	);
 }
 
-function prepareSkillLoadArguments(args: unknown): SkillLoadParams {
-	const raw = coerceRecord(args);
-	const name = readString(raw, "name", "skill", "skillName", "skill_name");
-	if (!name) throw new Error('skill_load requires: {"name":"skill-name"}');
-	return { name };
-}
-
-function prepareSkillResourceArguments(args: unknown): SkillResourceParams {
-	const raw = coerceRecord(args);
-	const name = readString(raw, "name", "skill", "skillName", "skill_name");
-	const path = readString(raw, "path", "resource", "resourcePath", "resource_path", "file", "filename");
-	if (!name || !path) {
-		throw new Error('skill_resource requires: {"name":"skill-name","path":"references/file.md"}');
-	}
-	return { name, path };
-}
-
 function coerceRecord(args: unknown): Record<string, unknown> {
 	if (typeof args === "string") {
 		try {
@@ -394,7 +361,13 @@ function normalizeCommand(command: string | undefined): ProjectFileParams["comma
 
 function formatProjectFileResult(result: ProjectFileResult): string {
 	if (result.command === "list") return (result.files || []).join("\n") || "(no files)";
-	if (result.command === "get") return result.content || "";
+	if (result.command === "get") {
+		const content = result.content || "";
+		if (result.truncated && typeof result.omittedBytes === "number") {
+			return `${content}\n\n[project_file content truncated: omitted ${result.omittedBytes} bytes]`;
+		}
+		return content;
+	}
 	return `${result.action || result.command}: ${result.filename}`;
 }
 
@@ -426,37 +399,4 @@ function formatSkillAuditReminder(result: ProjectTaskResult, activeSkillNames: s
 		...activeSkillNames.map((name) => `- ${name}`),
 		"If any selected skill is not reflected in the current project, update the files and run preview again.",
 	].join("\n");
-}
-
-function formatSkillLoadResult(result: SkillLoadResult): string {
-	const resources =
-		result.resources.length > 0
-			? `\n\nAvailable skill resources:\n${result.resources
-					.map((resource) => `- ${resource.path} (${resource.size} bytes)`)
-					.join("\n")}`
-			: "";
-	return [
-		`Skill: ${result.name}`,
-		result.interface?.displayName ? `Display name: ${result.interface.displayName}` : "",
-		result.interface?.shortDescription ? `Short description: ${result.interface.shortDescription}` : "",
-		`Location: ${result.location}`,
-		result.interface?.defaultPrompt ? `Default prompt: ${result.interface.defaultPrompt}` : "",
-		"References are relative to this skill. Use skill_resource to read listed relative resources when needed.",
-		"",
-		`<skill name="${escapeXml(result.name)}" location="${escapeXml(result.location)}">`,
-		result.content,
-		"</skill>",
-		resources,
-	]
-		.filter(Boolean)
-		.join("\n");
-}
-
-function escapeXml(value: string): string {
-	return value
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&apos;");
 }

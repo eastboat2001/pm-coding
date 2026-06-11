@@ -5,7 +5,7 @@ import type {
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
 } from "@mariozechner/pi-ai";
-import type { CustomProvider } from "../storage/stores/custom-providers-store.js";
+import { customProviderIdentity, type CustomProvider } from "../storage/stores/custom-providers-store.js";
 
 export type CompatibleThinkingFormat = NonNullable<OpenAICompletionsCompat["thinkingFormat"]>;
 export type CompatibleMaxTokensField = NonNullable<OpenAICompletionsCompat["maxTokensField"]>;
@@ -124,7 +124,7 @@ export function createManualModelsFromConfigs(
 				id: config.id.trim(),
 				name: config.id.trim(),
 				api,
-				provider: provider.name,
+				provider: customProviderIdentity(provider),
 				baseUrl: provider.baseUrl,
 				reasoning: config.reasoning,
 				input: config.vision ? ["text", "image"] : ["text"],

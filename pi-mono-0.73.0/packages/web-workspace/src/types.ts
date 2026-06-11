@@ -53,7 +53,7 @@ export interface RuntimeRunEventRecord extends JsonObject {
 export interface StartRunRequest extends JsonObject {
 	sessionId?: string;
 	title?: string;
-	message: JsonObject;
+	message?: JsonObject;
 	model?: JsonObject;
 	thinkingLevel?: string;
 	projectFiles?: StartRunProjectFile[];
@@ -66,7 +66,7 @@ export interface StartRunProjectFile extends JsonObject {
 
 export interface StartRunResult extends JsonObject {
 	session: RuntimeSessionRecord;
-	message: RuntimeMessageRecord;
+	message?: RuntimeMessageRecord;
 	run: RuntimeRunRecord;
 }
 
@@ -215,6 +215,7 @@ export type DiagnosticLogCategory =
 
 export interface DiagnosticLogEventInput extends JsonObject {
 	timestamp?: string;
+	clientId?: string;
 	level?: DiagnosticLogLevel;
 	category?: DiagnosticLogCategory;
 	eventType?: string;
@@ -232,6 +233,7 @@ export interface DiagnosticLogEventInput extends JsonObject {
 export interface DiagnosticLogEventRecord extends JsonObject {
 	id: number;
 	timestamp: string;
+	clientId?: string;
 	level: DiagnosticLogLevel;
 	category: DiagnosticLogCategory;
 	eventType: string;
@@ -256,6 +258,7 @@ export interface DiagnosticLogWriteResult extends JsonObject {
 }
 
 export interface DiagnosticLogQuery extends JsonObject {
+	clientId?: string;
 	sessionId?: string;
 	traceId?: string;
 	level?: DiagnosticLogLevel;
@@ -297,6 +300,7 @@ export interface DiagnosticLogStatus extends JsonObject {
 }
 
 export interface ProjectWorkspaceContext {
+	clientId?: string;
 	sessionId: string;
 	title: string;
 	projectId: string;
@@ -304,6 +308,7 @@ export interface ProjectWorkspaceContext {
 }
 
 export interface ProjectRequestContext {
+	clientId?: string;
 	sessionId: string;
 	title?: string;
 }
@@ -321,6 +326,9 @@ export interface ProjectFileResult extends JsonObject {
 	filename?: string;
 	action?: string;
 	content?: string;
+	size?: number;
+	truncated?: boolean;
+	omittedBytes?: number;
 	files?: string[];
 	fileCount?: number;
 	projectRoot?: string;
@@ -386,6 +394,7 @@ export interface ProjectPreviewRenameRequest extends JsonObject {
 export interface ProjectPreviewResult extends JsonObject {
 	version: number;
 	projectId: string;
+	clientId?: string;
 	sessionId: string;
 	title: string;
 	status: string;
@@ -400,6 +409,7 @@ export interface ProjectPreviewResult extends JsonObject {
 
 export interface ProjectPreviewSummary extends JsonObject {
 	projectId: string;
+	clientId?: string;
 	sessionId: string;
 	title: string;
 	status: string;

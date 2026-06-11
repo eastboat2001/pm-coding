@@ -3,6 +3,7 @@ import { requestSkillApi } from "./client.js";
 import { registerDefaultSkillLoadMessageRenderer } from "./default-skill-message.js";
 import { registerSkillToolRenderers } from "./renderers.js";
 import {
+	formatSkillLoadResult,
 	prepareSkillLoadArguments,
 	prepareSkillResourceArguments,
 	type SkillLoadDetails,
@@ -53,37 +54,4 @@ function createSkillResourceTool(): AgentTool<typeof skillResourceSchema, SkillR
 			};
 		},
 	};
-}
-
-function formatSkillLoadResult(result: SkillLoadDetails): string {
-	const resources =
-		result.resources.length > 0
-			? `\n\nAvailable skill resources:\n${result.resources
-					.map((resource) => `- ${resource.path} (${resource.size} bytes)`)
-					.join("\n")}`
-			: "";
-	return [
-		`Skill: ${result.name}`,
-		result.interface?.displayName ? `Display name: ${result.interface.displayName}` : "",
-		result.interface?.shortDescription ? `Short description: ${result.interface.shortDescription}` : "",
-		`Location: ${result.location}`,
-		result.interface?.defaultPrompt ? `Default prompt: ${result.interface.defaultPrompt}` : "",
-		"References are relative to this skill. Use skill_resource to read listed relative resources when needed.",
-		"",
-		`<skill name="${escapeXml(result.name)}" location="${escapeXml(result.location)}">`,
-		result.content,
-		"</skill>",
-		resources,
-	]
-		.filter(Boolean)
-		.join("\n");
-}
-
-function escapeXml(value: string): string {
-	return value
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&apos;");
 }

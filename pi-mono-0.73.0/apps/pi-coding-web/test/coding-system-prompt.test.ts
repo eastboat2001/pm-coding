@@ -41,4 +41,9 @@ describe("coding system prompt", () => {
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("Match the latest user request language");
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("without switching the output language");
 	});
+
+	it("does not tell the model to read ordinary attachment names as project files", () => {
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("Ordinary user attachments are already available in the message context");
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("Do not call project_file get with an ordinary attachment filename");
+	});
 });

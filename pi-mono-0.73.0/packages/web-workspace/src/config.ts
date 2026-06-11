@@ -30,7 +30,7 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		runtimeDbFile: resolveConfiguredPath(rootDir, stringValue(env("PI_DB_FILE")) || "data/pi-runtime.sqlite"),
 		redisUrl: stringValue(env("PI_REDIS_URL")) || "redis://127.0.0.1:6379",
 		runsEnabled: envBooleanValue(env("PI_RUNS_ENABLED")) ?? true,
-		workerId: stringValue(env("PI_WORKER_ID")) || `worker-${process.pid}`,
+		workerId: stringValue(env("PI_WORKER_ID")) || "pi-worker",
 		workerConcurrency: positiveIntegerValue(env("PI_WORKER_CONCURRENCY"), 2),
 		runQueueName: stringValue(env("PI_RUN_QUEUE_NAME")) || "pi:runs",
 		runEventRetentionDays: nonNegativeIntegerValue(env("PI_RUN_EVENT_RETENTION_DAYS"), 30),

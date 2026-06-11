@@ -5,6 +5,6 @@ export function runtimeMessageToAgentMessage(message: RuntimeMessageRecord): Age
 	const payload = message.payload;
 	return {
 		...payload,
-		role: typeof payload.role === "string" ? payload.role : message.role,
+		role: message.role,
 	} as AgentMessage;
 }

@@ -12,7 +12,7 @@ export type CustomProviderType =
 
 export interface CustomProvider {
 	id: string; // UUID
-	name: string; // Display name, also used as Model.provider
+	name: string; // Display name
 	type: CustomProviderType;
 	baseUrl: string;
 	apiKey?: string; // Optional, applies to all models
@@ -21,6 +21,20 @@ export interface CustomProvider {
 	// For manual types ONLY - models stored directly on provider
 	// Auto-discovery types: models fetched on-demand, never stored
 	models?: Model<any>[];
+}
+
+const CUSTOM_PROVIDER_ID_PREFIX = "custom-provider:";
+
+export function customProviderIdentity(provider: Pick<CustomProvider, "id">): string {
+	return `${CUSTOM_PROVIDER_ID_PREFIX}${provider.id}`;
+}
+
+export function customProviderMatchesIdentity(
+	provider: Pick<CustomProvider, "id" | "name">,
+	identity: string | undefined,
+): boolean {
+	if (!identity) return false;
+	return identity === customProviderIdentity(provider) || identity === provider.id || identity === provider.name;
 }
 
 /**

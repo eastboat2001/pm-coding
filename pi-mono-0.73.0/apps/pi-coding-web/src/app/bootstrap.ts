@@ -53,8 +53,9 @@ import {
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
-import { RemoteAgentController } from "../runtime/remote-agent-controller.js";
+import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
 import { collectProjectFilesFromMessages } from "../runtime/project-file-seed.js";
+import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import {
 	cancelRun as cancelRuntimeRun,
 	connectRunEvents,
@@ -174,7 +175,12 @@ const settings = new SettingsStore();
 const sessions = new SessionsStore();
 const customProviders = new ServerBackedCustomProvidersStore(configuredStorage);
 const providerKeys = new ServerBackedProviderKeysStore(configuredStorage, async (providerName) => {
-	const customProvider = (await customProviders.getAll()).find((provider) => provider.name === providerName);
+	const customProvider = (await customProviders.getAll()).find(
+		(provider) =>
+			provider.name === providerName ||
+			provider.id === providerName ||
+			`custom-provider:${provider.id}` === providerName,
+	);
 	return customProvider?.apiKey || null;
 });
 
@@ -855,24 +861,24 @@ const handleModelSelect = () => {
 };
 
 const resumeInterruptedSessionIfNeeded = () => {
-	if (!agent || !currentSessionId || resumedInterruptedSessions.has(currentSessionId)) return;
-	if (agent.state.isStreaming) return;
-	if (currentActiveRunId && isActiveRunStatus(currentRunStatus)) return;
-
-	const lastMessage = agent.state.messages[agent.state.messages.length - 1];
-	if (!lastMessage || lastMessage.role !== "toolResult") return;
-
-	const sessionId = currentSessionId;
-	resumedInterruptedSessions.add(sessionId);
-	void agent.continue().catch((error) => {
-		console.error("Failed to resume interrupted session:", error);
-		writeDiagnosticEvent({
-			level: "error",
-			category: "agent",
-			eventType: "agent.resume.error",
-			data: errorDiagnosticData(error, { sessionId }),
-		});
-		resumedInterruptedSessions.delete(sessionId);
+	if (!agent) return;
+	resumeInterruptedToolResultSession({
+		activeRunId: currentActiveRunId,
+		isStreaming: agent.state.isStreaming,
+		messages: agent.state.messages,
+		resumedSessions: resumedInterruptedSessions,
+		runStatus: currentRunStatus,
+		sessionId: currentSessionId,
+		startRemoteContinuation: startRemoteContinuationRun,
+		reportError: (error, sessionId) => {
+			console.error("Failed to resume interrupted session:", error);
+			writeDiagnosticEvent({
+				level: "error",
+				category: "agent",
+				eventType: "agent.resume.error",
+				data: errorDiagnosticData(error, { sessionId }),
+			});
+		},
 	});
 };
 
@@ -896,6 +902,12 @@ const normalizeRemotePromptInput = (
 	return [{ role: "user", content, timestamp: Date.now() }];
 };
 
+const drainCurrentRemoteRunEvents = async (runId: string): Promise<void> => {
+	const controller = remoteAgentController;
+	if (!controller || controller.activeRunId !== runId) return;
+	await drainRemoteRunEvents(runId, controller, runClient.listRunEvents);
+};
+
 const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, intervalMs = 200): Promise<boolean> => {
 	if (!currentSessionId) return false;
 
@@ -913,6 +925,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 			continue;
 		}
 
+		await drainCurrentRemoteRunEvents(run.runId);
 		closeRemoteRunConnection();
 		if (remoteAgentController?.activeRunId === run.runId) {
 			await remoteAgentController.settleRemoteRun(run.status);
@@ -1023,8 +1036,10 @@ const connectToRemoteRun = (run: RuntimeRunRecord, controller: RemoteAgentContro
 	closeRemoteRunConnection();
 	trackRemoteRun(run);
 	scheduleRemoteRunStatusPoll(run.runId);
-	remoteRunConnection = runClient.connectRunEvents(run.runId, controller.lastSeq, (event) => {
-		void applyConnectedRunEvent(event).catch((error) => {
+	remoteRunConnection = runClient.connectRunEvents(run.runId, controller.lastSeq, async (event) => {
+		try {
+			await applyConnectedRunEvent(event);
+		} catch (error) {
 			console.error("Failed to apply remote run event:", error);
 			writeDiagnosticEvent({
 				level: "error",
@@ -1032,7 +1047,8 @@ const connectToRemoteRun = (run: RuntimeRunRecord, controller: RemoteAgentContro
 				eventType: "agent.remote_event.error",
 				data: errorDiagnosticData(error, { runId: event.runId, sessionId: event.sessionId, seq: event.seq }),
 			});
-		});
+			throw error;
+		}
 	});
 };
 
@@ -1066,6 +1082,38 @@ const startRemotePrompt = async (
 		});
 	} catch (error) {
 		agent.state.messages = previousMessages;
+		await saveSession();
+		renderApp();
+		requestChatPanelUpdate();
+		throw error;
+	}
+
+	currentSessionCreatedAt = runResult.session.createdAt;
+	await setCurrentSessionId(runResult.session.sessionId);
+
+	const controller = new RemoteAgentController(agent);
+	controller.startRemoteRun(runResult.run.runId);
+	remoteAgentController = controller;
+	connectToRemoteRun(runResult.run, controller);
+	renderApp();
+	requestChatPanelUpdate();
+	await saveSession();
+	await agent.waitForIdle();
+};
+
+const startRemoteContinuationRun = async (): Promise<void> => {
+	await ensureSessionIdentity();
+	const projectFiles = collectProjectFilesFromMessages(agent.state.messages);
+	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
+	try {
+		runResult = await runClient.startRun({
+			sessionId: currentSessionId,
+			title: sessionTitle(currentTitle, agent.state.messages),
+			model: agent.state.model as unknown as Record<string, unknown>,
+			thinkingLevel: agent.state.thinkingLevel,
+			...(projectFiles.length > 0 ? { projectFiles } : {}),
+		});
+	} catch (error) {
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();

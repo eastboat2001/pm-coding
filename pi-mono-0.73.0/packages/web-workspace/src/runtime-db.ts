@@ -14,6 +14,7 @@ import type {
 	RuntimeRunEventRecord,
 	RuntimeRunRecord,
 	RuntimeSessionRecord,
+	StartRunResult,
 } from "./types.js";
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
@@ -67,6 +68,18 @@ type RunEventRow = {
 type SeqRow = {
 	seq: number;
 };
+
+export interface CreateRunWithMessageInput {
+	sessionId: string;
+	clientId: string;
+	title: string;
+	model: JsonObject;
+	thinkingLevel: string;
+	messageRole: string;
+	payload: JsonObject;
+	runId: string;
+	createdAt?: string;
+}
 
 export class RuntimeDbStore {
 	private database: DatabaseSync | undefined;
@@ -348,6 +361,103 @@ export class RuntimeDbStore {
 		return requiredRecord(this.getRun(input.clientId, input.runId), "run");
 	}
 
+	createContinuationRun(input: CreateRunInput): RuntimeRunRecord | undefined {
+		const updatedAt = input.createdAt ?? now();
+		const db = this.open();
+		const created = this.writeTransaction(db, () => {
+			if (!this.getSession(input.clientId, input.sessionId)) return false;
+			if (this.hasActiveRun(db, input.clientId, input.sessionId)) return false;
+			db.prepare(
+				`INSERT INTO runs (
+					run_id,
+					session_id,
+					client_id,
+					status,
+					model_json,
+					thinking_level,
+					updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				input.runId,
+				input.sessionId,
+				input.clientId,
+				"queued",
+				JSON.stringify(input.model),
+				input.thinkingLevel,
+				updatedAt,
+			);
+			this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt);
+			return true;
+		});
+		return created ? requiredRecord(this.getRun(input.clientId, input.runId), "run") : undefined;
+	}
+
+	createRunWithMessage(input: CreateRunWithMessageInput): StartRunResult | undefined {
+		const createdAt = input.createdAt ?? now();
+		const db = this.open();
+		let messageId = 0;
+		const created = this.writeTransaction(db, () => {
+			const existingSession = this.getSession(input.clientId, input.sessionId);
+			if (existingSession && this.hasActiveRun(db, input.clientId, input.sessionId)) {
+				return false;
+			}
+			if (!existingSession) {
+				this.upsertClient(input.clientId);
+				db.prepare(
+					`INSERT INTO sessions (
+						session_id,
+						client_id,
+						title,
+						model_json,
+						thinking_level,
+						created_at,
+						updated_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				).run(
+					input.sessionId,
+					input.clientId,
+					input.title,
+					JSON.stringify(input.model),
+					input.thinkingLevel,
+					createdAt,
+					createdAt,
+				);
+			}
+			db.prepare(
+				`INSERT INTO messages (session_id, client_id, role, payload_json, created_at)
+				VALUES (?, ?, ?, ?, ?)`,
+			).run(input.sessionId, input.clientId, input.messageRole, JSON.stringify(input.payload), createdAt);
+			messageId = (db.prepare("SELECT last_insert_rowid() AS id").get() as { id: number }).id;
+			db.prepare(
+				`INSERT INTO runs (
+					run_id,
+					session_id,
+					client_id,
+					status,
+					model_json,
+					thinking_level,
+					updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				input.runId,
+				input.sessionId,
+				input.clientId,
+				"queued",
+				JSON.stringify(input.model),
+				input.thinkingLevel,
+				createdAt,
+			);
+			this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", createdAt);
+			return true;
+		});
+		if (!created) return undefined;
+		return {
+			session: requiredRecord(this.getSession(input.clientId, input.sessionId), "session"),
+			message: requiredRecord(this.getMessage(input.clientId, messageId), "message"),
+			run: requiredRecord(this.getRun(input.clientId, input.runId), "run"),
+		};
+	}
+
 	updateRunStatus(runId: string, clientId: string, status: RunStatus, patch: RunStatusPatch = {}): RuntimeRunRecord {
 		const current = requiredRecord(this.getRun(clientId, runId), "run");
 		const updatedAt = patch.updatedAt ?? now();
@@ -467,6 +577,18 @@ export class RuntimeDbStore {
 				WHERE client_id = ? AND session_id = ?`,
 			)
 			.run(updatedAt, status, runId, clientId, sessionId);
+	}
+
+	private hasActiveRun(db: DatabaseSync, clientId: string, sessionId: string): boolean {
+		const row = db
+			.prepare(
+				`SELECT 1 AS active
+				FROM runs
+				WHERE client_id = ? AND session_id = ? AND status IN ('queued', 'running', 'cancelling')
+				LIMIT 1`,
+			)
+			.get(clientId, sessionId) as { active: number } | undefined;
+		return row !== undefined;
 	}
 
 	private writeTransaction<T>(db: DatabaseSync, callback: () => T): T {

@@ -78,6 +78,28 @@ describe("worker attachment runtime messages", () => {
 		]);
 	});
 
+	it("does not let unsafe payload roles override the normalized runtime user role", async () => {
+		for (const unsafeRole of ["assistant", "toolResult", "custom"] as const) {
+			await service.startRun("client-a", {
+				sessionId: `session-${unsafeRole}`,
+				title: "Unsafe role run",
+				message: { role: unsafeRole, content: "hello", timestamp: 321 },
+				model: {},
+				thinkingLevel: "high",
+			});
+
+			const runtimeMessage = db.listMessages("client-a", `session-${unsafeRole}`)[0];
+			const agentMessage = runtimeMessageToAgentMessage(runtimeMessage!);
+
+			expect(runtimeMessage).toMatchObject({
+				role: "user",
+				payload: expect.objectContaining({ role: unsafeRole }),
+			});
+			expect(agentMessage).toMatchObject({ role: "user", content: "hello" });
+			expect(convertAgentMessagesToLlm([agentMessage])).toEqual([{ role: "user", content: "hello", timestamp: 321 }]);
+		}
+	});
+
 	it("keeps normal startRun user messages as plain LLM user messages", async () => {
 		await service.startRun("client-a", {
 			sessionId: "session-1",

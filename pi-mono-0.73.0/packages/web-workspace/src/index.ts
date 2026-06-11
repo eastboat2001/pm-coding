@@ -16,6 +16,14 @@ export { WorkspaceRunWorkerService } from "./run-worker-service.js";
 export { RuntimeDbStore } from "./runtime-db.js";
 export type { ServerDirectAgentTool } from "./server-agent-tools.js";
 export { createServerDirectProjectTools, createServerDirectSkillTools } from "./server-agent-tools.js";
+export type { SkillLoadParams, SkillResourceParams } from "./skill-tool-contract.js";
+export {
+	formatSkillLoadResult,
+	prepareSkillLoadArguments,
+	prepareSkillResourceArguments,
+	skillLoadSchema,
+	skillResourceSchema,
+} from "./skill-tool-contract.js";
 export type {
 	AppendMessageInput,
 	AppendRunEventInput,
@@ -61,6 +69,7 @@ export type {
 	RuntimeSessionDetail,
 	RuntimeSessionListResult,
 	RuntimeSessionRecord,
+	SkillInterfaceMetadata,
 	SkillListResult,
 	SkillLoadRequest,
 	SkillLoadResult,

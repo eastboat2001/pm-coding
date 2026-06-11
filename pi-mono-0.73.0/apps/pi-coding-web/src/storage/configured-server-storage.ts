@@ -1,5 +1,6 @@
 import type { Model } from "@mariozechner/pi-ai";
 import type { CustomProvider, SessionData, SessionMetadata } from "@mariozechner/pi-web-ui";
+import { piClientHeaders } from "../runtime/client-id.js";
 
 const READ_REQUEST_TIMEOUT_MS = 1000;
 const WRITE_REQUEST_TIMEOUT_MS = 5000;
@@ -138,7 +139,10 @@ export class ConfiguredServerStorage {
 		try {
 			const response = await fetch(`${this.baseUrl}${path}`, {
 				method: options.method || "GET",
-				headers: options.body ? { "Content-Type": "application/json" } : undefined,
+				headers: {
+					...piClientHeaders(),
+					...(options.body ? { "Content-Type": "application/json" } : {}),
+				},
 				body: options.body ? JSON.stringify(options.body) : undefined,
 				signal: controller.signal,
 			});

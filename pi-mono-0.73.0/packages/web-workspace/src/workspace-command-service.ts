@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
+import { PROJECT_LOG_MAX_CHARS } from "./constants.js";
 import type { ProjectBashRequest, ProjectBashResult, StorageConfig } from "./types.js";
 import { removeSiblingProjectDirs, workspaceContext } from "./workspace-paths.js";
 
@@ -7,9 +8,9 @@ export class WorkspaceCommandService {
 	constructor(private readonly config: StorageConfig) {}
 
 	async run(body: ProjectBashRequest): Promise<ProjectBashResult> {
-		const { projectDir, sessionId } = workspaceContext(this.config, body);
+		const { clientId, projectDir, sessionId } = workspaceContext(this.config, body);
 		mkdirSync(projectDir, { recursive: true });
-		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId);
+		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const command = String(body.command || "").trim();
 		if (!command) throw new Error("Field `command` is required.");
 		const timeoutMs = Math.max(1000, Math.min(Number(body.timeoutMs || this.config.projectBuildTimeoutMs), 300000));
@@ -19,10 +20,11 @@ export class WorkspaceCommandService {
 		} catch (error) {
 			throw new Error(formatCommandFailure(error, logs));
 		}
+		const output = truncateProjectLogs(logs).join("").trim();
 		return {
 			command,
 			projectRoot: projectDir,
-			output: logs.join("").trim() || "Command completed successfully.",
+			output: output || "Command completed successfully.",
 		};
 	}
 }
@@ -42,7 +44,7 @@ export function runCommand(
 		);
 	}
 	if (signal?.aborted) return Promise.reject(new Error("Command aborted"));
-	logs.push(`$ ${trimmedCommand}`);
+	appendProjectLog(logs, `$ ${trimmedCommand}`);
 	return new Promise((resolveCommand, rejectCommand) => {
 		let child: ChildProcess | undefined;
 		let settled = false;
@@ -87,8 +89,8 @@ export function runCommand(
 				rejectCommand(new Error(`Command timed out after ${timeoutMs}ms: ${trimmedCommand}`));
 			});
 		}, timeoutMs);
-		spawned.stdout?.on("data", (chunk) => logs.push(String(chunk)));
-		spawned.stderr?.on("data", (chunk) => logs.push(String(chunk)));
+		spawned.stdout?.on("data", (chunk) => appendProjectLog(logs, String(chunk)));
+		spawned.stderr?.on("data", (chunk) => appendProjectLog(logs, String(chunk)));
 		spawned.on("error", (error) => {
 			settle(() => rejectCommand(error));
 		});
@@ -102,6 +104,23 @@ export function runCommand(
 			});
 		});
 	});
+}
+
+export function appendProjectLog(logs: string[], value: string, maxChars = PROJECT_LOG_MAX_CHARS): void {
+	if (!value || logs.some((entry) => entry.includes("[truncated project log"))) return;
+	const currentLength = logs.reduce((total, entry) => total + entry.length, 0);
+	if (currentLength + value.length <= maxChars) {
+		logs.push(value);
+		return;
+	}
+	const remaining = Math.max(0, maxChars - currentLength);
+	logs.push(`${value.slice(0, remaining)}\n[truncated project log after ${maxChars} chars]\n`);
+}
+
+export function truncateProjectLogs(logs: string[], maxChars = PROJECT_LOG_MAX_CHARS): string[] {
+	const text = logs.join("");
+	if (text.length <= maxChars) return logs;
+	return [`${text.slice(0, maxChars)}\n[truncated project log after ${maxChars} chars]\n`];
 }
 
 function killProcessTree(child: ChildProcess): void {
@@ -137,7 +156,7 @@ const UNSAFE_PROJECT_COMMAND_PATTERNS = [
 
 function formatCommandFailure(error: unknown, logs: string[]): string {
 	const message = error instanceof Error ? error.message : String(error);
-	const output = logs.join("").trim();
+	const output = truncateProjectLogs(logs).join("").trim();
 	const shell = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : process.env.SHELL || "sh";
 	return [
 		message,

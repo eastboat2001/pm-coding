@@ -5,24 +5,25 @@ import type { ProjectWorkspaceContext, StorageConfig } from "./types.js";
 
 export function workspaceContext(
 	config: StorageConfig,
-	body: { sessionId?: unknown; title?: unknown },
+	body: { clientId?: unknown; sessionId?: unknown; title?: unknown },
 ): ProjectWorkspaceContext {
+	const clientId = optionalSafePathId(body.clientId, "client");
 	const sessionId = String(body.sessionId || "").trim();
 	const title = String(body.title || "").trim();
 	if (!sessionId) throw new Error("Field `sessionId` is required.");
-	const projectId = projectSlug(sessionId, title);
-	const projectDir = projectDirectory(config.projectsRootDir, sessionId, title);
+	const projectId = projectSlug(sessionId, title, clientId);
+	const projectDir = projectDirectory(config.projectsRootDir, sessionId, title, clientId);
 	assertInside(config.projectsRootDir, projectDir);
-	return { sessionId, title, projectId, projectDir };
+	return { ...(clientId ? { clientId } : {}), sessionId, title, projectId, projectDir };
 }
 
-export function projectDirectory(projectsRootDir: string, sessionId: string, title?: string): string {
-	return join(projectsRootDir, projectSlug(sessionId, title));
+export function projectDirectory(projectsRootDir: string, sessionId: string, title?: string, clientId?: string): string {
+	return join(projectsRootDir, projectSlug(sessionId, title, clientId));
 }
 
-export function projectSlug(sessionId: string, title?: string): string {
+export function projectSlug(sessionId: string, title?: string, clientId?: string): string {
 	const base = sanitizePathComponent(title || "");
-	const suffix = (sanitizePathComponent(sessionId) || sessionId).slice(0, 8);
+	const suffix = projectSlugSuffix(sessionId, clientId);
 	return base ? `${base}-${suffix}` : `project-${suffix}`;
 }
 
@@ -80,27 +81,38 @@ export function sanitizeProjectPathComponent(value: string): string {
 	return cleaned;
 }
 
-export function removeSiblingProjectDirs(projectsRootDir: string, currentProjectDir: string, sessionId: string): void {
+export function removeSiblingProjectDirs(
+	projectsRootDir: string,
+	currentProjectDir: string,
+	sessionId: string,
+	clientId?: string,
+): void {
 	if (!existsSync(projectsRootDir)) return;
-	const suffix = `-${(sanitizePathComponent(sessionId) || sessionId).slice(0, 8)}`;
+	const suffix = `-${projectSlugSuffix(sessionId, clientId)}`;
 	for (const name of readdirSync(projectsRootDir)) {
 		const candidate = join(projectsRootDir, name);
 		if (candidate === currentProjectDir || !name.endsWith(suffix)) continue;
+		if (!projectDirectoryBelongsToSession(candidate, sessionId, suffix, name, clientId)) continue;
 		rmSync(candidate, { recursive: true, force: true });
 	}
 }
 
-export function deleteSessionAndProjects(projectsRootDir: string, sessionPath: string, sessionId: string): boolean {
+export function deleteSessionAndProjects(
+	projectsRootDir: string,
+	sessionPath: string,
+	sessionId: string,
+	clientId?: string,
+): boolean {
 	let deleted = false;
 	if (existsSync(sessionPath)) {
 		rmSync(sessionPath, { force: true });
 		deleted = true;
 	}
-	const suffix = `-${(sanitizePathComponent(sessionId) || sessionId).slice(0, 8)}`;
+	const suffix = `-${projectSlugSuffix(sessionId, clientId)}`;
 	if (existsSync(projectsRootDir)) {
 		for (const name of readdirSync(projectsRootDir)) {
 			const projectPath = join(projectsRootDir, name);
-			if (projectDirectoryBelongsToSession(projectPath, sessionId, suffix, name)) {
+			if (projectDirectoryBelongsToSession(projectPath, sessionId, suffix, name, clientId)) {
 				rmSync(join(projectsRootDir, name), { recursive: true, force: true });
 				deleted = true;
 			}
@@ -114,17 +126,41 @@ function projectDirectoryBelongsToSession(
 	sessionId: string,
 	legacySuffix: string,
 	directoryName: string,
+	clientId?: string,
 ): boolean {
 	const metadataPath = join(projectPath, PROJECT_METADATA_FILE);
 	if (existsSync(metadataPath)) {
 		try {
-			const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as { sessionId?: unknown };
-			return metadata.sessionId === sessionId;
+			const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as {
+				clientId?: unknown;
+				sessionId?: unknown;
+			};
+			return metadata.sessionId === sessionId && (!clientId || metadata.clientId === clientId);
 		} catch {
 			return false;
 		}
 	}
 	return directoryName === `project${legacySuffix}` || directoryName.endsWith(legacySuffix);
+}
+
+function projectSlugSuffix(sessionId: string, clientId?: string): string {
+	const safeSessionId = requiredSafePathId(sessionId, "session");
+	if (!clientId) return safeSessionId.slice(0, 8);
+	const safeClientId = requiredSafePathId(clientId, "client");
+	return `${safeClientId.slice(0, 8)}-${safeSessionId.slice(0, 8)}`;
+}
+
+function optionalSafePathId(value: unknown, label: "client" | "session"): string | undefined {
+	if (value === undefined || value === null) return undefined;
+	const trimmed = String(value).trim();
+	if (!trimmed) return undefined;
+	return requiredSafePathId(trimmed, label);
+}
+
+function requiredSafePathId(value: string, label: "client" | "session"): string {
+	const safeValue = sanitizePathComponent(value);
+	if (!safeValue) throw new Error(`Invalid ${label} id.`);
+	return safeValue;
 }
 
 export function listProjectSourceFiles(root: string): string[] {

@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { cloneJsonObject, isObject, readJsonFile, writeJsonFile } from "./json.js";
 import type { JsonObject, StorageConfig } from "./types.js";
 import {
+	assertInside,
 	deleteSessionAndProjects,
 	listProjectSourceFiles,
 	projectDirectory,
@@ -12,13 +13,14 @@ import {
 export class WorkspaceSessionService {
 	constructor(private readonly config: StorageConfig) {}
 
-	listSessions(): JsonObject[] {
-		if (!existsSync(this.config.sessionsDir)) return [];
+	listSessions(clientId?: string): JsonObject[] {
+		const sessionsDir = this.getSessionsDir(clientId);
+		if (!existsSync(sessionsDir)) return [];
 		const sessions: JsonObject[] = [];
-		for (const filename of readdirSync(this.config.sessionsDir)) {
+		for (const filename of readdirSync(sessionsDir)) {
 			if (!filename.endsWith(".json")) continue;
 			try {
-				const record = readJsonFile(join(this.config.sessionsDir, filename));
+				const record = readJsonFile(join(sessionsDir, filename));
 				if (isObject(record.metadata)) sessions.push(record.metadata);
 			} catch {
 				// Ignore malformed session files so one bad record does not break startup.
@@ -27,14 +29,14 @@ export class WorkspaceSessionService {
 		return sessions.sort((a, b) => String(b.lastModified || "").localeCompare(String(a.lastModified || "")));
 	}
 
-	readSession(sessionId: string): JsonObject | undefined {
-		const sessionPath = this.getSessionPath(sessionId);
+	readSession(sessionId: string, clientId?: string): JsonObject | undefined {
+		const sessionPath = this.getSessionPath(sessionId, clientId);
 		if (!existsSync(sessionPath)) return undefined;
 		const record = readJsonFile(sessionPath);
-		return { ...record, project: projectSummary(this.config.projectsRootDir, record.data) };
+		return { ...record, project: projectSummary(this.config.projectsRootDir, record.data, clientId) };
 	}
 
-	writeSession(sessionId: string, data: JsonObject, metadata: JsonObject): JsonObject {
+	writeSession(sessionId: string, data: JsonObject, metadata: JsonObject, clientId?: string): JsonObject {
 		if (String(data.id || "") !== sessionId || String(metadata.id || "") !== sessionId) {
 			throw new Error("Session ID mismatch.");
 		}
@@ -44,22 +46,24 @@ export class WorkspaceSessionService {
 			data,
 			metadata,
 		};
-		writeJsonFile(this.getSessionPath(sessionId), record);
-		const project = persistProjectArtifacts(this.config.projectsRootDir, sessionId, data, metadata);
+		writeJsonFile(this.getSessionPath(sessionId, clientId), record);
+		const project = persistProjectArtifacts(this.config.projectsRootDir, sessionId, data, metadata, clientId);
 		return { ...record, project };
 	}
 
-	deleteSession(sessionId: string): boolean {
-		return deleteSessionAndProjects(this.config.projectsRootDir, this.getSessionPath(sessionId), sessionId);
+	deleteSession(sessionId: string, clientId?: string): boolean {
+		return deleteSessionAndProjects(this.config.projectsRootDir, this.getSessionPath(sessionId, clientId), sessionId, clientId);
 	}
 
-	readSettings(): JsonObject | undefined {
-		if (!existsSync(this.config.settingsFile)) return undefined;
-		return readJsonFile(this.config.settingsFile);
+	readSettings(clientId?: string): JsonObject | undefined {
+		const settingsPath = this.getSettingsPath(clientId);
+		if (!existsSync(settingsPath)) return undefined;
+		return readJsonFile(settingsPath);
 	}
 
-	writeSettings(body: JsonObject): JsonObject {
-		const existing = existsSync(this.config.settingsFile) ? readJsonFile(this.config.settingsFile) : {};
+	writeSettings(body: JsonObject, clientId?: string): JsonObject {
+		const settingsPath = this.getSettingsPath(clientId);
+		const existing = existsSync(settingsPath) ? readJsonFile(settingsPath) : {};
 		const record: JsonObject = {
 			...(isObject(existing) ? existing : {}),
 			version: 1,
@@ -99,7 +103,7 @@ export class WorkspaceSessionService {
 				delete record.customProviders;
 			}
 		}
-		writeJsonFile(this.config.settingsFile, record);
+		writeJsonFile(settingsPath, record);
 		return record;
 	}
 
@@ -108,15 +112,31 @@ export class WorkspaceSessionService {
 		mkdirSync(this.config.projectsRootDir, { recursive: true });
 	}
 
-	private getSessionPath(sessionId: string): string {
-		const safeSessionId = sanitizePathComponent(sessionId) || sessionId;
-		return join(this.config.sessionsDir, `${safeSessionId}.json`);
+	private getSessionsDir(clientId?: string): string {
+		if (!clientId) return this.config.sessionsDir;
+		const sessionsDir = join(this.config.sessionsDir, requiredSafePathId(clientId, "client"));
+		assertInside(this.config.sessionsDir, sessionsDir);
+		return sessionsDir;
+	}
+
+	private getSessionPath(sessionId: string, clientId?: string): string {
+		const sessionPath = join(this.getSessionsDir(clientId), `${requiredSafePathId(sessionId, "session")}.json`);
+		assertInside(this.config.sessionsDir, sessionPath);
+		return sessionPath;
+	}
+
+	private getSettingsPath(clientId?: string): string {
+		if (!clientId) return this.config.settingsFile;
+		const settingsRoot = dirname(this.config.settingsFile);
+		const settingsPath = join(settingsRoot, "clients", requiredSafePathId(clientId, "client"), basename(this.config.settingsFile));
+		assertInside(settingsRoot, settingsPath);
+		return settingsPath;
 	}
 }
 
-function projectSummary(projectsRootDir: string, sessionData: unknown): JsonObject {
+function projectSummary(projectsRootDir: string, sessionData: unknown, clientId?: string): JsonObject {
 	const data = isObject(sessionData) ? sessionData : {};
-	const projectDir = projectDirectory(projectsRootDir, String(data.id || ""), String(data.title || ""));
+	const projectDir = projectDirectory(projectsRootDir, String(data.id || ""), String(data.title || ""), clientId);
 	return {
 		projectRoot: projectDir,
 		fileCount: listProjectSourceFiles(projectDir).length,
@@ -128,8 +148,9 @@ function persistProjectArtifacts(
 	sessionId: string,
 	sessionData: JsonObject,
 	metadata: JsonObject,
+	clientId?: string,
 ): JsonObject {
-	const projectDir = projectDirectory(projectsRootDir, sessionId, String(metadata.title || ""));
+	const projectDir = projectDirectory(projectsRootDir, sessionId, String(metadata.title || ""), clientId);
 	const artifacts = extractArtifactsFromMessages(sessionData.messages);
 	if (Object.keys(artifacts).length === 0) {
 		return {
@@ -197,4 +218,10 @@ function extractArtifactsFromMessages(messages: unknown): Record<string, string>
 		if (command === "delete") delete artifacts[filename];
 	}
 	return artifacts;
+}
+
+function requiredSafePathId(value: string, label: "client" | "session"): string {
+	const safeValue = sanitizePathComponent(value);
+	if (!safeValue) throw new Error(`Invalid ${label} id.`);
+	return safeValue;
 }

@@ -2,7 +2,7 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 import type { RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
 import { describe, expect, it } from "vitest";
-import { RemoteAgentController } from "../src/runtime/remote-agent-controller.js";
+import { drainRemoteRunEvents, RemoteAgentController } from "../src/runtime/remote-agent-controller.js";
 
 describe("RemoteAgentController", () => {
 	it("replays remote run events into the agent and finishes on terminal status", async () => {
@@ -104,6 +104,28 @@ describe("RemoteAgentController", () => {
 		expect(agent.state.messages).toEqual([persistedAssistant]);
 		expect(agent.state.streamingMessage).toEqual(streamingAssistant);
 		expect(agent.state.isStreaming).toBe(true);
+	});
+
+	it("drains missed events after the applied checkpoint before terminal settle", async () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+		const assistantMessage = createAssistantMessage("missed terminal output");
+
+		controller.startRemoteRun("r1");
+		await controller.applyRunEvent(createRunEventRecord(1, "r1", { type: "agent_start" }));
+		await drainRemoteRunEvents("r1", controller, async (runId, afterSeq) => {
+			expect(runId).toBe("r1");
+			expect(afterSeq).toBe(1);
+			return [
+				createRunEventRecord(2, "r1", { type: "message_end", message: assistantMessage }),
+				createRunEventRecord(3, "r1", { type: "agent_end", messages: [assistantMessage] }),
+			];
+		});
+		await controller.finishRemoteRun("completed");
+
+		expect(controller.activeRunId).toBeUndefined();
+		expect(controller.lastSeq).toBe(3);
+		expect(agent.state.messages).toEqual([assistantMessage]);
 	});
 });
 

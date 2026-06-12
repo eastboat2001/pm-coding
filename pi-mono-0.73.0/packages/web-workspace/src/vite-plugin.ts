@@ -13,8 +13,9 @@ import {
 	SESSIONS_API_PREFIX,
 	SKILLS_API_PREFIX,
 } from "./constants.js";
+import { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
-import { isObject, readJsonBody, sendJson } from "./json.js";
+import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
 import { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunQueue } from "./run-queue.js";
 import { RuntimeDbStore } from "./runtime-db.js";
@@ -51,6 +52,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 	const tasks = new WorkspaceTaskService(config, previews, undefined, diagnostics);
 	const skills = new WorkspaceSkillService(config, diagnostics);
 	const runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
+	const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
 	const runQueue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
 	const runApi = new WorkspaceRunApiService(runtimeDb, runQueue, diagnostics, {
 		writeFile(context, file) {
@@ -136,7 +138,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 				return;
 			}
 			if (isLogsApi) {
-				await handleLogsApi(method, route, url, req, res, config, diagnostics);
+				await handleLogsApi(method, route, url, req, res, config, diagnostics, diagnosticExports);
 				return;
 			}
 			if (isSessionsApi) {
@@ -439,12 +441,31 @@ async function handleLogsApi(
 	res: ServerResponse,
 	config: StorageConfig,
 	diagnostics: WorkspaceDiagnosticLogService,
+	diagnosticExports: WorkspaceDiagnosticExportService,
 ): Promise<void> {
 	if (method === "GET" && route === "/status") {
 		sendJson(res, diagnostics.status());
 		return;
 	}
 	const clientId = readConfiguredApiClientId(req, config);
+	if (method === "GET" && route === "/export") {
+		const sessionId = queryString(url, "sessionId");
+		const runId = queryString(url, "runId");
+		if (!sessionId && !runId) {
+			sendJson(res, { error: "Query parameter `sessionId` or `runId` is required." }, 400);
+			return;
+		}
+		const payload = diagnosticExports.export({
+			clientId: clientId ?? "",
+			sessionId,
+			runId,
+			includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : true,
+			maxDiagnosticEvents: queryNumber(url, "maxDiagnosticEvents"),
+		});
+		res.setHeader("Content-Disposition", `attachment; filename="${diagnosticExportFilename(sessionId, runId)}"`);
+		sendPrettyJson(res, payload);
+		return;
+	}
 	if (method === "POST" && route === "/events") {
 		const body = await readJsonBody(req);
 		sendJson(res, diagnostics.writeEvents(withDiagnosticClientId(body, clientId) as DiagnosticLogWriteRequest));
@@ -671,6 +692,16 @@ function queryBoolean(url: URL, key: string): boolean {
 	const value = url.searchParams.get(key);
 	if (!value) return false;
 	return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function diagnosticExportFilename(sessionId: string | undefined, runId: string | undefined): string {
+	const id = sanitizeFilenamePart(runId ?? sessionId ?? "logs");
+	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+	return `pi-diagnostics-${id}-${timestamp}.json`;
+}
+
+function sanitizeFilenamePart(value: string): string {
+	return value.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80) || "logs";
 }
 
 function computedLangfuseOtelEndpoint(host: string): string {

@@ -8,7 +8,7 @@
 - `docker-compose.build.yaml`：有完整源码时用于本地构建镜像。
 - `.env.example`：统一配置模板，复制为 `.env` 后使用。
 - `data/`：服务器运行数据目录，挂载到容器内 `/app/apps/pi-coding-web/data`。
-- `pi-coding-web-0.73.0.tar`：可选的离线镜像包，由 `docker save` 生成，不应提交到 Git。
+- `pi-coding-web-offline-0.73.0.tar`：可选的离线镜像包，包含 `pi-coding-web:0.73.0` 和 `redis:7-alpine`，由 `docker save` 生成，不应提交到 Git。
 
 ## 服务器前置条件
 
@@ -103,9 +103,11 @@ docker compose up -d
 
 ```bash
 cd /path/to/pi-mono-0.73.0
-docker build -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
-docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.0
+docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
+docker save -o docker/pi-coding-web/pi-coding-web-offline-0.73.0.tar pi-coding-web:0.73.0 redis:7-alpine
 ```
+
+如果构建机访问官方 npm registry 稳定，可以去掉 `--build-arg NPM_REGISTRY=https://registry.npmmirror.com`，Dockerfile 默认使用 `https://registry.npmjs.org/`。
 
 把 `docker/pi-coding-web` 目录复制到服务器，例如：
 
@@ -113,7 +115,7 @@ docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.
 /opt/pi-coding-web/
   docker-compose.yaml
   .env
-  pi-coding-web-0.73.0.tar
+  pi-coding-web-offline-0.73.0.tar
   data/
 ```
 
@@ -121,7 +123,7 @@ docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.
 
 ```bash
 cd /opt/pi-coding-web
-docker load -i pi-coding-web-0.73.0.tar
+docker load -i pi-coding-web-offline-0.73.0.tar
 docker compose up -d --no-build
 ```
 
@@ -302,7 +304,7 @@ docker compose up -d
 ```bash
 cd /opt/pi-coding-web
 docker compose down
-docker load -i pi-coding-web-0.73.0.tar
+docker load -i pi-coding-web-offline-0.73.0.tar
 docker compose up -d --no-build
 ```
 

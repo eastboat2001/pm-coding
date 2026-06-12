@@ -125,6 +125,7 @@ function applyNonStreamingCompletion(
 	completion: OpenAI.Chat.Completions.ChatCompletion,
 	model: Model<"openai-completions">,
 	tools: Tool[] | undefined,
+	allowReasoningBlocks: boolean,
 ): void {
 	const choice = completion.choices?.[0];
 	if (!choice) return;
@@ -149,7 +150,11 @@ function applyNonStreamingCompletion(
 		(message as { reasoning_content?: string; reasoning?: string }).reasoning_content ??
 		(message as { reasoning?: string }).reasoning;
 	if (reasoningContent) {
-		output.content.push({ type: "thinking", thinking: reasoningContent });
+		if (allowReasoningBlocks) {
+			output.content.push({ type: "thinking", thinking: reasoningContent });
+		} else if (!content && !message.tool_calls?.length) {
+			output.content.push({ type: "text", text: reasoningContent });
+		}
 	}
 
 	for (const toolCall of message.tool_calls || []) {
@@ -251,6 +256,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
 			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
 			const useNonStreamingToolCalls = compat.useNonStreamingToolCalls && !!context.tools?.length;
+			const allowReasoningBlocks = !!options?.reasoningEffort;
 			let params = buildParams(model, context, options, compat, cacheRetention, !useNonStreamingToolCalls);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -266,7 +272,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					.create(params as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, requestOptions)
 					.withResponse();
 				await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
-				applyNonStreamingCompletion(output, completion, model, context.tools);
+				applyNonStreamingCompletion(output, completion, model, context.tools, allowReasoningBlocks);
 				stream.push({ type: "start", partial: output });
 				emitFinalContentEvents(stream, output);
 				if (output.stopReason === "error" || output.stopReason === "aborted") {
@@ -289,6 +295,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 
 			let currentBlock: TextContent | ThinkingContent | StreamingToolCallBlock | null = null;
+			let unexpectedReasoningText = "";
 			const blocks = output.content;
 			const getContentIndex = (block: typeof currentBlock) => (block ? blocks.indexOf(block) : -1);
 			const currentContentIndex = () => getContentIndex(currentBlock);
@@ -326,6 +333,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 						});
 					}
 				}
+			};
+			const emitTextBlock = (text: string) => {
+				currentBlock = { type: "text", text };
+				output.content.push(currentBlock);
+				const contentIndex = currentContentIndex();
+				stream.push({ type: "text_start", contentIndex, partial: output });
+				stream.push({ type: "text_delta", contentIndex, delta: text, partial: output });
+				stream.push({ type: "text_end", contentIndex, content: text, partial: output });
+				currentBlock = null;
 			};
 
 			for await (const chunk of openaiStream) {
@@ -403,26 +419,30 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					}
 
 					if (foundReasoningField) {
-						if (!currentBlock || currentBlock.type !== "thinking") {
-							finishCurrentBlock(currentBlock);
-							currentBlock = {
-								type: "thinking",
-								thinking: "",
-								thinkingSignature: foundReasoningField,
-							};
-							output.content.push(currentBlock);
-							stream.push({ type: "thinking_start", contentIndex: currentContentIndex(), partial: output });
-						}
+						const delta = (choice.delta as any)[foundReasoningField];
+						if (!allowReasoningBlocks) {
+							unexpectedReasoningText += delta;
+						} else {
+							if (!currentBlock || currentBlock.type !== "thinking") {
+								finishCurrentBlock(currentBlock);
+								currentBlock = {
+									type: "thinking",
+									thinking: "",
+									thinkingSignature: foundReasoningField,
+								};
+								output.content.push(currentBlock);
+								stream.push({ type: "thinking_start", contentIndex: currentContentIndex(), partial: output });
+							}
 
-						if (currentBlock.type === "thinking") {
-							const delta = (choice.delta as any)[foundReasoningField];
-							currentBlock.thinking += delta;
-							stream.push({
-								type: "thinking_delta",
-								contentIndex: currentContentIndex(),
-								delta,
-								partial: output,
-							});
+							if (currentBlock.type === "thinking") {
+								currentBlock.thinking += delta;
+								stream.push({
+									type: "thinking_delta",
+									contentIndex: currentContentIndex(),
+									delta,
+									partial: output,
+								});
+							}
 						}
 					}
 
@@ -494,6 +514,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 
 			finishCurrentBlock(currentBlock);
+			if (!allowReasoningBlocks && unexpectedReasoningText && output.content.length === 0) {
+				emitTextBlock(unexpectedReasoningText);
+			}
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
 			}

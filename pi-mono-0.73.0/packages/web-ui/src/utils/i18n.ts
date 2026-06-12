@@ -51,6 +51,10 @@ declare module "@mariozechner/mini-lit" {
 		Back: string;
 		"No skills available": string;
 		"Add SKILL.md files under the configured skills directory.": string;
+		"Diagnostic logs": string;
+		"Choose a session to export related PI diagnostics.": string;
+		Export: string;
+		"Exporting...": string;
 		"Skill status": string;
 		"All configured skills are valid.": string;
 		"Skill issues found": string;
@@ -359,6 +363,10 @@ export const translations = {
 		"No skills available": "No skills available",
 		"Add SKILL.md files under the configured skills directory.":
 			"Add SKILL.md files under the configured skills directory.",
+		"Diagnostic logs": "Diagnostic logs",
+		"Choose a session to export related PI diagnostics.": "Choose a session to export related PI diagnostics.",
+		Export: "Export",
+		"Exporting...": "Exporting...",
 		"Skill status": "Skill status",
 		"All configured skills are valid.": "All configured skills are valid.",
 		"Skill issues found": "Skill issues found",
@@ -694,6 +702,11 @@ export const translations = {
 		"No skills available": "Keine Fähigkeiten verfügbar",
 		"Add SKILL.md files under the configured skills directory.":
 			"Fügen Sie SKILL.md-Dateien im konfigurierten Skills-Verzeichnis hinzu.",
+		"Diagnostic logs": "Diagnoseprotokolle",
+		"Choose a session to export related PI diagnostics.":
+			"Wählen Sie eine Sitzung aus, um zugehörige PI-Diagnosen zu exportieren.",
+		Export: "Exportieren",
+		"Exporting...": "Exportiert...",
 		"Skill status": "Fähigkeitenstatus",
 		"All configured skills are valid.": "Alle konfigurierten Fähigkeiten sind gültig.",
 		"Skill issues found": "Fähigkeitenprobleme gefunden",
@@ -1047,6 +1060,10 @@ mutableTranslations.zh = {
 	Back: "返回",
 	"No skills available": "没有可用技能",
 	"Add SKILL.md files under the configured skills directory.": "请在配置的 skills 目录下添加 SKILL.md 文件。",
+	"Diagnostic logs": "诊断日志",
+	"Choose a session to export related PI diagnostics.": "选择一个会话并导出相关 PI 诊断日志。",
+	Export: "导出",
+	"Exporting...": "正在导出...",
 	"Skill status": "技能状态",
 	"All configured skills are valid.": "所有已配置技能均有效。",
 	"Skill issues found": "发现技能问题",
@@ -1380,6 +1397,10 @@ mutableTranslations.ms = {
 	"No skills available": "Tiada kemahiran tersedia",
 	"Add SKILL.md files under the configured skills directory.":
 		"Tambah fail SKILL.md di bawah direktori kemahiran yang dikonfigurasi.",
+	"Diagnostic logs": "Log diagnostik",
+	"Choose a session to export related PI diagnostics.": "Pilih sesi untuk mengeksport diagnostik PI berkaitan.",
+	Export: "Eksport",
+	"Exporting...": "Mengeksport...",
 	"Skill status": "Status kemahiran",
 	"All configured skills are valid.": "Semua kemahiran yang dikonfigurasi adalah sah.",
 	"Skill issues found": "Isu kemahiran ditemui",

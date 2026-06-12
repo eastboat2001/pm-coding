@@ -3,10 +3,22 @@ FROM node:22-bookworm-slim
 WORKDIR /app
 
 ENV HUSKY=0
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG NPM_REPLACE_REGISTRY_HOST=npmjs
+ARG NPM_FETCH_TIMEOUT=600000
+ARG NPM_FETCH_RETRIES=5
 
 COPY . .
 
-RUN npm ci
+RUN npm ci \
+    --registry="${NPM_REGISTRY}" \
+    --replace-registry-host="${NPM_REPLACE_REGISTRY_HOST}" \
+    --fetch-timeout="${NPM_FETCH_TIMEOUT}" \
+    --fetch-retries="${NPM_FETCH_RETRIES}" \
+    --fetch-retry-mintimeout=20000 \
+    --fetch-retry-maxtimeout=120000 \
+    --no-audit \
+    --fund=false
 RUN npm run build --workspace=@mariozechner/pi-ai
 RUN npm run build --workspace=@mariozechner/pi-agent-core
 RUN npm run build --workspace=@mariozechner/pi-web-workspace

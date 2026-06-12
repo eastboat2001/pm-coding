@@ -8,7 +8,7 @@ import {
 	type StreamFn,
 	type ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
-import { streamSimple, type Model } from "@mariozechner/pi-ai";
+import { type Model, streamSimple } from "@mariozechner/pi-ai";
 import {
 	createServerDirectProjectTools,
 	createServerDirectSkillTools,
@@ -219,7 +219,7 @@ export function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentO
 			tools,
 		},
 		sessionId: input.session.sessionId,
-		getApiKey: async (provider) => readServerProviderApiKey(options.config, provider),
+		getApiKey: async (provider) => readServerProviderApiKey(options.config, provider, input.run.clientId),
 		repairToolCalls: true,
 		convertToLlm: convertAgentMessagesToLlm,
 		streamFn: createLoggedStreamFn(

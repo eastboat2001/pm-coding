@@ -52,23 +52,31 @@ export class WorkspaceSessionService {
 	}
 
 	deleteSession(sessionId: string, clientId?: string): boolean {
-		return deleteSessionAndProjects(this.config.projectsRootDir, this.getSessionPath(sessionId, clientId), sessionId, clientId);
+		return deleteSessionAndProjects(
+			this.config.projectsRootDir,
+			this.getSessionPath(sessionId, clientId),
+			sessionId,
+			clientId,
+		);
 	}
 
 	readSettings(clientId?: string): JsonObject | undefined {
-		const settingsPath = this.getSettingsPath(clientId);
-		if (!existsSync(settingsPath)) return undefined;
-		return readJsonFile(settingsPath);
+		const clientSettings = clientId ? this.migrateClientGlobalSettings(clientId) : undefined;
+		const globalSettings = this.readSettingsFile(this.config.settingsFile);
+		if (!clientId) return globalSettings;
+		return mergeEffectiveSettings(globalSettings, clientSettings);
 	}
 
 	writeSettings(body: JsonObject, clientId?: string): JsonObject {
+		if (clientId) this.migrateClientGlobalSettings(clientId);
+		if (hasGlobalSettingsUpdate(body)) this.writeGlobalSettings(body);
+		if (hasClientSettingsUpdate(body) || !hasGlobalSettingsUpdate(body)) this.writeClientSettings(body, clientId);
+		return this.readSettings(clientId) ?? {};
+	}
+
+	private writeClientSettings(body: JsonObject, clientId?: string): JsonObject {
 		const settingsPath = this.getSettingsPath(clientId);
-		const existing = existsSync(settingsPath) ? readJsonFile(settingsPath) : {};
-		const record: JsonObject = {
-			...(isObject(existing) ? existing : {}),
-			version: 1,
-			savedAt: new Date().toISOString(),
-		};
+		const record = this.settingsRecord(settingsPath);
 		if (Object.hasOwn(body, "currentSessionId")) {
 			const currentSessionId = body.currentSessionId;
 			if (typeof currentSessionId === "string" && currentSessionId.trim()) {
@@ -78,6 +86,12 @@ export class WorkspaceSessionService {
 			}
 		}
 		if (Object.hasOwn(body, "selectedModel")) record.selectedModel = body.selectedModel;
+		writeJsonFile(settingsPath, record);
+		return record;
+	}
+
+	private writeGlobalSettings(body: JsonObject): JsonObject {
+		const record = this.settingsRecord(this.config.settingsFile);
 		if (Object.hasOwn(body, "providerKeys")) {
 			const existingProviderKeys = isObject(record.providerKeys) ? record.providerKeys : {};
 			const incomingProviderKeys = isObject(body.providerKeys) ? body.providerKeys : {};
@@ -103,8 +117,61 @@ export class WorkspaceSessionService {
 				delete record.customProviders;
 			}
 		}
-		writeJsonFile(settingsPath, record);
+		writeJsonFile(this.config.settingsFile, record);
 		return record;
+	}
+
+	private migrateClientGlobalSettings(clientId: string): JsonObject | undefined {
+		const settingsPath = this.getSettingsPath(clientId);
+		const clientSettings = this.readSettingsFile(settingsPath);
+		if (!clientSettings) return undefined;
+
+		const hasLegacyProviderKeys =
+			isObject(clientSettings.providerKeys) && Object.keys(clientSettings.providerKeys).length > 0;
+		const hasLegacyCustomProviders = Array.isArray(clientSettings.customProviders);
+		if (!hasLegacyProviderKeys && !hasLegacyCustomProviders) return clientSettings;
+
+		const globalRecord = this.settingsRecord(this.config.settingsFile);
+		if (hasLegacyProviderKeys) {
+			const globalProviderKeys = isObject(globalRecord.providerKeys) ? globalRecord.providerKeys : {};
+			const clientProviderKeys = isObject(clientSettings.providerKeys) ? clientSettings.providerKeys : {};
+			globalRecord.providerKeys = {
+				...clientProviderKeys,
+				...globalProviderKeys,
+			};
+		}
+		if (hasLegacyCustomProviders) {
+			globalRecord.customProviders = mergeCustomProviders(
+				Array.isArray(clientSettings.customProviders) ? clientSettings.customProviders : [],
+				Array.isArray(globalRecord.customProviders) ? globalRecord.customProviders : [],
+			);
+		}
+		writeJsonFile(this.config.settingsFile, globalRecord);
+
+		const nextClientSettings: JsonObject = {
+			...clientSettings,
+			version: 1,
+			savedAt: new Date().toISOString(),
+		};
+		delete nextClientSettings.providerKeys;
+		delete nextClientSettings.customProviders;
+		writeJsonFile(settingsPath, nextClientSettings);
+		return nextClientSettings;
+	}
+
+	private readSettingsFile(settingsPath: string): JsonObject | undefined {
+		if (!existsSync(settingsPath)) return undefined;
+		const settings = readJsonFile(settingsPath);
+		return isObject(settings) ? settings : undefined;
+	}
+
+	private settingsRecord(settingsPath: string): JsonObject {
+		const existing = this.readSettingsFile(settingsPath);
+		return {
+			...(existing ?? {}),
+			version: 1,
+			savedAt: new Date().toISOString(),
+		};
 	}
 
 	ensureDirs(): void {
@@ -128,10 +195,62 @@ export class WorkspaceSessionService {
 	private getSettingsPath(clientId?: string): string {
 		if (!clientId) return this.config.settingsFile;
 		const settingsRoot = dirname(this.config.settingsFile);
-		const settingsPath = join(settingsRoot, "clients", requiredSafePathId(clientId, "client"), basename(this.config.settingsFile));
+		const settingsPath = join(
+			settingsRoot,
+			"clients",
+			requiredSafePathId(clientId, "client"),
+			basename(this.config.settingsFile),
+		);
 		assertInside(settingsRoot, settingsPath);
 		return settingsPath;
 	}
+}
+
+function hasGlobalSettingsUpdate(body: JsonObject): boolean {
+	return Object.hasOwn(body, "providerKeys") || Object.hasOwn(body, "customProviders");
+}
+
+function hasClientSettingsUpdate(body: JsonObject): boolean {
+	return Object.hasOwn(body, "currentSessionId") || Object.hasOwn(body, "selectedModel");
+}
+
+function mergeEffectiveSettings(
+	globalSettings: JsonObject | undefined,
+	clientSettings: JsonObject | undefined,
+): JsonObject | undefined {
+	if (!globalSettings && !clientSettings) return undefined;
+	const merged: JsonObject = {
+		...(globalSettings ?? {}),
+		...(clientSettings ?? {}),
+	};
+	if (isObject(globalSettings?.providerKeys)) {
+		merged.providerKeys = globalSettings.providerKeys;
+	} else if (isObject(clientSettings?.providerKeys)) {
+		merged.providerKeys = clientSettings.providerKeys;
+	} else {
+		delete merged.providerKeys;
+	}
+	if (Array.isArray(globalSettings?.customProviders)) {
+		merged.customProviders = globalSettings.customProviders;
+	} else if (Array.isArray(clientSettings?.customProviders)) {
+		merged.customProviders = clientSettings.customProviders;
+	} else {
+		delete merged.customProviders;
+	}
+	return merged;
+}
+
+function mergeCustomProviders(clientProviders: unknown[], globalProviders: unknown[]): unknown[] {
+	const providers = new Map<string, unknown>();
+	for (const provider of clientProviders) {
+		if (!isObject(provider) || typeof provider.id !== "string") continue;
+		providers.set(provider.id, provider);
+	}
+	for (const provider of globalProviders) {
+		if (!isObject(provider) || typeof provider.id !== "string") continue;
+		providers.set(provider.id, provider);
+	}
+	return [...providers.values()];
 }
 
 function projectSummary(projectsRootDir: string, sessionData: unknown, clientId?: string): JsonObject {

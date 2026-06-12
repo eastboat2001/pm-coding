@@ -271,6 +271,18 @@ export interface DiagnosticLogQueryResult extends JsonObject {
 	events: DiagnosticLogEventRecord[];
 }
 
+export interface DiagnosticLogExportQuery extends DiagnosticLogQuery {
+	maxEvents?: number;
+}
+
+export interface DiagnosticLogExportResult extends JsonObject {
+	events: DiagnosticLogEventRecord[];
+	total: number;
+	exported: number;
+	truncated: boolean;
+	limit: number;
+}
+
 export interface DiagnosticLogStatus extends JsonObject {
 	enabled: boolean;
 	databaseFile: string;

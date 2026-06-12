@@ -737,6 +737,44 @@ await test("WorkspaceSessionService stores server-backed custom providers in set
 	assert.deepEqual(settings.customProviders, providers);
 });
 
+await test("WorkspaceSessionService splits global provider settings from client state", () => {
+	const root = tempRoot();
+	const service = new WorkspaceSessionService(testConfig(root));
+	const providers = [
+		{
+			id: "provider-1",
+			name: "Shared Provider",
+			type: "openai-completions",
+			baseUrl: "https://example.test/v1",
+			apiKey: "shared-key",
+			models: [{ id: "model-1", name: "Model 1", provider: "custom-provider:provider-1" }],
+		},
+	];
+	const selectedModel = { provider: "custom-provider:provider-1", id: "model-1" };
+
+	service.writeSettings(
+		{
+			currentSessionId: "client-a-session",
+			selectedModel,
+			providerKeys: { "custom-provider:provider-1": "shared-key" },
+			customProviders: providers,
+		},
+		"client-a",
+	);
+
+	const globalSettings = service.readSettings();
+	assert.deepEqual(globalSettings.providerKeys, { "custom-provider:provider-1": "shared-key" });
+	assert.deepEqual(globalSettings.customProviders, providers);
+	assert.equal(globalSettings.currentSessionId, undefined);
+	assert.equal(globalSettings.selectedModel, undefined);
+
+	const clientSettings = service.readSettings("client-a");
+	assert.equal(clientSettings.currentSessionId, "client-a-session");
+	assert.deepEqual(clientSettings.selectedModel, selectedModel);
+	assert.deepEqual(clientSettings.providerKeys, { "custom-provider:provider-1": "shared-key" });
+	assert.deepEqual(clientSettings.customProviders, providers);
+});
+
 await test("WorkspaceSessionService deletes only project directories whose metadata matches the full session id", () => {
 	const root = tempRoot();
 	const config = testConfig(root);

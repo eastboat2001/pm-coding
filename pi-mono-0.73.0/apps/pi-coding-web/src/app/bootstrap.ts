@@ -3,10 +3,10 @@ import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
 import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import {
-	type Attachment,
 	type AgentState,
 	ApiKeyPromptDialog,
 	AppStorage,
+	type Attachment,
 	ChatPanel,
 	createStreamFn,
 	defaultConvertToLlm,
@@ -39,6 +39,7 @@ import "../app.css";
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
+import { DiagnosticLogsTab } from "../diagnostics/DiagnosticLogsTab.js";
 import { createDiagnosticClient, type DiagnosticData, type DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
 import { createLoggedStreamFn, type DiagnosticStreamLoggingConfig } from "../diagnostics/model-stream-logger.js";
 import { LocalSessionListDialog } from "../dialogs/LocalSessionListDialog.js";
@@ -46,15 +47,15 @@ import {
 	buildCodingHandoffPrompt,
 	buildPmApiUrl,
 	fetchPmHandoffPayload,
-	prepareHandoffDocumentFiles,
 	type HandoffDocumentFile,
 	type PmHandoffPayload,
+	prepareHandoffDocumentFiles,
 } from "../integrations/pm-handoff.js";
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
-import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
 import { collectProjectFilesFromMessages } from "../runtime/project-file-seed.js";
+import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
 import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import {
 	cancelRun as cancelRuntimeRun,
@@ -1570,7 +1571,13 @@ const renderApp = () => {
 							skillStatusTab.skills = piRuntimeConfig.selectableSkills;
 							skillStatusTab.defaultSkills = piRuntimeConfig.defaultSkills;
 							skillStatusTab.diagnostics = piRuntimeConfig.skillDiagnostics;
-							SettingsDialog.open([new LanguageTab(), providersTab, new ProxyTab(), skillStatusTab]);
+							SettingsDialog.open([
+								new LanguageTab(),
+								providersTab,
+								new ProxyTab(),
+								new DiagnosticLogsTab(),
+								skillStatusTab,
+							]);
 						},
 						title: i18n("Settings"),
 					})}

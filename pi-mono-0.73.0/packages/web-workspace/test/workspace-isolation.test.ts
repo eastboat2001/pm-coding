@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WorkspaceDiagnosticLogService } from "../src/diagnostic-log-service.js";
+import type { StorageConfig } from "../src/types.js";
 import { WorkspaceFileService } from "../src/workspace-file-service.js";
 import { WorkspacePreviewService } from "../src/workspace-preview-service.js";
 import { WorkspaceSessionService } from "../src/workspace-session-service.js";
-import type { StorageConfig } from "../src/types.js";
 
 describe("workspace client isolation and path safety", () => {
 	let root: string;
@@ -21,7 +21,7 @@ describe("workspace client isolation and path safety", () => {
 		rmSync(root, { force: true, recursive: true });
 	});
 
-	it("isolates configured sessions and settings by client id", () => {
+	it("isolates configured sessions while sharing provider settings globally", () => {
 		const sessions = new WorkspaceSessionService(config);
 		sessions.ensureDirs();
 
@@ -31,8 +31,8 @@ describe("workspace client isolation and path safety", () => {
 			sessionMetadata("session-1", "Client A"),
 			"client-a",
 		);
-		sessions.writeSettings({ currentSessionId: "session-1", providerKeys: { openai: "a-key" } }, "client-a");
-		sessions.writeSettings({ currentSessionId: "session-2", providerKeys: { openai: "b-key" } }, "client-b");
+		sessions.writeSettings({ currentSessionId: "session-1", providerKeys: { openai: "global-key" } }, "client-a");
+		sessions.writeSettings({ currentSessionId: "session-2" }, "client-b");
 
 		expect(sessions.readSession("session-1", "client-a")?.metadata).toMatchObject({ title: "Client A" });
 		expect(sessions.readSession("session-1", "client-b")).toBeUndefined();
@@ -40,11 +40,14 @@ describe("workspace client isolation and path safety", () => {
 		expect(sessions.listSessions("client-b")).toEqual([]);
 		expect(sessions.readSettings("client-a")).toMatchObject({
 			currentSessionId: "session-1",
-			providerKeys: { openai: "a-key" },
+			providerKeys: { openai: "global-key" },
 		});
 		expect(sessions.readSettings("client-b")).toMatchObject({
 			currentSessionId: "session-2",
-			providerKeys: { openai: "b-key" },
+			providerKeys: { openai: "global-key" },
+		});
+		expect(sessions.readSettings()).toMatchObject({
+			providerKeys: { openai: "global-key" },
 		});
 	});
 

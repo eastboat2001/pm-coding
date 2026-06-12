@@ -47,6 +47,12 @@ export function sendJson(res: ServerResponse, payload: JsonObject, status = 200)
 	res.end(JSON.stringify(payload));
 }
 
+export function sendPrettyJson(res: ServerResponse, payload: JsonObject, status = 200): void {
+	res.statusCode = status;
+	res.setHeader("Content-Type", "application/json; charset=utf-8");
+	res.end(JSON.stringify(payload, null, 2));
+}
+
 export function isObject(value: unknown): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

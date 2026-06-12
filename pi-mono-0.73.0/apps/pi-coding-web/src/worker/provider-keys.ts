@@ -1,11 +1,31 @@
 import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { StorageConfig } from "@mariozechner/pi-web-workspace";
+
+const SAFE_CLIENT_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export function readServerProviderApiKey(
 	config: Pick<StorageConfig, "settingsFile">,
 	provider: string,
+	clientId?: string,
 ): string | undefined {
-	const settings = readSettings(config.settingsFile);
+	return (
+		readProviderApiKey(readSettings(config.settingsFile), provider) ??
+		readLegacyClientProviderApiKey(config, provider, clientId)
+	);
+}
+
+function readLegacyClientProviderApiKey(
+	config: Pick<StorageConfig, "settingsFile">,
+	provider: string,
+	clientId: string | undefined,
+): string | undefined {
+	if (!clientId || !SAFE_CLIENT_ID_PATTERN.test(clientId)) return undefined;
+	const clientSettingsFile = join(dirname(config.settingsFile), "clients", clientId, basename(config.settingsFile));
+	return readProviderApiKey(readSettings(clientSettingsFile), provider);
+}
+
+function readProviderApiKey(settings: Record<string, unknown> | undefined, provider: string): string | undefined {
 	const providerKeys = isRecord(settings?.providerKeys) ? settings.providerKeys : {};
 	const providerKey = providerKeys[provider];
 	if (typeof providerKey === "string" && providerKey) {

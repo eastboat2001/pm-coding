@@ -10,12 +10,15 @@ import { createRef, ref } from "lit/directives/ref.js";
 import { Brain, Image as ImageIcon } from "lucide";
 import { Input } from "../components/Input.js";
 import { getAppStorage } from "../storage/app-storage.js";
+import { type CustomProviderModelEntry, loadCustomProviderModels } from "../utils/custom-provider-models.js";
 import { formatModelCost } from "../utils/format.js";
 import { i18n } from "../utils/i18n.js";
-import {
-	loadCustomProviderModels,
-	type CustomProviderModelEntry,
-} from "../utils/custom-provider-models.js";
+
+export function formatModelTokenCount(tokens: number): string {
+	if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(0)}M`;
+	if (tokens >= 1000) return `${(tokens / 1000).toFixed(0)}K`;
+	return String(tokens);
+}
 
 /**
  * Score a query against a text using subsequence matching.
@@ -157,12 +160,6 @@ export class ModelSelector extends DialogBase {
 			this.customProvidersLoading = false;
 			this.requestUpdate();
 		}
-	}
-
-	private formatTokens(tokens: number): string {
-		if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(0)}M`;
-		if (tokens >= 1000) return `${(tokens / 1000).toFixed(0)}`;
-		return String(tokens);
 	}
 
 	private handleSelect(model: Model<any>) {
@@ -341,7 +338,7 @@ export class ModelSelector extends DialogBase {
 								<div class="flex items-center gap-2">
 									<span class="${model.reasoning ? "" : "opacity-30"}">${icon(Brain, "sm")}</span>
 									<span class="${model.input.includes("image") ? "" : "opacity-30"}">${icon(ImageIcon, "sm")}</span>
-									<span>${this.formatTokens(model.contextWindow)}K/${this.formatTokens(model.maxTokens)}K</span>
+									<span>${formatModelTokenCount(model.contextWindow)}/${formatModelTokenCount(model.maxTokens)}</span>
 								</div>
 								<span>${formatModelCost(model.cost)}</span>
 							</div>

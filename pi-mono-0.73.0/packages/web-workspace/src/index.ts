@@ -1,5 +1,6 @@
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
 export { loadStorageConfig } from "./config.js";
+export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export type { LangfuseDiagnosticEvent, LangfuseExporterStatus } from "./langfuse-exporter.js";
 export { LangfuseDiagnosticExporter } from "./langfuse-exporter.js";
@@ -33,6 +34,8 @@ export type {
 	DiagnosticLogCategory,
 	DiagnosticLogEventInput,
 	DiagnosticLogEventRecord,
+	DiagnosticLogExportQuery,
+	DiagnosticLogExportResult,
 	DiagnosticLogLevel,
 	DiagnosticLogQuery,
 	DiagnosticLogQueryResult,

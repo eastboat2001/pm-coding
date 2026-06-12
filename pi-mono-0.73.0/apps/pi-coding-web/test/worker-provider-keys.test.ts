@@ -53,6 +53,44 @@ describe("worker provider keys", () => {
 		expect(readServerProviderApiKey({ settingsFile }, "custom-provider:provider-b")).toBe("second-key");
 	});
 
+	it("prefers global provider settings over legacy client-scoped provider settings", () => {
+		writeSettings({
+			customProviders: [
+				{
+					id: "provider-a",
+					name: "mimo",
+					apiKey: "global-key",
+				},
+			],
+		});
+		writeClientSettings("client-a", {
+			customProviders: [
+				{
+					id: "provider-a",
+					name: "mimo",
+					apiKey: "client-key",
+				},
+			],
+		});
+
+		expect(readServerProviderApiKey({ settingsFile }, "custom-provider:provider-a", "client-a")).toBe("global-key");
+	});
+
+	it("falls back to legacy client-scoped provider settings during migration", () => {
+		writeSettings({ providerKeys: { openai: "openai-key" } });
+		writeClientSettings("client-a", {
+			customProviders: [
+				{
+					id: "provider-a",
+					name: "mimo",
+					apiKey: "client-key",
+				},
+			],
+		});
+
+		expect(readServerProviderApiKey({ settingsFile }, "custom-provider:provider-a", "client-a")).toBe("client-key");
+	});
+
 	it("returns undefined when settings do not contain the provider", () => {
 		writeSettings({ providerKeys: { openai: "openai-key" } });
 
@@ -61,5 +99,11 @@ describe("worker provider keys", () => {
 
 	function writeSettings(settings: Record<string, unknown>): void {
 		writeFileSync(settingsFile, JSON.stringify(settings), "utf8");
+	}
+
+	function writeClientSettings(clientId: string, settings: Record<string, unknown>): void {
+		const clientDir = join(rootDir, "clients", clientId);
+		mkdirSync(clientDir, { recursive: true });
+		writeFileSync(join(clientDir, "settings.json"), JSON.stringify(settings), "utf8");
 	}
 });

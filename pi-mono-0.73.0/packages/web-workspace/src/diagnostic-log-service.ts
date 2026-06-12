@@ -8,6 +8,8 @@ import type {
 	DiagnosticLogCategory,
 	DiagnosticLogEventInput,
 	DiagnosticLogEventRecord,
+	DiagnosticLogExportQuery,
+	DiagnosticLogExportResult,
 	DiagnosticLogLevel,
 	DiagnosticLogQuery,
 	DiagnosticLogQueryResult,
@@ -20,6 +22,8 @@ import type {
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
+const DEFAULT_EXPORT_LIMIT = 50000;
+const MAX_EXPORT_LIMIT = 200000;
 const MAX_STRING_LENGTH = 4000;
 const MAX_ARRAY_ITEMS = 100;
 const MAX_OBJECT_KEYS = 200;
@@ -200,6 +204,42 @@ export class WorkspaceDiagnosticLogService {
 			)
 			.all(...values) as DiagnosticEventRow[];
 		return { events: rows.map(toRecord) };
+	}
+
+	exportEvents(query: DiagnosticLogExportQuery = {}): DiagnosticLogExportResult {
+		const limit = clampExportLimit(query.maxEvents ?? query.limit);
+		if (!this.config.loggingEnabled || !existsSync(this.config.logsDbFile)) {
+			return { events: [], total: 0, exported: 0, truncated: false, limit };
+		}
+		const clauses: string[] = [];
+		const values: (string | number)[] = [];
+		addClause(clauses, values, "client_id", stringField(query.clientId));
+		addClause(clauses, values, "session_id", stringField(query.sessionId));
+		addClause(clauses, values, "trace_id", stringField(query.traceId));
+		addClause(clauses, values, "level", diagnosticLevel(query.level));
+		addClause(clauses, values, "category", diagnosticCategory(query.category));
+		addClause(clauses, values, "event_type", stringField(query.eventType));
+		const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+		const countRow = this.open()
+			.prepare(`SELECT COUNT(*) AS count FROM diagnostic_events ${where}`)
+			.get(...values) as CountRow | undefined;
+		const rows = this.open()
+			.prepare(
+				`SELECT id, timestamp, client_id, level, category, event_type, session_id, trace_id, span_id, parent_span_id, request_id, provider, model, duration_ms, data_json
+				FROM diagnostic_events
+				${where}
+				ORDER BY id ASC
+				LIMIT ?`,
+			)
+			.all(...values, limit) as DiagnosticEventRow[];
+		const total = countRow?.count ?? rows.length;
+		return {
+			events: rows.map(toRecord),
+			total,
+			exported: rows.length,
+			truncated: rows.length < total,
+			limit,
+		};
 	}
 
 	private open(): DatabaseSync {
@@ -461,6 +501,11 @@ function diagnosticCategory(value: unknown): DiagnosticLogCategory | undefined {
 function clampLimit(value: unknown): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_LIMIT;
 	return Math.min(MAX_LIMIT, Math.max(1, Math.round(value)));
+}
+
+function clampExportLimit(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_EXPORT_LIMIT;
+	return Math.min(MAX_EXPORT_LIMIT, Math.max(1, Math.round(value)));
 }
 
 function addClause(clauses: string[], values: (string | number)[], column: string, value: string | undefined): void {

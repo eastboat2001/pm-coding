@@ -1086,6 +1086,17 @@ pi-monaco-file-viewer {
 	padding: 14px;
 }
 
+.generated-apps-panel__footer {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	min-height: 38px;
+	padding: 9px 16px;
+	border-top: 1px solid var(--border);
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
 .generated-apps-panel__list {
 	display: flex;
 	flex-direction: column;
@@ -1182,6 +1193,10 @@ pi-monaco-file-viewer {
 
 .generated-app-card__status--running span {
 	background: #12b76a;
+}
+
+.generated-app-card__status--idle span {
+	background: #8aa0c6;
 }
 
 .generated-app-card__status--failed span {

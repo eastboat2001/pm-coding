@@ -37,8 +37,8 @@ describe("WorkspaceRunApiService", () => {
 
 		expect(result.session.sessionId).toBe("session-1");
 		expect(result.run.status).toBe("queued");
-		expect(result.message.role).toBe("user");
-		expect(result.message.payload).toEqual({ content: "hello" });
+		expect(result.message?.role).toBe("user");
+		expect(result.message?.payload).toEqual({ content: "hello" });
 		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
 		await expect(
 			service.startRun("client-a", {
@@ -95,8 +95,13 @@ describe("WorkspaceRunApiService", () => {
 	});
 
 	it("seeds request project files into the final runtime session before enqueueing", async () => {
-		const seededFiles: Array<{ clientId: string; sessionId: string; title: string; filename: string; content: string }> =
-			[];
+		const seededFiles: Array<{
+			clientId: string;
+			sessionId: string;
+			title: string;
+			filename: string;
+			content: string;
+		}> = [];
 		const seedingService = new WorkspaceRunApiService(db, queue, undefined, {
 			writeFile: async (context, file) => {
 				seededFiles.push({
@@ -120,9 +125,40 @@ describe("WorkspaceRunApiService", () => {
 
 		expect(result.session.sessionId).toBe("session-1");
 		expect(seededFiles).toEqual([
-			{ clientId: "client-a", sessionId: "session-1", title: "QDM Finish", filename: "docs/需求.md", content: "# PRD" },
+			{
+				clientId: "client-a",
+				sessionId: "session-1",
+				title: "QDM Finish",
+				filename: "docs/需求.md",
+				content: "# PRD",
+			},
 		]);
 		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
+	});
+
+	it("initializes a project workspace for a new run even when no project files are seeded", async () => {
+		const initializedWorkspaces: Array<{ clientId: string; sessionId: string; title: string }> = [];
+		const seedingService = new WorkspaceRunApiService(db, queue, undefined, {
+			ensureWorkspace: async (context) => {
+				initializedWorkspaces.push(context);
+			},
+			writeFile: async () => {
+				throw new Error("No files should be seeded for this request");
+			},
+		});
+
+		const result = await seedingService.startRun("client-a", {
+			sessionId: "session-plain",
+			title: "Plain Chat",
+			message: { content: "hello" },
+			model: {},
+			thinkingLevel: "high",
+		});
+
+		expect(result.session.sessionId).toBe("session-plain");
+		expect(initializedWorkspaces).toEqual([
+			{ clientId: "client-a", sessionId: "session-plain", title: "Plain Chat" },
+		]);
 	});
 
 	it("preserves user-with-attachments as the runtime message role", async () => {
@@ -148,7 +184,7 @@ describe("WorkspaceRunApiService", () => {
 			thinkingLevel: "high",
 		});
 
-		expect(result.message.role).toBe("user-with-attachments");
+		expect(result.message?.role).toBe("user-with-attachments");
 		expect(db.listMessages("client-a", "session-attachments")).toEqual([
 			expect.objectContaining({
 				role: "user-with-attachments",

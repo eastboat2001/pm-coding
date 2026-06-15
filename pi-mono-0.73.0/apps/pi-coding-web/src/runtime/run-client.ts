@@ -63,6 +63,13 @@ export async function deleteSession(sessionId: string): Promise<DeleteSessionRes
 	});
 }
 
+export async function renameSession(sessionId: string, title: string): Promise<RuntimeSessionRecord> {
+	return requestRunApi<RuntimeSessionRecord>(`${SESSIONS_API_PREFIX}/${encodeURIComponent(sessionId)}`, {
+		method: "PUT",
+		body: JSON.stringify({ title }),
+	});
+}
+
 export async function listRunEvents(runId: string, afterSeq = 0): Promise<RuntimeRunEventRecord[]> {
 	const result = await requestRunApi<RuntimeRunEventListResult>(
 		`${RUNS_API_PREFIX}/${encodeURIComponent(runId)}/events?afterSeq=${afterSeq}`,

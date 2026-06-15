@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { RunStatus } from "@mariozechner/pi-web-workspace";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running", "cancelling"]);

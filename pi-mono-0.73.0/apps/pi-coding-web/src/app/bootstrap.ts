@@ -34,7 +34,7 @@ import type {
 	RuntimeRunRecord,
 } from "@mariozechner/pi-web-workspace";
 import { html, render } from "lit";
-import { Folder, History, PanelsTopLeft, Plus, Settings } from "lucide";
+import { Folder, PanelsTopLeft, Plus, Settings } from "lucide";
 import "../app.css";
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
@@ -42,7 +42,6 @@ import { Input } from "@mariozechner/mini-lit/dist/Input.js";
 import { DiagnosticLogsTab } from "../diagnostics/DiagnosticLogsTab.js";
 import { createDiagnosticClient, type DiagnosticData, type DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
 import { createLoggedStreamFn, type DiagnosticStreamLoggingConfig } from "../diagnostics/model-stream-logger.js";
-import { LocalSessionListDialog } from "../dialogs/LocalSessionListDialog.js";
 import {
 	buildCodingHandoffPrompt,
 	buildPmApiUrl,
@@ -54,7 +53,7 @@ import {
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
-import { collectProjectFilesFromMessages } from "../runtime/project-file-seed.js";
+import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
 import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
 import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import {
@@ -65,6 +64,7 @@ import {
 	listRunEvents as listRuntimeRunEvents,
 	listSessions as listRuntimeSessions,
 	type RunEventConnection,
+	renameSession as renameRuntimeSession,
 	startRun as startRuntimeRun,
 } from "../runtime/run-client.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
@@ -96,6 +96,7 @@ import type { GeneratedAppsPanel } from "./GeneratedAppsPanel.js";
 import {
 	clampGeneratedAppsPanelWidth,
 	GENERATED_APPS_PANEL_DEFAULT_WIDTH,
+	loadSessionProjectApps,
 	readGeneratedAppsPanelWidth,
 	writeGeneratedAppsPanelWidth,
 } from "./generated-apps-state.js";
@@ -581,6 +582,33 @@ const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
 	}
 };
 
+const loadGeneratedAppsForSessions = async () => {
+	const browserSessions = await getBrowserSessions();
+	return loadSessionProjectApps(browserSessions);
+};
+
+const renameSessionProject = async (sessionId: string, title: string) => {
+	try {
+		await renameRuntimeSession(sessionId, title);
+	} catch (error) {
+		if (!isRuntimeSessionMissingError(error)) throw error;
+	}
+	if (storage.sessions) {
+		await storage.sessions.updateTitle(sessionId, title);
+	}
+	const sessionData = await storage.sessions?.get(sessionId);
+	const metadata = (await storage.sessions?.getMetadata(sessionId)) as SessionMetadataWithRunState | null;
+	if (sessionData && metadata) {
+		await configuredStorage.writeSession({ ...sessionData, title }, { ...metadata, title });
+	}
+	if (sessionId === currentSessionId) {
+		currentTitle = title;
+		await saveSession();
+		renderApp();
+	}
+	refreshGeneratedAppsPanel();
+};
+
 const deleteSessionEverywhere = async (sessionId: string) => {
 	try {
 		await deleteRuntimeSession(sessionId);
@@ -891,10 +919,10 @@ const normalizeRemotePromptInput = (
 		if (input.length !== 1) {
 			throw new Error("Remote runs currently support a single prompt message.");
 		}
-		return input;
+		return input.map(preparePromptAttachmentSeeds);
 	}
 	if (typeof input !== "string") {
-		return [input];
+		return [preparePromptAttachmentSeeds(input)];
 	}
 	const content: Array<{ type: "text"; text: string } | ImageContent> = [{ type: "text", text: input }];
 	if (images && images.length > 0) {
@@ -902,6 +930,43 @@ const normalizeRemotePromptInput = (
 	}
 	return [{ role: "user", content, timestamp: Date.now() }];
 };
+
+function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
+	if ((message as { role?: unknown }).role !== "user-with-attachments") return message;
+	const attachments = (message as { attachments?: unknown }).attachments;
+	if (!Array.isArray(attachments)) return message;
+	const preparedAttachments = prepareAttachmentProjectFileSeeds(attachments);
+	return {
+		...message,
+		content: appendAttachmentProjectPathInstructions(
+			(message as { content?: unknown }).content,
+			attachmentProjectPathInstructions(preparedAttachments),
+		),
+		attachments: preparedAttachments,
+	} as AgentMessage;
+}
+
+function attachmentProjectPathInstructions(attachments: Array<{ type?: unknown; projectFilePath?: unknown }>): string {
+	const paths = attachments
+		.filter((attachment) => attachment.type === "document" && typeof attachment.projectFilePath === "string")
+		.map((attachment) => String(attachment.projectFilePath).trim())
+		.filter(Boolean);
+	if (paths.length === 0) return "";
+	return [
+		"",
+		"Attachment documents have been saved to the current session project workspace. Use project_file get to read these paths instead of relying on inline document text:",
+		...paths.map((path) => `- ${path}`),
+	].join("\n");
+}
+
+function appendAttachmentProjectPathInstructions(content: unknown, instructions: string): unknown {
+	if (!instructions) return content;
+	if (typeof content === "string") return `${content.trimEnd()}\n\n${instructions}`;
+	if (Array.isArray(content)) {
+		return [...content, { type: "text", text: instructions }];
+	}
+	return content;
+}
 
 const drainCurrentRemoteRunEvents = async (runId: string): Promise<void> => {
 	const controller = remoteAgentController;
@@ -969,12 +1034,16 @@ const scheduleRemoteRunStatusPoll = (runId: string): void => {
 };
 
 const cancelCurrentRemoteRun = async (runId: string): Promise<void> => {
-	if (runId === currentActiveRunId) {
+	const shouldRestoreCurrentRunState = runId === currentActiveRunId;
+	const previousRunStatus = currentRunStatus;
+	const previousRunUpdatedAt = currentRunUpdatedAt;
+	if (shouldRestoreCurrentRunState) {
 		currentRunStatus = "cancelling";
 		currentRunUpdatedAt = new Date().toISOString();
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
+		refreshGeneratedAppsPanel();
 	}
 
 	let run: RuntimeRunRecord;
@@ -988,6 +1057,14 @@ const cancelCurrentRemoteRun = async (runId: string): Promise<void> => {
 			eventType: "agent.remote_run.cancel.error",
 			data: errorDiagnosticData(error, { runId }),
 		});
+		if (shouldRestoreCurrentRunState && runId === currentActiveRunId) {
+			currentRunStatus = previousRunStatus;
+			currentRunUpdatedAt = previousRunUpdatedAt;
+			await saveSession();
+			renderApp();
+			requestChatPanelUpdate();
+			refreshGeneratedAppsPanel();
+		}
 		throw error;
 	}
 
@@ -996,6 +1073,7 @@ const cancelCurrentRemoteRun = async (runId: string): Promise<void> => {
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
+		refreshGeneratedAppsPanel();
 
 		void syncCurrentRunStatusFromServer(runId, 60, 1000).catch((error) => {
 			console.error("Failed to settle remote run cancellation:", error);
@@ -1099,6 +1177,7 @@ const startRemotePrompt = async (
 	renderApp();
 	requestChatPanelUpdate();
 	await saveSession();
+	refreshGeneratedAppsPanel();
 	await agent.waitForIdle();
 };
 
@@ -1131,6 +1210,7 @@ const startRemoteContinuationRun = async (): Promise<void> => {
 	renderApp();
 	requestChatPanelUpdate();
 	await saveSession();
+	refreshGeneratedAppsPanel();
 	await agent.waitForIdle();
 };
 
@@ -1189,6 +1269,8 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			await enqueueDefaultSkillLoadMessages(agent, piRuntimeConfig.defaultSkills);
 			await modelController.persistSelectedModel(agent.state.model);
 			await saveSession();
+			if (activeSidebarPanel === "apps") refreshGeneratedAppsPanel();
+			if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 		},
 		onModelSelect: handleModelSelect,
 		onThinkingChange: async () => {
@@ -1348,10 +1430,7 @@ const applyHandoffDefaultThinkingLevel = async () => {
 	}
 };
 
-const markHandoffAttachmentsUiOnly = (
-	attachments: Attachment[],
-	documentFiles: HandoffDocumentFile[],
-): Attachment[] =>
+const markHandoffAttachmentsUiOnly = (attachments: Attachment[], documentFiles: HandoffDocumentFile[]): Attachment[] =>
 	attachments.map((attachment, index) => ({
 		...attachment,
 		llmContext: "none" as const,
@@ -1381,7 +1460,8 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 		});
 	}
 
-	const inputAttachments = documentFiles.length > 0 ? markHandoffAttachmentsUiOnly(attachments, documentFiles) : attachments;
+	const inputAttachments =
+		documentFiles.length > 0 ? markHandoffAttachmentsUiOnly(attachments, documentFiles) : attachments;
 	await applyHandoffDefaultThinkingLevel();
 	chatPanel.agentInterface?.setInput(buildCodingHandoffPrompt(payload, documentFiles), inputAttachments);
 	if (currentSessionId) {
@@ -1472,26 +1552,6 @@ const renderApp = () => {
 						<span class="example-header__logo-segment example-header__logo-segment--aitc">AITC</span>
 					</div>
 					<div class="example-header__session flex items-center gap-2 min-w-0">
-					${Button({
-						variant: "ghost",
-						size: "sm",
-						children: icon(History, "sm"),
-						onClick: () => {
-							LocalSessionListDialog.open(
-								getBrowserSessions,
-								async (sessionId) => {
-									await loadSession(sessionId);
-								},
-								async (deletedSessionId) => {
-									await deleteSessionEverywhere(deletedSessionId);
-								},
-								async (runId) => {
-									await cancelCurrentRemoteRun(runId);
-								},
-							);
-						},
-						title: i18n("Sessions"),
-					})}
 					${Button({
 						variant: "ghost",
 						size: "sm",
@@ -1637,6 +1697,11 @@ const renderApp = () => {
 								<pi-generated-apps-panel
 									.openSession=${(sessionId: string) => loadSession(sessionId)}
 									.deleteSession=${(sessionId: string) => deleteSessionEverywhere(sessionId)}
+									.cancelRun=${(runId: string) => cancelCurrentRemoteRun(runId)}
+									.loadProjects=${loadGeneratedAppsForSessions}
+									.renameProject=${(project: { sessionId: string }, title: string) =>
+										renameSessionProject(project.sessionId, title)}
+									.selectedSessionStatus=${isActiveRunStatus(currentRunStatus) ? "running" : "idle"}
 								></pi-generated-apps-panel>
 							</aside>
 							<div

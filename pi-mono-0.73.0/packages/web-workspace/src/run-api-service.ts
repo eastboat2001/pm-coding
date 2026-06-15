@@ -23,6 +23,7 @@ export interface RunApiDiagnostics {
 }
 
 export interface RunProjectFileSeeder {
+	ensureWorkspace?(context: { clientId: string; sessionId: string; title: string }): Promise<void> | void;
 	writeFile(
 		context: { clientId: string; sessionId: string; title: string },
 		file: StartRunProjectFile,
@@ -60,6 +61,7 @@ export class WorkspaceRunApiService {
 		const model = isObject(request.model) ? request.model : (existingSession?.model ?? {});
 		const thinkingLevel = normalizeOptionalString(request.thinkingLevel) ?? existingSession?.thinkingLevel ?? "high";
 		const title = existingSession?.title ?? normalizeOptionalString(request.title) ?? "Untitled session";
+		await this.ensureProjectWorkspace(clientId, sessionId, title);
 		await this.seedProjectFiles(clientId, sessionId, title, request.projectFiles);
 		if (request.message === undefined) {
 			const run = this.db.createContinuationRun({
@@ -146,6 +148,15 @@ export class WorkspaceRunApiService {
 		};
 	}
 
+	renameSession(clientId: string, sessionId: string, title: string): RuntimeSessionRecord {
+		const nextTitle = normalizeOptionalString(title);
+		if (!nextTitle) throw new RunApiError("Session title is required", 400);
+		if (nextTitle.length > 160) throw new RunApiError("Session title must be 160 characters or fewer", 400);
+		const session = this.db.updateSessionTitle(clientId, sessionId, nextTitle);
+		if (!session) throw new RunApiError("Session not found.", 404);
+		return session;
+	}
+
 	async deleteSession(
 		clientId: string,
 		sessionId: string,
@@ -200,6 +211,16 @@ export class WorkspaceRunApiService {
 
 	private hasActiveRun(clientId: string, sessionId: string): boolean {
 		return this.activeRuns(clientId, sessionId).length > 0;
+	}
+
+	private async ensureProjectWorkspace(clientId: string, sessionId: string, title: string): Promise<void> {
+		if (!this.projectFiles?.ensureWorkspace) return;
+		try {
+			await this.projectFiles.ensureWorkspace({ clientId, sessionId, title });
+		} catch (error) {
+			if (error instanceof RunApiError) throw error;
+			throw new RunApiError(`Project workspace init failed: ${errorMessage(error)}`, 500);
+		}
 	}
 
 	private async seedProjectFiles(clientId: string, sessionId: string, title: string, value: unknown): Promise<void> {

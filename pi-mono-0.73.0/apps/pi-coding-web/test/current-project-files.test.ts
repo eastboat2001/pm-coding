@@ -165,6 +165,18 @@ describe("current project files state", () => {
 		expect(tree.children[0].children.map((node) => node.name)).toEqual(["components", "styles", "main.ts"]);
 	});
 
+	it("builds a root project node for an empty session workspace", () => {
+		const tree = buildCurrentProjectFileTree([], "Plain Chat");
+
+		expect(tree).toMatchObject({
+			type: "directory",
+			name: "Plain Chat",
+			path: "",
+			fileCount: 0,
+			children: [],
+		});
+	});
+
 	it("filters files while ignoring whitespace and separators", () => {
 		const files = ["src/components/AISafetyPanel.tsx", "src/pages/Profile.tsx", "README.md"];
 

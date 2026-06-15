@@ -42,8 +42,11 @@ describe("coding system prompt", () => {
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("without switching the output language");
 	});
 
-	it("does not tell the model to read ordinary attachment names as project files", () => {
-		expect(DEFAULT_SYSTEM_PROMPT).toContain("Ordinary user attachments are already available in the message context");
-		expect(DEFAULT_SYSTEM_PROMPT).toContain("Do not call project_file get with an ordinary attachment filename");
+	it("tells the model to read document attachments from project workspace paths", () => {
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("User attachments are saved into the current session project workspace");
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("attachments/*.md or docs/*.md");
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("call project_file get to read them");
+		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Ordinary user attachments are already available in the message context");
+		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Do not call project_file get with an ordinary attachment filename");
 	});
 });

@@ -26,6 +26,7 @@ import type {
 import {
 	assertInside,
 	listProjectSourceFiles,
+	migrateLegacyProjectDir,
 	removeSiblingProjectDirs,
 	safeRelativeProjectPath,
 	workspaceContext,
@@ -34,8 +35,20 @@ import {
 export class WorkspaceFileService {
 	constructor(private readonly config: StorageConfig) {}
 
+	ensureProjectWorkspace(body: ProjectRequestContext): ProjectFilesListResult {
+		const { clientId, projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
+		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
+		mkdirSync(projectDir, { recursive: true });
+		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
+		const files = listProjectSourceFiles(projectDir).map((file) =>
+			normalizeProjectFilePath(relative(projectDir, file)),
+		);
+		return { projectId, sessionId, title, projectRoot: projectDir, files, fileCount: files.length };
+	}
+
 	listProjectFiles(body: ProjectRequestContext): ProjectFilesListResult {
-		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
+		const { clientId, projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
+		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const files = listProjectSourceFiles(projectDir).map((file) =>
 			normalizeProjectFilePath(relative(projectDir, file)),
 		);
@@ -43,7 +56,8 @@ export class WorkspaceFileService {
 	}
 
 	readProjectFilePreview(body: ProjectFilePreviewRequest): ProjectFilePreviewResult {
-		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
+		const { clientId, projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
+		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const relativePath = safeRelativeProjectPath(String(body.filename || "").trim());
 		const targetPath = resolve(projectDir, relativePath);
 		assertInside(projectDir, targetPath);
@@ -73,7 +87,8 @@ export class WorkspaceFileService {
 	}
 
 	saveProjectFile(body: ProjectFileSaveRequest): ProjectFileSaveResult {
-		const { projectDir } = workspaceContext(this.config, body);
+		const { clientId, projectDir, sessionId } = workspaceContext(this.config, body);
+		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const filename = String(body.filename || "").trim();
 		const content = body.content;
 		const baseHash = String(body.baseHash || "").trim();
@@ -105,6 +120,7 @@ export class WorkspaceFileService {
 
 	handle(body: ProjectFileRequest): ProjectFileResult {
 		const { clientId, projectDir, sessionId } = workspaceContext(this.config, body);
+		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		mkdirSync(projectDir, { recursive: true });
 		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 
@@ -126,8 +142,7 @@ export class WorkspaceFileService {
 			const stat = statSync(targetPath);
 			if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`);
 			const bytesToRead = Math.min(stat.size, PROJECT_FILE_GET_MAX_BYTES);
-			const content =
-				bytesToRead > 0 ? readFilePrefix(targetPath, bytesToRead).toString("utf8") : "";
+			const content = bytesToRead > 0 ? readFilePrefix(targetPath, bytesToRead).toString("utf8") : "";
 			const truncated = stat.size > bytesToRead;
 			return {
 				command,

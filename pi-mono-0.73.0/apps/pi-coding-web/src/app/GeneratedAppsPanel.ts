@@ -1,11 +1,14 @@
 import { icon } from "@mariozechner/mini-lit";
 import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { AlertCircle, ExternalLink, PanelsTopLeft, Pencil, RefreshCw, Search, Trash2, X } from "lucide";
+import { AlertCircle, ExternalLink, PanelsTopLeft, Pencil, RefreshCw, Search, Square, Trash2, X } from "lucide";
 import {
+	cancelGeneratedAppRunWithRollback,
 	filterGeneratedApps,
+	formatGeneratedAppUpdatedAt,
 	type GeneratedAppRecord,
 	loadGeneratedApps,
+	projectSessionStatusLabel,
 	renameGeneratedApp,
 } from "./generated-apps-state.js";
 
@@ -13,6 +16,13 @@ import {
 export class GeneratedAppsPanel extends LitElement {
 	@property({ attribute: false }) openSession: (sessionId: string) => Promise<unknown> | unknown = () => undefined;
 	@property({ attribute: false }) deleteSession: (sessionId: string) => Promise<unknown> | unknown = () => undefined;
+	@property({ attribute: false }) cancelRun: (runId: string) => Promise<unknown> | unknown = () => undefined;
+	@property({ attribute: false }) renameProject: (project: GeneratedAppRecord, title: string) => Promise<unknown> | unknown = (
+		project,
+		title,
+	) => renameGeneratedApp(project.projectId, title);
+	@property({ attribute: false }) loadProjects: () => Promise<GeneratedAppRecord[]> = () => loadGeneratedApps();
+	@property({ type: String }) selectedSessionStatus: "running" | "idle" = "idle";
 
 	@state() private projects: GeneratedAppRecord[] = [];
 	@state() private loading = false;
@@ -40,7 +50,7 @@ export class GeneratedAppsPanel extends LitElement {
 		this.loading = true;
 		this.error = "";
 		try {
-			this.projects = await loadGeneratedApps();
+			this.projects = await this.loadProjects();
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -86,6 +96,11 @@ export class GeneratedAppsPanel extends LitElement {
 				<div class="generated-apps-panel__body">
 					${this.renderBody(visibleProjects)}
 				</div>
+				<footer class="generated-apps-panel__footer">
+					<span class=${`generated-app-card__status generated-app-card__status--${this.selectedSessionStatus}`}>
+						<span></span>${this.selectedSessionStatus === "running" ? t("正在执行") : t("空闲")}
+					</span>
+				</footer>
 				${this.renderRenameDialog()}
 				${this.renderDeleteDialog()}
 			</div>
@@ -108,9 +123,9 @@ export class GeneratedAppsPanel extends LitElement {
 			return html`
 				<div class="generated-apps-panel__state">
 					<span>${icon(PanelsTopLeft, "md")}</span>
-					<div>
-						<div class="generated-apps-panel__state-title">${t("No generated apps yet")}</div>
-						<div class="generated-apps-panel__state-text">${t("Preview a project to make it appear here.")}</div>
+							<div>
+						<div class="generated-apps-panel__state-title">${t("No session projects yet")}</div>
+						<div class="generated-apps-panel__state-text">${t("Send a message to create a session project.")}</div>
 					</div>
 				</div>
 			`;
@@ -120,8 +135,8 @@ export class GeneratedAppsPanel extends LitElement {
 				<div class="generated-apps-panel__state">
 					<span>${icon(Search, "md")}</span>
 					<div>
-						<div class="generated-apps-panel__state-title">${t("No matching apps")}</div>
-						<div class="generated-apps-panel__state-text">${t("Try another app name or preview URL.")}</div>
+						<div class="generated-apps-panel__state-title">${t("No matching sessions")}</div>
+						<div class="generated-apps-panel__state-text">${t("Try another session title or preview URL.")}</div>
 					</div>
 				</div>
 			`;
@@ -131,10 +146,11 @@ export class GeneratedAppsPanel extends LitElement {
 
 	private renderProject(project: GeneratedAppRecord): TemplateResult {
 		const canOpen = Boolean(project.previewUrl);
+		const running = project.status === "running";
 		const editing = this.editingProjectId === project.projectId;
 		const renaming = this.renamingProjectId === project.projectId;
 		const deleting = this.deletingProjectId === project.projectId;
-		const statusLabel = projectStatusLabel(project.status);
+		const statusLabel = projectSessionStatusLabel(project.runStatus || project.status);
 		return html`
 			<article
 				class="generated-app-card"
@@ -147,17 +163,13 @@ export class GeneratedAppsPanel extends LitElement {
 				<div class="generated-app-card__icon">${icon(PanelsTopLeft, "md")}</div>
 				<div class="generated-app-card__main">
 					<div class="generated-app-card__title" title=${project.title}>${project.title}</div>
-					${
-						canOpen
-							? html`<div class="generated-app-card__url">${project.previewUrl}</div>`
-							: html`<div class="generated-app-card__url generated-app-card__url--muted">${t("Preview unavailable")}</div>`
-					}
+					${canOpen ? html`<div class="generated-app-card__url">${project.previewUrl}</div>` : ""}
 					<div class="generated-app-card__meta">
-						<span class=${`generated-app-card__status generated-app-card__status--${project.status === "running" ? "running" : "failed"}`}>
+						<span class=${`generated-app-card__status generated-app-card__status--${project.status}`}>
 							<span></span>${statusLabel}
 						</span>
 						<span>${project.fileCount} ${t("files")}</span>
-						<span>${formatUpdatedAt(project.updatedAt)}</span>
+						<span>${formatGeneratedAppUpdatedAt(project.updatedAt)}</span>
 					</div>
 				</div>
 				<div
@@ -178,31 +190,38 @@ export class GeneratedAppsPanel extends LitElement {
 					>
 						${icon(Pencil, "sm")}
 					</button>
+					${
+						canOpen
+							? html`
+								<button
+									type="button"
+									class="generated-app-card__action"
+									?disabled=${deleting}
+									@click=${(event: MouseEvent) => {
+										event.stopPropagation();
+										this.openPreview(project);
+									}}
+									title=${t("Open preview")}
+									aria-label=${t("Open preview")}
+								>
+									${icon(ExternalLink, "sm")}
+								</button>
+							`
+							: ""
+					}
 					<button
 						type="button"
-						class="generated-app-card__action"
-						?disabled=${!canOpen || deleting}
-						@click=${(event: MouseEvent) => {
-							event.stopPropagation();
-							this.openPreview(project);
-						}}
-						title=${t("Open preview")}
-						aria-label=${t("Open preview")}
-					>
-						${icon(ExternalLink, "sm")}
-					</button>
-					<button
-						type="button"
-						class="generated-app-card__action generated-app-card__action--danger"
+						class=${`generated-app-card__action generated-app-card__action--danger ${running ? "generated-app-card__action--stop" : ""}`}
 						?disabled=${editing || renaming || deleting}
 						@click=${(event: MouseEvent) => {
 							event.stopPropagation();
-							this.startDelete(project);
+							if (running) void this.stopRun(project);
+							else this.startDelete(project);
 						}}
-						title=${t("Delete APP")}
-						aria-label=${t("Delete APP")}
+						title=${running ? t("Stop run") : t("Delete session")}
+						aria-label=${running ? t("Stop run") : t("Delete session")}
 					>
-						${icon(Trash2, "sm")}
+						${running ? icon(Square, "sm") : icon(Trash2, "sm")}
 					</button>
 				</div>
 			</article>
@@ -354,9 +373,9 @@ export class GeneratedAppsPanel extends LitElement {
 		this.renamingProjectId = project.projectId;
 		this.renameError = "";
 		try {
-			const renamed = await renameGeneratedApp(project.projectId, title);
+			await this.renameProject(project, title);
 			this.projects = this.projects.map((candidate) =>
-				candidate.projectId === renamed.projectId ? renamed : candidate,
+				candidate.sessionId === project.sessionId ? { ...candidate, title } : candidate,
 			);
 			this.cancelRename();
 		} catch (error) {
@@ -387,6 +406,12 @@ export class GeneratedAppsPanel extends LitElement {
 		this.deleteError = "";
 	}
 
+	private async stopRun(project: GeneratedAppRecord): Promise<void> {
+		await cancelGeneratedAppRunWithRollback(this.projects, project, this.cancelRun, (projects) => {
+			this.projects = projects;
+		});
+	}
+
 	private cancelDelete(): void {
 		if (this.deletingProjectId) return;
 		this.deleteProjectId = "";
@@ -415,22 +440,4 @@ function t(message: string): string {
 function countLabel(visibleCount: number, totalCount: number, query: string): string {
 	if (query.trim()) return `${visibleCount} / ${totalCount} ${t("apps")}`;
 	return `${totalCount} ${t("apps")}`;
-}
-
-function projectStatusLabel(status: string): string {
-	if (status === "running") return t("available");
-	return status;
-}
-
-function formatUpdatedAt(value: string): string {
-	const timestamp = Date.parse(value);
-	if (!Number.isFinite(timestamp)) return value;
-	const deltaSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
-	if (deltaSeconds < 60) return t("Updated just now");
-	const deltaMinutes = Math.floor(deltaSeconds / 60);
-	if (deltaMinutes < 60) return `${t("Updated")} ${deltaMinutes}m ${t("ago")}`;
-	const deltaHours = Math.floor(deltaMinutes / 60);
-	if (deltaHours < 24) return `${t("Updated")} ${deltaHours}h ${t("ago")}`;
-	const deltaDays = Math.floor(deltaHours / 24);
-	return `${t("Updated")} ${deltaDays}d ${t("ago")}`;
 }

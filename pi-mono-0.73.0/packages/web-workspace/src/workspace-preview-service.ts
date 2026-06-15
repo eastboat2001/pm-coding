@@ -17,6 +17,7 @@ import type {
 import {
 	assertInside,
 	listProjectSourceFiles,
+	migrateLegacyProjectDir,
 	removeSiblingProjectDirs,
 	safeRelativePreviewPath,
 	workspaceContext,
@@ -30,6 +31,7 @@ export class WorkspacePreviewService {
 
 	async preview(body: ProjectPreviewRequest, req: PreviewRequestLike): Promise<ProjectPreviewResult> {
 		const { clientId, sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
+		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		mkdirSync(projectDir, { recursive: true });
 		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const fileCount = listProjectSourceFiles(projectDir).length;

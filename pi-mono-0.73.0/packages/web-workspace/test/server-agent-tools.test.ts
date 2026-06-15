@@ -173,12 +173,12 @@ describe("server-direct agent project tools", () => {
 
 		expect(result.content[0]).toMatchObject({
 			type: "text",
-			text: expect.stringContaining("Preview URL: http://localhost:5173/preview/demo-s1/"),
+			text: expect.stringContaining("Preview URL: http://localhost:5173/preview/project-s1/"),
 		});
 		expect(result.details).toMatchObject({
 			task: "preview",
 			status: "running",
-			previewUrl: "http://localhost:5173/preview/demo-s1/",
+			previewUrl: "http://localhost:5173/preview/project-s1/",
 		});
 	});
 
@@ -202,7 +202,7 @@ describe("server-direct agent project tools", () => {
 		expect(result.details).toMatchObject({
 			task: "preview",
 			status: "running",
-			previewUrl: "http://localhost:5173/preview/demo-s1/",
+			previewUrl: "http://localhost:5173/preview/project-s1/",
 		});
 	});
 });

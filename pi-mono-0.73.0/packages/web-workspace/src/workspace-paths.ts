@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { PROJECT_MANIFEST_FILE, PROJECT_METADATA_FILE } from "./constants.js";
 import type { ProjectWorkspaceContext, StorageConfig } from "./types.js";
 
@@ -21,10 +21,9 @@ export function projectDirectory(projectsRootDir: string, sessionId: string, tit
 	return join(projectsRootDir, projectSlug(sessionId, title, clientId));
 }
 
-export function projectSlug(sessionId: string, title?: string, clientId?: string): string {
-	const base = sanitizePathComponent(title || "");
+export function projectSlug(sessionId: string, _title?: string, clientId?: string): string {
 	const suffix = projectSlugSuffix(sessionId, clientId);
-	return base ? `${base}-${suffix}` : `project-${suffix}`;
+	return `project-${suffix}`;
 }
 
 export function sanitizePathComponent(value: string): string {
@@ -97,6 +96,25 @@ export function removeSiblingProjectDirs(
 	}
 }
 
+export function migrateLegacyProjectDir(
+	projectsRootDir: string,
+	currentProjectDir: string,
+	sessionId: string,
+	clientId?: string,
+): void {
+	if (!existsSync(projectsRootDir) || projectDirectoryHasContent(currentProjectDir)) return;
+	const suffix = `-${projectSlugSuffix(sessionId, clientId)}`;
+	for (const name of readdirSync(projectsRootDir)) {
+		const candidate = join(projectsRootDir, name);
+		if (candidate === currentProjectDir) continue;
+		if (!projectDirectoryBelongsToSession(candidate, sessionId, suffix, name, clientId)) continue;
+		if (existsSync(currentProjectDir)) rmSync(currentProjectDir, { recursive: true, force: true });
+		renameSync(candidate, currentProjectDir);
+		rewriteMigratedProjectMetadata(currentProjectDir, candidate);
+		return;
+	}
+}
+
 export function deleteSessionAndProjects(
 	projectsRootDir: string,
 	sessionPath: string,
@@ -141,6 +159,32 @@ function projectDirectoryBelongsToSession(
 		}
 	}
 	return directoryName === `project${legacySuffix}` || directoryName.endsWith(legacySuffix);
+}
+
+function projectDirectoryHasContent(projectDir: string): boolean {
+	if (!existsSync(projectDir)) return false;
+	try {
+		return statSync(projectDir).isDirectory() && readdirSync(projectDir).length > 0;
+	} catch {
+		return false;
+	}
+}
+
+function rewriteMigratedProjectMetadata(projectDir: string, legacyProjectDir: string): void {
+	const metadataPath = join(projectDir, PROJECT_METADATA_FILE);
+	if (!existsSync(metadataPath)) return;
+	try {
+		const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
+		const nextProjectId = basename(projectDir);
+		metadata.projectId = nextProjectId;
+		metadata.projectRoot = projectDir;
+		if (typeof metadata.serveRoot === "string" && metadata.serveRoot.startsWith(legacyProjectDir)) {
+			metadata.serveRoot = `${projectDir}${metadata.serveRoot.slice(legacyProjectDir.length)}`;
+		}
+		writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+	} catch {
+		// Ignore corrupt metadata; callers can still access migrated source files.
+	}
 }
 
 function projectSlugSuffix(sessionId: string, clientId?: string): string {

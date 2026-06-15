@@ -17,7 +17,12 @@ import {
 	runCommand,
 	truncateProjectLogs,
 } from "./workspace-command-service.js";
-import { listProjectSourceFiles, removeSiblingProjectDirs, workspaceContext } from "./workspace-paths.js";
+import {
+	listProjectSourceFiles,
+	migrateLegacyProjectDir,
+	removeSiblingProjectDirs,
+	workspaceContext,
+} from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 
 type ProjectCommandRunner = (
@@ -48,6 +53,7 @@ export class WorkspaceTaskService {
 		}
 
 		const { clientId, sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
+		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		if (body.task === "logs") {
 			const logs = this.previews.readProjectLogs(projectId, clientId);
 			return this.recordTaskResult({ ...logs, task: "logs", status: String(logs.status || "ready") });

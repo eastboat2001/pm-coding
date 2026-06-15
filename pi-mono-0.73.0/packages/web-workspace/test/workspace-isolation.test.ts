@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import type { StorageConfig } from "../src/types.js";
 import { WorkspaceFileService } from "../src/workspace-file-service.js";
 import { WorkspacePreviewService } from "../src/workspace-preview-service.js";
 import { WorkspaceSessionService } from "../src/workspace-session-service.js";
+import { projectDirectory, projectSlug } from "../src/workspace-paths.js";
 
 describe("workspace client isolation and path safety", () => {
 	let root: string;
@@ -87,6 +88,39 @@ describe("workspace client isolation and path safety", () => {
 		expect(() =>
 			files.handle({ clientId: "client-a", sessionId: "/", title: "Shared title", command: "list" }),
 		).toThrow("Invalid session id");
+	});
+
+	it("keeps project workspace ids stable across title language and rename changes", () => {
+		const chineseProjectId = projectSlug("session-1", "生成一个贪吃蛇游戏", "client-a");
+		const englishProjectId = projectSlug("session-1", "Snake Game", "client-a");
+		const renamedProjectId = projectSlug("session-1", "Another title after rename", "client-a");
+
+		expect(chineseProjectId).toBe("project-client-a-session-");
+		expect(englishProjectId).toBe(chineseProjectId);
+		expect(renamedProjectId).toBe(chineseProjectId);
+		expect(projectDirectory(config.projectsRootDir, "session-1", "Snake Game", "client-a")).toBe(
+			projectDirectory(config.projectsRootDir, "session-1", "生成一个贪吃蛇游戏", "client-a"),
+		);
+		expect(projectSlug("session-1", "Snake Game", "client-b")).not.toBe(chineseProjectId);
+	});
+
+	it("migrates legacy title-based project directories to the stable session project directory", () => {
+		const files = new WorkspaceFileService(config);
+		const legacyProjectDir = join(config.projectsRootDir, "snake-game-client-a-session-");
+		const stableProjectDir = projectDirectory(config.projectsRootDir, "session-1", "新的中文标题", "client-a");
+		mkdirSync(legacyProjectDir, { recursive: true });
+		writeFileSync(join(legacyProjectDir, "index.html"), "<h1>legacy</h1>", "utf8");
+
+		const result = files.handle({
+			clientId: "client-a",
+			sessionId: "session-1",
+			title: "新的中文标题",
+			command: "list",
+		});
+
+		expect(result.files).toEqual(["index.html"]);
+		expect(existsSync(join(stableProjectDir, "index.html"))).toBe(true);
+		expect(existsSync(legacyProjectDir)).toBe(false);
 	});
 
 	it("isolates project preview list, logs, and rename by client id", async () => {

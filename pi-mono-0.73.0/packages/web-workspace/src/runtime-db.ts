@@ -225,6 +225,14 @@ export class RuntimeDbStore {
 		return row ? toSessionRecord(row) : undefined;
 	}
 
+	updateSessionTitle(clientId: string, sessionId: string, title: string): RuntimeSessionRecord | undefined {
+		const updatedAt = now();
+		this.open()
+			.prepare("UPDATE sessions SET title = ?, updated_at = ? WHERE client_id = ? AND session_id = ?")
+			.run(title, updatedAt, clientId, sessionId);
+		return this.getSession(clientId, sessionId);
+	}
+
 	appendMessage(input: AppendMessageInput): RuntimeMessageRecord {
 		const createdAt = input.createdAt ?? now();
 		const db = this.open();

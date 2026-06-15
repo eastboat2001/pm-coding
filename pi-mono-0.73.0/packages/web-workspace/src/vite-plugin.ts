@@ -55,6 +55,13 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 	const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
 	const runQueue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
 	const runApi = new WorkspaceRunApiService(runtimeDb, runQueue, diagnostics, {
+		ensureWorkspace(context) {
+			files.ensureProjectWorkspace({
+				clientId: context.clientId,
+				sessionId: context.sessionId,
+				title: context.title,
+			});
+		},
 		writeFile(context, file) {
 			files.handle({
 				clientId: context.clientId,
@@ -524,6 +531,11 @@ async function handleRuntimeSessionsApi(
 			if (method === "GET") {
 				const detail = runApi.getSession(clientId, sessionId);
 				sendJson(res, detail || { error: "Session not found." }, detail ? 200 : 404);
+				return;
+			}
+			if (method === "PUT") {
+				const body = await readJsonBody(req);
+				sendJson(res, runApi.renameSession(clientId, sessionId, String((body as { title?: unknown }).title || "")));
 				return;
 			}
 			if (method === "DELETE") {

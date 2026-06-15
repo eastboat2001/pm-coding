@@ -144,27 +144,18 @@ export class CurrentProjectFilesPanel extends LitElement {
 				</div>
 			`;
 		}
-		if (!this.loading && allFiles.length === 0) {
-			return html`
-				<div class="current-project-files-panel__state">
-					<span>${icon(Folder, "md")}</span>
-					<div>
-						<div class="current-project-files-panel__state-title">${t("No project files yet")}</div>
-						<div class="current-project-files-panel__state-text">${t("Generated project files will appear here.")}</div>
-					</div>
-				</div>
-			`;
-		}
 		if (!this.loading && visibleFiles.length === 0) {
-			return html`
-				<div class="current-project-files-panel__state">
-					<span>${icon(Search, "md")}</span>
-					<div>
-						<div class="current-project-files-panel__state-title">${t("No matching files")}</div>
-						<div class="current-project-files-panel__state-text">${t("Try another file name or path.")}</div>
+			if (allFiles.length > 0) {
+				return html`
+					<div class="current-project-files-panel__state">
+						<span>${icon(Search, "md")}</span>
+						<div>
+							<div class="current-project-files-panel__state-title">${t("No matching files")}</div>
+							<div class="current-project-files-panel__state-text">${t("Try another file name or path.")}</div>
+						</div>
 					</div>
-				</div>
-			`;
+				`;
+			}
 		}
 		return html`<div class="current-project-file-tree">${this.renderDirectory(tree, 0, true)}</div>`;
 	}

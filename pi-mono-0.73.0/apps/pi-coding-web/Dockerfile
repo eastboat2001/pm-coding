@@ -28,8 +28,8 @@ RUN npm run build:worker --workspace=pi-coding-web
 
 ENV NODE_ENV=production
 
-RUN mkdir -p /app/apps/pi-coding-web/data/sessions \
-  /app/apps/pi-coding-web/data/projects \
+RUN mkdir -p /app/apps/pi-coding-web/data/clients \
+  /app/apps/pi-coding-web/data/runtime \
   /app/apps/pi-coding-web/data/logs \
   /app/apps/pi-coding-web/data/skills \
   /app/apps/pi-coding-web/data/default-skills

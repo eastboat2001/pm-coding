@@ -19,8 +19,6 @@ import {
 } from "./workspace-command-service.js";
 import {
 	listProjectSourceFiles,
-	migrateLegacyProjectDir,
-	removeSiblingProjectDirs,
 	workspaceContext,
 } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
@@ -53,14 +51,12 @@ export class WorkspaceTaskService {
 		}
 
 		const { clientId, sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
-		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		if (body.task === "logs") {
 			const logs = this.previews.readProjectLogs(projectId, clientId);
 			return this.recordTaskResult({ ...logs, task: "logs", status: String(logs.status || "ready") });
 		}
 
 		mkdirSync(projectDir, { recursive: true });
-		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const files = listProjectSourceFiles(projectDir).map((file) => relative(projectDir, file));
 		const hasPackageJson = existsSync(join(projectDir, "package.json"));
 		if (body.task === "build_static") {

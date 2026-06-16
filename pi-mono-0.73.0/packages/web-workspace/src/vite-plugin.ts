@@ -41,6 +41,7 @@ import { WorkspacePreviewService } from "./workspace-preview-service.js";
 import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
+import { deleteSessionWorkspace } from "./workspace-paths.js";
 
 export function configuredStoragePlugin(envFile?: string): Plugin {
 	const rootDir = process.cwd();
@@ -54,25 +55,35 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 	const runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
 	const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
 	const runQueue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
-	const runApi = new WorkspaceRunApiService(runtimeDb, runQueue, diagnostics, {
-		ensureWorkspace(context) {
-			files.ensureProjectWorkspace({
-				clientId: context.clientId,
-				sessionId: context.sessionId,
-				title: context.title,
-			});
+	const runApi = new WorkspaceRunApiService(
+		runtimeDb,
+		runQueue,
+		diagnostics,
+		{
+			ensureWorkspace(context) {
+				files.ensureProjectWorkspace({
+					clientId: context.clientId,
+					sessionId: context.sessionId,
+					title: context.title,
+				});
+			},
+			writeFile(context, file) {
+				files.handle({
+					clientId: context.clientId,
+					sessionId: context.sessionId,
+					title: context.title,
+					command: "create",
+					filename: file.filename,
+					content: file.content,
+				});
+			},
 		},
-		writeFile(context, file) {
-			files.handle({
-				clientId: context.clientId,
-				sessionId: context.sessionId,
-				title: context.title,
-				command: "create",
-				filename: file.filename,
-				content: file.content,
-			});
+		{
+			deleteSessionWorkspace(clientId, sessionId) {
+				return deleteSessionWorkspace(config.clientsRootDir, sessionId, clientId);
+			},
 		},
-	});
+	);
 	let startupDiagnosticsWritten = false;
 
 	const ensureStorageDirs = () => {
@@ -196,6 +207,7 @@ export function createStartupDiagnosticEvents(config: StorageConfig): Diagnostic
 				redisUrl: redactConnectionUrl(config.redisUrl),
 				runQueueName: config.runQueueName,
 				runtimeDbFile: config.runtimeDbFile,
+				clientsRootDir: config.clientsRootDir,
 				workerId: config.workerId,
 				workerConcurrency: config.workerConcurrency,
 				clientIdRequired: config.clientIdRequired,
@@ -223,8 +235,7 @@ export function createStartupDiagnosticEvents(config: StorageConfig): Diagnostic
 
 function storageWatchIgnoredPaths(config: StorageConfig): string[] {
 	return [
-		`${normalizeWatchPath(config.sessionsDir)}/**`,
-		`${normalizeWatchPath(config.projectsRootDir)}/**`,
+		`${normalizeWatchPath(config.clientsRootDir)}/**`,
 		`${normalizeWatchPath(config.skillsDir)}/**`,
 		`${normalizeWatchPath(config.defaultSkillsDir)}/**`,
 		normalizeWatchPath(config.logsDbFile),
@@ -346,13 +357,11 @@ async function handleStorageApi(
 	if (method === "GET" && route === "/status") {
 		sendJson(res, {
 			configured: true,
-			sessionsDir: config.sessionsDir,
 			settingsFile: config.settingsFile,
-			projectsRootDir: config.projectsRootDir,
+			clientsRootDir: config.clientsRootDir,
 			skillsDir: config.skillsDir,
 			defaultSkillsDir: config.defaultSkillsDir,
 			previewBaseUrl: config.previewBaseUrl,
-			serverSessionSyncEnabled: config.serverSessionSyncEnabled,
 			defaultModelProvider: config.defaultModelProvider,
 			defaultModelId: config.defaultModelId,
 			handoffDefaultThinkingLevel: config.handoffDefaultThinkingLevel,
@@ -398,32 +407,6 @@ async function handleStorageApi(
 		return;
 	}
 	const clientId = readConfiguredApiClientId(req, config);
-	if (method === "GET" && route === "/sessions") {
-		sendJson(res, { sessions: sessions.listSessions(clientId) });
-		return;
-	}
-
-	const sessionMatch = route.match(/^\/sessions\/([^/]+)$/);
-	if (sessionMatch) {
-		const sessionId = decodeURIComponent(sessionMatch[1]);
-		if (method === "GET") {
-			const record = sessions.readSession(sessionId, clientId);
-			sendJson(res, record || { error: "Session not found." }, record ? 200 : 404);
-			return;
-		}
-		if (method === "PUT") {
-			const body = await readJsonBody(req);
-			if (!isObject(body.data) || !isObject(body.metadata))
-				throw new Error("Fields `data` and `metadata` are required.");
-			sendJson(res, sessions.writeSession(sessionId, body.data, body.metadata, clientId));
-			return;
-		}
-		if (method === "DELETE") {
-			sendJson(res, { deleted: sessions.deleteSession(sessionId, clientId) });
-			return;
-		}
-	}
-
 	if (route === "/settings") {
 		if (method === "GET") {
 			const settings = sessions.readSettings(clientId);

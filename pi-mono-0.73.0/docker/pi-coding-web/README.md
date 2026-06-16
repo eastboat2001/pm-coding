@@ -39,7 +39,6 @@ PI_CODING_WEB_IMAGE=pi-coding-web:0.73.0
 PI_CODING_WEB_PORT=5173
 PI_CODING_WEB_PULL_POLICY=never
 
-PI_SERVER_SESSION_SYNC_ENABLED=true
 PI_PREVIEW_BASE_URL=
 PI_LOG_ENABLED=true
 PI_LANGFUSE_ENABLED=false
@@ -52,7 +51,6 @@ LANGFUSE_SECRET_KEY=
 - `PI_CODING_WEB_IMAGE`：运行的镜像名和 tag。
 - `PI_CODING_WEB_PORT`：服务器对外暴露端口。
 - `PI_CODING_WEB_PULL_POLICY`：默认 `never`，表示只使用本地镜像，不从 registry 拉取。
-- `PI_SERVER_SESSION_SYNC_ENABLED`：Docker 部署建议保持 `true`，会话和设置会保存到挂载的 `data/` 目录。
 - `PI_PREVIEW_BASE_URL`：留空时，PI 会按当前请求 Host 生成预览链接；若经过反向代理或域名访问，也可以显式写成 `https://pi.example.com`。
 - `PI_LOG_ENABLED`：是否启用后台诊断日志。
 - `PI_LANGFUSE_ENABLED`：是否启用 Langfuse 导出。
@@ -169,7 +167,7 @@ curl http://127.0.0.1:5173/api/pi-logs/status
 重点看：
 
 - `configured` 是否为 `true`。
-- `serverSessionSyncEnabled` 是否为 `true`。
+- `runtimeDbFile` 是否指向 `/app/apps/pi-coding-web/data/runtime/pi-runtime.sqlite`。
 - `loggingEnabled` 是否为 `true`。
 - `databaseFile` 是否指向 `/app/apps/pi-coding-web/data/logs/pi-diagnostics.sqlite`。
 - `langfuseConfigured` 是否符合预期。
@@ -190,9 +188,9 @@ curl http://127.0.0.1:5173/api/pi-logs/status
 
 其中包含：
 
-- `data/sessions/`：服务端会话。
+- `data/clients/`：按 client/session 隔离的项目工作区。
 - `data/settings.json`：服务端设置、模型选择、provider key 镜像等。
-- `data/projects/`：生成项目和预览产物。
+- `data/runtime/pi-runtime.sqlite`：会话、消息、run 和 run events。
 - `data/logs/pi-diagnostics.sqlite`：PI 诊断日志 SQLite 数据库。
 - `data/skills/`：服务器全局 skills。
 

@@ -26,19 +26,9 @@ describe("workspace client isolation and path safety", () => {
 		const sessions = new WorkspaceSessionService(config);
 		sessions.ensureDirs();
 
-		sessions.writeSession(
-			"session-1",
-			sessionData("session-1", "Client A"),
-			sessionMetadata("session-1", "Client A"),
-			"client-a",
-		);
 		sessions.writeSettings({ currentSessionId: "session-1", providerKeys: { openai: "global-key" } }, "client-a");
 		sessions.writeSettings({ currentSessionId: "session-2" }, "client-b");
 
-		expect(sessions.readSession("session-1", "client-a")?.metadata).toMatchObject({ title: "Client A" });
-		expect(sessions.readSession("session-1", "client-b")).toBeUndefined();
-		expect(sessions.listSessions("client-a").map((session) => session.id)).toEqual(["session-1"]);
-		expect(sessions.listSessions("client-b")).toEqual([]);
 		expect(sessions.readSettings("client-a")).toMatchObject({
 			currentSessionId: "session-1",
 			providerKeys: { openai: "global-key" },
@@ -50,22 +40,21 @@ describe("workspace client isolation and path safety", () => {
 		expect(sessions.readSettings()).toMatchObject({
 			providerKeys: { openai: "global-key" },
 		});
+		expect(existsSync(join(root, "data", "sessions"))).toBe(false);
+		expect(existsSync(join(config.clientsRootDir, "client-a", "settings.json"))).toBe(true);
 	});
 
-	it("rejects unsafe legacy session ids instead of falling back to the raw id", () => {
+	it("rejects unsafe client ids for client settings paths", () => {
 		const sessions = new WorkspaceSessionService(config);
 
-		expect(() => sessions.readSession("/", "client-a")).toThrow("Invalid session id");
-		expect(() =>
-			sessions.writeSession("/", sessionData("/", "Escape"), sessionMetadata("/", "Escape"), "client-a"),
-		).toThrow("Invalid session id");
-		expect(existsSync(resolve(root, ".json"))).toBe(false);
+		expect(() => sessions.writeSettings({ currentSessionId: "session-1" }, "/")).toThrow("Invalid client id");
+		expect(existsSync(resolve(root, "settings.json"))).toBe(false);
 	});
 
 	it("isolates project workspaces by client id for the same session and title", () => {
 		const files = new WorkspaceFileService(config);
 
-		files.handle({
+		const created = files.handle({
 			clientId: "client-a",
 			sessionId: "session-1",
 			title: "Shared title",
@@ -74,6 +63,8 @@ describe("workspace client isolation and path safety", () => {
 			content: "client-a",
 		});
 
+		expect(created.projectRoot).toBe(join(config.clientsRootDir, "client-a", "sessions", "session-1", "project"));
+		expect(existsSync(join(root, "data", "projects", String(created.projectId)))).toBe(false);
 		expect(
 			files.handle({ clientId: "client-a", sessionId: "session-1", title: "Shared title", command: "list" }).files,
 		).toEqual(["index.html"]);
@@ -90,24 +81,24 @@ describe("workspace client isolation and path safety", () => {
 		).toThrow("Invalid session id");
 	});
 
-	it("keeps project workspace ids stable across title language and rename changes", () => {
-		const chineseProjectId = projectSlug("session-1", "生成一个贪吃蛇游戏", "client-a");
-		const englishProjectId = projectSlug("session-1", "Snake Game", "client-a");
-		const renamedProjectId = projectSlug("session-1", "Another title after rename", "client-a");
+	it("derives project workspace ids only from client and session ids", () => {
+		const projectId = projectSlug("session-1", "client-a");
 
-		expect(chineseProjectId).toBe("project-client-a-session-");
-		expect(englishProjectId).toBe(chineseProjectId);
-		expect(renamedProjectId).toBe(chineseProjectId);
-		expect(projectDirectory(config.projectsRootDir, "session-1", "Snake Game", "client-a")).toBe(
-			projectDirectory(config.projectsRootDir, "session-1", "生成一个贪吃蛇游戏", "client-a"),
+		expect(projectId).toBe("project-client-a-session-");
+		expect(projectSlug("session-1", "client-b")).not.toBe(projectId);
+		const stableProjectDir = projectDirectory(config.clientsRootDir, "session-1", "client-a");
+		expect(stableProjectDir).toBe(join(config.clientsRootDir, "client-a", "sessions", "session-1", "project"));
+		expect(stableProjectDir).not.toContain("Snake");
+		expect(stableProjectDir).not.toContain("生成");
+		expect(projectDirectory(config.clientsRootDir, "session-1", "client-b")).not.toBe(
+			stableProjectDir,
 		);
-		expect(projectSlug("session-1", "Snake Game", "client-b")).not.toBe(chineseProjectId);
 	});
 
-	it("migrates legacy title-based project directories to the stable session project directory", () => {
+	it("does not migrate or read legacy flat project directories", () => {
 		const files = new WorkspaceFileService(config);
-		const legacyProjectDir = join(config.projectsRootDir, "snake-game-client-a-session-");
-		const stableProjectDir = projectDirectory(config.projectsRootDir, "session-1", "新的中文标题", "client-a");
+		const legacyProjectDir = join(root, "data", "projects", "snake-game-client-a-session-");
+		const stableProjectDir = projectDirectory(config.clientsRootDir, "session-1", "client-a");
 		mkdirSync(legacyProjectDir, { recursive: true });
 		writeFileSync(join(legacyProjectDir, "index.html"), "<h1>legacy</h1>", "utf8");
 
@@ -118,9 +109,9 @@ describe("workspace client isolation and path safety", () => {
 			command: "list",
 		});
 
-		expect(result.files).toEqual(["index.html"]);
-		expect(existsSync(join(stableProjectDir, "index.html"))).toBe(true);
-		expect(existsSync(legacyProjectDir)).toBe(false);
+		expect(result.files).toEqual([]);
+		expect(existsSync(join(stableProjectDir, "index.html"))).toBe(false);
+		expect(existsSync(legacyProjectDir)).toBe(true);
 	});
 
 	it("isolates project preview list, logs, and rename by client id", async () => {
@@ -142,6 +133,9 @@ describe("workspace client isolation and path safety", () => {
 			req,
 		);
 
+		expect(preview.projectRoot).toBe(join(config.clientsRootDir, "client-a", "sessions", "session-1", "project"));
+		expect(existsSync(join(String(preview.projectRoot), ".pi-project.json"))).toBe(true);
+		expect(existsSync(join(root, "data", "projects", preview.projectId, ".pi-project.json"))).toBe(false);
 		expect(previews.listProjects(req, "client-a").projects.map((project) => project.projectId)).toEqual([
 			preview.projectId,
 		]);
@@ -179,22 +173,13 @@ describe("workspace client isolation and path safety", () => {
 	});
 });
 
-function sessionData(id: string, title: string) {
-	return { id, title, messages: [] };
-}
-
-function sessionMetadata(id: string, title: string) {
-	return { id, title, lastModified: "2026-06-11T00:00:00.000Z" };
-}
-
 function testConfig(root: string): StorageConfig {
 	return {
-		sessionsDir: join(root, "data", "sessions"),
 		settingsFile: join(root, "data", "settings.json"),
-		projectsRootDir: join(root, "data", "projects"),
+		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
 		defaultSkillsDir: join(root, "data", "default-skills"),
-		runtimeDbFile: join(root, "data", "pi-runtime.sqlite"),
+		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
 		runsEnabled: false,
 		workerId: "test-worker",
@@ -207,7 +192,6 @@ function testConfig(root: string): StorageConfig {
 		projectBuildCommand: "npm run build",
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
-		serverSessionSyncEnabled: false,
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",

@@ -1,4 +1,5 @@
-import { PI_CODING_HANDOFF_INSTRUCTIONS_BY_LANGUAGE } from "../prompts/coding-system-prompt.js";
+import { PI_CODING_HANDOFF_INSTRUCTIONS_EN } from "../prompts/coding-system-prompt.js";
+import { normalizeHandoffLanguage } from "./handoff-language.js";
 
 export type PmHandoffDocument = {
 	kind: string;
@@ -46,17 +47,6 @@ export async function fetchPmHandoffPayload(token: string): Promise<PmHandoffPay
 	return data;
 }
 
-function normalizeHandoffLanguage(language?: string): keyof typeof PI_CODING_HANDOFF_INSTRUCTIONS_BY_LANGUAGE {
-	const normalized = String(language || "")
-		.trim()
-		.toLowerCase()
-		.replace("_", "-");
-	if (normalized === "zh" || normalized.startsWith("zh-")) return "zh";
-	if (normalized === "de" || normalized.startsWith("de-")) return "de";
-	if (normalized === "ms" || normalized.startsWith("ms-")) return "ms";
-	return "en";
-}
-
 export function prepareHandoffDocumentFiles(
 	documents: PmHandoffDocument[] = [],
 	attachments: HandoffDocumentAttachment[] = [],
@@ -82,27 +72,39 @@ export function buildCodingHandoffPrompt(
 	payload: PmHandoffPayload,
 	documentFiles: HandoffDocumentFile[] = [],
 ): string {
-	const sourcePrompt = (payload.implementation_prompt || "").trim();
-	const platformInstructions = PI_CODING_HANDOFF_INSTRUCTIONS_BY_LANGUAGE[normalizeHandoffLanguage(payload.language)];
-	const handoffDocumentInstructions = buildHandoffDocumentInstructions(payload.language, documentFiles);
-	return [sourcePrompt, handoffDocumentInstructions, platformInstructions].filter(Boolean).join("\n\n---\n\n");
+	return buildCodingHandoffPromptFromSource(payload.implementation_prompt || "", documentFiles);
 }
 
-function buildHandoffDocumentInstructions(language: string | undefined, documentFiles: HandoffDocumentFile[]): string {
+export function buildCodingHandoffPromptFromSource(
+	source: string,
+	documentFiles: HandoffDocumentFile[] = [],
+): string {
+	const sourcePrompt = source.trim();
+	const handoffDocumentInstructions = buildHandoffDocumentInstructions(documentFiles);
+	return [sourcePrompt, handoffDocumentInstructions, PI_CODING_HANDOFF_INSTRUCTIONS_EN]
+		.filter(Boolean)
+		.join("\n\n---\n\n");
+}
+
+export function buildVisibleCodingHandoffPrompt(payload: PmHandoffPayload): string {
+	const sourcePrompt = (payload.implementation_prompt || "").trim();
+	if (sourcePrompt) return sourcePrompt;
+	return HANDOFF_VISIBLE_FALLBACK[normalizeHandoffLanguage(payload.language)];
+}
+
+const HANDOFF_VISIBLE_FALLBACK = {
+	en: "Generate the static project from the PM handoff.",
+	zh: "请根据 PM 交接内容生成静态项目。",
+	de: "Erstelle das statische Projekt anhand des PM-Handoffs.",
+	ms: "Jana projek statik berdasarkan handoff PM.",
+} as const;
+
+function buildHandoffDocumentInstructions(documentFiles: HandoffDocumentFile[]): string {
 	if (documentFiles.length === 0) return "";
 	const entries = documentFiles.map((file) => `- ${formatDocumentKind(file.kind)}: ${file.filename}`).join("\n");
-	const normalized = normalizeHandoffLanguage(language);
-	if (normalized === "zh") {
-		return [
-			"PI 已将 PM 交接文档保存到当前会话项目目录的 docs/ 子目录。",
-			"开始编码前，必须使用 project_file get 逐个读取以下路径；如果 PM 原始提示词中出现原始附件名、\"PRD 文档：\"、\"系统设计文档：\" 等标签，请以这里的 docs/ 路径为准，不要读取原始附件名。",
-			entries,
-			"UI 中仍保留同名附件仅用于查看；模型上下文以这些 docs/ 文件为准。",
-		].join("\n");
-	}
 	return [
 		"PI has saved the PM handoff documents under the docs/ subdirectory of the current session project workspace.",
-		"Before coding, use project_file get to read each exact path below. If the original PM prompt mentions attachment filenames or labels such as \"PRD document\" or \"design document\", use these docs/ paths instead and do not read the original attachment names.",
+		'Before coding, use project_file get to read each exact path below. If the original PM prompt mentions attachment filenames or labels such as "PRD document" or "design document", use these docs/ paths instead and do not read the original attachment names.',
 		entries,
 		"The UI still shows the same attachments for review only; the model context should rely on these docs/ files.",
 	].join("\n");

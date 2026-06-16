@@ -14,6 +14,8 @@ describe("storage config diagnostics", () => {
 		expect(config.envFileExists).toBe(false);
 		expect(config.runsEnabled).toBe(true);
 		expect(config.logStdoutEnabled).toBe(true);
+		expect(config.clientsRootDir).toBe(resolve(root, "data/clients"));
+		expect(config.runtimeDbFile).toBe(resolve(root, "data/runtime/pi-runtime.sqlite"));
 
 		const events = createStartupDiagnosticEvents(config);
 

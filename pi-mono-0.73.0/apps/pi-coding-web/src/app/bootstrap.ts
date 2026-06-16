@@ -43,13 +43,15 @@ import { DiagnosticLogsTab } from "../diagnostics/DiagnosticLogsTab.js";
 import { createDiagnosticClient, type DiagnosticData, type DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
 import { createLoggedStreamFn, type DiagnosticStreamLoggingConfig } from "../diagnostics/model-stream-logger.js";
 import {
-	buildCodingHandoffPrompt,
+	buildCodingHandoffPromptFromSource,
+	buildVisibleCodingHandoffPrompt,
 	buildPmApiUrl,
 	fetchPmHandoffPayload,
 	type HandoffDocumentFile,
 	type PmHandoffPayload,
 	prepareHandoffDocumentFiles,
 } from "../integrations/pm-handoff.js";
+import { normalizeHandoffLanguage } from "../integrations/handoff-language.js";
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
@@ -121,7 +123,6 @@ const EMPTY_USAGE: SessionMetadata["usage"] = {
 };
 
 const piRuntimeConfig = {
-	serverSessionSyncEnabled: false,
 	handoffDefaultThinkingLevel: "high" as ThinkingLevel,
 	selectableSkills: [] as SkillSummary[],
 	globalSkills: [] as SkillSummary[],
@@ -137,6 +138,8 @@ const piRuntimeConfig = {
 		modelOutputSnapshotMaxChars: 20000,
 	} as DiagnosticStreamLoggingConfig,
 };
+
+let pendingHandoffModelContext: { documentFiles: HandoffDocumentFile[] } | undefined;
 
 const runClient = {
 	cancelRun: cancelRuntimeRun,
@@ -225,7 +228,6 @@ const loadPiRuntimeConfig = async () => {
 	const promptSkills = Array.isArray(skillList.promptSkills) ? skillList.promptSkills : [];
 	const defaultSkills = Array.isArray(skillList.defaultSkills) ? skillList.defaultSkills : [];
 	const diagnostics = Array.isArray(skillList.diagnostics) ? skillList.diagnostics : [];
-	piRuntimeConfig.serverSessionSyncEnabled = status?.serverSessionSyncEnabled === true;
 	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
 	piRuntimeConfig.selectableSkills = selectableSkills;
 	piRuntimeConfig.globalSkills = promptSkills;
@@ -251,12 +253,7 @@ const syncRuntimeConfigAfterRender = async () => {
 		agent.state.systemPrompt = buildCurrentSystemPrompt();
 	}
 	applySkillSlashSuggestions();
-	if (isServerSessionSyncEnabled() && currentSessionId) {
-		await configuredStorage.writeSettings({ currentSessionId });
-	}
 };
-
-const isServerSessionSyncEnabled = () => piRuntimeConfig.serverSessionSyncEnabled;
 
 const normalizeThinkingLevel = (value?: string): ThinkingLevel => {
 	const normalized = String(value || "")
@@ -460,9 +457,6 @@ const setCurrentSessionId = async (sessionId: string | undefined) => {
 	} else {
 		await storage.settings.delete(CURRENT_SESSION_ID_KEY);
 	}
-	if (isServerSessionSyncEnabled()) {
-		await configuredStorage.writeSettings({ currentSessionId: sessionId ?? null });
-	}
 	updateUrl(sessionId);
 };
 
@@ -521,7 +515,6 @@ const saveSession = async () => {
 		const emptySessionId = currentSessionId;
 		try {
 			await storage.sessions.deleteSession(emptySessionId);
-			await configuredStorage.deleteSession(emptySessionId);
 			if (emptySessionId === currentSessionId) {
 				currentSessionCreatedAt = undefined;
 				await setCurrentSessionId(undefined);
@@ -557,9 +550,6 @@ const saveSession = async () => {
 		const metadata = buildSessionMetadata(state, createdAt, resolvedTitle, lastModified);
 
 		await storage.sessions.save(sessionData, metadata);
-		if (isServerSessionSyncEnabled()) {
-			await configuredStorage.writeSession(sessionData, metadata);
-		}
 	} catch (err) {
 		console.error("Failed to save session:", err);
 		writeDiagnosticEvent({
@@ -573,12 +563,11 @@ const saveSession = async () => {
 
 const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
 	const browserSessions = (await storage.sessions.getAllMetadata()) as SessionMetadataWithRunState[];
-	const localSessions = await configuredStorage.listSessionMetadata();
 	try {
 		const runtimeSessions = await runClient.listSessions();
-		return mergeRuntimeSessionMetadata(runtimeSessions, browserSessions, localSessions);
+		return mergeRuntimeSessionMetadata(runtimeSessions, browserSessions, []);
 	} catch {
-		return mergeRuntimeSessionMetadata([], browserSessions, localSessions);
+		return mergeRuntimeSessionMetadata([], browserSessions, []);
 	}
 };
 
@@ -595,11 +584,6 @@ const renameSessionProject = async (sessionId: string, title: string) => {
 	}
 	if (storage.sessions) {
 		await storage.sessions.updateTitle(sessionId, title);
-	}
-	const sessionData = await storage.sessions?.get(sessionId);
-	const metadata = (await storage.sessions?.getMetadata(sessionId)) as SessionMetadataWithRunState | null;
-	if (sessionData && metadata) {
-		await configuredStorage.writeSession({ ...sessionData, title }, { ...metadata, title });
 	}
 	if (sessionId === currentSessionId) {
 		currentTitle = title;
@@ -618,7 +602,6 @@ const deleteSessionEverywhere = async (sessionId: string) => {
 	if (storage.sessions) {
 		await storage.sessions.deleteSession(sessionId);
 	}
-	await configuredStorage.deleteSession(sessionId);
 	if (sessionId === currentSessionId) {
 		currentProjectFilePreviewFilename = "";
 		resetRemoteRunState();
@@ -931,6 +914,36 @@ const normalizeRemotePromptInput = (
 	return [{ role: "user", content, timestamp: Date.now() }];
 };
 
+function applyPendingHandoffModelContent(messages: AgentMessage[]): AgentMessage[] {
+	if (!pendingHandoffModelContext || messages.length !== 1) return messages;
+	const message = messages[0];
+	if ((message as { role?: unknown }).role !== "user-with-attachments") return messages;
+	const visibleContent = (message as { content?: unknown }).content;
+	const visibleText = messageContentText(visibleContent);
+	const messageWithModelContent = {
+		...(message as unknown as Record<string, unknown>),
+		llmContent: buildCodingHandoffPromptFromSource(visibleText, pendingHandoffModelContext.documentFiles),
+	} as unknown as AgentMessage;
+	return [messageWithModelContent];
+}
+
+function messageContentText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.map((block) => {
+				if (typeof block === "object" && block !== null && "text" in block) {
+					const text = (block as { text?: unknown }).text;
+					return typeof text === "string" ? text : "";
+				}
+				return "";
+			})
+			.filter(Boolean)
+			.join("\n\n");
+	}
+	return "";
+}
+
 function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
 	if ((message as { role?: unknown }).role !== "user-with-attachments") return message;
 	const attachments = (message as { attachments?: unknown }).attachments;
@@ -938,34 +951,9 @@ function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
 	const preparedAttachments = prepareAttachmentProjectFileSeeds(attachments);
 	return {
 		...message,
-		content: appendAttachmentProjectPathInstructions(
-			(message as { content?: unknown }).content,
-			attachmentProjectPathInstructions(preparedAttachments),
-		),
+		content: (message as { content?: unknown }).content,
 		attachments: preparedAttachments,
 	} as AgentMessage;
-}
-
-function attachmentProjectPathInstructions(attachments: Array<{ type?: unknown; projectFilePath?: unknown }>): string {
-	const paths = attachments
-		.filter((attachment) => attachment.type === "document" && typeof attachment.projectFilePath === "string")
-		.map((attachment) => String(attachment.projectFilePath).trim())
-		.filter(Boolean);
-	if (paths.length === 0) return "";
-	return [
-		"",
-		"Attachment documents have been saved to the current session project workspace. Use project_file get to read these paths instead of relying on inline document text:",
-		...paths.map((path) => `- ${path}`),
-	].join("\n");
-}
-
-function appendAttachmentProjectPathInstructions(content: unknown, instructions: string): unknown {
-	if (!instructions) return content;
-	if (typeof content === "string") return `${content.trimEnd()}\n\n${instructions}`;
-	if (Array.isArray(content)) {
-		return [...content, { type: "text", text: instructions }];
-	}
-	return content;
 }
 
 const drainCurrentRemoteRunEvents = async (runId: string): Promise<void> => {
@@ -1136,7 +1124,7 @@ const startRemotePrompt = async (
 	images?: ImageContent[],
 ): Promise<void> => {
 	await ensureSessionIdentity();
-	const messages = normalizeRemotePromptInput(input, images);
+	const messages = applyPendingHandoffModelContent(normalizeRemotePromptInput(input, images));
 	const message = messages[0];
 	if (!isRecord(message)) {
 		throw new Error("Remote runs require a JSON-object prompt message.");
@@ -1167,6 +1155,7 @@ const startRemotePrompt = async (
 		throw error;
 	}
 
+	pendingHandoffModelContext = undefined;
 	currentSessionCreatedAt = runResult.session.createdAt;
 	await setCurrentSessionId(runResult.session.sessionId);
 
@@ -1294,6 +1283,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 };
 
 const loadSession = async (sessionId: string): Promise<boolean> => {
+	pendingHandoffModelContext = undefined;
 	if (!storage.sessions) return false;
 
 	try {
@@ -1345,14 +1335,7 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		return true;
 	} catch {}
 
-	let sessionData = await storage.sessions.get(sessionId);
-	if (!sessionData) {
-		const serverSession = await configuredStorage.readSession(sessionId);
-		if (serverSession) {
-			await storage.sessions.save(serverSession.data, serverSession.metadata);
-			sessionData = serverSession.data;
-		}
-	}
+	const sessionData = await storage.sessions.get(sessionId);
 	if (!sessionData) {
 		console.error("Session not found:", sessionId);
 		writeDiagnosticEvent({
@@ -1389,6 +1372,7 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 };
 
 const startFreshSession = async (persistImmediately = false) => {
+	pendingHandoffModelContext = undefined;
 	currentTitle = "";
 	currentSessionCreatedAt = undefined;
 	resetRemoteRunState();
@@ -1402,21 +1386,11 @@ const startFreshSession = async (persistImmediately = false) => {
 	renderApp();
 };
 
-const normalizeHandoffLanguage = (language?: string) => {
-	const normalized = String(language || "")
-		.trim()
-		.toLowerCase()
-		.replace("_", "-");
-	if (normalized === "zh" || normalized.startsWith("zh-")) return "zh";
-	if (normalized === "de" || normalized.startsWith("de-")) return "de";
-	if (normalized === "ms" || normalized.startsWith("ms-")) return "ms";
-	return "en";
-};
-
 const applyHandoffLanguage = (language?: string) => {
 	const handoffLanguage = normalizeHandoffLanguage(language);
 	setLanguage(handoffLanguage);
 	document.documentElement.lang = handoffLanguage;
+	return handoffLanguage;
 };
 
 const applyHandoffDefaultThinkingLevel = async () => {
@@ -1430,7 +1404,10 @@ const applyHandoffDefaultThinkingLevel = async () => {
 	}
 };
 
-const markHandoffAttachmentsUiOnly = (attachments: Attachment[], documentFiles: HandoffDocumentFile[]): Attachment[] =>
+const markHandoffAttachmentsUiOnly = (
+	attachments: Attachment[],
+	documentFiles: HandoffDocumentFile[],
+): Attachment[] =>
 	attachments.map((attachment, index) => ({
 		...attachment,
 		llmContext: "none" as const,
@@ -1463,7 +1440,8 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 	const inputAttachments =
 		documentFiles.length > 0 ? markHandoffAttachmentsUiOnly(attachments, documentFiles) : attachments;
 	await applyHandoffDefaultThinkingLevel();
-	chatPanel.agentInterface?.setInput(buildCodingHandoffPrompt(payload, documentFiles), inputAttachments);
+	pendingHandoffModelContext = { documentFiles };
+	chatPanel.agentInterface?.setInput(buildVisibleCodingHandoffPrompt(payload), inputAttachments);
 	if (currentSessionId) {
 		await saveSession();
 	}

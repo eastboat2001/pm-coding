@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -281,6 +281,32 @@ describe("WorkspaceRunApiService", () => {
 		expect(service.getSession("client-b", "shared-session")?.session.title).toBe("Client B");
 		expect(service.listRuns("client-a")).toEqual([]);
 		expect(service.listRuns("client-b").map((run) => run.runId)).toEqual([clientB.run.runId]);
+	});
+
+	it("deletes the client session workspace when deleting a SQLite session", async () => {
+		db.createSession({
+			clientId: "client-a",
+			sessionId: "session-1",
+			title: "Delete files",
+			model: {},
+			thinkingLevel: "medium",
+		});
+		const sessionDir = join(dir, "clients", "client-a", "sessions", "session-1");
+		mkdirSync(join(sessionDir, "project"), { recursive: true });
+		writeFileSync(join(sessionDir, "project", "index.html"), "<h1>delete me</h1>", "utf8");
+		const deletingService = new WorkspaceRunApiService(db, queue, undefined, undefined, {
+			deleteSessionWorkspace: (clientId, sessionId) => {
+				const target = join(dir, "clients", clientId, "sessions", sessionId);
+				rmSync(target, { force: true, recursive: true });
+				return true;
+			},
+		});
+
+		const result = await deletingService.deleteSession("client-a", "session-1");
+
+		expect(result).toEqual({ deleted: true, sessionId: "session-1" });
+		expect(db.getSession("client-a", "session-1")).toBeUndefined();
+		expect(existsSync(sessionDir)).toBe(false);
 	});
 
 	it("cancelRun marks queued runs cancelled so the session is no longer active", async () => {

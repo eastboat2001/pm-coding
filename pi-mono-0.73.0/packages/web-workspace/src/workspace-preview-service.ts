@@ -17,9 +17,8 @@ import type {
 import {
 	assertInside,
 	listProjectSourceFiles,
-	migrateLegacyProjectDir,
-	removeSiblingProjectDirs,
 	safeRelativePreviewPath,
+	sanitizePathComponent,
 	workspaceContext,
 } from "./workspace-paths.js";
 
@@ -31,9 +30,7 @@ export class WorkspacePreviewService {
 
 	async preview(body: ProjectPreviewRequest, req: PreviewRequestLike): Promise<ProjectPreviewResult> {
 		const { clientId, sessionId, title, projectId, projectDir } = workspaceContext(this.config, body);
-		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		mkdirSync(projectDir, { recursive: true });
-		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const fileCount = listProjectSourceFiles(projectDir).length;
 		if (fileCount === 0) throw new Error("Cannot preview an empty project workspace.");
 		return await this.buildAndRecordProject(projectDir, { clientId, projectId, sessionId, title, req, fileCount });
@@ -50,14 +47,10 @@ export class WorkspacePreviewService {
 	}
 
 	listProjects(req?: PreviewRequestLike, clientId?: string): ProjectPreviewListResult {
-		if (!existsSync(this.config.projectsRootDir)) return { projects: [] };
 		const projects: ProjectPreviewSummary[] = [];
-		for (const entry of readdirSync(this.config.projectsRootDir, { withFileTypes: true })) {
-			if (!entry.isDirectory()) continue;
-			const metadataPath = join(this.config.projectsRootDir, entry.name, PROJECT_METADATA_FILE);
-			if (!existsSync(metadataPath)) continue;
+		for (const { metadata } of this.listProjectMetadata(clientId)) {
 			try {
-				const summary = projectPreviewSummary(readJsonFile(metadataPath), entry.name);
+				const summary = projectPreviewSummary(metadata);
 				if (clientId && summary?.clientId !== clientId) continue;
 				if (summary && req && summary.status === "running") {
 					summary.previewUrl = buildPreviewUrl(this.config, req, summary.projectId);
@@ -77,14 +70,12 @@ export class WorkspacePreviewService {
 		const nextTitle = normalizeProjectTitle(title);
 		if (!nextTitle) throw new Error("App name is required.");
 		if (nextTitle.length > 160) throw new Error("App name must be 160 characters or fewer.");
-		const metadataPath = join(this.config.projectsRootDir, safeProjectId, PROJECT_METADATA_FILE);
-		if (!existsSync(metadataPath)) throw new Error("Project not found.");
-		const metadata = this.readProjectMetadata(safeProjectId, clientId);
-		if (!metadata) throw new Error("Project not found.");
-		if (!projectPreviewSummary(metadata, safeProjectId)) throw new Error("Project metadata is invalid.");
-		const nextMetadata: JsonObject = { ...metadata, title: nextTitle };
-		writeJsonFile(metadataPath, nextMetadata);
-		const summary = projectPreviewSummary(nextMetadata, safeProjectId);
+		const record = this.findProjectMetadata(safeProjectId, clientId);
+		if (!record) throw new Error("Project not found.");
+		if (!projectPreviewSummary(record.metadata)) throw new Error("Project metadata is invalid.");
+		const nextMetadata: JsonObject = { ...record.metadata, title: nextTitle };
+		writeJsonFile(record.metadataPath, nextMetadata);
+		const summary = projectPreviewSummary(nextMetadata);
 		if (!summary) throw new Error("Project metadata is invalid.");
 		if (req && summary.status === "running")
 			summary.previewUrl = buildPreviewUrl(this.config, req, summary.projectId);
@@ -143,7 +134,7 @@ export class WorkspacePreviewService {
 	private async buildAndRecordProject(
 		projectDir: string,
 		options: {
-			clientId?: string;
+			clientId: string;
 			projectId: string;
 			sessionId: string;
 			title: string;
@@ -215,13 +206,40 @@ export class WorkspacePreviewService {
 	}
 
 	private readProjectMetadata(projectId: string, clientId?: string): JsonObject | undefined {
+		return this.findProjectMetadata(projectId, clientId)?.metadata;
+	}
+
+	private findProjectMetadata(
+		projectId: string,
+		clientId?: string,
+	): { metadata: JsonObject; metadataPath: string } | undefined {
 		const safeProjectId = safePreviewProjectId(projectId);
 		if (!safeProjectId) return undefined;
-		const metadataPath = join(this.config.projectsRootDir, safeProjectId, PROJECT_METADATA_FILE);
-		if (!existsSync(metadataPath)) return undefined;
-		const metadata = readJsonFile(metadataPath);
-		if (clientId && metadata.clientId !== clientId) return undefined;
-		return metadata;
+		return this.listProjectMetadata(clientId).find((record) => record.metadata.projectId === safeProjectId);
+	}
+
+	private listProjectMetadata(clientId?: string): Array<{ metadata: JsonObject; metadataPath: string }> {
+		const clientsRoot = this.config.clientsRootDir;
+		if (!existsSync(clientsRoot)) return [];
+		const clientNames = clientId ? [sanitizePathComponent(clientId)].filter(Boolean) : clientDirectoryNames(clientsRoot);
+		const records: Array<{ metadata: JsonObject; metadataPath: string }> = [];
+		for (const clientName of clientNames) {
+			const sessionsRoot = join(clientsRoot, clientName, "sessions");
+			if (!existsSync(sessionsRoot)) continue;
+			for (const sessionEntry of readdirSync(sessionsRoot, { withFileTypes: true })) {
+				if (!sessionEntry.isDirectory()) continue;
+				const metadataPath = join(sessionsRoot, sessionEntry.name, "project", PROJECT_METADATA_FILE);
+				if (!existsSync(metadataPath)) continue;
+				try {
+					const metadata = readJsonFile(metadataPath);
+					if (clientId && metadata.clientId !== clientId) continue;
+					records.push({ metadata, metadataPath });
+				} catch {
+					// Ignore partial or corrupt generated project records.
+				}
+			}
+		}
+		return records;
 	}
 
 	private writeProjectLogEvent(
@@ -248,9 +266,9 @@ export class WorkspacePreviewService {
 	}
 }
 
-function projectPreviewSummary(metadata: JsonObject, directoryName: string): ProjectPreviewSummary | undefined {
+function projectPreviewSummary(metadata: JsonObject): ProjectPreviewSummary | undefined {
 	const projectId = stringValue(metadata.projectId);
-	if (!projectId || projectId !== directoryName || safePreviewProjectId(projectId) !== projectId) return undefined;
+	if (!projectId || safePreviewProjectId(projectId) !== projectId) return undefined;
 	const clientId = stringValue(metadata.clientId);
 	const sessionId = stringValue(metadata.sessionId);
 	const title = stringValue(metadata.title);
@@ -285,6 +303,12 @@ function stringValue(value: unknown): string {
 
 function numberValue(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function clientDirectoryNames(clientsRoot: string): string[] {
+	return readdirSync(clientsRoot, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => entry.name);
 }
 
 function normalizeProjectTitle(value: string): string {

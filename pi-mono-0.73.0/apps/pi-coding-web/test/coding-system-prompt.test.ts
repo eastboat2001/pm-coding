@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
 	buildCodingSystemPrompt,
 	DEFAULT_SYSTEM_PROMPT,
-	PI_CODING_HANDOFF_INSTRUCTIONS_BY_LANGUAGE,
+	PI_CODING_HANDOFF_INSTRUCTIONS_EN,
 } from "../src/prompts/coding-system-prompt.js";
 
 describe("coding system prompt", () => {
 	it("tells the model to read omitted project file content before editing existing files", () => {
 		const prompts = [
 			["default", DEFAULT_SYSTEM_PROMPT],
-			...Object.entries(PI_CODING_HANDOFF_INSTRUCTIONS_BY_LANGUAGE),
+			["handoff", PI_CODING_HANDOFF_INSTRUCTIONS_EN],
 		] as const;
 
 		for (const [name, prompt] of prompts) {
@@ -44,9 +44,10 @@ describe("coding system prompt", () => {
 
 	it("tells the model to read document attachments from project workspace paths", () => {
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("User attachments are saved into the current session project workspace");
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("Ordinary document and image attachments are also included in the message context");
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("attachments/*.md or docs/*.md");
-		expect(DEFAULT_SYSTEM_PROMPT).toContain("call project_file get to read them");
-		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Ordinary user attachments are already available in the message context");
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("only when a prompt explicitly lists");
+		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("attachments/original");
 		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Do not call project_file get with an ordinary attachment filename");
 	});
 });

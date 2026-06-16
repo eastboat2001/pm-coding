@@ -11,23 +11,27 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 	const env = (name: string) => envValue(name, configEnv.values);
 	const envStorageDir = stringValue(env("PI_STORAGE_DIR"));
 	const storageDir = envStorageDir ? resolveConfiguredPath(rootDir, envStorageDir) : undefined;
+	const clientsRootDir = resolveConfiguredPath(
+		rootDir,
+		stringValue(env("PI_CLIENTS_ROOT_DIR")) || (storageDir ? join(storageDir, "clients") : "data/clients"),
+	);
 	return {
-		sessionsDir: resolveConfiguredPath(
-			rootDir,
-			stringValue(env("PI_SESSIONS_DIR")) || (storageDir ? join(storageDir, "sessions") : "data/sessions"),
-		),
 		settingsFile: resolveConfiguredPath(
 			rootDir,
 			stringValue(env("PI_SETTINGS_FILE")) ||
 				(storageDir ? join(storageDir, "settings.json") : "data/settings.json"),
 		),
-		projectsRootDir: resolveConfiguredPath(rootDir, stringValue(env("PI_PROJECTS_ROOT_DIR")) || "data/projects"),
+		clientsRootDir,
 		skillsDir: resolveConfiguredPath(rootDir, stringValue(env("PI_SKILLS_DIR")) || "data/skills"),
 		defaultSkillsDir: resolveConfiguredPath(
 			rootDir,
 			stringValue(env("PI_DEFAULT_SKILLS_DIR")) || "data/default-skills",
 		),
-		runtimeDbFile: resolveConfiguredPath(rootDir, stringValue(env("PI_DB_FILE")) || "data/pi-runtime.sqlite"),
+		runtimeDbFile: resolveConfiguredPath(
+			rootDir,
+			stringValue(env("PI_DB_FILE")) ||
+				(storageDir ? join(storageDir, "runtime", "pi-runtime.sqlite") : "data/runtime/pi-runtime.sqlite"),
+		),
 		redisUrl: stringValue(env("PI_REDIS_URL")) || "redis://127.0.0.1:6379",
 		runsEnabled: envBooleanValue(env("PI_RUNS_ENABLED")) ?? true,
 		workerId: stringValue(env("PI_WORKER_ID")) || "pi-worker",
@@ -40,7 +44,6 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		projectBuildCommand: stringValue(env("PI_PROJECT_BUILD_COMMAND")) || "npm run build",
 		projectInstallTimeoutMs: positiveIntegerValue(env("PI_PROJECT_INSTALL_TIMEOUT_MS"), 120000),
 		projectBuildTimeoutMs: positiveIntegerValue(env("PI_PROJECT_BUILD_TIMEOUT_MS"), 120000),
-		serverSessionSyncEnabled: envBooleanValue(env("PI_SERVER_SESSION_SYNC_ENABLED")) ?? false,
 		defaultModelProvider: stringValue(env("PI_DEFAULT_MODEL_PROVIDER")),
 		defaultModelId: stringValue(env("PI_DEFAULT_MODEL_ID")),
 		handoffDefaultThinkingLevel: thinkingLevelValue(env("PI_HANDOFF_DEFAULT_THINKING_LEVEL")),

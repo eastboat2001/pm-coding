@@ -152,7 +152,7 @@
 - `project_file` 失败卡片渲染已调整：失败或中断时优先显示真实错误信息，不再展示模型尝试写入的完整文件正文，避免误判为“文件已成功创建”。
 - Dockerfile 和 compose 挂载路径改为 `apps/pi-coding-web/data`。
 - `.dockerignore` 已排除递归 `*.tar`、`*.tar.gz`，避免离线镜像包被再次加入 Docker build context。
-- Git ignore 已排除 `.npm-cache/`、`.worktrees/`、`apps/pi-coding-web/data/pi-runtime.sqlite*` 和 `apps/pi-coding-web/dist-worker/`，这些都是本地缓存、运行库或 worker 构建产物，不应提交。
+- Git ignore 已排除 `.npm-cache/`、`.worktrees/`、`apps/pi-coding-web/data/runtime/pi-runtime.sqlite*` 和 `apps/pi-coding-web/dist-worker/`，这些都是本地缓存、运行库或 worker 构建产物，不应提交。
 - 原 `packages/web-ui/example/data/*` 运行数据从仓库结构中移除。
 - 原生成项目 `packages/web-ui/example/kanban` 从产品代码路径中移除。
 
@@ -310,7 +310,7 @@ Docker Compose 部署现在包含 Web、worker 和 Redis 三个服务。离线�
 
 ```env
 PI_RUNS_ENABLED=true
-PI_DB_FILE=./data/pi-runtime.sqlite
+PI_DB_FILE=./data/runtime/pi-runtime.sqlite
 PI_REDIS_URL=redis://redis:6379
 PI_WORKER_ID=pi-worker
 PI_WORKER_CONCURRENCY=2
@@ -332,11 +332,10 @@ apps/pi-coding-web/.env
 
 `.env.example` 已列出完整变量并按用途分组，包括：
 
-- `PI_SESSIONS_DIR`、`PI_SETTINGS_FILE`、`PI_PROJECTS_ROOT_DIR`：会话、设置、生成项目目录。
+- `PI_CLIENTS_ROOT_DIR`、`PI_SETTINGS_FILE`：client/session 项目工作区根目录和服务端设置文件。
 - `PI_SKILLS_DIR`、`PI_DEFAULT_SKILLS_DIR`：服务端 skill 目录。
 - `PI_PREVIEW_BASE_URL`：对浏览器可访问的 PI 公开地址。
 - `PI_PROJECT_INSTALL_COMMAND`、`PI_PROJECT_BUILD_COMMAND`：生成项目安装和构建命令。
-- `PI_SERVER_SESSION_SYNC_ENABLED`：是否启用服务端会话同步。
 - `PI_RUNS_ENABLED`、`PI_DB_FILE`、`PI_REDIS_URL`、`PI_WORKER_*`、`PI_RUN_QUEUE_NAME`：后台 worker run、SQLite runtime DB 和 Redis 队列配置。
 - `PI_CLIENT_ID_REQUIRED`：是否强制 PI-owned API 携带 `X-PI-Client-ID`。
 - `PI_LOG_*`：诊断日志、深度调试、保留周期和 SQLite 清理策略。

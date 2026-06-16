@@ -8,11 +8,13 @@ type RuntimeAttachment = {
 	content: string;
 	extractedText?: string;
 	llmContext?: "full" | "none";
+	projectFilePath?: string;
 };
 
 type UserMessageWithAttachmentsLike = {
 	role: "user-with-attachments";
 	content: string | (TextContent | ImageContent)[];
+	llmContent?: string | (TextContent | ImageContent)[];
 	timestamp: number;
 	attachments?: RuntimeAttachment[];
 };
@@ -22,11 +24,12 @@ function isArtifactMessage(message: AgentMessage): boolean {
 }
 
 function convertAttachments(attachments: RuntimeAttachment[]): (TextContent | ImageContent)[] {
-	const content: (TextContent | ImageContent)[] = [];
+	const documents: TextContent[] = [];
+	const images: ImageContent[] = [];
 	for (const attachment of attachments) {
 		if (attachment.llmContext === "none") continue;
 		if (attachment.type === "image") {
-			content.push({
+			images.push({
 				type: "image",
 				data: attachment.content,
 				mimeType: attachment.mimeType,
@@ -34,13 +37,16 @@ function convertAttachments(attachments: RuntimeAttachment[]): (TextContent | Im
 			continue;
 		}
 		if (attachment.type === "document" && attachment.extractedText) {
-			content.push({
+			const archiveLine = attachment.projectFilePath
+				? `\nArchived project workspace path: ${attachment.projectFilePath}`
+				: "";
+			documents.push({
 				type: "text",
-				text: `\n\n[Document: ${attachment.fileName}]\n${attachment.extractedText}`,
+				text: `\n\n[Attached document: ${attachment.fileName}]${archiveLine}\nThis attachment is already provided inline below. Do not call project_file with the original attachment filename.\n\n${attachment.extractedText}`,
 			} as TextContent);
 		}
 	}
-	return content;
+	return [...documents, ...images];
 }
 
 export function convertAgentMessagesToLlm(messages: AgentMessage[]): Message[] {
@@ -50,10 +56,9 @@ export function convertAgentMessagesToLlm(messages: AgentMessage[]): Message[] {
 			const role = (message as { role?: string }).role;
 			if (role === "user-with-attachments") {
 				const attachmentMessage = message as unknown as UserMessageWithAttachmentsLike;
+				const sourceContent = attachmentMessage.llmContent ?? attachmentMessage.content;
 				const content: (TextContent | ImageContent)[] =
-					typeof attachmentMessage.content === "string"
-						? [{ type: "text", text: attachmentMessage.content }]
-						: [...attachmentMessage.content];
+					typeof sourceContent === "string" ? [{ type: "text", text: sourceContent }] : [...sourceContent];
 				if (attachmentMessage.attachments) {
 					content.push(...convertAttachments(attachmentMessage.attachments));
 				}

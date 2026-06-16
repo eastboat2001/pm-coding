@@ -149,9 +149,8 @@ export interface AppendRunEventInput extends JsonObject {
 }
 
 export interface StorageConfig {
-	sessionsDir: string;
 	settingsFile: string;
-	projectsRootDir: string;
+	clientsRootDir: string;
 	skillsDir: string;
 	defaultSkillsDir: string;
 	runtimeDbFile: string;
@@ -167,7 +166,6 @@ export interface StorageConfig {
 	projectBuildCommand: string;
 	projectInstallTimeoutMs: number;
 	projectBuildTimeoutMs: number;
-	serverSessionSyncEnabled: boolean;
 	defaultModelProvider: string;
 	defaultModelId: string;
 	handoffDefaultThinkingLevel: string;
@@ -312,7 +310,7 @@ export interface DiagnosticLogStatus extends JsonObject {
 }
 
 export interface ProjectWorkspaceContext {
-	clientId?: string;
+	clientId: string;
 	sessionId: string;
 	title: string;
 	projectId: string;

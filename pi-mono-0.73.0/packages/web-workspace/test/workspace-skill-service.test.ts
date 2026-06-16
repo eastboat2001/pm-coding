@@ -11,12 +11,11 @@ function tempRoot(): string {
 
 function testConfig(root: string): StorageConfig {
 	return {
-		sessionsDir: join(root, "data", "sessions"),
 		settingsFile: join(root, "data", "settings.json"),
-		projectsRootDir: join(root, "data", "projects"),
+		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
 		defaultSkillsDir: join(root, "data", "default-skills"),
-		runtimeDbFile: join(root, "data", "pi-runtime.sqlite"),
+		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
 		runsEnabled: false,
 		workerId: "test-worker",
@@ -29,7 +28,6 @@ function testConfig(root: string): StorageConfig {
 		projectBuildCommand: "npm run build",
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
-		serverSessionSyncEnabled: false,
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",

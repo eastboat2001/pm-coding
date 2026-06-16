@@ -33,7 +33,7 @@ Server rules:
 - Reject session/run/project APIs without a valid `X-PI-Client-ID`.
 - Persist every session and run with `client_id`.
 - Query sessions and runs with both `client_id` and resource id.
-- Write project files under a client-scoped directory, for example `data/projects/<client-id>/<session-slug>/`.
+- Write project files under a client/session-scoped directory, for example `data/clients/<client-id>/sessions/<session-id>/project/`.
 - Do not list or load sessions owned by another client.
 
 This is isolation, not authentication. A user who can copy another browser's `PI_CLIENT_ID` can impersonate it. That is acceptable for this stage and should be documented as a temporary boundary before real login/auth.
@@ -224,7 +224,7 @@ Add `.env` settings:
 
 ```env
 PI_RUNS_ENABLED=true
-PI_DB_URL=sqlite:./data/pi-runtime.sqlite
+PI_DB_URL=sqlite:./data/runtime/pi-runtime.sqlite
 PI_REDIS_URL=redis://127.0.0.1:6379
 PI_WORKER_ID=
 PI_WORKER_CONCURRENCY=2

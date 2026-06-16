@@ -21,16 +21,17 @@ function tempRoot() {
 
 function testConfig(root, overrides = {}) {
 	return {
-		sessionsDir: join(root, "data", "sessions"),
 		settingsFile: join(root, "data", "settings.json"),
-		projectsRootDir: join(root, "data", "projects"),
+		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
+		defaultSkillsDir: join(root, "data", "default-skills"),
+		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		previewBaseUrl: "http://localhost:5173",
 		projectInstallCommand: "npm install",
 		projectBuildCommand: "npm run build",
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
-		serverSessionSyncEnabled: false,
+		clientIdRequired: true,
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
@@ -75,12 +76,10 @@ await test("loadStorageConfig reads .env from the app root and strips preview tr
 	writeFileSync(
 		join(root, ".env"),
 		[
-			"PI_SESSIONS_DIR=runtime/sessions",
 			"PI_SETTINGS_FILE=runtime/settings.json",
-			"PI_PROJECTS_ROOT_DIR=runtime/projects",
+			"PI_CLIENTS_ROOT_DIR=runtime/clients",
 			"PI_SKILLS_DIR=runtime/skills",
 			"PI_PREVIEW_BASE_URL=http://localhost:5173/",
-			"PI_SERVER_SESSION_SYNC_ENABLED=true",
 			"PI_DEFAULT_MODEL_PROVIDER=openai",
 			"PI_DEFAULT_MODEL_ID=gpt-5.1",
 			"PI_HANDOFF_DEFAULT_THINKING_LEVEL=medium",
@@ -92,12 +91,10 @@ await test("loadStorageConfig reads .env from the app root and strips preview tr
 
 	assert.equal(config.envFile, resolve(root, ".env"));
 	assert.equal(config.envFileExists, true);
-	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
-	assert.equal(config.projectsRootDir, resolve(root, "runtime/projects"));
+	assert.equal(config.clientsRootDir, resolve(root, "runtime/clients"));
 	assert.equal(config.skillsDir, resolve(root, "runtime/skills"));
 	assert.equal(config.previewBaseUrl, "http://localhost:5173");
-	assert.equal(config.serverSessionSyncEnabled, true);
 	assert.equal(config.defaultModelProvider, "openai");
 	assert.equal(config.defaultModelId, "gpt-5.1");
 	assert.equal(config.handoffDefaultThinkingLevel, "medium");
@@ -133,9 +130,8 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 	writeFileSync(
 		join(root, "pi.runtime.env"),
 		[
-			"PI_SESSIONS_DIR=env/sessions",
 			"PI_SETTINGS_FILE=env/settings.json",
-			"PI_PROJECTS_ROOT_DIR=env/projects",
+			"PI_CLIENTS_ROOT_DIR=env/clients",
 			"PI_SKILLS_DIR=env/skills",
 			"PI_DEFAULT_SKILLS_DIR=env/default-skills",
 			"PI_PREVIEW_BASE_URL=http://env.local/",
@@ -143,7 +139,6 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 			"PI_PROJECT_BUILD_COMMAND=pnpm build",
 			"PI_PROJECT_INSTALL_TIMEOUT_MS=300000",
 			"PI_PROJECT_BUILD_TIMEOUT_MS=310000",
-			"PI_SERVER_SESSION_SYNC_ENABLED=true",
 			"PI_DEFAULT_MODEL_PROVIDER=env-provider",
 			"PI_DEFAULT_MODEL_ID=env-model",
 			"PI_HANDOFF_DEFAULT_THINKING_LEVEL=low",
@@ -157,9 +152,8 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 
 	const envNames = [
 		"PI_STORAGE_ENV_FILE",
-		"PI_SESSIONS_DIR",
 		"PI_SETTINGS_FILE",
-		"PI_PROJECTS_ROOT_DIR",
+		"PI_CLIENTS_ROOT_DIR",
 		"PI_SKILLS_DIR",
 		"PI_DEFAULT_SKILLS_DIR",
 		"PI_PREVIEW_BASE_URL",
@@ -167,7 +161,6 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 		"PI_PROJECT_BUILD_COMMAND",
 		"PI_PROJECT_INSTALL_TIMEOUT_MS",
 		"PI_PROJECT_BUILD_TIMEOUT_MS",
-		"PI_SERVER_SESSION_SYNC_ENABLED",
 		"PI_DEFAULT_MODEL_PROVIDER",
 		"PI_DEFAULT_MODEL_ID",
 		"PI_HANDOFF_DEFAULT_THINKING_LEVEL",
@@ -183,9 +176,8 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 
 		assert.equal(config.envFile, resolve(root, "pi.runtime.env"));
 		assert.equal(config.envFileExists, true);
-		assert.equal(config.sessionsDir, resolve(root, "env/sessions"));
 		assert.equal(config.settingsFile, resolve(root, "env/settings.json"));
-		assert.equal(config.projectsRootDir, resolve(root, "env/projects"));
+		assert.equal(config.clientsRootDir, resolve(root, "env/clients"));
 		assert.equal(config.skillsDir, resolve(root, "env/skills"));
 		assert.equal(config.defaultSkillsDir, resolve(root, "env/default-skills"));
 		assert.equal(config.previewBaseUrl, "http://env.local");
@@ -193,7 +185,6 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 		assert.equal(config.projectBuildCommand, "pnpm build");
 		assert.equal(config.projectInstallTimeoutMs, 300000);
 		assert.equal(config.projectBuildTimeoutMs, 310000);
-		assert.equal(config.serverSessionSyncEnabled, true);
 		assert.equal(config.defaultModelProvider, "env-provider");
 		assert.equal(config.defaultModelId, "env-model");
 		assert.equal(config.handoffDefaultThinkingLevel, "low");
@@ -217,11 +208,10 @@ await test("loadStorageConfig supports PI_STORAGE_DIR defaults", () => {
 
 	assert.equal(config.envFile, resolve(root, ".env"));
 	assert.equal(config.envFileExists, true);
-	assert.equal(config.sessionsDir, resolve(root, "runtime/sessions"));
 	assert.equal(config.settingsFile, resolve(root, "runtime/settings.json"));
-	assert.equal(config.projectsRootDir, resolve(root, "data/projects"));
+	assert.equal(config.clientsRootDir, resolve(root, "runtime/clients"));
+	assert.equal(config.runtimeDbFile, resolve(root, "runtime/runtime/pi-runtime.sqlite"));
 	assert.equal(config.skillsDir, resolve(root, "data/skills"));
-	assert.equal(config.serverSessionSyncEnabled, false);
 	assert.equal(config.defaultModelProvider, "");
 	assert.equal(config.defaultModelId, "");
 	assert.equal(config.handoffDefaultThinkingLevel, "high");
@@ -775,64 +765,10 @@ await test("WorkspaceSessionService splits global provider settings from client 
 	assert.deepEqual(clientSettings.customProviders, providers);
 });
 
-await test("WorkspaceSessionService deletes only project directories whose metadata matches the full session id", () => {
-	const root = tempRoot();
-	const config = testConfig(root);
-	const service = new WorkspaceSessionService(config);
-	const targetSessionId = "abcdef12-target";
-	const otherSessionId = "abcdef12-other";
-	const targetProjectDir = join(config.projectsRootDir, "target-app-abcdef12");
-	const otherProjectDir = join(config.projectsRootDir, "other-app-abcdef12");
-	mkdirSync(targetProjectDir, { recursive: true });
-	mkdirSync(otherProjectDir, { recursive: true });
-	writeFileSync(
-		join(targetProjectDir, ".pi-project.json"),
-		JSON.stringify({
-			projectId: "target-app-abcdef12",
-			sessionId: targetSessionId,
-			title: "Target App",
-			status: "running",
-			mode: "static",
-			previewUrl: "",
-			projectRoot: targetProjectDir,
-			serveRoot: targetProjectDir,
-			fileCount: 1,
-			updatedAt: "2026-06-03T00:00:00.000Z",
-		}),
-		"utf8",
-	);
-	writeFileSync(
-		join(otherProjectDir, ".pi-project.json"),
-		JSON.stringify({
-			projectId: "other-app-abcdef12",
-			sessionId: otherSessionId,
-			title: "Other App",
-			status: "running",
-			mode: "static",
-			previewUrl: "",
-			projectRoot: otherProjectDir,
-			serveRoot: otherProjectDir,
-			fileCount: 1,
-			updatedAt: "2026-06-03T00:00:00.000Z",
-		}),
-		"utf8",
-	);
-
-	service.writeSession(
-		targetSessionId,
-		{ id: targetSessionId, title: "Target App", messages: [] },
-		{ id: targetSessionId, title: "Target App" },
-	);
-
-	assert.equal(service.deleteSession(targetSessionId), true);
-	assert.equal(existsSync(targetProjectDir), false);
-	assert.equal(existsSync(otherProjectDir), true);
-});
-
 await test("WorkspaceFileService creates, rewrites, updates, lists, reads, and deletes files inside a session project", () => {
 	const root = tempRoot();
 	const service = new WorkspaceFileService(testConfig(root));
-	const context = { sessionId: "session-123456789", title: "Demo App" };
+	const context = { clientId: "client-a", sessionId: "session-123456789", title: "Demo App" };
 
 	const created = service.handle({ ...context, command: "create", filename: "src/main.js", content: "console.log('a');" });
 	assert.equal(created.action, "created");
@@ -857,31 +793,31 @@ await test("WorkspaceFileService lists current project files without write-side 
 	const root = tempRoot();
 	const config = testConfig(root);
 	const service = new WorkspaceFileService(config);
-	const context = { sessionId: "session-files", title: "Demo App" };
+	const context = { clientId: "client-a", sessionId: "session-files", title: "Demo App" };
 
 	service.handle({ ...context, command: "create", filename: "src/main.js", content: "console.log('ok');" });
 	service.handle({ ...context, command: "create", filename: "src/components/App.vue", content: "<template></template>" });
-	const siblingDir = join(config.projectsRootDir, "legacy-session-");
+	const siblingDir = join(root, "data", "projects", "legacy-session-");
 	mkdirSync(siblingDir, { recursive: true });
 
 	const listed = service.listProjectFiles(context);
-	const missing = service.listProjectFiles({ sessionId: "session-missing", title: "Missing App" });
+	const missing = service.listProjectFiles({ clientId: "client-a", sessionId: "session-missing", title: "Missing App" });
 
 	assert.deepEqual(listed.files, ["src/components/App.vue", "src/main.js"]);
 	assert.equal(listed.fileCount, 2);
 	assert.equal(existsSync(siblingDir), true);
 	assert.deepEqual(missing.files, []);
-	assert.equal(existsSync(join(config.projectsRootDir, "missing-app-session-")), false);
+	assert.equal(existsSync(join(root, "data", "projects", "missing-app-session-")), false);
 });
 
 await test("WorkspaceFileService previews a current project text file without write-side effects", () => {
 	const root = tempRoot();
 	const config = testConfig(root);
 	const service = new WorkspaceFileService(config);
-	const context = { sessionId: "session-preview", title: "Preview App" };
+	const context = { clientId: "client-a", sessionId: "session-preview", title: "Preview App" };
 
 	service.handle({ ...context, command: "create", filename: "src/main.ts", content: "export const answer = 42;\n" });
-	const siblingDir = join(config.projectsRootDir, "legacy-session-");
+	const siblingDir = join(root, "data", "projects", "legacy-session-");
 	mkdirSync(siblingDir, { recursive: true });
 
 	const preview = service.readProjectFilePreview({ ...context, filename: "src/main.ts" });
@@ -900,7 +836,7 @@ await test("WorkspaceFileService saves a text file preview with hash conflict pr
 	const root = tempRoot();
 	const config = testConfig(root);
 	const service = new WorkspaceFileService(config);
-	const context = { sessionId: "session-save", title: "Save App" };
+	const context = { clientId: "client-a", sessionId: "session-save", title: "Save App" };
 
 	service.handle({ ...context, command: "create", filename: "src/main.ts", content: "export const answer = 42;\n" });
 	const preview = service.readProjectFilePreview({ ...context, filename: "src/main.ts" });
@@ -923,7 +859,7 @@ await test("WorkspaceFileService rejects saving when the base hash is stale", ()
 	const root = tempRoot();
 	const config = testConfig(root);
 	const service = new WorkspaceFileService(config);
-	const context = { sessionId: "session-save-conflict", title: "Save Conflict" };
+	const context = { clientId: "client-a", sessionId: "session-save-conflict", title: "Save Conflict" };
 
 	service.handle({ ...context, command: "create", filename: "src/main.ts", content: "export const answer = 42;\n" });
 	const preview = service.readProjectFilePreview({ ...context, filename: "src/main.ts" });
@@ -945,7 +881,7 @@ await test("WorkspaceFileService rejects saving when the base hash is stale", ()
 await test("WorkspaceFileService rejects update when old_str is not unique", () => {
 	const root = tempRoot();
 	const service = new WorkspaceFileService(testConfig(root));
-	const context = { sessionId: "session-123456789", title: "Demo App" };
+	const context = { clientId: "client-a", sessionId: "session-123456789", title: "Demo App" };
 
 	service.handle({
 		...context,
@@ -977,6 +913,7 @@ await test("WorkspaceFileService rejects project paths that escape the workspace
 	assert.throws(() =>
 		service.handle({
 			sessionId: "session-123456789",
+			clientId: "client-a",
 			title: "Demo App",
 			command: "create",
 			filename: "../outside.txt",
@@ -988,7 +925,7 @@ await test("WorkspaceFileService rejects project paths that escape the workspace
 await test("WorkspaceCommandService rejects commands that can stop the PI server", async () => {
 	const root = tempRoot();
 	const service = new WorkspaceCommandService(testConfig(root));
-	const context = { sessionId: "session-command-safety", title: "Command Safety" };
+	const context = { clientId: "client-a", sessionId: "session-command-safety", title: "Command Safety" };
 	const command = "taskkill /F /IM node.exe 2>nul & echo Stopped";
 
 	assert.equal(isUnsafeProjectCommand(command), true);
@@ -1003,9 +940,8 @@ await test("configuredStoragePlugin ignores generated storage directories in the
 	writeFileSync(
 		join(root, "workspace.env"),
 		[
-			`PI_SESSIONS_DIR=${join(root, "runtime", "sessions")}`,
 			`PI_SETTINGS_FILE=${join(root, "runtime", "settings.json")}`,
-			`PI_PROJECTS_ROOT_DIR=${join(root, "runtime", "projects")}`,
+			`PI_CLIENTS_ROOT_DIR=${join(root, "runtime", "clients")}`,
 			`PI_SKILLS_DIR=${join(root, "runtime", "skills")}`,
 			`PI_LOG_DB=${join(root, "data", "logs", "pi-diagnostics.sqlite")}`,
 		].join("\n"),
@@ -1017,8 +953,7 @@ await test("configuredStoragePlugin ignores generated storage directories in the
 	const ignored = viteConfig?.server?.watch?.ignored;
 
 	assert.ok(Array.isArray(ignored));
-	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "sessions")) + "/**"));
-	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "projects")) + "/**"));
+	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "clients")) + "/**"));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "skills")) + "/**"));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "data", "logs", "pi-diagnostics.sqlite"))));
 	assert.ok(ignored.includes(normalizeWatchPath(join(root, "runtime", "settings.json"))));
@@ -1029,7 +964,7 @@ await test("WorkspacePreviewService serves dist when a project was built", async
 	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
 	const fileService = new WorkspaceFileService(config);
 	const previewService = new WorkspacePreviewService(config);
-	const context = { sessionId: "session-abcdef", title: "Built App" };
+	const context = { clientId: "client-a", sessionId: "session-abcdef", title: "Built App" };
 
 	const created = fileService.handle({
 		...context,
@@ -1045,7 +980,7 @@ await test("WorkspacePreviewService serves dist when a project was built", async
 	assert.equal(result.status, "running");
 	assert.equal(result.mode, "static");
 	assert.equal(result.serveRoot, join(String(created.projectRoot), "dist"));
-	assert.equal(result.previewUrl, "http://localhost:5173/preview/built-app-session-/");
+	assert.equal(result.previewUrl, "http://localhost:5173/preview/project-client-a-session-/");
 	assert.match(readFileSync(join(String(created.projectRoot), ".pi-project.json"), "utf8"), /"status": "running"/);
 });
 
@@ -1053,10 +988,10 @@ await test("WorkspacePreviewService lists generated projects from preview metada
 	const root = tempRoot();
 	const config = testConfig(root);
 	const previewService = new WorkspacePreviewService(config);
-	const olderDir = join(config.projectsRootDir, "older-app");
-	const newerDir = join(config.projectsRootDir, "newer-app");
-	const brokenDir = join(config.projectsRootDir, "broken-app");
-	const incompleteDir = join(config.projectsRootDir, "incomplete-app");
+	const olderDir = join(config.clientsRootDir, "client-a", "sessions", "session-old", "project");
+	const newerDir = join(config.clientsRootDir, "client-a", "sessions", "session-new", "project");
+	const brokenDir = join(config.clientsRootDir, "client-a", "sessions", "session-broken", "project");
+	const incompleteDir = join(config.clientsRootDir, "client-a", "sessions", "session-incomplete", "project");
 	mkdirSync(olderDir, { recursive: true });
 	mkdirSync(newerDir, { recursive: true });
 	mkdirSync(brokenDir, { recursive: true });
@@ -1066,6 +1001,7 @@ await test("WorkspacePreviewService lists generated projects from preview metada
 		JSON.stringify({
 			version: 1,
 			projectId: "older-app",
+			clientId: "client-a",
 			sessionId: "session-old",
 			title: "Older App",
 			status: "running",
@@ -1084,6 +1020,7 @@ await test("WorkspacePreviewService lists generated projects from preview metada
 		JSON.stringify({
 			version: 1,
 			projectId: "newer-app",
+			clientId: "client-a",
 			sessionId: "session-new",
 			title: "Newer App",
 			status: "failed",
@@ -1121,13 +1058,14 @@ await test("WorkspacePreviewService rewrites running project preview URLs for th
 	const root = tempRoot();
 	const config = testConfig(root, { previewBaseUrl: "" });
 	const previewService = new WorkspacePreviewService(config);
-	const projectDir = join(config.projectsRootDir, "current-host-app");
+	const projectDir = join(config.clientsRootDir, "client-a", "sessions", "session-current-host", "project");
 	mkdirSync(projectDir, { recursive: true });
 	writeFileSync(
 		join(projectDir, ".pi-project.json"),
 		JSON.stringify({
 			version: 1,
 			projectId: "current-host-app",
+			clientId: "client-a",
 			sessionId: "session-current-host",
 			title: "Current Host App",
 			status: "running",
@@ -1151,7 +1089,7 @@ await test("WorkspacePreviewService renames generated project metadata", async (
 	const root = tempRoot();
 	const config = testConfig(root, { previewBaseUrl: "" });
 	const previewService = new WorkspacePreviewService(config);
-	const projectDir = join(config.projectsRootDir, "rename-app");
+	const projectDir = join(config.clientsRootDir, "client-a", "sessions", "session-rename", "project");
 	const updatedAt = "2026-05-29T10:00:00.000Z";
 	mkdirSync(projectDir, { recursive: true });
 	writeFileSync(
@@ -1159,6 +1097,7 @@ await test("WorkspacePreviewService renames generated project metadata", async (
 		JSON.stringify({
 			version: 1,
 			projectId: "rename-app",
+			clientId: "client-a",
 			sessionId: "session-rename",
 			title: "Original App",
 			status: "running",
@@ -1189,7 +1128,7 @@ await test("WorkspaceTaskService previews static root without running package sc
 	const config = testConfig(root);
 	const fileService = new WorkspaceFileService(config);
 	const taskService = new WorkspaceTaskService(config);
-	const context = { sessionId: "session-static-script", title: "Static Script" };
+	const context = { clientId: "client-a", sessionId: "session-static-script", title: "Static Script" };
 
 	const created = fileService.handle({
 		...context,
@@ -1213,7 +1152,7 @@ await test("WorkspaceTaskService previews static root without running package sc
 
 	assert.equal(result.status, "running");
 	assert.equal(result.mode, "static");
-	assert.equal(result.previewUrl, "http://localhost:5173/preview/static-script-session-/");
+	assert.equal(result.previewUrl, "http://localhost:5173/preview/project-client-a-session-/");
 	assert.equal(result.serveRoot, String(created.projectRoot));
 	assert.equal(existsSync(join(String(created.projectRoot), "dist", "index.html")), false);
 	assert.match(result.logs.join(""), /does not run package scripts/);
@@ -1224,7 +1163,7 @@ await test("WorkspacePreviewService rejects build source entries before build_st
 	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
 	const fileService = new WorkspaceFileService(config);
 	const previewService = new WorkspacePreviewService(config);
-	const context = { sessionId: "session-vite-source", title: "Vite Source" };
+	const context = { clientId: "client-a", sessionId: "session-vite-source", title: "Vite Source" };
 
 	fileService.handle({
 		...context,
@@ -1257,7 +1196,7 @@ await test("WorkspaceTaskService rejects Node services without a static entry", 
 	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
 	const fileService = new WorkspaceFileService(config);
 	const taskService = new WorkspaceTaskService(config);
-	const context = { sessionId: "session-node-service", title: "Node Service" };
+	const context = { clientId: "client-a", sessionId: "session-node-service", title: "Node Service" };
 
 	fileService.handle({
 		...context,
@@ -1284,19 +1223,19 @@ await test("WorkspaceTaskService build_static runs the configured build and expo
 	const root = tempRoot();
 	const config = testConfig(root, {
 		projectInstallCommand: "npm install",
-		projectBuildCommand: "npm run build",
+		projectBuildCommand: "npm exec vite build",
 	});
 	const fileService = new WorkspaceFileService(config);
 	const commands = [];
 	const taskService = new WorkspaceTaskService(config, undefined, async (command, cwd, _timeoutMs, logs) => {
 		commands.push(command);
 		logs.push(`ran: ${command}\n`);
-		if (command === "npm run build") {
+		if (command === "npm exec vite build") {
 			mkdirSync(join(cwd, "dist"), { recursive: true });
 			writeFileSync(join(cwd, "dist", "index.html"), "<h1>Built static</h1>", "utf8");
 		}
 	});
-	const context = { sessionId: "session-build-static", title: "Build Static" };
+	const context = { clientId: "client-a", sessionId: "session-build-static", title: "Build Static" };
 
 	const created = fileService.handle({
 		...context,
@@ -1316,7 +1255,7 @@ await test("WorkspaceTaskService build_static runs the configured build and expo
 
 	assert.equal(build.status, "passed");
 	assert.equal(build.valid, true);
-	assert.deepEqual(commands, ["npm install", "npm run build"]);
+	assert.deepEqual(commands, ["npm install", "npm exec vite build"]);
 	assert.equal(build.serveRoot, join(String(created.projectRoot), "dist"));
 	assert.equal(existsSync(join(String(created.projectRoot), "dist", "index.html")), true);
 	assert.match(build.logs.join(""), /Static build completed/);
@@ -1329,7 +1268,7 @@ await test("WorkspacePreviewService does not return a clickable URL for an unpre
 	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
 	const fileService = new WorkspaceFileService(config);
 	const previewService = new WorkspacePreviewService(config);
-	const context = { sessionId: "session-unpreviewable", title: "Unpreviewable" };
+	const context = { clientId: "client-a", sessionId: "session-unpreviewable", title: "Unpreviewable" };
 
 	fileService.handle({
 		...context,

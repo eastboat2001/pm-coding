@@ -48,7 +48,7 @@ describe("collectProjectFilesFromMessages", () => {
 		expect(files).toEqual([]);
 	});
 
-	it("archives ordinary document attachments as project files and removes duplicate inline context", () => {
+	it("archives ordinary document attachments as project files while keeping inline model context", () => {
 		const attachments = prepareAttachmentProjectFileSeeds([
 			{
 				id: "doc-1",
@@ -68,11 +68,30 @@ describe("collectProjectFilesFromMessages", () => {
 				content: "base64-original",
 				extractedText: "# Requirements",
 				projectFilePath: "attachments/PRD 文档.md",
-				llmContext: "none",
 			}),
 		]);
+		expect(attachments[0].llmContext).toBeUndefined();
 		expect(collectProjectFilesFromMessages([{ role: "user-with-attachments", content: "read", attachments } as never])).toEqual([
 			{ filename: "attachments/PRD 文档.md", content: "# Requirements" },
+		]);
+	});
+
+	it("preserves text document attachment extensions in project file paths", () => {
+		const attachments = prepareAttachmentProjectFileSeeds([
+			{
+				id: "doc-1",
+				fileName: "n.txt",
+				type: "document",
+				mimeType: "text/plain",
+				size: 8,
+				content: "",
+				extractedText: "你好 mimo",
+			},
+		] as never);
+
+		expect(attachments[0].projectFilePath).toBe("attachments/n.txt");
+		expect(collectProjectFilesFromMessages([{ role: "user-with-attachments", content: "read", attachments } as never])).toEqual([
+			{ filename: "attachments/n.txt", content: "你好 mimo" },
 		]);
 	});
 
@@ -94,12 +113,12 @@ describe("collectProjectFilesFromMessages", () => {
 				fileName: "screen shot.png",
 				type: "image",
 				content: "png-base64",
-				projectFilePath: "attachments/original/screen shot.png",
+				projectFilePath: "attachments/screen shot.png",
 			}),
 		]);
 		expect(attachments[0].llmContext).toBeUndefined();
 		expect(collectProjectFilesFromMessages([{ role: "user-with-attachments", content: "look", attachments } as never])).toEqual([
-			{ filename: "attachments/original/screen shot.png", content: "png-base64", encoding: "base64" },
+			{ filename: "attachments/screen shot.png", content: "png-base64", encoding: "base64" },
 		]);
 	});
 

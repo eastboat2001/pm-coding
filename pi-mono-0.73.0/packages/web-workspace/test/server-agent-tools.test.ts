@@ -11,12 +11,11 @@ function tempRoot(): string {
 
 function testConfig(root: string): StorageConfig {
 	return {
-		sessionsDir: join(root, "data", "sessions"),
 		settingsFile: join(root, "data", "settings.json"),
-		projectsRootDir: join(root, "data", "projects"),
+		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
 		defaultSkillsDir: join(root, "data", "default-skills"),
-		runtimeDbFile: join(root, "data", "pi-runtime.sqlite"),
+		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
 		runsEnabled: false,
 		workerId: "test-worker",
@@ -29,7 +28,6 @@ function testConfig(root: string): StorageConfig {
 		projectBuildCommand: "npm run build",
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
-		serverSessionSyncEnabled: false,
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
@@ -67,6 +65,7 @@ describe("server-direct agent project tools", () => {
 	it("rejects omitted project_file placeholders as create or rewrite content", () => {
 		const root = tempRoot();
 		const tools = createServerDirectProjectTools(testConfig(root), {
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Demo",
 		});
@@ -84,6 +83,7 @@ describe("server-direct agent project tools", () => {
 	it("rejects omitted project_file placeholders as update replacement content", () => {
 		const root = tempRoot();
 		const tools = createServerDirectProjectTools(testConfig(root), {
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Demo",
 		});
@@ -102,6 +102,7 @@ describe("server-direct agent project tools", () => {
 	it("allows normal project_file create and update operations", async () => {
 		const root = tempRoot();
 		const tools = createServerDirectProjectTools(testConfig(root), {
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Demo",
 		});
@@ -127,10 +128,51 @@ describe("server-direct agent project tools", () => {
 		expect(getResult.content[0]).toEqual({ type: "text", text: "<h1>new</h1>" });
 	});
 
+	it("reads archived attachments when the model asks for the original attachment filename", async () => {
+		const root = tempRoot();
+		const tools = createServerDirectProjectTools(testConfig(root), {
+			clientId: "client-a",
+			sessionId: "s1",
+			title: "Demo",
+		});
+		const projectFile = tools.find((tool) => tool.name === "project_file");
+
+		await projectFile!.execute("tc-create", {
+			command: "create",
+			filename: "attachments/n.txt",
+			content: "你好 mimo",
+		});
+		const getResult = await projectFile!.execute("tc-get", { command: "get", filename: "n.txt" });
+
+		expect(getResult.content[0]).toEqual({ type: "text", text: "你好 mimo" });
+		expect(getResult.details).toMatchObject({ command: "get", filename: "attachments/n.txt" });
+	});
+
+	it("reads legacy markdown attachment archives when the model asks for the original filename", async () => {
+		const root = tempRoot();
+		const tools = createServerDirectProjectTools(testConfig(root), {
+			clientId: "client-a",
+			sessionId: "s1",
+			title: "Demo",
+		});
+		const projectFile = tools.find((tool) => tool.name === "project_file");
+
+		await projectFile!.execute("tc-create", {
+			command: "create",
+			filename: "attachments/n.md",
+			content: "你好 mimo",
+		});
+		const getResult = await projectFile!.execute("tc-get", { command: "get", filename: "n.txt" });
+
+		expect(getResult.content[0]).toEqual({ type: "text", text: "你好 mimo" });
+		expect(getResult.details).toMatchObject({ command: "get", filename: "attachments/n.md" });
+	});
+
 	it("creates project files without browser fetch", async () => {
 		const root = tempRoot();
 		const config = testConfig(root);
 		const tools = createServerDirectProjectTools(config, {
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Demo",
 			activeSkillNames: [],
@@ -155,6 +197,7 @@ describe("server-direct agent project tools", () => {
 	it("exposes preview through server-direct project tasks using the configured preview base URL", async () => {
 		const root = tempRoot();
 		const tools = createServerDirectProjectTools(testConfig(root), {
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Demo",
 		});
@@ -173,12 +216,12 @@ describe("server-direct agent project tools", () => {
 
 		expect(result.content[0]).toMatchObject({
 			type: "text",
-			text: expect.stringContaining("Preview URL: http://localhost:5173/preview/project-s1/"),
+			text: expect.stringContaining("Preview URL: http://localhost:5173/preview/project-client-a-s1/"),
 		});
 		expect(result.details).toMatchObject({
 			task: "preview",
 			status: "running",
-			previewUrl: "http://localhost:5173/preview/project-s1/",
+			previewUrl: "http://localhost:5173/preview/project-client-a-s1/",
 		});
 	});
 
@@ -186,6 +229,7 @@ describe("server-direct agent project tools", () => {
 		const root = tempRoot();
 		const config = { ...testConfig(root), previewBaseUrl: "" };
 		const tools = createServerDirectProjectTools(config, {
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Demo",
 		});
@@ -202,7 +246,7 @@ describe("server-direct agent project tools", () => {
 		expect(result.details).toMatchObject({
 			task: "preview",
 			status: "running",
-			previewUrl: "http://localhost:5173/preview/project-s1/",
+			previewUrl: "http://localhost:5173/preview/project-client-a-s1/",
 		});
 	});
 });

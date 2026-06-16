@@ -18,7 +18,7 @@ describe("project execution and preview hardening", () => {
 	it("rejects build_static package script commands before executing the runner", async () => {
 		const root = tempRoot();
 		const config = { ...testConfig(root), projectInstallCommand: "", projectBuildCommand: "npm run build" };
-		const projectDir = projectDirectory(config.projectsRootDir, "s1", "Hardening");
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
 		mkdirSync(projectDir, { recursive: true });
 		writeFileSync(
 			join(projectDir, "package.json"),
@@ -31,7 +31,7 @@ describe("project execution and preview hardening", () => {
 			commands.push(command);
 		});
 
-		const result = await service.run({ task: "build_static", sessionId: "s1", title: "Hardening" });
+		const result = await service.run({ task: "build_static", clientId: "client-a", sessionId: "s1", title: "Hardening" });
 
 		expect(commands).toEqual([]);
 		expect(result.status).toBe("failed");
@@ -45,13 +45,14 @@ describe("project execution and preview hardening", () => {
 		const previews = new WorkspacePreviewService(config);
 		const req = { headers: { host: "localhost:5173", "x-forwarded-proto": "http" } };
 		files.handle({
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Preview",
 			command: "create",
 			filename: "index.html",
 			content: "<h1>ok</h1>",
 		});
-		const preview = await previews.preview({ sessionId: "s1", title: "Preview" }, req);
+		const preview = await previews.preview({ clientId: "client-a", sessionId: "s1", title: "Preview" }, req);
 		const res = new MockResponse();
 
 		expect(
@@ -71,6 +72,7 @@ describe("project execution and preview hardening", () => {
 		const files = new WorkspaceFileService(testConfig(root));
 		const content = "a".repeat(700 * 1024);
 		files.handle({
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Large File",
 			command: "create",
@@ -79,6 +81,7 @@ describe("project execution and preview hardening", () => {
 		});
 
 		const result = files.handle({
+			clientId: "client-a",
 			sessionId: "s1",
 			title: "Large File",
 			command: "get",
@@ -93,7 +96,7 @@ describe("project execution and preview hardening", () => {
 	it("truncates build_static command logs", async () => {
 		const root = tempRoot();
 		const config = { ...testConfig(root), projectInstallCommand: "", projectBuildCommand: "node build.js" };
-		const projectDir = projectDirectory(config.projectsRootDir, "s1", "Logs");
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
 		mkdirSync(projectDir, { recursive: true });
 		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }), "utf8");
 		const service = new WorkspaceTaskService(config, undefined, async (_command, _cwd, _timeoutMs, logs) => {
@@ -101,7 +104,7 @@ describe("project execution and preview hardening", () => {
 			throw new Error("boom");
 		});
 
-		const result = await service.run({ task: "build_static", sessionId: "s1", title: "Logs" });
+		const result = await service.run({ task: "build_static", clientId: "client-a", sessionId: "s1", title: "Logs" });
 
 		const logText = result.logs?.join("") ?? "";
 		expect(logText.length).toBeLessThan(80_000);
@@ -127,12 +130,11 @@ class MockResponse extends Writable {
 
 function testConfig(root: string): StorageConfig {
 	return {
-		sessionsDir: join(root, "data", "sessions"),
 		settingsFile: join(root, "data", "settings.json"),
-		projectsRootDir: join(root, "data", "projects"),
+		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
 		defaultSkillsDir: join(root, "data", "default-skills"),
-		runtimeDbFile: join(root, "data", "pi-runtime.sqlite"),
+		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
 		runsEnabled: false,
 		workerId: "test-worker",
@@ -145,7 +147,6 @@ function testConfig(root: string): StorageConfig {
 		projectBuildCommand: "npm run build",
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
-		serverSessionSyncEnabled: false,
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",

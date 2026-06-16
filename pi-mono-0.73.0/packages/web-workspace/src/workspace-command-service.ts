@@ -2,16 +2,14 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { PROJECT_LOG_MAX_CHARS } from "./constants.js";
 import type { ProjectBashRequest, ProjectBashResult, StorageConfig } from "./types.js";
-import { migrateLegacyProjectDir, removeSiblingProjectDirs, workspaceContext } from "./workspace-paths.js";
+import { workspaceContext } from "./workspace-paths.js";
 
 export class WorkspaceCommandService {
 	constructor(private readonly config: StorageConfig) {}
 
 	async run(body: ProjectBashRequest): Promise<ProjectBashResult> {
-		const { clientId, projectDir, sessionId } = workspaceContext(this.config, body);
-		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
+		const { projectDir } = workspaceContext(this.config, body);
 		mkdirSync(projectDir, { recursive: true });
-		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const command = String(body.command || "").trim();
 		if (!command) throw new Error("Field `command` is required.");
 		const timeoutMs = Math.max(1000, Math.min(Number(body.timeoutMs || this.config.projectBuildTimeoutMs), 300000));

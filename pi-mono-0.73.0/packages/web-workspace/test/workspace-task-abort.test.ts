@@ -13,12 +13,11 @@ function tempRoot(): string {
 
 function testConfig(root: string): StorageConfig {
 	return {
-		sessionsDir: join(root, "data", "sessions"),
 		settingsFile: join(root, "data", "settings.json"),
-		projectsRootDir: join(root, "data", "projects"),
+		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
 		defaultSkillsDir: join(root, "data", "default-skills"),
-		runtimeDbFile: join(root, "data", "pi-runtime.sqlite"),
+		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
 		runsEnabled: false,
 		workerId: "test-worker",
@@ -31,7 +30,6 @@ function testConfig(root: string): StorageConfig {
 		projectBuildCommand: "node build.js",
 		projectInstallTimeoutMs: 120000,
 		projectBuildTimeoutMs: 120000,
-		serverSessionSyncEnabled: false,
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
@@ -69,7 +67,7 @@ describe("WorkspaceTaskService abort handling", () => {
 	it("passes AbortSignal to build_static command runner and reports abort failures", async () => {
 		const root = tempRoot();
 		const config = testConfig(root);
-		const projectDir = projectDirectory(config.projectsRootDir, "s1", "Abort");
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
 		mkdirSync(projectDir, { recursive: true });
 		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }), "utf8");
 
@@ -82,7 +80,7 @@ describe("WorkspaceTaskService abort handling", () => {
 		});
 
 		const result = await service.run(
-			{ task: "build_static", sessionId: "s1", title: "Abort" },
+			{ task: "build_static", clientId: "client-a", sessionId: "s1", title: "Abort" },
 			undefined,
 			controller.signal,
 		);

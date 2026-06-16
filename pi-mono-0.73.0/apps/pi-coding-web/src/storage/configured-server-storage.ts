@@ -1,5 +1,5 @@
 import type { Model } from "@mariozechner/pi-ai";
-import type { CustomProvider, SessionData, SessionMetadata } from "@mariozechner/pi-web-ui";
+import type { CustomProvider } from "@mariozechner/pi-web-ui";
 import { piClientHeaders } from "../runtime/client-id.js";
 
 const READ_REQUEST_TIMEOUT_MS = 1000;
@@ -7,13 +7,11 @@ const WRITE_REQUEST_TIMEOUT_MS = 5000;
 
 export interface ConfiguredStorageStatus {
 	configured: boolean;
-	sessionsDir: string;
 	settingsFile: string;
-	projectsRootDir: string;
+	clientsRootDir: string;
 	skillsDir?: string;
 	defaultSkillsDir?: string;
 	previewBaseUrl?: string;
-	serverSessionSyncEnabled?: boolean;
 	defaultModelProvider?: string;
 	defaultModelId?: string;
 	handoffDefaultThinkingLevel?: string;
@@ -43,17 +41,6 @@ export interface ConfiguredStorageStatus {
 	otelDeploymentEnvironment?: string;
 }
 
-export interface ConfiguredSessionRecord {
-	version: 1;
-	savedAt: string;
-	data: SessionData;
-	metadata: SessionMetadata;
-	project?: {
-		projectRoot: string;
-		fileCount: number;
-	};
-}
-
 export interface ConfiguredSettingsRecord {
 	version: 1;
 	savedAt: string;
@@ -78,33 +65,6 @@ export class ConfiguredServerStorage {
 			allowMissing: true,
 			timeoutMs: READ_REQUEST_TIMEOUT_MS,
 		});
-	}
-
-	async writeSession(data: SessionData, metadata: SessionMetadata): Promise<void> {
-		await this.request<ConfiguredSessionRecord>(`/sessions/${encodeURIComponent(data.id)}`, {
-			method: "PUT",
-			body: { data, metadata },
-			timeoutMs: WRITE_REQUEST_TIMEOUT_MS,
-		});
-	}
-
-	async deleteSession(sessionId: string): Promise<void> {
-		await this.request(`/sessions/${encodeURIComponent(sessionId)}`, {
-			method: "DELETE",
-			allowMissing: true,
-		});
-	}
-
-	async readSession(sessionId: string): Promise<{ data: SessionData; metadata: SessionMetadata } | null> {
-		const record = await this.request<ConfiguredSessionRecord>(`/sessions/${encodeURIComponent(sessionId)}`, {
-			allowMissing: true,
-		});
-		return record ? { data: record.data, metadata: record.metadata } : null;
-	}
-
-	async listSessionMetadata(): Promise<SessionMetadata[]> {
-		const result = await this.request<{ sessions: SessionMetadata[] }>("/sessions", { allowMissing: true });
-		return result?.sessions ?? [];
 	}
 
 	async writeSettings(settingsData: ConfiguredSettingsUpdate): Promise<boolean> {

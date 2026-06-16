@@ -26,8 +26,6 @@ import type {
 import {
 	assertInside,
 	listProjectSourceFiles,
-	migrateLegacyProjectDir,
-	removeSiblingProjectDirs,
 	safeRelativeProjectPath,
 	workspaceContext,
 } from "./workspace-paths.js";
@@ -36,10 +34,8 @@ export class WorkspaceFileService {
 	constructor(private readonly config: StorageConfig) {}
 
 	ensureProjectWorkspace(body: ProjectRequestContext): ProjectFilesListResult {
-		const { clientId, projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
-		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
+		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
 		mkdirSync(projectDir, { recursive: true });
-		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 		const files = listProjectSourceFiles(projectDir).map((file) =>
 			normalizeProjectFilePath(relative(projectDir, file)),
 		);
@@ -47,8 +43,7 @@ export class WorkspaceFileService {
 	}
 
 	listProjectFiles(body: ProjectRequestContext): ProjectFilesListResult {
-		const { clientId, projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
-		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
+		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
 		const files = listProjectSourceFiles(projectDir).map((file) =>
 			normalizeProjectFilePath(relative(projectDir, file)),
 		);
@@ -56,8 +51,7 @@ export class WorkspaceFileService {
 	}
 
 	readProjectFilePreview(body: ProjectFilePreviewRequest): ProjectFilePreviewResult {
-		const { clientId, projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
-		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
+		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
 		const relativePath = safeRelativeProjectPath(String(body.filename || "").trim());
 		const targetPath = resolve(projectDir, relativePath);
 		assertInside(projectDir, targetPath);
@@ -87,8 +81,7 @@ export class WorkspaceFileService {
 	}
 
 	saveProjectFile(body: ProjectFileSaveRequest): ProjectFileSaveResult {
-		const { clientId, projectDir, sessionId } = workspaceContext(this.config, body);
-		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
+		const { projectDir } = workspaceContext(this.config, body);
 		const filename = String(body.filename || "").trim();
 		const content = body.content;
 		const baseHash = String(body.baseHash || "").trim();
@@ -119,10 +112,8 @@ export class WorkspaceFileService {
 	}
 
 	handle(body: ProjectFileRequest): ProjectFileResult {
-		const { clientId, projectDir, sessionId } = workspaceContext(this.config, body);
-		migrateLegacyProjectDir(this.config.projectsRootDir, projectDir, sessionId, clientId);
+		const { projectDir } = workspaceContext(this.config, body);
 		mkdirSync(projectDir, { recursive: true });
-		removeSiblingProjectDirs(this.config.projectsRootDir, projectDir, sessionId, clientId);
 
 		const command = String(body.command || "").trim();
 		const filename = String(body.filename || "").trim();
@@ -138,15 +129,16 @@ export class WorkspaceFileService {
 		assertInside(projectDir, targetPath);
 
 		if (command === "get") {
-			if (!existsSync(targetPath)) throw new Error(`File not found: ${relativePath}`);
-			const stat = statSync(targetPath);
-			if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`);
+			const readableFile = resolveReadableProjectFile(projectDir, relativePath, targetPath);
+			if (!existsSync(readableFile.targetPath)) throw new Error(`File not found: ${relativePath}`);
+			const stat = statSync(readableFile.targetPath);
+			if (!stat.isFile()) throw new Error(`Project path is not a file: ${readableFile.relativePath}`);
 			const bytesToRead = Math.min(stat.size, PROJECT_FILE_GET_MAX_BYTES);
-			const content = bytesToRead > 0 ? readFilePrefix(targetPath, bytesToRead).toString("utf8") : "";
+			const content = bytesToRead > 0 ? readFilePrefix(readableFile.targetPath, bytesToRead).toString("utf8") : "";
 			const truncated = stat.size > bytesToRead;
 			return {
 				command,
-				filename: relativePath,
+				filename: readableFile.relativePath,
 				content,
 				size: stat.size,
 				...(truncated ? { truncated, omittedBytes: stat.size - bytesToRead } : { truncated: false }),
@@ -205,6 +197,38 @@ const PROJECT_FILE_SAVE_MAX_BYTES = 2 * 1024 * 1024;
 
 function normalizeProjectFilePath(path: string): string {
 	return path.replace(/\\/g, "/");
+}
+
+function resolveReadableProjectFile(
+	projectDir: string,
+	relativePath: string,
+	targetPath: string,
+): { relativePath: string; targetPath: string } {
+	if (existsSync(targetPath)) return { relativePath: normalizeProjectFilePath(relativePath), targetPath };
+	for (const candidate of attachmentAliasCandidates(relativePath)) {
+		const candidateRelativePath = safeRelativeProjectPath(candidate);
+		const candidateTargetPath = resolve(projectDir, candidateRelativePath);
+		assertInside(projectDir, candidateTargetPath);
+		if (existsSync(candidateTargetPath)) {
+			return {
+				relativePath: normalizeProjectFilePath(candidateRelativePath),
+				targetPath: candidateTargetPath,
+			};
+		}
+	}
+	return { relativePath: normalizeProjectFilePath(relativePath), targetPath };
+}
+
+function attachmentAliasCandidates(relativePath: string): string[] {
+	const normalized = normalizeProjectFilePath(relativePath);
+	if (!normalized || normalized.includes("/")) return [];
+	const candidates = [`attachments/${normalized}`];
+	const dotIndex = normalized.lastIndexOf(".");
+	if (dotIndex > 0) {
+		const base = normalized.slice(0, dotIndex);
+		candidates.push(`attachments/${base}.md`);
+	}
+	return Array.from(new Set(candidates));
 }
 
 function normalizePreviewMaxBytes(value: unknown): number {

@@ -71,7 +71,10 @@ describe("worker attachment runtime messages", () => {
 				timestamp: 123,
 				content: [
 					{ type: "text", text: "请阅读附件" },
-					{ type: "text", text: "\n\n[Document: 需求.md]\n# PRD" },
+					{
+						type: "text",
+						text: "\n\n[Attached document: 需求.md]\nThis attachment is already provided inline below. Do not call project_file with the original attachment filename.\n\n# PRD",
+					},
 					{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
 				],
 			},

@@ -30,6 +30,10 @@ export interface RunProjectFileSeeder {
 	): Promise<void> | void;
 }
 
+export interface RunSessionWorkspaceCleaner {
+	deleteSessionWorkspace(clientId: string, sessionId: string): Promise<unknown> | unknown;
+}
+
 export class RunApiError extends Error {
 	constructor(
 		message: string,
@@ -46,6 +50,7 @@ export class WorkspaceRunApiService {
 		private readonly queue: RunQueue,
 		private readonly diagnostics?: RunApiDiagnostics,
 		private readonly projectFiles?: RunProjectFileSeeder,
+		private readonly sessionWorkspaces?: RunSessionWorkspaceCleaner,
 	) {}
 
 	async startRun(clientId: string, request: StartRunRequest): Promise<StartRunResult> {
@@ -170,7 +175,9 @@ export class WorkspaceRunApiService {
 			await Promise.all(activeRuns.map((run) => this.cancelActiveRun(run)));
 			return { deleted: false, sessionId, cancelledRuns: activeRuns.length };
 		}
-		return { deleted: this.db.deleteSession(clientId, sessionId), sessionId };
+		const deleted = this.db.deleteSession(clientId, sessionId);
+		if (deleted) await this.sessionWorkspaces?.deleteSessionWorkspace(clientId, sessionId);
+		return { deleted, sessionId };
 	}
 
 	listRuns(clientId: string): RuntimeRunRecord[] {

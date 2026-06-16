@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { PROJECT_MANIFEST_FILE, PROJECT_METADATA_FILE } from "./constants.js";
 import type { ProjectWorkspaceContext, StorageConfig } from "./types.js";
 
@@ -7,21 +7,23 @@ export function workspaceContext(
 	config: StorageConfig,
 	body: { clientId?: unknown; sessionId?: unknown; title?: unknown },
 ): ProjectWorkspaceContext {
-	const clientId = optionalSafePathId(body.clientId, "client");
+	const clientId = requiredSafePathId(String(body.clientId || ""), "client");
 	const sessionId = String(body.sessionId || "").trim();
 	const title = String(body.title || "").trim();
 	if (!sessionId) throw new Error("Field `sessionId` is required.");
-	const projectId = projectSlug(sessionId, title, clientId);
-	const projectDir = projectDirectory(config.projectsRootDir, sessionId, title, clientId);
-	assertInside(config.projectsRootDir, projectDir);
-	return { ...(clientId ? { clientId } : {}), sessionId, title, projectId, projectDir };
+	const projectId = projectSlug(sessionId, clientId);
+	const projectDir = projectDirectory(config.clientsRootDir, sessionId, clientId);
+	assertInside(config.clientsRootDir, projectDir);
+	return { clientId, sessionId, title, projectId, projectDir };
 }
 
-export function projectDirectory(projectsRootDir: string, sessionId: string, title?: string, clientId?: string): string {
-	return join(projectsRootDir, projectSlug(sessionId, title, clientId));
+export function projectDirectory(clientsRootDir: string, sessionId: string, clientId: string): string {
+	const safeClientId = requiredSafePathId(clientId, "client");
+	const safeSessionId = requiredSafePathId(sessionId, "session");
+	return join(clientsRootDir, safeClientId, "sessions", safeSessionId, "project");
 }
 
-export function projectSlug(sessionId: string, _title?: string, clientId?: string): string {
+export function projectSlug(sessionId: string, clientId: string): string {
 	const suffix = projectSlugSuffix(sessionId, clientId);
 	return `project-${suffix}`;
 }
@@ -80,125 +82,25 @@ export function sanitizeProjectPathComponent(value: string): string {
 	return cleaned;
 }
 
-export function removeSiblingProjectDirs(
-	projectsRootDir: string,
-	currentProjectDir: string,
-	sessionId: string,
-	clientId?: string,
-): void {
-	if (!existsSync(projectsRootDir)) return;
-	const suffix = `-${projectSlugSuffix(sessionId, clientId)}`;
-	for (const name of readdirSync(projectsRootDir)) {
-		const candidate = join(projectsRootDir, name);
-		if (candidate === currentProjectDir || !name.endsWith(suffix)) continue;
-		if (!projectDirectoryBelongsToSession(candidate, sessionId, suffix, name, clientId)) continue;
-		rmSync(candidate, { recursive: true, force: true });
-	}
-}
-
-export function migrateLegacyProjectDir(
-	projectsRootDir: string,
-	currentProjectDir: string,
-	sessionId: string,
-	clientId?: string,
-): void {
-	if (!existsSync(projectsRootDir) || projectDirectoryHasContent(currentProjectDir)) return;
-	const suffix = `-${projectSlugSuffix(sessionId, clientId)}`;
-	for (const name of readdirSync(projectsRootDir)) {
-		const candidate = join(projectsRootDir, name);
-		if (candidate === currentProjectDir) continue;
-		if (!projectDirectoryBelongsToSession(candidate, sessionId, suffix, name, clientId)) continue;
-		if (existsSync(currentProjectDir)) rmSync(currentProjectDir, { recursive: true, force: true });
-		renameSync(candidate, currentProjectDir);
-		rewriteMigratedProjectMetadata(currentProjectDir, candidate);
-		return;
-	}
-}
-
-export function deleteSessionAndProjects(
-	projectsRootDir: string,
-	sessionPath: string,
-	sessionId: string,
-	clientId?: string,
-): boolean {
-	let deleted = false;
-	if (existsSync(sessionPath)) {
-		rmSync(sessionPath, { force: true });
-		deleted = true;
-	}
-	const suffix = `-${projectSlugSuffix(sessionId, clientId)}`;
-	if (existsSync(projectsRootDir)) {
-		for (const name of readdirSync(projectsRootDir)) {
-			const projectPath = join(projectsRootDir, name);
-			if (projectDirectoryBelongsToSession(projectPath, sessionId, suffix, name, clientId)) {
-				rmSync(join(projectsRootDir, name), { recursive: true, force: true });
-				deleted = true;
-			}
-		}
-	}
-	return deleted;
-}
-
-function projectDirectoryBelongsToSession(
-	projectPath: string,
-	sessionId: string,
-	legacySuffix: string,
-	directoryName: string,
-	clientId?: string,
-): boolean {
-	const metadataPath = join(projectPath, PROJECT_METADATA_FILE);
-	if (existsSync(metadataPath)) {
-		try {
-			const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as {
-				clientId?: unknown;
-				sessionId?: unknown;
-			};
-			return metadata.sessionId === sessionId && (!clientId || metadata.clientId === clientId);
-		} catch {
-			return false;
-		}
-	}
-	return directoryName === `project${legacySuffix}` || directoryName.endsWith(legacySuffix);
-}
-
-function projectDirectoryHasContent(projectDir: string): boolean {
-	if (!existsSync(projectDir)) return false;
-	try {
-		return statSync(projectDir).isDirectory() && readdirSync(projectDir).length > 0;
-	} catch {
-		return false;
-	}
-}
-
-function rewriteMigratedProjectMetadata(projectDir: string, legacyProjectDir: string): void {
-	const metadataPath = join(projectDir, PROJECT_METADATA_FILE);
-	if (!existsSync(metadataPath)) return;
-	try {
-		const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
-		const nextProjectId = basename(projectDir);
-		metadata.projectId = nextProjectId;
-		metadata.projectRoot = projectDir;
-		if (typeof metadata.serveRoot === "string" && metadata.serveRoot.startsWith(legacyProjectDir)) {
-			metadata.serveRoot = `${projectDir}${metadata.serveRoot.slice(legacyProjectDir.length)}`;
-		}
-		writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
-	} catch {
-		// Ignore corrupt metadata; callers can still access migrated source files.
-	}
-}
-
-function projectSlugSuffix(sessionId: string, clientId?: string): string {
+export function sessionDirectory(clientsRootDir: string, sessionId: string, clientId: string): string {
+	const safeClientId = requiredSafePathId(clientId, "client");
 	const safeSessionId = requiredSafePathId(sessionId, "session");
-	if (!clientId) return safeSessionId.slice(0, 8);
+	const sessionDir = join(clientsRootDir, safeClientId, "sessions", safeSessionId);
+	assertInside(clientsRootDir, sessionDir);
+	return sessionDir;
+}
+
+export function deleteSessionWorkspace(clientsRootDir: string, sessionId: string, clientId: string): boolean {
+	const sessionDir = sessionDirectory(clientsRootDir, sessionId, clientId);
+	const existed = existsSync(sessionDir);
+	rmSync(sessionDir, { recursive: true, force: true });
+	return existed;
+}
+
+function projectSlugSuffix(sessionId: string, clientId: string): string {
+	const safeSessionId = requiredSafePathId(sessionId, "session");
 	const safeClientId = requiredSafePathId(clientId, "client");
 	return `${safeClientId.slice(0, 8)}-${safeSessionId.slice(0, 8)}`;
-}
-
-function optionalSafePathId(value: unknown, label: "client" | "session"): string | undefined {
-	if (value === undefined || value === null) return undefined;
-	const trimmed = String(value).trim();
-	if (!trimmed) return undefined;
-	return requiredSafePathId(trimmed, label);
 }
 
 function requiredSafePathId(value: string, label: "client" | "session"): string {

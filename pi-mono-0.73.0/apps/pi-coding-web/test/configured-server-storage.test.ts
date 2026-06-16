@@ -16,35 +16,22 @@ describe("configured server storage", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("sends X-PI-Client-ID on configured storage session and settings requests", async () => {
+	it("sends X-PI-Client-ID on configured storage settings requests", async () => {
 		const requests: Array<{ url: string; init?: RequestInit }> = [];
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 				requests.push({ url: String(input), init });
-				if (String(input).endsWith("/sessions")) return jsonResponse({ sessions: [] });
 				if (String(input).endsWith("/settings")) return jsonResponse({ version: 1, savedAt: "now" });
-				if (String(input).includes("/sessions/session-1")) {
-					return jsonResponse({
-						version: 1,
-						savedAt: "now",
-						data: { id: "session-1", messages: [] },
-						metadata: { id: "session-1", lastModified: "now" },
-					});
-				}
 				throw new Error(`Unexpected URL ${String(input)}`);
 			}),
 		);
 
 		const storage = new ConfiguredServerStorage();
-		await storage.listSessionMetadata();
-		await storage.readSession("session-1");
-		await storage.writeSession({ id: "session-1", messages: [] } as never, { id: "session-1" } as never);
-		await storage.deleteSession("session-1");
 		await storage.readSettings();
 		await storage.writeSettings({ currentSessionId: "session-1" });
 
-		expect(requests).toHaveLength(6);
+		expect(requests).toHaveLength(2);
 		for (const request of requests) {
 			expect(request.init?.headers).toMatchObject({ "X-PI-Client-ID": clientId });
 		}

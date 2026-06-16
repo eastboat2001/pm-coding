@@ -50,7 +50,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser, or use the 
 
 This image runs Vite preview instead of a static nginx server because the application depends on Vite server middleware for session storage, server-side project files, controlled project tasks, run APIs, and `/preview/<project-id>/` URLs.
 
-When deploying behind a domain or reverse proxy, set `PI_PREVIEW_BASE_URL` in `.env` to the public PI origin, for example `https://pi.example.com`. Keep `PI_REDIS_URL=redis://redis:6379` for compose deployment. Generated projects, sessions, runtime DB, Redis data, and diagnostic logs are stored under the mounted `docker/pi-coding-web/data` directory.
+When deploying behind a domain or reverse proxy, set `PI_PREVIEW_BASE_URL` in `.env` to the public PI origin, for example `https://pi.example.com`. Keep `PI_REDIS_URL=redis://redis:6379` for compose deployment. Generated project workspaces, the runtime SQLite DB, Redis data, and diagnostic logs are stored under the mounted `docker/pi-coding-web/data` directory.
 
 Useful deployment checks:
 
@@ -126,7 +126,7 @@ This application includes:
 
 - **ChatPanel** - The main chat interface component
 - **System Prompt** - Custom configuration for the AI assistant
-- **Server workspace tools** - The normal Web UI agent flow creates files and runs controlled static project tasks in a fixed server project root
+- **Server workspace tools** - The normal Web UI agent flow creates files and runs controlled static project tasks in a client/session-scoped server project directory
 - **Browser-private session persistence** - Active and recent sessions are restored from browser IndexedDB only
 - **Model persistence** - The selected model is remembered across refreshes and new sessions
 - **Configured server storage** - Model configuration and generated project files use fixed paths from `.env`
@@ -159,15 +159,14 @@ By default, it persists:
 - the last selected model
 - provider API keys and custom providers
 - settings under the configured settings file
-- generated project files under the configured projects root directory
+- generated project files under the configured clients root directory
 
 Temporary multi-user deployment behavior:
 
-- PI sessions are intentionally not written to or restored from the configured server `sessionsDir`.
-- The session list shows only sessions saved in the current browser.
-- A `session=<id>` URL only restores the session if that browser already has the session in IndexedDB.
-- This avoids exposing one user's chat history to another user on the same PI server.
-- The server-session sync code path is controlled by `PI_SERVER_SESSION_SYNC_ENABLED` in `.env` for a future authenticated deployment where sessions can be scoped by user.
+- PI chat sessions are intentionally not written to or restored from legacy file-backed session JSON.
+- Runtime sessions, messages, runs, and run events are stored in SQLite and scoped by `X-PI-Client-ID`.
+- Browser IndexedDB keeps a local session cache for immediate UI restore.
+- A `session=<id>` URL restores from runtime SQLite when available, then falls back to that browser's IndexedDB cache.
 
 Behavioral details:
 
@@ -191,13 +190,13 @@ The application uses the Vite dev/preview server for generated project files, pr
 
 ### How it works
 
-- Browser IndexedDB is the only active session store in the current temporary multi-user mode.
-- Saved chat sessions are not mirrored to disk while `PI_SERVER_SESSION_SYNC_ENABLED=false`.
-- The session list only reads browser-backed records.
+- Runtime SQLite is the authoritative server-side session store.
+- Browser IndexedDB remains a local cache for session metadata and immediate restore.
+- Session JSON mirroring is disabled and no longer configurable.
 - The Web UI agent can call read-only global skill tools: `skill_load` and `skill_resource`.
 - The Web UI agent can call server workspace tools: `project_file` and `project_task`.
 - Global skills are loaded from the configured `skillsDir`; they provide instructions and reference text only, not script execution or arbitrary filesystem access.
-- Project files are written directly under the configured project root on the server.
+- Project files are written directly under the client/session project directory on the server.
 - `project_task` supports only controlled static tasks: `inspect`, `validate`, `build_static`, `preview`, and `logs`.
 - Built-in browser artifacts are disabled for project generation in this application.
 
@@ -206,12 +205,11 @@ The application uses the Vite dev/preview server for generated project files, pr
 Edit `.env`:
 
 ```env
-PI_SESSIONS_DIR=./data/sessions
 PI_SETTINGS_FILE=./data/settings.json
-PI_PROJECTS_ROOT_DIR=./data/projects
+PI_CLIENTS_ROOT_DIR=./data/clients
+PI_DB_FILE=./data/runtime/pi-runtime.sqlite
 PI_SKILLS_DIR=./data/skills
 PI_PREVIEW_BASE_URL=
-PI_SERVER_SESSION_SYNC_ENABLED=false
 PI_DEFAULT_MODEL_PROVIDER=
 PI_DEFAULT_MODEL_ID=
 PI_HANDOFF_DEFAULT_THINKING_LEVEL=high
@@ -226,9 +224,10 @@ Relative paths are resolved from `apps/pi-coding-web/`. Absolute paths are also 
 The application writes:
 
 - `<settingsFile>`
-- one project root directory per generated project under `projectsRootDir`
+- runtime session records to `<runtimeDbFile>`
+- generated project files under `<clientsRootDir>/<clientId>/sessions/<sessionId>/project`
 
-`sessionsDir` is reserved for the future authenticated server-session mode. It is not used while browser-private sessions are enabled.
+The runtime layout uses `clientsRootDir` for project workspaces and `runtimeDbFile` for SQLite-backed sessions and runs.
 
 `skillsDir` stores server-configured global skills. The first version supports directory-style skills only:
 
@@ -242,7 +241,7 @@ PI supports Anthropic/Agent Skills style directory resources such as `references
 
 With the default configuration, runtime data stays inside `apps/pi-coding-web/data/` and remains decoupled from any PM application directory.
 
-Project directory names are generated from a sanitized session title plus a stable session-id suffix, so multiple generated projects do not collide.
+Project directory names are stable per client and session and do not include the mutable session title.
 
 ## PM Handoff
 
@@ -252,7 +251,7 @@ The PM app can open this PI Web UI with a short-lived handoff token:
 /?handoff_token=<token>&pm_api_base_url=<pm-backend-base-url>
 ```
 
-PI resolves the token through PM, downloads the PRD/design documents as attachments, and places the PM implementation prompt into the chat input. The PM prompt and documents are treated as the primary requirement source. PI's own handoff instructions only describe platform execution: write files into the configured project root, run controlled static project tasks when useful, publish with `project_task preview`, and return the Preview URL.
+PI resolves the token through PM, downloads the PRD/design documents as attachments, and places the PM implementation prompt into the chat input. The PM prompt and documents are treated as the primary requirement source. PI's own handoff instructions only describe platform execution: write files into the client/session project directory, run controlled static project tasks when useful, publish with `project_task preview`, and return the Preview URL.
 
 For the current stage, PM demos should target static HTML/CSS/JS projects or build-based static frontend projects such as Vite React/Vue. Backend services, databases, auth providers, queues, external APIs, and deployment topology from PM documents are treated as target-system context and should be simulated in the static frontend with sample data, local state, mock responses, and clear loading/empty/error/success states. Node services, multi-service stacks, Docker, external databases, and custom reverse-proxy routing are outside the current preview scope.
 

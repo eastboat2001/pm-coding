@@ -59,13 +59,13 @@ export class WorkspaceDiagnosticExportService {
 				includeSettings,
 				maxDiagnosticEvents: diagnosticEvents.limit,
 			},
-			runtime: {
-				session: session ?? null,
-				messages: session ? this.runtimeDb.listMessages(clientId, sessionId) : [],
-				runs,
-				runEventsByRunId: collectRunEvents(this.runtimeDb, clientId, runs),
-				sessionFile: this.sessions.readSession(sessionId, clientId) ?? null,
-			},
+				runtime: {
+					session: session ?? null,
+					messages: session ? this.runtimeDb.listMessages(clientId, sessionId) : [],
+					runs,
+					runEventsByRunId: collectRunEvents(this.runtimeDb, clientId, runs),
+					sessionFile: null,
+				},
 			diagnostics: {
 				status: this.diagnostics.status(),
 				...diagnosticEvents,

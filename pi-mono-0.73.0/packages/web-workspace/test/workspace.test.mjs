@@ -46,6 +46,7 @@ function testConfig(root, overrides = {}) {
 		promptSnapshotMaxChars: 20000,
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 20000,
+		modelStreamIdleTimeoutMs: 60000,
 		logRetentionDays: 30,
 		logMaxEvents: 50000,
 		logCleanupIntervalMs: 3600000,
@@ -107,6 +108,7 @@ await test("loadStorageConfig reads .env from the app root and strips preview tr
 	assert.equal(config.promptSnapshotMaxChars, 20000);
 	assert.equal(config.modelOutputSnapshotLoggingEnabled, false);
 	assert.equal(config.modelOutputSnapshotMaxChars, 20000);
+	assert.equal(config.modelStreamIdleTimeoutMs, 60000);
 	assert.equal(config.logRetentionDays, 30);
 	assert.equal(config.logMaxEvents, 50000);
 	assert.equal(config.logCleanupIntervalMs, 3600000);
@@ -281,6 +283,7 @@ await test("loadStorageConfig supports diagnostic log and Langfuse env settings"
 			"PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS=5678",
 			"PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true",
 			"PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS=8765",
+			"PI_MODEL_STREAM_IDLE_TIMEOUT_MS=2345",
 			"PI_LOG_RETENTION_DAYS=7",
 			"PI_LOG_MAX_EVENTS=4321",
 			"PI_LOG_CLEANUP_INTERVAL_MS=111",
@@ -314,6 +317,7 @@ await test("loadStorageConfig supports diagnostic log and Langfuse env settings"
 	assert.equal(config.promptSnapshotMaxChars, 5678);
 	assert.equal(config.modelOutputSnapshotLoggingEnabled, true);
 	assert.equal(config.modelOutputSnapshotMaxChars, 8765);
+	assert.equal(config.modelStreamIdleTimeoutMs, 2345);
 	assert.equal(config.logRetentionDays, 7);
 	assert.equal(config.logMaxEvents, 4321);
 	assert.equal(config.logCleanupIntervalMs, 111);
@@ -396,6 +400,16 @@ await test("WorkspaceDiagnosticLogService reports disabled status without writin
 	const status = service.status();
 	assert.equal(status.enabled, false);
 	assert.equal(status.eventCount, 0);
+});
+
+await test("WorkspaceDiagnosticLogService reports configured model stream idle timeout", () => {
+	const root = tempRoot();
+	const service = new WorkspaceDiagnosticLogService(testConfig(root, { modelStreamIdleTimeoutMs: 2345 }));
+	service.ensureDirs();
+
+	const status = service.status();
+
+	assert.equal(status.modelStreamIdleTimeoutMs, 2345);
 });
 
 await test("WorkspaceDiagnosticLogService prunes old events and caps retained rows", () => {

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import type { Connect, Plugin } from "vite";
+import { AppPreviewGoalService } from "./app-preview-goal-service.js";
 import { normalizeClientId, readClientIdHeader } from "./client-id.js";
 import { loadStorageConfig } from "./config.js";
 import {
@@ -20,6 +21,7 @@ import { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunQueue } from "./run-queue.js";
 import { RuntimeDbStore } from "./runtime-db.js";
 import type {
+	AppPreviewGoalSource,
 	DiagnosticLogEventInput,
 	DiagnosticLogQuery,
 	DiagnosticLogWriteRequest,
@@ -53,6 +55,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 	const tasks = new WorkspaceTaskService(config, previews, undefined, diagnostics);
 	const skills = new WorkspaceSkillService(config, diagnostics);
 	const runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
+	const appPreviewGoals = new AppPreviewGoalService(runtimeDb);
 	const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
 	const runQueue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
 	const runApi = new WorkspaceRunApiService(
@@ -83,6 +86,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 				return deleteSessionWorkspace(config.clientsRootDir, sessionId, clientId);
 			},
 		},
+		appPreviewGoals,
 	);
 	let startupDiagnosticsWritten = false;
 
@@ -214,6 +218,7 @@ export function createStartupDiagnosticEvents(config: StorageConfig): Diagnostic
 				loggingEnabled: config.loggingEnabled,
 				logStdoutEnabled: config.logStdoutEnabled,
 				logsDbFile: config.logsDbFile,
+				modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
 			},
 		},
 	];
@@ -384,6 +389,7 @@ async function handleStorageApi(
 			promptSnapshotMaxChars: config.promptSnapshotMaxChars,
 			modelOutputSnapshotLoggingEnabled: config.modelOutputSnapshotLoggingEnabled,
 			modelOutputSnapshotMaxChars: config.modelOutputSnapshotMaxChars,
+			modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
 			logRetentionDays: config.logRetentionDays,
 			logMaxEvents: config.logMaxEvents,
 			logCleanupIntervalMs: config.logCleanupIntervalMs,
@@ -552,6 +558,32 @@ async function handleRuntimeRunsApi(
 			return;
 		}
 
+		if (method === "GET" && route === "/goals/app-preview") {
+			const sessionId = queryString(url, "sessionId");
+			if (!sessionId) throw new RunApiError("sessionId is required", 400);
+			const afterEventId = queryNumber(url, "afterEventId") ?? 0;
+			sendJson(res, {
+				goal: runApi.getAppPreviewGoal(clientId, sessionId) ?? null,
+				events: runApi.listAppPreviewGoalEvents(clientId, sessionId, afterEventId),
+			});
+			return;
+		}
+
+		if (method === "POST" && route === "/goals/app-preview") {
+			const body = await readJsonBody(req);
+			const sessionId = normalizeRequiredBodyString(body.sessionId, "sessionId");
+			const source = normalizeAppPreviewGoalSource(body.source);
+			sendJson(res, { goal: runApi.enableAppPreviewGoal(clientId, sessionId, source) ?? null });
+			return;
+		}
+
+		if (method === "POST" && route === "/goals/app-preview/disable") {
+			const body = await readJsonBody(req);
+			const sessionId = normalizeRequiredBodyString(body.sessionId, "sessionId");
+			sendJson(res, { goal: runApi.disableAppPreviewGoal(clientId, sessionId) ?? null });
+			return;
+		}
+
 		const eventsMatch = route.match(/^\/([^/]+)\/events$/);
 		if (method === "GET" && eventsMatch) {
 			const runId = decodeURIComponent(eventsMatch[1]);
@@ -669,6 +701,17 @@ function toDiagnosticLogQuery(url: URL): DiagnosticLogQuery {
 		eventType: queryString(url, "eventType"),
 		limit: queryNumber(url, "limit"),
 	};
+}
+
+function normalizeRequiredBodyString(value: unknown, field: string): string {
+	if (typeof value === "string" && value.trim()) return value.trim();
+	throw new RunApiError(`${field} is required`, 400);
+}
+
+function normalizeAppPreviewGoalSource(value: unknown): AppPreviewGoalSource {
+	if (value === undefined) return "manual";
+	if (value === "manual" || value === "pm_handoff") return value;
+	throw new RunApiError("source must be manual or pm_handoff", 400);
 }
 
 function queryString(url: URL, key: string): string | undefined {

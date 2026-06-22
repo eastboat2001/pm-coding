@@ -2,12 +2,14 @@ import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { ToolResultMessage } from "@mariozechner/pi-ai";
 import { html, LitElement } from "lit";
 import { property, state } from "lit/decorators.js";
+import "./TransientStatusIndicator.js";
 
 export class StreamingMessageContainer extends LitElement {
 	@property({ type: Array }) tools: AgentTool[] = [];
 	@property({ type: Boolean }) isStreaming = false;
 	@property({ type: Object }) pendingToolCalls?: ReadonlySet<string>;
 	@property({ type: Object }) toolResultsById?: Map<string, ToolResultMessage>;
+	@property({ type: String }) statusText = "";
 	@property({ attribute: false }) onCostClick?: () => void;
 
 	@state() private _message: AgentMessage | null = null;
@@ -22,6 +24,12 @@ export class StreamingMessageContainer extends LitElement {
 	override connectedCallback(): void {
 		super.connectedCallback();
 		this.style.display = "block";
+	}
+
+	private renderStatus() {
+		return this.statusText
+			? html`<transient-status-indicator .statusText=${this.statusText}></transient-status-indicator>`
+			: "";
 	}
 
 	// Public method to update the message with batching for performance
@@ -65,6 +73,7 @@ export class StreamingMessageContainer extends LitElement {
 		if (!this._message) {
 			if (this.isStreaming)
 				return html`<div class="flex flex-col gap-3 mb-3">
+					${this.renderStatus()}
 					<span class="mx-4 inline-block w-2 h-4 bg-muted-foreground animate-pulse"></span>
 				</div>`;
 			return html``; // Empty until a message is set
@@ -81,6 +90,7 @@ export class StreamingMessageContainer extends LitElement {
 			// Assistant message - render inline tool messages during streaming
 			return html`
 				<div class="flex flex-col gap-3 mb-3">
+					${this.renderStatus()}
 					<assistant-message
 						.message=${msg}
 						.tools=${this.tools}

@@ -58,6 +58,7 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		promptSnapshotMaxChars: positiveIntegerValue(env("PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS"), 20000),
 		modelOutputSnapshotLoggingEnabled: envBooleanValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED")) ?? false,
 		modelOutputSnapshotMaxChars: positiveIntegerValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS"), 20000),
+		modelStreamIdleTimeoutMs: positiveIntegerValue(env("PI_MODEL_STREAM_IDLE_TIMEOUT_MS"), 60000),
 		logRetentionDays: nonNegativeIntegerValue(env("PI_LOG_RETENTION_DAYS"), 30),
 		logMaxEvents: nonNegativeIntegerValue(env("PI_LOG_MAX_EVENTS"), 50000),
 		logCleanupIntervalMs: nonNegativeIntegerValue(env("PI_LOG_CLEANUP_INTERVAL_MS"), 3600000),

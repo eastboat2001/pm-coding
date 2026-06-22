@@ -243,7 +243,7 @@ async function runLoop(
 			}
 
 			// Check for tool calls
-			const toolCalls = message.content.filter((c) => c.type === "toolCall");
+			const toolCalls = message.stopReason === "toolUse" ? message.content.filter((c) => c.type === "toolCall") : [];
 
 			const toolResults: ToolResultMessage[] = [];
 			hasMoreToolCalls = false;

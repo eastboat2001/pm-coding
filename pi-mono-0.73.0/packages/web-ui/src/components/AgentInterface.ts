@@ -2,7 +2,7 @@ import { streamSimple, type ToolResultMessage, type Usage } from "@mariozechner/
 import { html, LitElement } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import { ModelSelector } from "../dialogs/ModelSelector.js";
-import type { MessageEditor } from "./MessageEditor.js";
+import type { MessageEditor, MessageEditorExtensionAction } from "./MessageEditor.js";
 import "./MessageEditor.js";
 import "./MessageList.js";
 import "./Messages.js"; // Import for side effects to register the custom elements
@@ -37,7 +37,11 @@ export class AgentInterface extends LitElement {
 	@property({ attribute: false }) onModelSelect?: () => void;
 	// Optional callback called after the thinking level changes
 	@property({ attribute: false }) onThinkingChange?: (level: ThinkingLevel) => void | Promise<void>;
+	@property({ attribute: false }) extensionActions: MessageEditorExtensionAction[] = [];
 	@property({ attribute: false }) slashSuggestions: SlashSuggestionItem[] = [];
+	@property({ type: String }) transientStatusText = "";
+	@property({ type: String }) appPreviewGoalStatusText = "";
+	@property({ type: String }) appPreviewGoalStatusDetail = "";
 
 	// References
 	@query("message-editor") private _messageEditor!: MessageEditor;
@@ -310,14 +314,15 @@ export class AgentInterface extends LitElement {
 				></message-list>
 
 				<!-- Streaming message container - manages its own updates -->
-				<streaming-message-container
-					class="${state.isStreaming ? "" : "hidden"}"
-					.tools=${state.tools}
-					.isStreaming=${state.isStreaming}
-					.pendingToolCalls=${state.pendingToolCalls}
-					.toolResultsById=${toolResultsById}
-					.onCostClick=${this.onCostClick}
-				></streaming-message-container>
+					<streaming-message-container
+						class="${state.isStreaming ? "" : "hidden"}"
+						.tools=${state.tools}
+						.isStreaming=${state.isStreaming}
+						.pendingToolCalls=${state.pendingToolCalls}
+						.toolResultsById=${toolResultsById}
+						.statusText=${this.transientStatusText}
+						.onCostClick=${this.onCostClick}
+					></streaming-message-container>
 			</div>
 		`;
 	}
@@ -371,6 +376,20 @@ export class AgentInterface extends LitElement {
 		`;
 	}
 
+	private renderAppPreviewGoalStatus() {
+		if (!this.appPreviewGoalStatusText) return "";
+		return html`
+			<div class="mb-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+				<div class="font-medium text-foreground">${this.appPreviewGoalStatusText}</div>
+				${
+					this.appPreviewGoalStatusDetail
+						? html`<div class="mt-0.5 text-xs text-muted-foreground">${this.appPreviewGoalStatusDetail}</div>`
+						: ""
+				}
+			</div>
+		`;
+	}
+
 	override render() {
 		if (!this.session)
 			return html`<div class="p-4 text-center text-muted-foreground">${i18n("No session set")}</div>`;
@@ -387,6 +406,7 @@ export class AgentInterface extends LitElement {
 				<!-- Input Area -->
 				<div class="shrink-0">
 					<div class="max-w-3xl mx-auto px-2">
+						${this.renderAppPreviewGoalStatus()}
 						<message-editor
 							.isStreaming=${state.isStreaming}
 							.currentModel=${state.model}
@@ -394,6 +414,7 @@ export class AgentInterface extends LitElement {
 							.showAttachmentButton=${this.enableAttachments}
 							.showModelSelector=${this.enableModelSelector}
 							.showThinkingSelector=${this.enableThinkingSelector}
+							.extensionActions=${this.extensionActions}
 							.slashSuggestions=${this.slashSuggestions}
 							.onSend=${(input: string, attachments: Attachment[]) => {
 								this.sendMessage(input, attachments);

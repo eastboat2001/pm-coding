@@ -56,6 +56,10 @@ function downgradeUnsupportedImages<TApi extends Api>(messages: Message[], model
 	});
 }
 
+function isValidToolCall(toolCall: ToolCall): boolean {
+	return toolCall.id.trim().length > 0 && toolCall.name.trim().length > 0;
+}
+
 /**
  * Normalize tool call ID for cross-provider compatibility.
  * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
@@ -123,6 +127,7 @@ export function transformMessages<TApi extends Api>(
 
 				if (block.type === "toolCall") {
 					const toolCall = block as ToolCall;
+					if (assistantMsg.stopReason !== "toolUse" || !isValidToolCall(toolCall)) return [];
 					let normalizedToolCall: ToolCall = toolCall;
 
 					if (!isSameModel && toolCall.thoughtSignature) {
@@ -202,6 +207,9 @@ export function transformMessages<TApi extends Api>(
 
 			result.push(msg);
 		} else if (msg.role === "toolResult") {
+			if (!pendingToolCalls.some((toolCall) => toolCall.id === msg.toolCallId)) {
+				continue;
+			}
 			existingToolResultIds.add(msg.toolCallId);
 			result.push(msg);
 		} else if (msg.role === "user") {

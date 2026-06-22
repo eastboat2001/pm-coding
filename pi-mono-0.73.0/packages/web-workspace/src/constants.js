@@ -1,0 +1,13 @@
+export const API_PREFIX = "/api/pi-storage";
+export const PROJECTS_API_PREFIX = "/api/pi-projects";
+export const SKILLS_API_PREFIX = "/api/pi-skills";
+export const LOGS_API_PREFIX = "/api/pi-logs";
+export const SESSIONS_API_PREFIX = "/api/pi-sessions";
+export const RUNS_API_PREFIX = "/api/pi-runs";
+export const PREVIEW_PREFIX = "/preview";
+export const CONFIG_ENV_FILE = ".env";
+export const PROJECT_MANIFEST_FILE = ".pi-project-files.json";
+export const PROJECT_METADATA_FILE = ".pi-project.json";
+export const PROJECT_FILE_GET_MAX_BYTES = 512 * 1024;
+export const PROJECT_LOG_MAX_CHARS = 64 * 1024;
+//# sourceMappingURL=constants.js.map

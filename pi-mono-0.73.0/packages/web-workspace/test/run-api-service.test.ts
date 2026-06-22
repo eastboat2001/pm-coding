@@ -2,9 +2,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AppPreviewGoalService } from "../src/app-preview-goal-service.js";
 import { RunApiError, WorkspaceRunApiService } from "../src/run-api-service.js";
 import { type ClaimedRun, InMemoryRunQueue, type RunQueue, type RunQueueItem } from "../src/run-queue.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
+import type { StartRunRequest } from "../src/types.js";
 
 describe("WorkspaceRunApiService", () => {
 	let db: RuntimeDbStore;
@@ -220,6 +222,176 @@ describe("WorkspaceRunApiService", () => {
 		expect(result.run.status).toBe("queued");
 		expect(db.listMessages("client-a", "session-continue").map((message) => message.role)).toEqual(["toolResult"]);
 		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
+	});
+
+	it("enables an app preview goal from startRun only after enqueue succeeds", async () => {
+		const goals = new AppPreviewGoalService(db);
+		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
+
+		const result = await goalService.startRun("client-a", {
+			sessionId: "session-goal",
+			title: "Preview app",
+			message: { content: "build preview" },
+			model: {},
+			thinkingLevel: "high",
+			appPreviewGoal: { enabled: true, source: "pm_handoff" },
+		});
+
+		expect(goalService.getAppPreviewGoal("client-a", "session-goal")).toEqual(
+			expect.objectContaining({
+				clientId: "client-a",
+				sessionId: "session-goal",
+				source: "pm_handoff",
+				status: "active",
+				maxContinuationRuns: 8,
+				lastRunId: result.run.runId,
+			}),
+		);
+		expect(goalService.listAppPreviewGoalEvents("client-a", "session-goal")).toEqual([
+			expect.objectContaining({
+				eventType: "goal_started",
+				reasonCode: "enabled",
+				runId: result.run.runId,
+			}),
+		]);
+
+		const failingQueue = new FailingRunQueue();
+		const failingGoalService = new WorkspaceRunApiService(db, failingQueue, undefined, undefined, undefined, goals);
+		await expect(
+			failingGoalService.startRun("client-b", {
+				sessionId: "session-goal",
+				title: "Preview app",
+				message: { content: "build preview" },
+				model: {},
+				thinkingLevel: "high",
+				appPreviewGoal: { enabled: true, source: "pm_handoff" },
+			}),
+		).rejects.toMatchObject({ statusCode: 503 });
+		expect(failingGoalService.getAppPreviewGoal("client-b", "session-goal")).toBeUndefined();
+	});
+
+	it("rejects startRun app preview goals with a missing source before creating work", async () => {
+		const goals = new AppPreviewGoalService(db);
+		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
+		const request = {
+			sessionId: "session-missing-source",
+			title: "Preview app",
+			message: { content: "build preview" },
+			model: {},
+			thinkingLevel: "high",
+			appPreviewGoal: { enabled: true },
+		} as unknown as StartRunRequest;
+
+		await expect(goalService.startRun("client-a", request)).rejects.toMatchObject({ statusCode: 400 });
+
+		await expect(queue.claim("worker-1", 1)).resolves.toBeUndefined();
+		expect(db.listRunsForSession("client-a", "session-missing-source")).toEqual([]);
+		expect(goalService.getAppPreviewGoal("client-a", "session-missing-source")).toBeUndefined();
+	});
+
+	it("rejects startRun app preview goals with an illegal source before creating work", async () => {
+		const goals = new AppPreviewGoalService(db);
+		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
+		const request = {
+			sessionId: "session-illegal-source",
+			title: "Preview app",
+			message: { content: "build preview" },
+			model: {},
+			thinkingLevel: "high",
+			appPreviewGoal: { enabled: true, source: "bogus" },
+		} as unknown as StartRunRequest;
+
+		await expect(goalService.startRun("client-a", request)).rejects.toMatchObject({ statusCode: 400 });
+
+		await expect(queue.claim("worker-1", 1)).resolves.toBeUndefined();
+		expect(db.listRunsForSession("client-a", "session-illegal-source")).toEqual([]);
+		expect(goalService.getAppPreviewGoal("client-a", "session-illegal-source")).toBeUndefined();
+	});
+
+	it("exposes app preview goal helpers for manual enable and disable", () => {
+		const goals = new AppPreviewGoalService(db);
+		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
+		db.createSession({
+			clientId: "client-a",
+			sessionId: "session-manual",
+			title: "Manual preview",
+			model: {},
+			thinkingLevel: "high",
+		});
+
+		const enabled = goalService.enableAppPreviewGoal("client-a", "session-manual", "manual");
+
+		expect(enabled).toEqual(
+			expect.objectContaining({
+				clientId: "client-a",
+				sessionId: "session-manual",
+				source: "manual",
+				status: "active",
+				maxContinuationRuns: 5,
+			}),
+		);
+		expect(goalService.getAppPreviewGoal("client-a", "session-manual")?.status).toBe("active");
+		const startedEvents = goalService.listAppPreviewGoalEvents("client-a", "session-manual");
+		expect(startedEvents).toEqual([
+			expect.objectContaining({ eventType: "goal_started", reasonCode: "enabled" }),
+		]);
+
+		const disabled = goalService.disableAppPreviewGoal("client-a", "session-manual");
+
+		expect(disabled).toEqual(expect.objectContaining({ status: "disabled" }));
+		expect(goalService.getAppPreviewGoal("client-a", "session-manual")?.status).toBe("disabled");
+		expect(
+			goalService.listAppPreviewGoalEvents("client-a", "session-manual", startedEvents[0]?.eventId),
+		).toEqual([expect.objectContaining({ eventType: "goal_disabled", reasonCode: "user_disabled" })]);
+	});
+
+	it("returns not found when manually enabling an app preview goal for a missing session", () => {
+		const goals = new AppPreviewGoalService(db);
+		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
+
+		let thrown: unknown;
+		try {
+			goalService.enableAppPreviewGoal("client-a", "missing-session", "manual");
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(thrown).toBeInstanceOf(RunApiError);
+		expect(thrown).toMatchObject({ message: "Runtime session not found", statusCode: 404 });
+		expect(goalService.getAppPreviewGoal("client-a", "missing-session")).toBeUndefined();
+	});
+
+	it("updates app preview goal lastRunId for continuation run requests", async () => {
+		const goals = new AppPreviewGoalService(db);
+		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
+		const first = await goalService.startRun("client-a", {
+			sessionId: "session-continue-goal",
+			title: "Preview app",
+			message: { content: "build preview" },
+			model: {},
+			thinkingLevel: "high",
+			appPreviewGoal: { enabled: true, source: "manual" },
+		});
+		await queue.claim("worker-1", 1);
+		db.updateRunStatus(first.run.runId, "client-a", "completed");
+
+		const continuation = await goalService.startRun("client-a", {
+			sessionId: "session-continue-goal",
+			model: {},
+			thinkingLevel: "high",
+			appPreviewGoal: { enabled: true, source: "manual" },
+		});
+
+		expect(goalService.getAppPreviewGoal("client-a", "session-continue-goal")).toEqual(
+			expect.objectContaining({
+				source: "manual",
+				status: "active",
+				lastRunId: continuation.run.runId,
+			}),
+		);
+		expect(
+			goalService.listAppPreviewGoalEvents("client-a", "session-continue-goal").map((event) => event.runId),
+		).toEqual([first.run.runId, continuation.run.runId]);
 	});
 
 	it("lists, details, deletes, runs, cancels, and events with client isolation", async () => {

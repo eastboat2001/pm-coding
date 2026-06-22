@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:worker": "tsgo -p tsconfig.worker.json",
+    "build:worker": "npm run build --workspace=@mariozechner/pi-web-workspace && tsgo -p tsconfig.worker.json",
     "preview": "vite preview",
     "worker": "node dist-worker/worker/main.js",
     "logs": "node scripts/pi-logs.mjs",

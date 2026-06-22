@@ -71,4 +71,99 @@ describe("AgentInterface", () => {
 		expect(editor.value).toBe("resume work");
 		expect(editor.attachments).toEqual([attachment]);
 	});
+
+	it("renders transient streaming status text before a message is available", async () => {
+		const { StreamingMessageContainer } = await import("../src/components/StreamingMessageContainer.js");
+		const element = Object.create(StreamingMessageContainer.prototype) as InstanceType<
+			typeof StreamingMessageContainer
+		> & {
+			_message: null;
+			isStreaming: boolean;
+			statusText: string;
+		};
+		Object.defineProperty(element, "_message", { configurable: true, value: null });
+		Object.defineProperty(element, "isStreaming", { configurable: true, value: true });
+		Object.defineProperty(element, "statusText", { configurable: true, value: "Retrying request... (1/5)" });
+
+		const template = element.render() as unknown as { values?: unknown[] };
+
+		expect(templateValues(template)).toContain("Retrying request... (1/5)");
+	});
+
+	it("keeps transient streaming status visible while an assistant message is streaming", async () => {
+		const { StreamingMessageContainer } = await import("../src/components/StreamingMessageContainer.js");
+		const element = Object.create(StreamingMessageContainer.prototype) as InstanceType<
+			typeof StreamingMessageContainer
+		> & {
+			_message: unknown;
+			isStreaming: boolean;
+			statusText: string;
+			tools: unknown[];
+			pendingToolCalls: Set<string>;
+			toolResultsById: Map<string, unknown>;
+		};
+		Object.defineProperty(element, "_message", {
+			configurable: true,
+			value: { role: "assistant", content: "Thinking..." },
+		});
+		Object.defineProperty(element, "isStreaming", { configurable: true, value: true });
+		Object.defineProperty(element, "statusText", { configurable: true, value: "Retrying request... (2/5)" });
+		Object.defineProperty(element, "tools", { configurable: true, value: [] });
+		Object.defineProperty(element, "pendingToolCalls", { configurable: true, value: new Set<string>() });
+		Object.defineProperty(element, "toolResultsById", { configurable: true, value: new Map<string, unknown>() });
+
+		const template = element.render() as unknown as { values?: unknown[] };
+
+		expect(templateValues(template)).toContain("Retrying request... (2/5)");
+	});
+
+	it("renders app preview goal status separately from transient streaming status", async () => {
+		const { AgentInterface } = await import("../src/components/AgentInterface.js");
+		const element = Object.create(AgentInterface.prototype) as InstanceType<typeof AgentInterface> & {
+			appPreviewGoalStatusText: string;
+			appPreviewGoalStatusDetail: string;
+			session: unknown;
+		};
+		Object.defineProperty(element, "session", {
+			configurable: true,
+			value: {
+				state: {
+					messages: [],
+					tools: [],
+					pendingToolCalls: new Set<string>(),
+					isStreaming: false,
+					model: { provider: "openai", id: "gpt-5" } satisfies Model<unknown>,
+					thinkingLevel: "high",
+				},
+				abort: vi.fn(),
+			},
+		});
+		Object.defineProperty(element, "extensionActions", { configurable: true, value: [] });
+		Object.defineProperty(element, "slashSuggestions", { configurable: true, value: [] });
+		Object.defineProperty(element, "enableAttachments", { configurable: true, value: true });
+		Object.defineProperty(element, "enableModelSelector", { configurable: true, value: true });
+		Object.defineProperty(element, "enableThinkingSelector", { configurable: true, value: true });
+		Object.defineProperty(element, "showThemeToggle", { configurable: true, value: false });
+		Object.defineProperty(element, "appPreviewGoalStatusText", {
+			configurable: true,
+			value: "Continuing preview generation",
+		});
+		Object.defineProperty(element, "appPreviewGoalStatusDetail", {
+			configurable: true,
+			value: "Preview access check did not pass.",
+		});
+
+		const template = element.render() as unknown as { values?: unknown[] };
+
+		expect(templateValues(template)).toContain("Continuing preview generation");
+		expect(templateValues(template)).toContain("Preview access check did not pass.");
+	});
 });
+
+function templateValues(value: unknown): unknown[] {
+	if (!value || typeof value !== "object") return [];
+	const values = Array.isArray((value as { values?: unknown[] }).values)
+		? (value as { values: unknown[] }).values
+		: [];
+	return values.flatMap((entry) => [entry, ...templateValues(entry)]);
+}

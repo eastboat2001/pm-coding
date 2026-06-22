@@ -7,18 +7,26 @@
 - `docker-compose.yaml`：服务器运行用 Compose 文件，只运行已有镜像。
 - `docker-compose.build.yaml`：有完整源码时用于本地构建镜像。
 - `.env.example`：统一配置模板，复制为 `.env` 后使用。
-- `data/`：服务器运行数据目录，挂载到容器内 `/app/apps/pi-coding-web/data`。
+- `pi-coding-web-data`：Compose named volume，挂载到容器内 `/app/apps/pi-coding-web/data`，保存 PI 会话、项目和日志。
+- `pi-redis-data`：Compose named volume，挂载到 Redis `/data`。
 - `pi-coding-web-offline-0.73.0.tar`：可选的离线镜像包，包含 `pi-coding-web:0.73.0` 和 `redis:7-alpine`，由 `docker save` 生成，不应提交到 Git。
 
 ## 服务器前置条件
 
-服务器需要安装 Docker Engine 和 Docker Compose Plugin。
+服务器需要安装 Docker Engine 和 Docker Compose Plugin，或者 Podman + podman-compose。
 
 检查命令：
 
 ```bash
 docker --version
 docker compose version
+```
+
+Podman 环境检查命令：
+
+```bash
+podman --version
+podman compose version
 ```
 
 如果服务器不能访问 npm 或 Docker registry，建议在开发机或构建机先构建镜像并导出 tar，再复制到服务器。
@@ -56,7 +64,7 @@ LANGFUSE_SECRET_KEY=
 - `PI_LANGFUSE_ENABLED`：是否启用 Langfuse 导出。
 - `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：Langfuse 密钥。`PI_LANGFUSE_ENABLED=false` 时可以留空。
 
-Docker 部署统一使用一个 `.env`。这个文件同时给 Docker Compose 提供镜像名、端口等部署变量，也作为 PI 的运行时配置文件被只读挂载到容器内。`.env` 已被 Git 忽略，不要提交真实密钥。
+Docker/Podman 部署统一使用一个 `.env`。这个文件同时给 Compose 提供镜像名、端口等部署变量，并通过 `env_file` 注入到容器进程环境。不要再把 `.env` bind mount 到 `/app/apps/pi-coding-web/.env`；rootless Podman 或受限文件系统下可能导致容器内读取 `.env` 报 `EACCES: permission denied`。`.env` 已被 Git 忽略，不要提交真实密钥。
 
 建议：
 
@@ -114,7 +122,6 @@ docker save -o docker/pi-coding-web/pi-coding-web-offline-0.73.0.tar pi-coding-w
   docker-compose.yaml
   .env
   pi-coding-web-offline-0.73.0.tar
-  data/
 ```
 
 在服务器加载镜像：
@@ -126,6 +133,39 @@ docker compose up -d --no-build
 ```
 
 `--no-build` 可以避免离线服务器误尝试构建源码。
+
+## 数据卷与 Podman 权限
+
+默认 `docker-compose.yaml` 使用 Compose named volumes，而不是把宿主机 `./data` 目录直接 bind mount 到容器内：
+
+```yaml
+volumes:
+  pi-coding-web-data:
+  pi-redis-data:
+```
+
+这样可以避免 rootless Podman、SELinux、NFS 或受限企业文件系统下的常见权限错误：
+
+```text
+EACCES: permission denied, mkdir '/app/apps/pi-coding-web/data/clients'
+EACCES: permission denied, open '/app/apps/pi-coding-web/.env'
+chown: .: Operation not permitted
+```
+
+如果你使用 Podman，Compose 项目名会参与 volume 名称。可以用下面命令确认真实 volume 名：
+
+```bash
+podman volume ls | grep pi-coding-web
+podman volume ls | grep pi-redis
+```
+
+需要备份数据时，先查看 volume 挂载点：
+
+```bash
+podman volume inspect <volume-name>
+```
+
+如果必须改回宿主机目录 bind mount，请先确认该目录在容器内可写，并且 `.env` 不要 bind mount 到容器内。Podman 环境通常还需要处理 SELinux label、用户命名空间或 `:U` 映射；没有明确需求时不建议使用 bind mount。
 
 ## 启动与停止
 
@@ -158,11 +198,11 @@ docker compose down
 本机检查：
 
 ```bash
-curl http://127.0.0.1:5173/api/pi-storage/status
-curl http://127.0.0.1:5173/api/pi-logs/status
+curl http://127.0.0.1:${PI_CODING_WEB_PORT:-5173}/api/pi-storage/status
+curl http://127.0.0.1:${PI_CODING_WEB_PORT:-5173}/api/pi-logs/status
 ```
 
-如果 `.env` 中改了端口，把 `5173` 替换为 `PI_CODING_WEB_PORT`。
+如果 shell 不支持上面的参数展开，手动把端口替换为 `.env` 里的 `PI_CODING_WEB_PORT`。例如 `PI_CODING_WEB_PORT=9529` 时访问 `http://127.0.0.1:9529/...`；容器内部端口始终是 `5173`。
 
 重点看：
 
@@ -180,10 +220,10 @@ curl http://127.0.0.1:5173/api/pi-logs/status
 /app/apps/pi-coding-web/data
 ```
 
-服务器挂载目录：
+服务器持久化位置：
 
 ```text
-./data
+Compose named volume: pi-coding-web-data
 ```
 
 其中包含：
@@ -202,7 +242,7 @@ curl http://127.0.0.1:5173/api/pi-logs/status
 "logVacuumIntervalMs": 86400000
 ```
 
-长期部署时必须保留 `data/` 目录，否则容器重建后会话、日志和生成项目都会丢失。
+长期部署时必须保留 `pi-coding-web-data` named volume，否则容器重建后会话、日志和生成项目都会丢失。
 
 ## Langfuse
 
@@ -286,7 +326,7 @@ PI_PREVIEW_BASE_URL=https://pi.example.com
 
 ## 升级
 
-保留 `data/` 和 `.env`。
+保留 `.env`、`pi-coding-web-data` 和 `pi-redis-data` volumes。
 
 在线构建升级：
 
@@ -310,9 +350,53 @@ docker compose up -d --no-build
 
 ```bash
 docker compose ps
-curl http://127.0.0.1:5173/api/pi-storage/status
-curl http://127.0.0.1:5173/api/pi-logs/status
+curl http://127.0.0.1:${PI_CODING_WEB_PORT:-5173}/api/pi-storage/status
+curl http://127.0.0.1:${PI_CODING_WEB_PORT:-5173}/api/pi-logs/status
 ```
+
+如果 `.env` 中配置了 `PI_CODING_WEB_PORT`，这里也要改成对应宿主机端口。
+
+## 常见启动故障
+
+Web 或 worker 退出后先看日志：
+
+```bash
+docker compose logs --tail=200 pi-coding-web
+docker compose logs --tail=200 pi-worker
+docker compose logs --tail=200 redis
+```
+
+Podman 环境也可以直接查容器日志：
+
+```bash
+podman logs --tail=200 pi-coding-web
+podman logs --tail=200 pi-worker
+podman logs --tail=200 pi-coding-redis
+```
+
+如果看到：
+
+```text
+EACCES: permission denied, open '/app/apps/pi-coding-web/.env'
+```
+
+说明 `.env` 被 bind mount 到容器内且容器不可读。删除 `./.env:/app/apps/pi-coding-web/.env:ro` 这类挂载，只保留 `env_file: ./.env`。
+
+如果看到：
+
+```text
+EACCES: permission denied, mkdir '/app/apps/pi-coding-web/data/clients'
+```
+
+说明容器不能写 `/app/apps/pi-coding-web/data`。使用默认 named volume，或者修复宿主机 bind mount 目录权限。
+
+如果 Redis 日志反复出现：
+
+```text
+chown: .: Operation not permitted
+```
+
+说明 Redis 正在写一个不允许容器 chown 的宿主机目录。使用默认 `pi-redis-data` named volume，或者删除 Redis 的 bind mount。
 
 ## PM 对接
 

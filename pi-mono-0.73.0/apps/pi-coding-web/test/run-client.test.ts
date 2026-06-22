@@ -1,17 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+	AppPreviewGoalEventRecord,
+	AppPreviewGoalRecord,
 	DeleteSessionResult,
 	RuntimeRunEventRecord,
 	RuntimeRunRecord,
 	RuntimeSessionDetail,
 	RuntimeSessionRecord,
+	type StartRunRequest,
 	StartRunResult,
 } from "@mariozechner/pi-web-workspace";
 import {
+	buildAppPreviewGoalStartRequest,
 	buildRunRequestHeaders,
 	cancelRun,
 	connectRunEvents,
 	deleteSession,
+	disableAppPreviewGoal,
+	enableAppPreviewGoal,
+	getAppPreviewGoal,
 	getSession,
 	listRunEvents,
 	listSessions,
@@ -106,6 +113,114 @@ describe("run client", () => {
 		expect(requests[0]?.init?.headers).toMatchObject({ "X-PI-Client-ID": clientId });
 	});
 
+	it("enables app preview goals through the run API", async () => {
+		const goal = createAppPreviewGoalRecord();
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				requests.push({ url: String(input), init });
+				return jsonResponse({ goal });
+			}),
+		);
+
+		await expect(enableAppPreviewGoal("session-1", "manual")).resolves.toEqual({ goal });
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe("http://localhost:5173/api/pi-runs/goals/app-preview");
+		expect(requests[0]?.init?.method).toBe("POST");
+		expect(requests[0]?.init?.body).toBe(
+			JSON.stringify({ sessionId: "session-1", source: "manual", enabled: true }),
+		);
+		expect(requests[0]?.init?.headers).toMatchObject({
+			"Content-Type": "application/json",
+			"X-PI-Client-ID": clientId,
+		});
+	});
+
+	it("disables app preview goals through the run API", async () => {
+		const goal = createAppPreviewGoalRecord({ status: "disabled" });
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				requests.push({ url: String(input), init });
+				return jsonResponse({ goal });
+			}),
+		);
+
+		await expect(disableAppPreviewGoal("session-1")).resolves.toEqual({ goal });
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe("http://localhost:5173/api/pi-runs/goals/app-preview/disable");
+		expect(requests[0]?.init?.method).toBe("POST");
+		expect(requests[0]?.init?.body).toBe(JSON.stringify({ sessionId: "session-1" }));
+		expect(requests[0]?.init?.headers).toMatchObject({
+			"Content-Type": "application/json",
+			"X-PI-Client-ID": clientId,
+		});
+	});
+
+	it("gets encoded app preview goal state through the run API", async () => {
+		const goal = createAppPreviewGoalRecord({ sessionId: "session with/slash" });
+		const event = createAppPreviewGoalEventRecord({ sessionId: goal.sessionId });
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				requests.push({ url: String(input), init });
+				return jsonResponse({ goal, events: [event] });
+			}),
+		);
+
+		await expect(getAppPreviewGoal("session with/slash")).resolves.toEqual({ goal, events: [event] });
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe(
+			"http://localhost:5173/api/pi-runs/goals/app-preview?sessionId=session%20with%2Fslash",
+		);
+		expect(requests[0]?.init?.method).toBe("GET");
+		expect(requests[0]?.init?.headers).toMatchObject({ "X-PI-Client-ID": clientId });
+	});
+
+	it("builds start-run app preview goal requests only when a source is selected", () => {
+		const manualRequest: StartRunRequest = {
+			message: { text: "build" },
+			appPreviewGoal: buildAppPreviewGoalStartRequest("manual"),
+		};
+
+		expect(manualRequest.appPreviewGoal).toEqual({ enabled: true, source: "manual" });
+		expect(buildAppPreviewGoalStartRequest(undefined)).toBeUndefined();
+	});
+
+	it("passes app preview goal start requests through the start run body", async () => {
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				requests.push({ url: String(input), init });
+				return jsonResponse(createStartRunResult());
+			}),
+		);
+
+		await startRun({
+			sessionId: "session-1",
+			message: { text: "build" },
+			appPreviewGoal: buildAppPreviewGoalStartRequest("pm_handoff"),
+		});
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe("http://localhost:5173/api/pi-runs");
+		expect(requests[0]?.init?.method).toBe("POST");
+		expect(requests[0]?.init?.body).toBe(
+			JSON.stringify({
+				sessionId: "session-1",
+				message: { text: "build" },
+				appPreviewGoal: { enabled: true, source: "pm_handoff" },
+			}),
+		);
+	});
+
 	it("preserves lowercase content-type and normalizes tuple-array headers", () => {
 		const headers = buildRunRequestHeaders(
 			[
@@ -189,6 +304,45 @@ describe("run client", () => {
 		});
 		expect(requests[0]?.init?.method).toBe("GET");
 		expect(connection.lastSeq).toBe(2);
+	});
+
+	it("reports run event connection loss and recovery", async () => {
+		vi.useFakeTimers();
+		const events = [createRunEventRecord(1)];
+		const statusChanges: Array<RunEventConnection["readyState"]> = [];
+		const fetchMock = vi
+			.fn<() => Promise<Response>>()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValueOnce(sseResponse(events));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const received: RuntimeRunEventRecord[] = [];
+		const connection = connectRunEvents(
+			"run-1",
+			0,
+			(event) => {
+				received.push(event);
+			},
+			{
+				onStatusChange: (nextConnection) => {
+					statusChanges.push(nextConnection.readyState);
+				},
+			},
+		);
+
+		await vi.waitFor(() => {
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+		expect(connection.lastError?.message).toBe("Failed to fetch");
+		expect(statusChanges).toContain(connection.CONNECTING);
+
+		await vi.advanceTimersByTimeAsync(1000);
+		await vi.waitFor(() => {
+			expect(received).toEqual(events);
+		});
+		expect(statusChanges).toContain(connection.OPEN);
+
+		connection.close();
 	});
 
 	it("does not advance the event checkpoint until an async handler resolves", async () => {
@@ -375,5 +529,36 @@ function createRunEventRecord(seq: number): RuntimeRunEventRecord {
 		type: "message",
 		payload: { text: `event-${seq}` },
 		createdAt: "2026-06-09T00:00:00.000Z",
+	};
+}
+
+function createAppPreviewGoalRecord(overrides: Partial<AppPreviewGoalRecord> = {}): AppPreviewGoalRecord {
+	return {
+		goalId: "goal-1",
+		clientId: "550e8400-e29b-41d4-a716-446655440000",
+		sessionId: "session-1",
+		source: "manual",
+		status: "active",
+		maxContinuationRuns: 3,
+		continuationRunsUsed: 1,
+		retryAttemptsUsed: 0,
+		createdAt: "2026-06-09T00:00:00.000Z",
+		updatedAt: "2026-06-09T00:00:00.000Z",
+		...overrides,
+	};
+}
+
+function createAppPreviewGoalEventRecord(
+	overrides: Partial<AppPreviewGoalEventRecord> = {},
+): AppPreviewGoalEventRecord {
+	return {
+		eventId: 1,
+		goalId: "goal-1",
+		clientId: "550e8400-e29b-41d4-a716-446655440000",
+		sessionId: "session-1",
+		eventType: "goal_started",
+		payload: {},
+		createdAt: "2026-06-09T00:00:00.000Z",
+		...overrides,
 	};
 }

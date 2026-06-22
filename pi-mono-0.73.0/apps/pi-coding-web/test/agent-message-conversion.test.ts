@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { convertAgentMessagesToLlm } from "../src/runtime/agent-message-conversion.js";
 import { prepareAttachmentProjectFileSeeds } from "../src/runtime/project-file-seed.js";
+import { trimRecoverableProviderStallErrors } from "../src/runtime/runtime-message-conversion.js";
 
 describe("worker agent message conversion", () => {
 	it("converts user-with-attachments messages to LLM user messages", () => {
@@ -171,5 +172,33 @@ describe("worker agent message conversion", () => {
 		]);
 
 		expect(messages).toEqual([]);
+	});
+
+	it("can hide recoverable provider stalled error markers before continuation replay", () => {
+		const messages = trimRecoverableProviderStallErrors([
+			{
+				messageId: 1,
+				sessionId: "session-1",
+				clientId: "client-1",
+				role: "assistant",
+				payload: {
+					role: "assistant",
+					content: [{ type: "text", text: "" }],
+					stopReason: "error",
+					errorMessage: "Model stream stalled for 60000ms without events.",
+				},
+				createdAt: "2026-06-22T00:00:00.000Z",
+			},
+			{
+				messageId: 2,
+				sessionId: "session-1",
+				clientId: "client-1",
+				role: "assistant",
+				payload: { role: "assistant", content: "keep me" },
+				createdAt: "2026-06-22T00:00:01.000Z",
+			},
+		]);
+
+		expect(messages.map((message) => message.messageId)).toEqual([2]);
 	});
 });

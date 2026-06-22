@@ -30,6 +30,7 @@ export type DiagnosticStreamLoggingConfig = {
 	promptSnapshotMaxChars?: number;
 	modelOutputSnapshotLoggingEnabled?: boolean;
 	modelOutputSnapshotMaxChars?: number;
+	streamIdleTimeoutMs?: number;
 };
 
 type NormalizedDiagnosticStreamLoggingConfig = {
@@ -39,11 +40,13 @@ type NormalizedDiagnosticStreamLoggingConfig = {
 	promptSnapshotMaxChars: number;
 	modelOutputSnapshotLoggingEnabled: boolean;
 	modelOutputSnapshotMaxChars: number;
+	streamIdleTimeoutMs: number;
 };
 
 const DEFAULT_RAW_PROVIDER_LOG_MAX_CHARS = 12000;
 const DEFAULT_PROMPT_SNAPSHOT_MAX_CHARS = 20000;
 const DEFAULT_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS = 20000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000;
 const SNAPSHOT_CHUNK_SIZE = 1800;
 const MAX_SNAPSHOT_MESSAGES = 80;
 const MAX_SNAPSHOT_TOOLS = 80;
@@ -77,6 +80,7 @@ export function createLoggedStreamFn(
 		const loggingConfig = normalizeLoggingConfig(getLoggingConfig());
 		const rawChunkState: RawStreamState = { usedChars: 0, truncatedNoticeWritten: false };
 		let inputSnapshot: DiagnosticData | undefined;
+		const streamAbortController = new AbortController();
 		const requestId = createDiagnosticId();
 		const spanId = requestId;
 		const traceId = traceContext.traceId ?? traceContext.sessionId ?? requestId;
@@ -103,6 +107,7 @@ export function createLoggedStreamFn(
 		try {
 			const stream = await streamFn(model, context, {
 				...options,
+				signal: combineAbortSignals(options?.signal, streamAbortController.signal),
 				onPayload: async (payload, requestModel) => {
 					const replacement = await options?.onPayload?.(payload, requestModel);
 					const effectivePayload = replacement ?? payload;
@@ -179,6 +184,7 @@ export function createLoggedStreamFn(
 				loggingConfig,
 				rawStreamState: { usedChars: 0, truncatedNoticeWritten: false },
 				inputSnapshot,
+				abortSource: () => streamAbortController.abort(),
 			});
 		} catch (error) {
 			const message = errorMessage(error);
@@ -216,6 +222,7 @@ type ObserveOptions = {
 	loggingConfig: NormalizedDiagnosticStreamLoggingConfig;
 	rawStreamState: RawStreamState;
 	inputSnapshot?: DiagnosticData;
+	abortSource: () => void;
 };
 
 type RawStreamState = {
@@ -267,8 +274,12 @@ async function pumpStream(
 	summary: StreamSummary,
 	outputSnapshot: OutputSnapshotState | undefined,
 ): Promise<void> {
+	const iterator = source[Symbol.asyncIterator]();
 	try {
-		for await (const event of source) {
+		while (true) {
+			const next = await nextStreamEvent(iterator, options);
+			if (next.done) return;
+			const event = next.value;
 			updateSummary(summary, event);
 			updateOutputSnapshot(outputSnapshot, event);
 			writeRawStreamEvent(options, event);
@@ -279,6 +290,7 @@ async function pumpStream(
 		}
 	} catch (error) {
 		const message = errorMessage(error);
+		summary.stopReason = "error";
 		summary.errorMessage = message;
 		writeStreamSummary(options, summary, "error", outputSnapshot);
 		output.push({
@@ -286,6 +298,28 @@ async function pumpStream(
 			reason: "error",
 			error: createErrorAssistantMessage(options.model, message),
 		});
+	}
+}
+
+async function nextStreamEvent(
+	iterator: AsyncIterator<AssistantMessageEvent>,
+	options: ObserveOptions,
+): Promise<IteratorResult<AssistantMessageEvent>> {
+	const timeoutMs = options.loggingConfig.streamIdleTimeoutMs;
+	if (timeoutMs <= 0) return iterator.next();
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			iterator.next(),
+			new Promise<IteratorResult<AssistantMessageEvent>>((_resolve, reject) => {
+				timeoutId = setTimeout(() => {
+					options.abortSource();
+					reject(new Error(`Model stream stalled for ${timeoutMs}ms without events.`));
+				}, timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timeoutId !== undefined) clearTimeout(timeoutId);
 	}
 }
 
@@ -757,11 +791,28 @@ function normalizeLoggingConfig(config: DiagnosticStreamLoggingConfig): Normaliz
 			config.modelOutputSnapshotMaxChars,
 			DEFAULT_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS,
 		),
+		streamIdleTimeoutMs: positiveInteger(config.streamIdleTimeoutMs, DEFAULT_STREAM_IDLE_TIMEOUT_MS),
 	};
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+}
+
+function combineAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+	const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+	if (activeSignals.length === 0) return new AbortController().signal;
+	if (activeSignals.length === 1) return activeSignals[0];
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	for (const signal of activeSignals) {
+		if (signal.aborted) {
+			controller.abort();
+			break;
+		}
+		signal.addEventListener("abort", abort, { once: true });
+	}
+	return controller.signal;
 }
 
 function summarizeHeaders(headers: Record<string, string>): DiagnosticData {

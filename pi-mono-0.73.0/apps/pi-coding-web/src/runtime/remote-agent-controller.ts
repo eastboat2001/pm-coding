@@ -42,7 +42,7 @@ export class RemoteAgentController {
 		}
 
 		const payload = event.payload as AgentEvent;
-		if (this.isLocalPromptEcho(payload)) {
+		if (isRemoteRunStatusEvent(payload) || isInternalContinuationPromptEvent(payload) || this.isLocalPromptEcho(payload)) {
 			this._lastSeq = Math.max(this._lastSeq, event.seq);
 			return;
 		}
@@ -64,6 +64,10 @@ export class RemoteAgentController {
 				throw new Error(`Remote run event ${event.runId} does not match active run ${this._activeRunId}.`);
 			}
 			const payload = event.payload as AgentEvent;
+			if (isRemoteRunStatusEvent(payload) || isInternalContinuationPromptEvent(payload)) {
+				this._lastSeq = Math.max(this._lastSeq, event.seq);
+				continue;
+			}
 			this.hydrateAgentEvent(payload);
 			this._lastSeq = Math.max(this._lastSeq, event.seq);
 			if (payload.type === "agent_end") {
@@ -201,4 +205,22 @@ function sortJsonValue(value: unknown): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRemoteRunStatusEvent(value: unknown): boolean {
+	if (!isRecord(value)) return false;
+	return value.type === "agent_retry_scheduled";
+}
+
+function isInternalContinuationPromptEvent(event: AgentEvent): boolean {
+	if (event.type !== "message_start" && event.type !== "message_update" && event.type !== "message_end") {
+		return false;
+	}
+	return isInternalContinuationPromptMessage(event.message);
+}
+
+function isInternalContinuationPromptMessage(message: unknown): boolean {
+	if (!isRecord(message)) return false;
+	const metadata = message.piInternal;
+	return isRecord(metadata) && metadata.kind === "app_preview_continuation";
 }

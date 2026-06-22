@@ -52,6 +52,44 @@ describe("RemoteAgentController", () => {
 		expect(agent.state.messages).toEqual([userMessage]);
 	});
 
+	it("ignores retry status events while advancing the remote event checkpoint", async () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		await controller.applyRunEvent(
+			createRunEventRecord(4, "r1", {
+				type: "agent_retry_scheduled",
+				attempt: 1,
+				maxAttempts: 5,
+				reasonCode: "transient_provider_error",
+				delayMs: 1000,
+			}),
+		);
+
+		expect(controller.lastSeq).toBe(4);
+		expect(agent.appliedEvents).toEqual([]);
+		expect(agent.state.isStreaming).toBe(true);
+	});
+
+	it("ignores internal continuation prompt events while advancing the remote event checkpoint", async () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+		const internalPrompt = {
+			role: "user",
+			content: "Continue from the previous assistant response and complete the original request.",
+			piInternal: { kind: "app_preview_continuation" },
+		};
+
+		controller.startRemoteRun("r1");
+		await controller.applyRunEvent(createRunEventRecord(4, "r1", { type: "message_start", message: internalPrompt }));
+		await controller.applyRunEvent(createRunEventRecord(5, "r1", { type: "message_end", message: internalPrompt }));
+
+		expect(controller.lastSeq).toBe(5);
+		expect(agent.appliedEvents).toEqual([]);
+		expect(agent.state.messages).toEqual([]);
+	});
+
 	it("ignores remote prompt echo events when a handoff attachment message is replayed as a user message", async () => {
 		const localMessage = {
 			role: "user-with-attachments",

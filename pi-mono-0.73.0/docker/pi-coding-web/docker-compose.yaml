@@ -4,7 +4,7 @@ services:
     container_name: pi-coding-redis
     restart: unless-stopped
     volumes:
-      - ./data/redis:/data:Z
+      - pi-redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -25,8 +25,7 @@ services:
     ports:
       - "${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
-      - ./data:/app/apps/pi-coding-web/data:Z
-      - ./.env:/app/apps/pi-coding-web/.env:ro
+      - pi-coding-web-data:/app/apps/pi-coding-web/data
     depends_on:
       redis:
         condition: service_healthy
@@ -57,8 +56,11 @@ services:
       PI_REDIS_URL: redis://redis:6379
       PI_WORKER_ID: ${PI_WORKER_ID:-pi-worker}
     volumes:
-      - ./data:/app/apps/pi-coding-web/data:Z
-      - ./.env:/app/apps/pi-coding-web/.env:ro
+      - pi-coding-web-data:/app/apps/pi-coding-web/data
     depends_on:
       redis:
         condition: service_healthy
+
+volumes:
+  pi-coding-web-data:
+  pi-redis-data:

@@ -1,4 +1,7 @@
 import type {
+	AppPreviewGoalEventRecord,
+	AppPreviewGoalRecord,
+	AppPreviewGoalSource,
 	DeleteSessionResult,
 	RuntimeRunEventListResult,
 	RuntimeRunEventRecord,
@@ -30,6 +33,10 @@ export interface RunEventConnection {
 	close(): void;
 }
 
+export interface RunEventConnectionOptions {
+	onStatusChange?: (connection: RunEventConnection) => void;
+}
+
 export function buildRunRequestHeaders(initHeaders?: HeadersInit, hasBody = false): Record<string, string> {
 	const headers = Object.fromEntries(new Headers(initHeaders).entries());
 	headers["X-PI-Client-ID"] = piClientHeaders()["X-PI-Client-ID"];
@@ -37,6 +44,12 @@ export function buildRunRequestHeaders(initHeaders?: HeadersInit, hasBody = fals
 		headers["Content-Type"] = "application/json";
 	}
 	return headers;
+}
+
+export function buildAppPreviewGoalStartRequest(
+	source: AppPreviewGoalSource | undefined,
+): StartRunRequest["appPreviewGoal"] {
+	return source ? { enabled: true, source } : undefined;
 }
 
 export async function startRun(request: StartRunRequest): Promise<StartRunResult> {
@@ -84,10 +97,37 @@ export async function cancelRun(runId: string): Promise<RuntimeRunRecord> {
 	});
 }
 
+export async function getAppPreviewGoal(
+	sessionId: string,
+): Promise<{ goal: AppPreviewGoalRecord | null; events: AppPreviewGoalEventRecord[] }> {
+	return requestRunApi<{ goal: AppPreviewGoalRecord | null; events: AppPreviewGoalEventRecord[] }>(
+		`${RUNS_API_PREFIX}/goals/app-preview?sessionId=${encodeURIComponent(sessionId)}`,
+		{ method: "GET" },
+	);
+}
+
+export async function enableAppPreviewGoal(
+	sessionId: string,
+	source: AppPreviewGoalSource,
+): Promise<{ goal: AppPreviewGoalRecord | null }> {
+	return requestRunApi<{ goal: AppPreviewGoalRecord | null }>(`${RUNS_API_PREFIX}/goals/app-preview`, {
+		method: "POST",
+		body: JSON.stringify({ sessionId, source, enabled: true }),
+	});
+}
+
+export async function disableAppPreviewGoal(sessionId: string): Promise<{ goal: AppPreviewGoalRecord | null }> {
+	return requestRunApi<{ goal: AppPreviewGoalRecord | null }>(`${RUNS_API_PREFIX}/goals/app-preview/disable`, {
+		method: "POST",
+		body: JSON.stringify({ sessionId }),
+	});
+}
+
 export function connectRunEvents(
 	runId: string,
 	afterSeq: number,
 	onEvent: (event: RuntimeRunEventRecord) => void | Promise<void>,
+	options: RunEventConnectionOptions = {},
 ): RunEventConnection {
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
 	let abortController: AbortController | undefined;
@@ -104,13 +144,19 @@ export function connectRunEvents(
 			abortController?.abort();
 			connection.closed = true;
 			connection.readyState = connection.CLOSED;
+			notifyStatusChange();
 		},
+	};
+
+	const notifyStatusChange = (): void => {
+		options.onStatusChange?.(connection);
 	};
 
 	const connectStream = async (): Promise<void> => {
 		if (connection.closed) return;
 		abortController = new AbortController();
 		connection.readyState = connection.CONNECTING;
+		notifyStatusChange();
 		let fallbackToPolling = false;
 		try {
 			const endpoint = new URL(
@@ -130,6 +176,7 @@ export function connectRunEvents(
 				if (connection.closed) return;
 				connection.readyState = connection.OPEN;
 				connection.lastError = undefined;
+				notifyStatusChange();
 				await deliverRunEvents(result.events);
 				fallbackToPolling = true;
 				return;
@@ -140,11 +187,13 @@ export function connectRunEvents(
 			if (connection.closed) return;
 			connection.readyState = connection.OPEN;
 			connection.lastError = undefined;
+			notifyStatusChange();
 			await readEventStream(response.body, deliverRunEvent);
 		} catch (error) {
 			if (connection.closed) return;
 			connection.lastError = toError(error);
 			connection.readyState = connection.CONNECTING;
+			notifyStatusChange();
 		} finally {
 			abortController = undefined;
 			if (!connection.closed) {
@@ -182,6 +231,7 @@ export function connectRunEvents(
 			if (connection.closed) return;
 			connection.readyState = connection.OPEN;
 			connection.lastError = undefined;
+			notifyStatusChange();
 			connection.pollIntervalMs =
 				events.length > 0
 					? FAST_POLL_INTERVAL_MS
@@ -192,6 +242,7 @@ export function connectRunEvents(
 			connection.pollIntervalMs = MAX_POLL_INTERVAL_MS;
 			if (!connection.closed) {
 				connection.readyState = connection.CONNECTING;
+				notifyStatusChange();
 			}
 		} finally {
 			if (!connection.closed) {

@@ -29,6 +29,16 @@ function isConfiguredModel(model: Model<any> | undefined): model is Model<any> {
 	return !!model && model.provider !== "unknown" && model.id !== "unknown";
 }
 
+export interface MessageEditorExtensionAction {
+	id: string;
+	label: string;
+	detail?: string;
+	active?: boolean;
+	disabled?: boolean;
+	icon?: unknown;
+	onSelect: () => void | Promise<void>;
+}
+
 @customElement("message-editor")
 export class MessageEditor extends LitElement {
 	private _value = "";
@@ -57,6 +67,7 @@ export class MessageEditor extends LitElement {
 	@property() onModelSelect?: () => void;
 	@property() onThinkingChange?: (level: "off" | "minimal" | "low" | "medium" | "high") => void;
 	@property() onFilesChange?: (files: Attachment[]) => void;
+	@property({ attribute: false }) extensionActions: MessageEditorExtensionAction[] = [];
 	@property({ attribute: false }) slashSuggestions: SlashSuggestionItem[] = [];
 	@property() attachments: Attachment[] = [];
 	@property() maxFiles = 10;
@@ -635,6 +646,41 @@ export class MessageEditor extends LitElement {
 					this.extensionsMenuView === "main"
 						? html`
 							<div class="py-1">
+								${this.extensionActions.map((action) => {
+									const disabled = action.disabled === true;
+									const active = action.active === true;
+									return html`
+										<button
+											type="button"
+											?disabled=${disabled}
+											class="w-full px-3 py-2 text-left hover:bg-secondary/70 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent ${
+												active ? "bg-primary/10 text-primary" : ""
+											}"
+											@mousedown=${async (event: MouseEvent) => {
+												event.preventDefault();
+												if (disabled) return;
+												try {
+													await action.onSelect();
+												} catch (error) {
+													console.error("Extension action failed:", error);
+												} finally {
+													this.closeExtensionsMenu();
+												}
+											}}
+										>
+											<span class="h-5 w-5 inline-flex items-center justify-center shrink-0">
+												${action.icon ?? ""}
+											</span>
+											<div class="min-w-0 flex-1">
+												<div class="text-sm font-medium truncate">${action.label}</div>
+												${action.detail ? html`<div class="text-xs text-muted-foreground truncate">${action.detail}</div>` : ""}
+											</div>
+											<span class="h-5 w-5 inline-flex items-center justify-center shrink-0">
+												${active ? icon(Check, "sm", "text-primary") : ""}
+											</span>
+										</button>
+									`;
+								})}
 								<button
 									type="button"
 									class="w-full px-3 py-2 text-left hover:bg-secondary/70 flex items-center gap-2"

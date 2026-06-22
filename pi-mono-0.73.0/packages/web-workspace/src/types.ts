@@ -50,6 +50,63 @@ export interface RuntimeRunEventRecord extends JsonObject {
 	createdAt: string;
 }
 
+export type AppPreviewGoalSource = "pm_handoff" | "manual";
+
+export type AppPreviewGoalStatus =
+	| "active"
+	| "preview_ready"
+	| "disabled"
+	| "blocked"
+	| "failed"
+	| "cancelled"
+	| "budget_limited";
+
+export type AppPreviewGoalEventType =
+	| "goal_started"
+	| "goal_disabled"
+	| "retry_scheduled"
+	| "retry_exhausted"
+	| "continuation_scheduled"
+	| "preview_check_failed"
+	| "preview_ready"
+	| "budget_limited"
+	| "blocked"
+	| "queue_unavailable";
+
+export interface AppPreviewGoalStartRequest extends JsonObject {
+	enabled: boolean;
+	source: AppPreviewGoalSource;
+}
+
+export interface AppPreviewGoalRecord extends JsonObject {
+	goalId: string;
+	clientId: string;
+	sessionId: string;
+	source: AppPreviewGoalSource;
+	status: AppPreviewGoalStatus;
+	maxContinuationRuns: number;
+	continuationRunsUsed: number;
+	retryAttemptsUsed: number;
+	lastRunId?: string;
+	lastPreviewUrl?: string;
+	lastFailureReason?: string;
+	createdAt: string;
+	updatedAt: string;
+	completedAt?: string;
+}
+
+export interface AppPreviewGoalEventRecord extends JsonObject {
+	eventId: number;
+	goalId: string;
+	clientId: string;
+	sessionId: string;
+	runId?: string;
+	eventType: AppPreviewGoalEventType;
+	reasonCode?: string;
+	payload: JsonObject;
+	createdAt: string;
+}
+
 export interface StartRunRequest extends JsonObject {
 	sessionId?: string;
 	title?: string;
@@ -57,6 +114,7 @@ export interface StartRunRequest extends JsonObject {
 	model?: JsonObject;
 	thinkingLevel?: string;
 	projectFiles?: StartRunProjectFile[];
+	appPreviewGoal?: AppPreviewGoalStartRequest;
 }
 
 export interface StartRunProjectFile extends JsonObject {
@@ -148,6 +206,48 @@ export interface AppendRunEventInput extends JsonObject {
 	createdAt?: string;
 }
 
+export interface UpsertAppPreviewGoalInput extends JsonObject {
+	goalId: string;
+	clientId: string;
+	sessionId: string;
+	source: AppPreviewGoalSource;
+	status: AppPreviewGoalStatus;
+	maxContinuationRuns: number;
+	continuationRunsUsed: number;
+	retryAttemptsUsed: number;
+	lastRunId?: string;
+	lastPreviewUrl?: string;
+	lastFailureReason?: string;
+	createdAt?: string;
+	updatedAt?: string;
+	completedAt?: string;
+}
+
+export interface UpdateAppPreviewGoalInput extends JsonObject {
+	clientId: string;
+	sessionId: string;
+	status?: AppPreviewGoalStatus;
+	maxContinuationRuns?: number;
+	continuationRunsUsed?: number;
+	retryAttemptsUsed?: number;
+	lastRunId?: string | null;
+	lastPreviewUrl?: string | null;
+	lastFailureReason?: string | null;
+	updatedAt?: string;
+	completedAt?: string | null;
+}
+
+export interface AppendAppPreviewGoalEventInput extends JsonObject {
+	goalId: string;
+	clientId: string;
+	sessionId: string;
+	runId?: string;
+	eventType: AppPreviewGoalEventType;
+	reasonCode?: string;
+	payload?: JsonObject;
+	createdAt?: string;
+}
+
 export interface StorageConfig {
 	settingsFile: string;
 	clientsRootDir: string;
@@ -180,6 +280,7 @@ export interface StorageConfig {
 	promptSnapshotMaxChars: number;
 	modelOutputSnapshotLoggingEnabled: boolean;
 	modelOutputSnapshotMaxChars: number;
+	modelStreamIdleTimeoutMs: number;
 	logRetentionDays: number;
 	logMaxEvents: number;
 	logCleanupIntervalMs: number;
@@ -291,6 +392,7 @@ export interface DiagnosticLogStatus extends JsonObject {
 	promptSnapshotMaxChars?: number;
 	modelOutputSnapshotLoggingEnabled?: boolean;
 	modelOutputSnapshotMaxChars?: number;
+	modelStreamIdleTimeoutMs?: number;
 	logRetentionDays?: number;
 	logMaxEvents?: number;
 	lastCleanupAt?: string;

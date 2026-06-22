@@ -217,4 +217,61 @@ describe("openai-completions empty tools handling", () => {
 		expect(Array.isArray(params.tools)).toBe(true);
 		expect(params.tools).toEqual([]);
 	});
+
+	it("drops malformed tool calls and orphaned tool results before replay", async () => {
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const model = { ...baseModel, api: "openai-completions" } as const;
+
+		await streamSimple(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "start", timestamp: Date.now() },
+					{
+						role: "assistant",
+						content: [
+							{ type: "text", text: "I was cut off while creating a tool call." },
+							{ type: "toolCall", id: "", name: "", arguments: {} },
+						],
+						stopReason: "toolUse",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						api: "openai-completions",
+						provider: "openai",
+						model: "gpt-4o-mini",
+						timestamp: Date.now(),
+					},
+					{
+						role: "toolResult",
+						toolCallId: "",
+						toolName: "",
+						content: [{ type: "text", text: "Tool  not found" }],
+						isError: true,
+						timestamp: Date.now(),
+					},
+					{ role: "user", content: "continue", timestamp: Date.now() },
+				],
+				tools: [],
+			},
+			{ apiKey: "test" },
+		).result();
+
+		const params = mockState.lastParams as {
+			messages: Array<{ role: string; content?: unknown; tool_call_id?: string; tool_calls?: unknown[] }>;
+		};
+		expect(params.messages).toHaveLength(3);
+		expect(params.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+		expect(params.messages[1]).toMatchObject({
+			role: "assistant",
+			content: "I was cut off while creating a tool call.",
+		});
+		expect(params.messages.some((message) => message.role === "tool")).toBe(false);
+		expect(params.messages.some((message) => message.tool_calls?.length)).toBe(false);
+	});
 });

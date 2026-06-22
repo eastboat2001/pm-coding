@@ -44,6 +44,7 @@ function testConfig(root: string): StorageConfig {
 		promptSnapshotMaxChars: 20000,
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 20000,
+		modelStreamIdleTimeoutMs: 60000,
 		logRetentionDays: 30,
 		logMaxEvents: 50000,
 		logCleanupIntervalMs: 3600000,

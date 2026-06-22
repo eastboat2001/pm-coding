@@ -3,8 +3,14 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isObject } from "./json.js";
 import type {
+	AppendAppPreviewGoalEventInput,
 	AppendMessageInput,
 	AppendRunEventInput,
+	AppPreviewGoalEventRecord,
+	AppPreviewGoalEventType,
+	AppPreviewGoalRecord,
+	AppPreviewGoalSource,
+	AppPreviewGoalStatus,
 	CreateRunInput,
 	CreateSessionInput,
 	JsonObject,
@@ -15,6 +21,8 @@ import type {
 	RuntimeRunRecord,
 	RuntimeSessionRecord,
 	StartRunResult,
+	UpdateAppPreviewGoalInput,
+	UpsertAppPreviewGoalInput,
 } from "./types.js";
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
@@ -61,6 +69,35 @@ type RunEventRow = {
 	client_id: string;
 	seq: number;
 	event_type: string;
+	payload_json: string;
+	created_at: string;
+};
+
+type AppPreviewGoalRow = {
+	goal_id: string;
+	client_id: string;
+	session_id: string;
+	source: AppPreviewGoalSource;
+	status: AppPreviewGoalStatus;
+	max_continuation_runs: number;
+	continuation_runs_used: number;
+	retry_attempts_used: number;
+	last_run_id: string | null;
+	last_preview_url: string | null;
+	last_failure_reason: string | null;
+	created_at: string;
+	updated_at: string;
+	completed_at: string | null;
+};
+
+type AppPreviewGoalEventRow = {
+	id: number;
+	goal_id: string;
+	client_id: string;
+	session_id: string;
+	run_id: string | null;
+	event_type: AppPreviewGoalEventType;
+	reason_code: string | null;
 	payload_json: string;
 	created_at: string;
 };
@@ -155,6 +192,40 @@ export class RuntimeDbStore {
 				FOREIGN KEY (client_id, run_id) REFERENCES runs(client_id, run_id)
 			);
 			CREATE INDEX IF NOT EXISTS idx_run_events_run_seq ON run_events(client_id, run_id, seq);
+
+			CREATE TABLE IF NOT EXISTS app_preview_goals (
+				goal_id TEXT NOT NULL,
+				client_id TEXT NOT NULL,
+				session_id TEXT NOT NULL,
+				source TEXT NOT NULL,
+				status TEXT NOT NULL,
+				max_continuation_runs INTEGER NOT NULL,
+				continuation_runs_used INTEGER NOT NULL,
+				retry_attempts_used INTEGER NOT NULL,
+				last_run_id TEXT,
+				last_preview_url TEXT,
+				last_failure_reason TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				completed_at TEXT,
+				PRIMARY KEY (client_id, session_id),
+				FOREIGN KEY (client_id, session_id) REFERENCES sessions(client_id, session_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_app_preview_goals_status ON app_preview_goals(status, updated_at);
+
+			CREATE TABLE IF NOT EXISTS app_preview_goal_events (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				goal_id TEXT NOT NULL,
+				client_id TEXT NOT NULL,
+				session_id TEXT NOT NULL,
+				run_id TEXT,
+				event_type TEXT NOT NULL,
+				reason_code TEXT,
+				payload_json TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				FOREIGN KEY (client_id, session_id) REFERENCES sessions(client_id, session_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_app_preview_goal_events_goal ON app_preview_goal_events(client_id, session_id, id);
 		`);
 	}
 
@@ -523,9 +594,163 @@ export class RuntimeDbStore {
 		return rows.map(toRunEventRecord);
 	}
 
+	upsertAppPreviewGoal(input: UpsertAppPreviewGoalInput): AppPreviewGoalRecord {
+		const createdAt = input.createdAt ?? now();
+		const updatedAt = input.updatedAt ?? createdAt;
+		this.open()
+			.prepare(
+				`INSERT INTO app_preview_goals (
+					goal_id,
+					client_id,
+					session_id,
+					source,
+					status,
+					max_continuation_runs,
+					continuation_runs_used,
+					retry_attempts_used,
+					last_run_id,
+					last_preview_url,
+					last_failure_reason,
+					created_at,
+					updated_at,
+					completed_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(client_id, session_id) DO UPDATE SET
+					goal_id = excluded.goal_id,
+					source = excluded.source,
+					status = excluded.status,
+					max_continuation_runs = excluded.max_continuation_runs,
+					continuation_runs_used = excluded.continuation_runs_used,
+					retry_attempts_used = excluded.retry_attempts_used,
+					last_run_id = excluded.last_run_id,
+					last_preview_url = excluded.last_preview_url,
+					last_failure_reason = excluded.last_failure_reason,
+					updated_at = excluded.updated_at,
+					completed_at = excluded.completed_at`,
+			)
+			.run(
+				input.goalId,
+				input.clientId,
+				input.sessionId,
+				input.source,
+				input.status,
+				input.maxContinuationRuns,
+				input.continuationRunsUsed,
+				input.retryAttemptsUsed,
+				input.lastRunId ?? null,
+				input.lastPreviewUrl ?? null,
+				input.lastFailureReason ?? null,
+				createdAt,
+				updatedAt,
+				input.completedAt ?? null,
+			);
+		return requiredRecord(this.getAppPreviewGoal(input.clientId, input.sessionId), "app preview goal");
+	}
+
+	getAppPreviewGoal(clientId: string, sessionId: string): AppPreviewGoalRecord | undefined {
+		const row = this.open()
+			.prepare(
+				`SELECT goal_id, client_id, session_id, source, status, max_continuation_runs, continuation_runs_used,
+					retry_attempts_used, last_run_id, last_preview_url, last_failure_reason, created_at, updated_at, completed_at
+				FROM app_preview_goals
+				WHERE client_id = ? AND session_id = ?`,
+			)
+			.get(clientId, sessionId) as AppPreviewGoalRow | undefined;
+		return row ? toAppPreviewGoalRecord(row) : undefined;
+	}
+
+	updateAppPreviewGoal(input: UpdateAppPreviewGoalInput): AppPreviewGoalRecord | undefined {
+		const current = this.getAppPreviewGoal(input.clientId, input.sessionId);
+		if (!current) return undefined;
+		const updatedAt = input.updatedAt ?? now();
+		const lastRunId = "lastRunId" in input ? input.lastRunId : current.lastRunId;
+		const lastPreviewUrl = "lastPreviewUrl" in input ? input.lastPreviewUrl : current.lastPreviewUrl;
+		const lastFailureReason = "lastFailureReason" in input ? input.lastFailureReason : current.lastFailureReason;
+		const completedAt = "completedAt" in input ? input.completedAt : current.completedAt;
+		this.open()
+			.prepare(
+				`UPDATE app_preview_goals
+				SET status = ?,
+					max_continuation_runs = ?,
+					continuation_runs_used = ?,
+					retry_attempts_used = ?,
+					last_run_id = ?,
+					last_preview_url = ?,
+					last_failure_reason = ?,
+					updated_at = ?,
+					completed_at = ?
+				WHERE client_id = ? AND session_id = ?`,
+			)
+			.run(
+				input.status ?? current.status,
+				input.maxContinuationRuns ?? current.maxContinuationRuns,
+				input.continuationRunsUsed ?? current.continuationRunsUsed,
+				input.retryAttemptsUsed ?? current.retryAttemptsUsed,
+				lastRunId ?? null,
+				lastPreviewUrl ?? null,
+				lastFailureReason ?? null,
+				updatedAt,
+				completedAt ?? null,
+				input.clientId,
+				input.sessionId,
+			);
+		return this.getAppPreviewGoal(input.clientId, input.sessionId);
+	}
+
+	appendAppPreviewGoalEvent(input: AppendAppPreviewGoalEventInput): AppPreviewGoalEventRecord {
+		const createdAt = input.createdAt ?? now();
+		const payload = input.payload ?? {};
+		const db = this.open();
+		const row = this.writeTransaction(db, () => {
+			const goal = requiredRecord(this.getAppPreviewGoal(input.clientId, input.sessionId), "app preview goal");
+			if (goal.goalId !== input.goalId)
+				throw new Error("App preview goal event goal id does not match session goal");
+			db.prepare(
+				`INSERT INTO app_preview_goal_events (
+					goal_id,
+					client_id,
+					session_id,
+					run_id,
+					event_type,
+					reason_code,
+					payload_json,
+					created_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				input.goalId,
+				input.clientId,
+				input.sessionId,
+				input.runId ?? null,
+				input.eventType,
+				input.reasonCode ?? null,
+				JSON.stringify(payload),
+				createdAt,
+			);
+			return db.prepare("SELECT last_insert_rowid() AS id").get() as { id: number };
+		});
+		return requiredRecord(this.getAppPreviewGoalEvent(input.clientId, row.id), "app preview goal event");
+	}
+
+	listAppPreviewGoalEvents(clientId: string, sessionId: string, afterEventId: number): AppPreviewGoalEventRecord[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT id, goal_id, client_id, session_id, run_id, event_type, reason_code, payload_json, created_at
+				FROM app_preview_goal_events
+				WHERE client_id = ? AND session_id = ? AND id > ?
+				ORDER BY id ASC`,
+			)
+			.all(clientId, sessionId, afterEventId) as AppPreviewGoalEventRow[];
+		return rows.map(toAppPreviewGoalEventRecord);
+	}
+
 	deleteSession(clientId: string, sessionId: string): boolean {
 		const db = this.open();
 		return this.writeTransaction(db, () => {
+			db.prepare("DELETE FROM app_preview_goal_events WHERE client_id = ? AND session_id = ?").run(
+				clientId,
+				sessionId,
+			);
+			db.prepare("DELETE FROM app_preview_goals WHERE client_id = ? AND session_id = ?").run(clientId, sessionId);
 			db.prepare("DELETE FROM run_events WHERE client_id = ? AND session_id = ?").run(clientId, sessionId);
 			db.prepare("DELETE FROM runs WHERE client_id = ? AND session_id = ?").run(clientId, sessionId);
 			db.prepare("DELETE FROM messages WHERE client_id = ? AND session_id = ?").run(clientId, sessionId);
@@ -569,6 +794,17 @@ export class RuntimeDbStore {
 			)
 			.get(clientId, eventId) as RunEventRow | undefined;
 		return row ? toRunEventRecord(row) : undefined;
+	}
+
+	private getAppPreviewGoalEvent(clientId: string, eventId: number): AppPreviewGoalEventRecord | undefined {
+		const row = this.open()
+			.prepare(
+				`SELECT id, goal_id, client_id, session_id, run_id, event_type, reason_code, payload_json, created_at
+				FROM app_preview_goal_events
+				WHERE client_id = ? AND id = ?`,
+			)
+			.get(clientId, eventId) as AppPreviewGoalEventRow | undefined;
+		return row ? toAppPreviewGoalEventRecord(row) : undefined;
 	}
 
 	private updateSessionRun(
@@ -666,9 +902,50 @@ function toRunEventRecord(row: RunEventRow): RuntimeRunEventRecord {
 	};
 }
 
+function toAppPreviewGoalRecord(row: AppPreviewGoalRow): AppPreviewGoalRecord {
+	return {
+		goalId: row.goal_id,
+		clientId: row.client_id,
+		sessionId: row.session_id,
+		source: row.source,
+		status: row.status,
+		maxContinuationRuns: row.max_continuation_runs,
+		continuationRunsUsed: row.continuation_runs_used,
+		retryAttemptsUsed: row.retry_attempts_used,
+		...(row.last_run_id ? { lastRunId: row.last_run_id } : {}),
+		...(row.last_preview_url ? { lastPreviewUrl: row.last_preview_url } : {}),
+		...(row.last_failure_reason ? { lastFailureReason: row.last_failure_reason } : {}),
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		...(row.completed_at ? { completedAt: row.completed_at } : {}),
+	};
+}
+
+function toAppPreviewGoalEventRecord(row: AppPreviewGoalEventRow): AppPreviewGoalEventRecord {
+	return {
+		eventId: row.id,
+		goalId: row.goal_id,
+		clientId: row.client_id,
+		sessionId: row.session_id,
+		...(row.run_id ? { runId: row.run_id } : {}),
+		eventType: row.event_type,
+		...(row.reason_code ? { reasonCode: row.reason_code } : {}),
+		payload: parseAppPreviewGoalEventPayload(row.payload_json),
+		createdAt: row.created_at,
+	};
+}
+
 function parseJsonObject(value: string): JsonObject {
 	const parsed = JSON.parse(value) as unknown;
 	return isObject(parsed) ? parsed : {};
+}
+
+function parseAppPreviewGoalEventPayload(value: string): JsonObject {
+	try {
+		return parseJsonObject(value);
+	} catch {
+		return {};
+	}
 }
 
 function requiredRecord<T>(record: T | undefined, label: string): T {

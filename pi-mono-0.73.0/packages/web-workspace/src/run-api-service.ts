@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
+import type { AppPreviewGoalService } from "./app-preview-goal-service.js";
 import { isObject } from "./json.js";
 import type { RunQueue } from "./run-queue.js";
 import type { RuntimeDbStore } from "./runtime-db.js";
 import type {
+	AppPreviewGoalEventRecord,
+	AppPreviewGoalRecord,
+	AppPreviewGoalSource,
 	DeleteSessionResult,
 	DiagnosticLogEventInput,
 	JsonObject,
@@ -51,9 +55,13 @@ export class WorkspaceRunApiService {
 		private readonly diagnostics?: RunApiDiagnostics,
 		private readonly projectFiles?: RunProjectFileSeeder,
 		private readonly sessionWorkspaces?: RunSessionWorkspaceCleaner,
+		private readonly appPreviewGoals?: AppPreviewGoalService,
 	) {}
 
 	async startRun(clientId: string, request: StartRunRequest): Promise<StartRunResult> {
+		const appPreviewGoalSource = request.appPreviewGoal?.enabled
+			? normalizeAppPreviewGoalSourceForStartRun(request.appPreviewGoal.source)
+			: undefined;
 		const sessionId = normalizeOptionalString(request.sessionId) ?? randomUUID();
 		const existingSession = this.db.getSession(clientId, sessionId);
 		if (existingSession && this.hasActiveRun(clientId, sessionId)) {
@@ -80,6 +88,7 @@ export class WorkspaceRunApiService {
 				throw new RunApiError(`Session ${sessionId} already has an active run`, 409);
 			}
 			await this.enqueueRun(run);
+			this.applyAppPreviewGoalRequest(clientId, sessionId, run.runId, appPreviewGoalSource);
 			return {
 				session: this.requiredSession(clientId, sessionId),
 				run,
@@ -101,6 +110,7 @@ export class WorkspaceRunApiService {
 			throw new RunApiError(`Session ${sessionId} already has an active run`, 409);
 		}
 		await this.enqueueRun(result.run);
+		this.applyAppPreviewGoalRequest(clientId, sessionId, result.run.runId, appPreviewGoalSource);
 		return result;
 	}
 
@@ -212,6 +222,32 @@ export class WorkspaceRunApiService {
 		return this.db.listRunEvents(clientId, runId, afterSeq);
 	}
 
+	getAppPreviewGoal(clientId: string, sessionId: string): AppPreviewGoalRecord | undefined {
+		return this.appPreviewGoals?.get(clientId, sessionId);
+	}
+
+	listAppPreviewGoalEvents(
+		clientId: string,
+		sessionId: string,
+		afterEventId = 0,
+	): AppPreviewGoalEventRecord[] {
+		return this.appPreviewGoals?.events(clientId, sessionId, afterEventId) ?? [];
+	}
+
+	enableAppPreviewGoal(
+		clientId: string,
+		sessionId: string,
+		source: AppPreviewGoalSource,
+	): AppPreviewGoalRecord | undefined {
+		if (!this.appPreviewGoals) return undefined;
+		this.requiredSession(clientId, sessionId);
+		return this.appPreviewGoals.enable({ clientId, sessionId, source });
+	}
+
+	disableAppPreviewGoal(clientId: string, sessionId: string): AppPreviewGoalRecord | undefined {
+		return this.appPreviewGoals?.disable({ clientId, sessionId });
+	}
+
 	private activeRuns(clientId: string, sessionId: string): RuntimeRunRecord[] {
 		return this.db.listRunsForSession(clientId, sessionId).filter((run) => ACTIVE_RUN_STATUSES.has(run.status));
 	}
@@ -243,6 +279,21 @@ export class WorkspaceRunApiService {
 			throw new RunApiError(`Project file seed failed: ${errorMessage(error)}`, 500);
 		}
 	}
+
+	private applyAppPreviewGoalRequest(
+		clientId: string,
+		sessionId: string,
+		runId: string,
+		source: AppPreviewGoalSource | undefined,
+	): void {
+		if (!source) return;
+		this.appPreviewGoals?.enable({
+			clientId,
+			sessionId,
+			runId,
+			source,
+		});
+	}
 }
 
 function normalizeMessage(value: unknown): JsonObject {
@@ -256,6 +307,11 @@ function normalizeUserMessageRole(value: unknown): "user" | "user-with-attachmen
 
 function normalizeOptionalString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeAppPreviewGoalSourceForStartRun(value: unknown): AppPreviewGoalSource {
+	if (value === "manual" || value === "pm_handoff") return value;
+	throw new RunApiError('App preview goal source must be "manual" or "pm_handoff"', 400);
 }
 
 function normalizeProjectFiles(value: unknown): StartRunProjectFile[] {

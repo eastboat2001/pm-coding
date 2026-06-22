@@ -1,18 +1,14 @@
 import type { Model, OpenAICompletionsCompat } from "@mariozechner/pi-ai";
 import {
-	customProviderIdentity,
 	type AutoDiscoveryProviderType,
 	type CustomProvider,
+	customProviderIdentity,
 } from "../storage/stores/custom-providers-store.js";
 import { discoverModels } from "./model-discovery.js";
 
 export const CUSTOM_PROVIDER_DISCOVERY_TIMEOUT_MS = 5000;
 
-type DiscoverModelsFn = (
-	type: AutoDiscoveryProviderType,
-	baseUrl: string,
-	apiKey?: string,
-) => Promise<Model<any>[]>;
+type DiscoverModelsFn = (type: AutoDiscoveryProviderType, baseUrl: string, apiKey?: string) => Promise<Model<any>[]>;
 
 export type CustomProviderModelEntry = {
 	providerLabel: string;
@@ -52,7 +48,10 @@ async function loadCustomProviderModelsForProvider(
 		const models = await withTimeout(discover(provider.type, provider.baseUrl, provider.apiKey), timeoutMs, []);
 		return models.map((model) => ({
 			providerLabel: provider.name,
-			model: normalizeCustomProviderModel(applyAutoDiscoveryCompat(model, provider.useNonStreamingToolCalls), provider),
+			model: normalizeCustomProviderModel(
+				applyAutoDiscoveryCompat(model, provider.useNonStreamingToolCalls),
+				provider,
+			),
 		}));
 	} catch (error) {
 		console.debug(`Failed to load models from ${provider.name}:`, error);

@@ -5,7 +5,7 @@ import type {
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
 } from "@mariozechner/pi-ai";
-import { customProviderIdentity, type CustomProvider } from "../storage/stores/custom-providers-store.js";
+import { type CustomProvider, customProviderIdentity } from "../storage/stores/custom-providers-store.js";
 
 export type CompatibleThinkingFormat = NonNullable<OpenAICompletionsCompat["thinkingFormat"]>;
 export type CompatibleMaxTokensField = NonNullable<OpenAICompletionsCompat["maxTokensField"]>;

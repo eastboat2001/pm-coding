@@ -29,6 +29,13 @@ declare module "@mariozechner/mini-lit" {
 		You: string;
 		Assistant: string;
 		"Thinking...": string;
+		"Retrying request...": string;
+		"next attempt in": string;
+		"Network connection lost. Waiting to reconnect...": string;
+		"Network restored. Syncing run status...": string;
+		"Run connection interrupted. Restoring updates...": string;
+		"Run updates reconnected. Syncing status...": string;
+		"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.": string;
 		"Type your message...": string;
 		"API Keys Configuration": string;
 		"Configure API keys for LLM providers. Keys are stored locally in your browser.": string;
@@ -316,7 +323,37 @@ declare module "@mariozechner/mini-lit" {
 		"Processed file": string;
 		"Running command": string;
 		"Ran command": string;
+		"Automatic preview": string;
+		Enabled: string;
+		"Not enabled": string;
+		"Automatic preview on": string;
+		"Automatic preview off": string;
+		"Waiting for task start": string;
+		"Generating preview": string;
+		"Continuing preview generation": string;
+		"Recovering preview generation": string;
 		"Preview ready": string;
+		"Preview generation limit reached": string;
+		"Preview generation needs attention": string;
+		"Preview generation failed": string;
+		"Preview generation cancelled": string;
+		"No preview URL detected.": string;
+		"Preview URL was not reachable.": string;
+		"Static resources are missing.": string;
+		"index.html is missing.": string;
+		"Preview page is empty.": string;
+		"Preview page did not pass validation.": string;
+		"Preview run queue is unavailable.": string;
+		"Run was cancelled.": string;
+		"Run was interrupted.": string;
+		"Model provider connection failed after retries.": string;
+		"Preview budget reached": string;
+		"Preview needs attention": string;
+		"Preview failed": string;
+		"Preview cancelled": string;
+		"Enable automatic preview": string;
+		"Disable automatic preview": string;
+		"Open preview": string;
 		"Preparing preview": string;
 		"Prepared preview": string;
 	}
@@ -339,6 +376,14 @@ export const translations = {
 		You: "You",
 		Assistant: "Assistant",
 		"Thinking...": "Thinking...",
+		"Retrying request...": "Retrying request...",
+		"next attempt in": "next attempt in",
+		"Network connection lost. Waiting to reconnect...": "Network connection lost. Waiting to reconnect...",
+		"Network restored. Syncing run status...": "Network restored. Syncing run status...",
+		"Run connection interrupted. Restoring updates...": "Run connection interrupted. Restoring updates...",
+		"Run updates reconnected. Syncing status...": "Run updates reconnected. Syncing status...",
+		"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.":
+			"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.",
 		"Type your message...": "Type your message...",
 		"API Keys Configuration": "API Keys Configuration",
 		"Configure API keys for LLM providers. Keys are stored locally in your browser.":
@@ -658,7 +703,37 @@ export const translations = {
 		"Processed file": "Processed file",
 		"Running command": "Running command",
 		"Ran command": "Ran command",
+		"Automatic preview": "Automatic preview",
+		Enabled: "Enabled",
+		"Not enabled": "Not enabled",
+		"Automatic preview on": "Automatic preview on",
+		"Automatic preview off": "Automatic preview off",
+		"Waiting for task start": "Waiting for task start",
+		"Generating preview": "Generating preview",
+		"Continuing preview generation": "Continuing preview generation",
+		"Recovering preview generation": "Recovering preview generation",
 		"Preview ready": "Preview ready",
+		"Preview generation limit reached": "Preview generation limit reached",
+		"Preview generation needs attention": "Preview generation needs attention",
+		"Preview generation failed": "Preview generation failed",
+		"Preview generation cancelled": "Preview generation cancelled",
+		"No preview URL detected.": "No preview URL detected.",
+		"Preview URL was not reachable.": "Preview URL was not reachable.",
+		"Static resources are missing.": "Static resources are missing.",
+		"index.html is missing.": "index.html is missing.",
+		"Preview page is empty.": "Preview page is empty.",
+		"Preview page did not pass validation.": "Preview page did not pass validation.",
+		"Preview run queue is unavailable.": "Preview run queue is unavailable.",
+		"Run was cancelled.": "Run was cancelled.",
+		"Run was interrupted.": "Run was interrupted.",
+		"Model provider connection failed after retries.": "Model provider connection failed after retries.",
+		"Preview budget reached": "Preview budget reached",
+		"Preview needs attention": "Preview needs attention",
+		"Preview failed": "Preview failed",
+		"Preview cancelled": "Preview cancelled",
+		"Enable automatic preview": "Enable automatic preview",
+		"Disable automatic preview": "Disable automatic preview",
+		"Open preview": "Open preview",
 		"Preparing preview": "Preparing preview",
 		"Prepared preview": "Prepared preview",
 	},
@@ -678,6 +753,14 @@ export const translations = {
 		You: "Sie",
 		Assistant: "Assistent",
 		"Thinking...": "Denkt nach...",
+		"Retrying request...": "Anfrage wird erneut versucht...",
+		"next attempt in": "next attempt in",
+		"Network connection lost. Waiting to reconnect...": "Network connection lost. Waiting to reconnect...",
+		"Network restored. Syncing run status...": "Network restored. Syncing run status...",
+		"Run connection interrupted. Restoring updates...": "Run connection interrupted. Restoring updates...",
+		"Run updates reconnected. Syncing status...": "Run updates reconnected. Syncing status...",
+		"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.":
+			"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.",
 		"Type your message...": "Geben Sie Ihre Nachricht ein...",
 		"API Keys Configuration": "API-Schlüssel-Konfiguration",
 		"Configure API keys for LLM providers. Keys are stored locally in your browser.":
@@ -999,7 +1082,37 @@ export const translations = {
 		"Processed file": "Datei verarbeitet",
 		"Running command": "Führe Befehl aus",
 		"Ran command": "Befehl ausgeführt",
+		"Automatic preview": "Automatic preview",
+		Enabled: "Enabled",
+		"Not enabled": "Not enabled",
+		"Automatic preview on": "Automatic preview on",
+		"Automatic preview off": "Automatic preview off",
+		"Waiting for task start": "Waiting for task start",
+		"Generating preview": "Generating preview",
+		"Continuing preview generation": "Continuing preview generation",
+		"Recovering preview generation": "Recovering preview generation",
 		"Preview ready": "Vorschau bereit",
+		"Preview generation limit reached": "Preview generation limit reached",
+		"Preview generation needs attention": "Preview generation needs attention",
+		"Preview generation failed": "Preview generation failed",
+		"Preview generation cancelled": "Preview generation cancelled",
+		"No preview URL detected.": "No preview URL detected.",
+		"Preview URL was not reachable.": "Preview URL was not reachable.",
+		"Static resources are missing.": "Static resources are missing.",
+		"index.html is missing.": "index.html is missing.",
+		"Preview page is empty.": "Preview page is empty.",
+		"Preview page did not pass validation.": "Preview page did not pass validation.",
+		"Preview run queue is unavailable.": "Preview run queue is unavailable.",
+		"Run was cancelled.": "Run was cancelled.",
+		"Run was interrupted.": "Run was interrupted.",
+		"Model provider connection failed after retries.": "Model provider connection failed after retries.",
+		"Preview budget reached": "Preview budget reached",
+		"Preview needs attention": "Preview needs attention",
+		"Preview failed": "Preview failed",
+		"Preview cancelled": "Preview cancelled",
+		"Enable automatic preview": "Enable automatic preview",
+		"Disable automatic preview": "Disable automatic preview",
+		"Open preview": "Open preview",
 		"Preparing preview": "Bereite Vorschau vor",
 		"Prepared preview": "Vorschau vorbereitet",
 	},
@@ -1037,6 +1150,14 @@ mutableTranslations.zh = {
 	You: "你",
 	Assistant: "助手",
 	"Thinking...": "思考中...",
+	"Retrying request...": "正在重试请求...",
+	"next attempt in": "下次尝试",
+	"Network connection lost. Waiting to reconnect...": "网络连接已中断，等待恢复...",
+	"Network restored. Syncing run status...": "网络已恢复，正在同步运行状态...",
+	"Run connection interrupted. Restoring updates...": "运行连接已中断，正在恢复更新...",
+	"Run updates reconnected. Syncing status...": "运行更新已恢复，正在同步状态...",
+	"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.":
+		"模型响应暂无更新，正在监测服务商恢复；如果流式响应超时，将自动恢复预览。",
 	"Type your message...": "输入消息...",
 	"API Keys Configuration": "API Key 配置",
 	"Configure API keys for LLM providers. Keys are stored locally in your browser.":
@@ -1341,7 +1462,37 @@ mutableTranslations.zh = {
 	"Processed file": "已处理文件",
 	"Running command": "正在运行命令",
 	"Ran command": "命令已运行",
+	"Automatic preview": "自动生成预览",
+	Enabled: "已启用",
+	"Not enabled": "未启用",
+	"Automatic preview on": "自动生成预览已开启",
+	"Automatic preview off": "自动生成预览已关闭",
+	"Waiting for task start": "等待任务开始",
+	"Generating preview": "正在生成预览",
+	"Continuing preview generation": "继续生成预览",
+	"Recovering preview generation": "正在恢复并继续生成预览",
 	"Preview ready": "预览已就绪",
+	"Preview generation limit reached": "已达到续跑上限",
+	"Preview generation needs attention": "需要人工处理",
+	"Preview generation failed": "预览生成失败",
+	"Preview generation cancelled": "预览生成已取消",
+	"No preview URL detected.": "未检测到预览 URL。",
+	"Preview URL was not reachable.": "预览地址不可访问。",
+	"Static resources are missing.": "静态资源缺失。",
+	"index.html is missing.": "缺少 index.html。",
+	"Preview page is empty.": "预览页面内容为空。",
+	"Preview page did not pass validation.": "预览页面校验未通过。",
+	"Preview run queue is unavailable.": "预览运行队列不可用。",
+	"Run was cancelled.": "运行已取消。",
+	"Run was interrupted.": "运行已中断。",
+	"Model provider connection failed after retries.": "模型服务连接在多次重试后仍失败。",
+	"Preview budget reached": "预览预算已用尽",
+	"Preview needs attention": "预览需要处理",
+	"Preview failed": "预览失败",
+	"Preview cancelled": "预览已取消",
+	"Enable automatic preview": "开启自动生成预览",
+	"Disable automatic preview": "关闭自动生成预览",
+	"Open preview": "打开预览",
 	"Preparing preview": "正在准备预览",
 	"Prepared preview": "预览已准备",
 };
@@ -1373,6 +1524,14 @@ mutableTranslations.ms = {
 	You: "Anda",
 	Assistant: "Pembantu",
 	"Thinking...": "Sedang berfikir...",
+	"Retrying request...": "Mencuba semula permintaan...",
+	"next attempt in": "next attempt in",
+	"Network connection lost. Waiting to reconnect...": "Network connection lost. Waiting to reconnect...",
+	"Network restored. Syncing run status...": "Network restored. Syncing run status...",
+	"Run connection interrupted. Restoring updates...": "Run connection interrupted. Restoring updates...",
+	"Run updates reconnected. Syncing status...": "Run updates reconnected. Syncing status...",
+	"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.":
+		"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.",
 	"Type your message...": "Taip mesej anda...",
 	"API Keys Configuration": "Konfigurasi API Key",
 	"Configure API keys for LLM providers. Keys are stored locally in your browser.":
@@ -1688,7 +1847,37 @@ mutableTranslations.ms = {
 	"Processed file": "Fail diproses",
 	"Running command": "Menjalankan arahan",
 	"Ran command": "Arahan dijalankan",
+	"Automatic preview": "Automatic preview",
+	Enabled: "Enabled",
+	"Not enabled": "Not enabled",
+	"Automatic preview on": "Automatic preview on",
+	"Automatic preview off": "Automatic preview off",
+	"Waiting for task start": "Waiting for task start",
+	"Generating preview": "Generating preview",
+	"Continuing preview generation": "Continuing preview generation",
+	"Recovering preview generation": "Recovering preview generation",
 	"Preview ready": "Pratonton sedia",
+	"Preview generation limit reached": "Preview generation limit reached",
+	"Preview generation needs attention": "Preview generation needs attention",
+	"Preview generation failed": "Preview generation failed",
+	"Preview generation cancelled": "Preview generation cancelled",
+	"No preview URL detected.": "No preview URL detected.",
+	"Preview URL was not reachable.": "Preview URL was not reachable.",
+	"Static resources are missing.": "Static resources are missing.",
+	"index.html is missing.": "index.html is missing.",
+	"Preview page is empty.": "Preview page is empty.",
+	"Preview page did not pass validation.": "Preview page did not pass validation.",
+	"Preview run queue is unavailable.": "Preview run queue is unavailable.",
+	"Run was cancelled.": "Run was cancelled.",
+	"Run was interrupted.": "Run was interrupted.",
+	"Model provider connection failed after retries.": "Model provider connection failed after retries.",
+	"Preview budget reached": "Preview budget reached",
+	"Preview needs attention": "Preview needs attention",
+	"Preview failed": "Preview failed",
+	"Preview cancelled": "Preview cancelled",
+	"Enable automatic preview": "Enable automatic preview",
+	"Disable automatic preview": "Disable automatic preview",
+	"Open preview": "Open preview",
 	"Preparing preview": "Menyediakan pratonton",
 	"Prepared preview": "Pratonton disediakan",
 };

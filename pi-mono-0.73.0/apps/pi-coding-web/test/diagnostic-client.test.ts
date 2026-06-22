@@ -4,7 +4,7 @@ import {
 	type Model,
 	createAssistantMessageEventStream,
 } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDiagnosticClient, summarizeProviderPayload } from "../src/diagnostics/diagnostic-client.js";
 import { createLoggedStreamFn } from "../src/diagnostics/model-stream-logger.js";
 
@@ -204,6 +204,39 @@ describe("model stream logger", () => {
 		const rawEvents = events.filter((event) => event.eventType === "model.stream.raw_event");
 		expect(rawEvents.some((event) => event.data?.type === "thinking_delta")).toBe(true);
 		expect(rawEvents.some((event) => event.data?.type === "text_delta")).toBe(true);
+	});
+
+	it("ends a stalled model stream after the configured idle timeout", async () => {
+		vi.useFakeTimers();
+		const events: Array<{ eventType: string; data?: Record<string, unknown> }> = [];
+		const client = createDiagnosticClient({
+			fetch: async (_url, init) => {
+				const body = JSON.parse(String(init?.body || "{}")) as {
+					events?: Array<{ eventType: string; data?: Record<string, unknown> }>;
+				};
+				events.push(...(body.events ?? []));
+				return new Response(JSON.stringify({ accepted: body.events?.length ?? 0, dropped: 0 }), { status: 200 });
+			},
+		});
+		const baseStream = createAssistantMessageEventStream();
+		const model = createModel();
+		const streamFn = createLoggedStreamFn(
+			async () => baseStream,
+			client,
+			() => ({ sessionId: "session-stalled", traceId: "trace-stalled" }),
+			() => ({ streamIdleTimeoutMs: 25 }),
+		);
+
+		const resultPromise = (await streamFn(model, createContext())).result();
+		await vi.advanceTimersByTimeAsync(25);
+		const result = await resultPromise;
+		await client.flush();
+		vi.useRealTimers();
+
+		expect(result.errorMessage).toContain("Model stream stalled for 25ms without events");
+		const summary = events.find((event) => event.eventType === "model.stream.summary");
+		expect(summary?.data?.stopReason).toBe("error");
+		expect(summary?.data?.errorMessage).toContain("Model stream stalled");
 	});
 });
 

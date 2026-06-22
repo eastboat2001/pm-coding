@@ -10,10 +10,13 @@ import {
 } from "@mariozechner/pi-agent-core";
 import { type Model, streamSimple } from "@mariozechner/pi-ai";
 import {
+	AppPreviewGoalService,
+	AppPreviewGoalSupervisor,
 	createServerDirectProjectTools,
 	createServerDirectSkillTools,
 	type DiagnosticLogEventInput,
 	loadStorageConfig,
+	PreviewReadinessChecker,
 	RedisRunQueue,
 	RuntimeDbStore,
 	type RuntimeMessageRecord,
@@ -61,6 +64,14 @@ async function main(): Promise<void> {
 	runtimeDb.ensureSchema();
 
 	const queue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
+	const appPreviewGoals = new AppPreviewGoalService(runtimeDb);
+	const previewReadiness = new PreviewReadinessChecker(config);
+	const appPreviewGoalSupervisor = new AppPreviewGoalSupervisor({
+		db: runtimeDb,
+		queue,
+		goals: appPreviewGoals,
+		readiness: previewReadiness,
+	});
 	const skills = new WorkspaceSkillService(config, diagnostics);
 	const skillList = skills.list();
 
@@ -70,6 +81,7 @@ async function main(): Promise<void> {
 		workerId: config.workerId,
 		concurrency: config.workerConcurrency,
 		diagnostics,
+		goalSupervisor: appPreviewGoalSupervisor,
 		createAgent(input) {
 			return createRunAgent(input, {
 				config,
@@ -144,6 +156,7 @@ function createWorkerStartupDiagnosticEvents(config: StorageConfig): DiagnosticL
 				loggingEnabled: config.loggingEnabled,
 				logStdoutEnabled: config.logStdoutEnabled,
 				logsDbFile: config.logsDbFile,
+				modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
 			},
 		},
 	];
@@ -236,6 +249,7 @@ export function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentO
 				promptSnapshotMaxChars: options.config.promptSnapshotMaxChars,
 				modelOutputSnapshotLoggingEnabled: options.config.modelOutputSnapshotLoggingEnabled,
 				modelOutputSnapshotMaxChars: options.config.modelOutputSnapshotMaxChars,
+				streamIdleTimeoutMs: options.config.modelStreamIdleTimeoutMs,
 			}),
 		),
 		transformContext: async (contextMessages, signal) =>

@@ -4,6 +4,7 @@ import { customElement, state } from "lit/decorators.js";
 import "./components/AgentInterface.js";
 import type { Agent, AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { AgentInterface } from "./components/AgentInterface.js";
+import type { MessageEditorExtensionAction } from "./components/MessageEditor.js";
 import { ArtifactsRuntimeProvider } from "./components/sandbox/ArtifactsRuntimeProvider.js";
 import { AttachmentsRuntimeProvider } from "./components/sandbox/AttachmentsRuntimeProvider.js";
 import type { SandboxRuntimeProvider } from "./components/sandbox/SandboxRuntimeProvider.js";
@@ -64,6 +65,7 @@ export class ChatPanel extends LitElement {
 			onCostClick?: () => void;
 			onModelSelect?: () => void;
 			onThinkingChange?: (level: ThinkingLevel) => void | Promise<void>;
+			extensionActions?: MessageEditorExtensionAction[];
 			slashSuggestions?: SlashSuggestionItem[];
 			enableArtifacts?: boolean;
 			sandboxUrlProvider?: () => string;
@@ -89,6 +91,7 @@ export class ChatPanel extends LitElement {
 		this.agentInterface.onThinkingChange = config?.onThinkingChange;
 		this.agentInterface.onBeforeSend = config?.onBeforeSend;
 		this.agentInterface.onCostClick = config?.onCostClick;
+		this.agentInterface.extensionActions = config?.extensionActions ?? [];
 		this.agentInterface.slashSuggestions = config?.slashSuggestions ?? [];
 
 		if (config?.enableArtifacts === false) {

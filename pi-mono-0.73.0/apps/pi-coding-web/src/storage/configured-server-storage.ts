@@ -24,6 +24,7 @@ export interface ConfiguredStorageStatus {
 	promptSnapshotMaxChars?: number;
 	modelOutputSnapshotLoggingEnabled?: boolean;
 	modelOutputSnapshotMaxChars?: number;
+	modelStreamIdleTimeoutMs?: number;
 	logRetentionDays?: number;
 	logMaxEvents?: number;
 	logCleanupIntervalMs?: number;

@@ -6,7 +6,7 @@ import {
 	type ManualModelConfig,
 	manualModelConfigFromModel,
 } from "../src/dialogs/custom-provider-model-config.js";
-import { customProviderIdentity, type CustomProvider } from "../src/storage/stores/custom-providers-store.js";
+import { type CustomProvider, customProviderIdentity } from "../src/storage/stores/custom-providers-store.js";
 
 const provider: Omit<CustomProvider, "models"> = {
 	id: "local",

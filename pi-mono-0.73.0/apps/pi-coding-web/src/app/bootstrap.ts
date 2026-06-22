@@ -28,13 +28,15 @@ import {
 	setLanguage,
 } from "@mariozechner/pi-web-ui";
 import type {
+	AppPreviewGoalRecord,
+	AppPreviewGoalSource,
 	RunStatus,
 	RuntimeMessageRecord,
 	RuntimeRunEventRecord,
 	RuntimeRunRecord,
 } from "@mariozechner/pi-web-workspace";
 import { html, render } from "lit";
-import { Folder, PanelsTopLeft, Plus, Settings } from "lucide";
+import { Eye, Folder, PanelsTopLeft, Plus, Settings } from "lucide";
 import "../app.css";
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
@@ -58,10 +60,30 @@ import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
 import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
 import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
+import { trimRecoverableProviderStallErrors } from "../runtime/runtime-message-conversion.js";
+import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import {
+	retryStatusFromRunEvent,
+	retryStatusText,
+	shouldClearRetryStatusForRunEvent,
+} from "../runtime/run-retry-status.js";
+import {
+	providerStallStatusDelayMs,
+	providerStallStatusText,
+	selectRunTransientStatusText,
+	shouldClearProviderStallStatusForRunEvent,
+	shouldScheduleProviderStallStatusAfterRunEvent,
+	type RunTransientStatusSource,
+	type RunTransientStatusTexts,
+} from "../runtime/run-transient-status.js";
+import {
+	buildAppPreviewGoalStartRequest,
 	cancelRun as cancelRuntimeRun,
 	connectRunEvents,
 	deleteSession as deleteRuntimeSession,
+	disableAppPreviewGoal,
+	enableAppPreviewGoal,
+	getAppPreviewGoal,
 	getSession as getRuntimeSession,
 	listRunEvents as listRuntimeRunEvents,
 	listSessions as listRuntimeSessions,
@@ -83,6 +105,16 @@ import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider
 import { sessionLastMessageModifiedAt } from "../storage/session-timestamps.js";
 import "./CurrentProjectFilesPanel.js";
 import type { CurrentProjectFilesPanel } from "./CurrentProjectFilesPanel.js";
+import {
+	appPreviewGoalActionState,
+	appPreviewGoalContinuationProgress,
+	appPreviewGoalContinuationRunId,
+	appPreviewGoalStageDetailLabel,
+	appPreviewGoalStageLabel,
+	appPreviewGoalToggleLabel,
+	isAppPreviewGoalEnabled,
+	isAppPreviewGoalSettledForRun,
+} from "./app-preview-goal-state.js";
 import {
 	CURRENT_PROJECT_FILE_PREVIEW_DRAWER_DEFAULT_WIDTH,
 	CURRENT_PROJECT_FILES_PANEL_DEFAULT_WIDTH,
@@ -136,18 +168,39 @@ const piRuntimeConfig = {
 		promptSnapshotMaxChars: 20000,
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 20000,
+		streamIdleTimeoutMs: 60000,
 	} as DiagnosticStreamLoggingConfig,
 };
 
 let pendingHandoffModelContext: { documentFiles: HandoffDocumentFile[] } | undefined;
+let currentAppPreviewGoal: AppPreviewGoalRecord | undefined;
+let pendingHandoffAppPreviewGoal = false;
+let manualAppPreviewGoalEnabled = false;
 
 const runClient = {
 	cancelRun: cancelRuntimeRun,
 	connectRunEvents,
 	getSession: getRuntimeSession,
+	disableAppPreviewGoal,
+	enableAppPreviewGoal,
+	getAppPreviewGoal,
 	listRunEvents: listRuntimeRunEvents,
 	listSessions: listRuntimeSessions,
 	startRun: startRuntimeRun,
+};
+
+type AppPreviewGoalExtensionAction = {
+	id: string;
+	label: string;
+	detail?: string;
+	active?: boolean;
+	disabled?: boolean;
+	icon?: unknown;
+	onSelect: () => void | Promise<void>;
+};
+type ExtensionActionHost = {
+	extensionActions: AppPreviewGoalExtensionAction[];
+	requestUpdate?: () => void;
 };
 
 type SkillSlashSuggestion = {
@@ -240,6 +293,7 @@ const loadPiRuntimeConfig = async () => {
 		promptSnapshotMaxChars: normalizePositiveInteger(status?.promptSnapshotMaxChars, 20000),
 		modelOutputSnapshotLoggingEnabled: status?.modelOutputSnapshotLoggingEnabled === true,
 		modelOutputSnapshotMaxChars: normalizePositiveInteger(status?.modelOutputSnapshotMaxChars, 20000),
+		streamIdleTimeoutMs: normalizePositiveInteger(status?.modelStreamIdleTimeoutMs, 60000),
 	};
 	piRuntimeConfig.skillSlashSuggestions = [
 		createSkillSlashCommand(skillApiErrorDetail(diagnostics)),
@@ -291,9 +345,11 @@ let agentUnsubscribe: (() => void) | undefined;
 let remoteAgentController: RemoteAgentController | undefined;
 let remoteRunConnection: RunEventConnection | undefined;
 let remoteRunStatusPollId: ReturnType<typeof setTimeout> | undefined;
+let remoteRunProviderStallStatusTimerId: ReturnType<typeof setTimeout> | undefined;
 let currentActiveRunId: string | undefined;
 let currentRunStatus: RunStatus | undefined;
 let currentRunUpdatedAt: string | undefined;
+const remoteRunTransientStatusTexts: RunTransientStatusTexts = {};
 const reportedQueuedRunTimeouts = new Set<string>();
 const resumedInterruptedSessions = new Set<string>();
 let activeSidebarPanel: "files" | "apps" | null = null;
@@ -333,10 +389,80 @@ const closeRemoteRunConnection = (): void => {
 	}
 };
 
+const clearProviderStallStatusTimer = (): void => {
+	if (remoteRunProviderStallStatusTimerId !== undefined) {
+		clearTimeout(remoteRunProviderStallStatusTimerId);
+		remoteRunProviderStallStatusTimerId = undefined;
+	}
+};
+
+const applyRemoteRunTransientStatusText = (): void => {
+	const agentInterface = chatPanel?.agentInterface;
+	if (!agentInterface) return;
+	agentInterface.transientStatusText = selectRunTransientStatusText(remoteRunTransientStatusTexts);
+	agentInterface.requestUpdate();
+};
+
+const setRemoteRunTransientStatusText = (source: RunTransientStatusSource, statusText = ""): void => {
+	if (statusText) {
+		remoteRunTransientStatusTexts[source] = statusText;
+	} else {
+		delete remoteRunTransientStatusTexts[source];
+	}
+	applyRemoteRunTransientStatusText();
+};
+
+const clearRemoteRunTransientStatusTexts = (): void => {
+	delete remoteRunTransientStatusTexts.connection;
+	delete remoteRunTransientStatusTexts.retry;
+	delete remoteRunTransientStatusTexts.providerStalled;
+	applyRemoteRunTransientStatusText();
+};
+
+const scheduleProviderStallStatus = (runId: string): void => {
+	clearProviderStallStatusTimer();
+	setRemoteRunTransientStatusText("providerStalled");
+	remoteRunProviderStallStatusTimerId = setTimeout(() => {
+		remoteRunProviderStallStatusTimerId = undefined;
+		if (runId !== currentActiveRunId || remoteAgentController?.activeRunId !== runId) return;
+		if (currentRunStatus && currentRunStatus !== "running") return;
+		setRemoteRunTransientStatusText("providerStalled", providerStallStatusText(i18nText));
+		requestChatPanelUpdate();
+	}, providerStallStatusDelayMs(piRuntimeConfig.diagnosticLogging.streamIdleTimeoutMs));
+};
+
+const hasObservableRunInProgress = (): boolean => {
+	return currentActiveRunId !== undefined || agent?.state?.isStreaming === true;
+};
+
+const syncActiveRunStatusOnce = (): void => {
+	const runId = currentActiveRunId;
+	if (!runId) return;
+	void syncCurrentRunStatusFromServer(runId, 1, 0).catch((error) => {
+		console.error("Failed to sync remote run status after reconnect:", error);
+	});
+};
+
+const setAppPreviewGoalStatusText = (goal = currentAppPreviewGoal): void => {
+	const agentInterface = chatPanel?.agentInterface;
+	if (!agentInterface) return;
+	const previewPending = manualAppPreviewGoalEnabled || pendingHandoffAppPreviewGoal;
+	const stageLabel = appPreviewGoalStageLabel(goal, previewPending);
+	const detailLabel = appPreviewGoalStageDetailLabel(goal);
+	const continuationProgress = appPreviewGoalContinuationProgress(goal);
+	agentInterface.appPreviewGoalStatusText = stageLabel
+		? `${i18nText(stageLabel)}${continuationProgress ? ` (${continuationProgress.used}/${continuationProgress.max})` : ""}`
+		: "";
+	agentInterface.appPreviewGoalStatusDetail = detailLabel ? i18nText(detailLabel) : "";
+	agentInterface.requestUpdate();
+};
+
 const resetRemoteRunState = (): void => {
 	closeRemoteRunConnection();
+	clearProviderStallStatusTimer();
 	remoteAgentController = undefined;
 	reportedQueuedRunTimeouts.clear();
+	clearRemoteRunTransientStatusTexts();
 	trackRemoteRun(undefined);
 };
 
@@ -345,12 +471,154 @@ const requestChatPanelUpdate = (): void => {
 	chatPanel?.agentInterface?.requestUpdate();
 };
 
-const markRemoteRunSettled = (status: RunStatus, updatedAt?: string): void => {
+const i18nText = (key: string): string => i18n(key as Parameters<typeof i18n>[0]);
+
+const currentAppPreviewGoalRequest = (source: AppPreviewGoalSource | undefined) =>
+	buildAppPreviewGoalStartRequest(source);
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function buildAppPreviewGoalExtensionActions(): AppPreviewGoalExtensionAction[] {
+	const previewPending = manualAppPreviewGoalEnabled || pendingHandoffAppPreviewGoal;
+	const actionState = appPreviewGoalActionState(currentAppPreviewGoal, previewPending);
+	return [
+		{
+			id: "app-preview-goal",
+			label: i18nText("Automatic preview"),
+			detail: i18nText(appPreviewGoalToggleLabel(currentAppPreviewGoal, previewPending)),
+			active: actionState.active,
+			disabled: actionState.disabled,
+			icon: icon(Eye, "sm"),
+			onSelect: async () => {
+				await setManualAppPreviewGoal(actionState.nextAction === "enable");
+			},
+		},
+	];
+}
+
+function updateAppPreviewGoalExtensionActions(): void {
+	const agentInterface = chatPanel?.agentInterface as unknown as ExtensionActionHost | undefined;
+	if (!agentInterface) return;
+	agentInterface.extensionActions = buildAppPreviewGoalExtensionActions();
+	agentInterface.requestUpdate?.();
+}
+
+function applyAppPreviewGoal(goal: AppPreviewGoalRecord | undefined): void {
+	currentAppPreviewGoal = goal;
+	manualAppPreviewGoalEnabled = isAppPreviewGoalEnabled(currentAppPreviewGoal);
+	updateAppPreviewGoalExtensionActions();
+	setAppPreviewGoalStatusText(currentAppPreviewGoal);
+	renderApp();
+	requestChatPanelUpdate();
+}
+
+async function refreshAppPreviewGoal(): Promise<AppPreviewGoalRecord | undefined> {
+	if (!currentSessionId) {
+		applyAppPreviewGoal(undefined);
+		return undefined;
+	}
+	try {
+		const result = await runClient.getAppPreviewGoal(currentSessionId);
+		applyAppPreviewGoal(result.goal ?? undefined);
+	} catch (error) {
+		console.error("Failed to refresh app preview goal:", error);
+	}
+	return currentAppPreviewGoal;
+}
+
+function refreshAppPreviewGoalInBackground(): void {
+	void refreshAppPreviewGoal().catch((error) => {
+		console.error("Failed to refresh app preview goal:", error);
+	});
+}
+
+async function refreshAppPreviewGoalAfterTerminalRun(runId: string, attempts = 20, intervalMs = 100): Promise<void> {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		const goal = await refreshAppPreviewGoal();
+		const continuationRunId = appPreviewGoalContinuationRunId(goal, runId);
+		if (continuationRunId && (await attachAppPreviewGoalContinuationRun(continuationRunId))) return;
+		if (isAppPreviewGoalSettledForRun(goal, runId)) return;
+		if (attempt < attempts - 1) await sleep(intervalMs);
+	}
+}
+
+async function attachAppPreviewGoalContinuationRun(runId: string): Promise<boolean> {
+	if (!currentSessionId) return false;
+	if (runId === currentActiveRunId && remoteAgentController?.activeRunId === runId) return true;
+
+	const detail = await runClient.getSession(currentSessionId);
+	const run = detail.runs.find((candidate) => candidate.runId === runId);
+	if (!run || !isActiveRunStatus(run.status)) return false;
+
+	const runEvents = await runClient.listRunEvents(run.runId, 0);
+	const runtimeMessages = trimMessagesForActiveRunReplay(detail.messages, {
+		hideRecoverableProviderStallErrors: true,
+	}).map(runtimeMessageToAgentMessage);
+	const sessionModel = await modelController.resolveCustomModel(detail.session.model as unknown as Model<any>);
+	await createAgent({
+		...(sessionModel
+			? { model: sessionModel }
+			: { model: (detail.session.model as unknown as Model<any>) || undefined }),
+		thinkingLevel: normalizeThinkingLevel(detail.session.thinkingLevel),
+		messages: runtimeMessages,
+		tools: [],
+	});
+
+	const controller = new RemoteAgentController(agent);
+	controller.startRemoteRun(run.runId);
+	controller.hydrateRunEvents(runEvents);
+	remoteAgentController = controller;
+	connectToRemoteRun(run, controller);
+	renderApp();
+	requestChatPanelUpdate();
+	await saveSession();
+	return true;
+}
+
+function refreshAppPreviewGoalAfterTerminalRunInBackground(runId: string): void {
+	void refreshAppPreviewGoalAfterTerminalRun(runId).catch((error) => {
+		console.error("Failed to refresh app preview goal after run terminal:", error);
+	});
+}
+
+async function setManualAppPreviewGoal(enabled: boolean): Promise<void> {
+	if (!enabled) pendingHandoffAppPreviewGoal = false;
+	manualAppPreviewGoalEnabled = enabled;
+	if (!currentSessionId) {
+		updateAppPreviewGoalExtensionActions();
+		setAppPreviewGoalStatusText();
+		renderApp();
+		requestChatPanelUpdate();
+		return;
+	}
+	try {
+		const result = enabled
+			? await runClient.enableAppPreviewGoal(currentSessionId, "manual")
+			: await runClient.disableAppPreviewGoal(currentSessionId);
+		applyAppPreviewGoal(result.goal ?? undefined);
+	} catch (error) {
+		if (enabled && error instanceof Error && error.message === "Runtime session not found") {
+			currentAppPreviewGoal = undefined;
+			manualAppPreviewGoalEnabled = true;
+			updateAppPreviewGoalExtensionActions();
+			setAppPreviewGoalStatusText();
+			renderApp();
+			requestChatPanelUpdate();
+			return;
+		}
+		throw error;
+	}
+}
+
+const markRemoteRunSettled = (runId: string, status: RunStatus, updatedAt?: string): void => {
 	closeRemoteRunConnection();
+	clearProviderStallStatusTimer();
 	remoteAgentController = undefined;
 	currentActiveRunId = undefined;
 	currentRunStatus = status;
 	currentRunUpdatedAt = updatedAt ?? currentRunUpdatedAt;
+	clearRemoteRunTransientStatusTexts();
+	refreshAppPreviewGoalAfterTerminalRunInBackground(runId);
 };
 
 const selectActiveRun = (runs: RuntimeRunRecord[]): RuntimeRunRecord | undefined =>
@@ -366,7 +634,11 @@ const runtimeMessageToAgentMessage = (message: RuntimeMessageRecord): AgentMessa
 	} as AgentMessage;
 };
 
-const trimMessagesForActiveRunReplay = (messages: RuntimeMessageRecord[]): RuntimeMessageRecord[] => messages;
+const trimMessagesForActiveRunReplay = (
+	messages: RuntimeMessageRecord[],
+	options: { hideRecoverableProviderStallErrors?: boolean } = {},
+): RuntimeMessageRecord[] =>
+	options.hideRecoverableProviderStallErrors ? trimRecoverableProviderStallErrors(messages) : messages;
 
 const buildSessionMetadata = (
 	state: AgentState,
@@ -984,7 +1256,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 		if (remoteAgentController?.activeRunId === run.runId) {
 			await remoteAgentController.settleRemoteRun(run.status);
 		}
-		markRemoteRunSettled(run.status, run.updatedAt);
+		markRemoteRunSettled(run.runId, run.status, run.updatedAt);
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
@@ -1078,18 +1350,31 @@ const cancelCurrentRemoteRun = async (runId: string): Promise<void> => {
 const applyConnectedRunEvent = async (event: RuntimeRunEventRecord): Promise<void> => {
 	if (!remoteAgentController || event.runId !== remoteAgentController.activeRunId) return;
 
-	await remoteAgentController.applyRunEvent(event);
-	currentRunUpdatedAt = event.createdAt;
+	const retryStatus = retryStatusFromRunEvent(event);
+	setRemoteRunTransientStatusText("connection");
+	if (retryStatus) {
+		setRemoteRunTransientStatusText("retry", retryStatusText(retryStatus, i18nText));
+	} else if (shouldClearRetryStatusForRunEvent(event)) {
+		setRemoteRunTransientStatusText("retry");
+	}
 
 	const payloadType =
 		isRecord(event.payload) && typeof event.payload.type === "string" ? event.payload.type : undefined;
+	await remoteAgentController.applyRunEvent(event);
+	if (shouldClearProviderStallStatusForRunEvent(payloadType)) {
+		clearProviderStallStatusTimer();
+		setRemoteRunTransientStatusText("providerStalled");
+	}
+	if (shouldScheduleProviderStallStatusAfterRunEvent(payloadType)) scheduleProviderStallStatus(event.runId);
+	currentRunUpdatedAt = event.createdAt;
+
 	if (payloadType === "agent_end") {
 		const syncedTerminalStatus = await syncCurrentRunStatusFromServer(event.runId);
 		if (!syncedTerminalStatus) {
 			if (remoteAgentController?.activeRunId === event.runId) {
 				await remoteAgentController.finishRemoteRun("completed");
 			}
-			markRemoteRunSettled("completed", event.createdAt);
+			markRemoteRunSettled(event.runId, "completed", event.createdAt);
 			await saveSession();
 			renderApp();
 			requestChatPanelUpdate();
@@ -1103,20 +1388,49 @@ const connectToRemoteRun = (run: RuntimeRunRecord, controller: RemoteAgentContro
 	closeRemoteRunConnection();
 	trackRemoteRun(run);
 	scheduleRemoteRunStatusPoll(run.runId);
-	remoteRunConnection = runClient.connectRunEvents(run.runId, controller.lastSeq, async (event) => {
-		try {
-			await applyConnectedRunEvent(event);
-		} catch (error) {
-			console.error("Failed to apply remote run event:", error);
-			writeDiagnosticEvent({
-				level: "error",
-				category: "agent",
-				eventType: "agent.remote_event.error",
-				data: errorDiagnosticData(error, { runId: event.runId, sessionId: event.sessionId, seq: event.seq }),
-			});
-			throw error;
-		}
-	});
+	if (run.status === "running") scheduleProviderStallStatus(run.runId);
+	let connectionWasInterrupted = false;
+	remoteRunConnection = runClient.connectRunEvents(
+		run.runId,
+		controller.lastSeq,
+		async (event) => {
+			try {
+				await applyConnectedRunEvent(event);
+			} catch (error) {
+				console.error("Failed to apply remote run event:", error);
+				writeDiagnosticEvent({
+					level: "error",
+					category: "agent",
+					eventType: "agent.remote_event.error",
+					data: errorDiagnosticData(error, { runId: event.runId, sessionId: event.sessionId, seq: event.seq }),
+				});
+				throw error;
+			}
+		},
+		{
+			onStatusChange: (connection) => {
+				if (connection.closed || run.runId !== currentActiveRunId || remoteAgentController?.activeRunId !== run.runId) {
+					return;
+				}
+				if (connection.readyState === connection.CONNECTING && connection.lastError) {
+					connectionWasInterrupted = true;
+					const status = navigator.onLine === false ? "offline" : "run_reconnecting";
+					setRemoteRunTransientStatusText("connection", runConnectionStatusText(status, i18nText));
+					requestChatPanelUpdate();
+					return;
+				}
+				if (connection.readyState === connection.OPEN && connectionWasInterrupted) {
+					connectionWasInterrupted = false;
+					setRemoteRunTransientStatusText(
+						"connection",
+						runConnectionStatusText("run_reconnected", i18nText),
+					);
+					requestChatPanelUpdate();
+					syncActiveRunStatusOnce();
+				}
+			},
+		},
+	);
 };
 
 const startRemotePrompt = async (
@@ -1137,8 +1451,14 @@ const startRemotePrompt = async (
 	void saveSession();
 
 	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
+	const appPreviewGoalSource: AppPreviewGoalSource | undefined = pendingHandoffAppPreviewGoal
+		? "pm_handoff"
+		: manualAppPreviewGoalEnabled
+			? "manual"
+			: undefined;
 	try {
 		const projectFiles = collectProjectFilesFromMessages(messages);
+		const appPreviewGoal = currentAppPreviewGoalRequest(appPreviewGoalSource);
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId,
 			title: sessionTitle(currentTitle, agent.state.messages),
@@ -1146,9 +1466,15 @@ const startRemotePrompt = async (
 			model: agent.state.model as unknown as Record<string, unknown>,
 			thinkingLevel: agent.state.thinkingLevel,
 			...(projectFiles.length > 0 ? { projectFiles } : {}),
+			...(appPreviewGoal ? { appPreviewGoal } : {}),
 		});
 	} catch (error) {
 		agent.state.messages = previousMessages;
+		if (appPreviewGoalSource === "pm_handoff") {
+			pendingHandoffAppPreviewGoal = false;
+			updateAppPreviewGoalExtensionActions();
+			setAppPreviewGoalStatusText();
+		}
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
@@ -1156,16 +1482,19 @@ const startRemotePrompt = async (
 	}
 
 	pendingHandoffModelContext = undefined;
+	pendingHandoffAppPreviewGoal = false;
 	currentSessionCreatedAt = runResult.session.createdAt;
 	await setCurrentSessionId(runResult.session.sessionId);
 
 	const controller = new RemoteAgentController(agent);
 	controller.startRemoteRun(runResult.run.runId);
+	clearRemoteRunTransientStatusTexts();
 	remoteAgentController = controller;
 	connectToRemoteRun(runResult.run, controller);
 	renderApp();
 	requestChatPanelUpdate();
 	await saveSession();
+	refreshAppPreviewGoalInBackground();
 	refreshGeneratedAppsPanel();
 	await agent.waitForIdle();
 };
@@ -1175,12 +1504,14 @@ const startRemoteContinuationRun = async (): Promise<void> => {
 	const projectFiles = collectProjectFilesFromMessages(agent.state.messages);
 	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
 	try {
+		const appPreviewGoal = currentAppPreviewGoalRequest(manualAppPreviewGoalEnabled ? "manual" : undefined);
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId,
 			title: sessionTitle(currentTitle, agent.state.messages),
 			model: agent.state.model as unknown as Record<string, unknown>,
 			thinkingLevel: agent.state.thinkingLevel,
 			...(projectFiles.length > 0 ? { projectFiles } : {}),
+			...(appPreviewGoal ? { appPreviewGoal } : {}),
 		});
 	} catch (error) {
 		await saveSession();
@@ -1194,11 +1525,13 @@ const startRemoteContinuationRun = async (): Promise<void> => {
 
 	const controller = new RemoteAgentController(agent);
 	controller.startRemoteRun(runResult.run.runId);
+	clearRemoteRunTransientStatusTexts();
 	remoteAgentController = controller;
 	connectToRemoteRun(runResult.run, controller);
 	renderApp();
 	requestChatPanelUpdate();
 	await saveSession();
+	refreshAppPreviewGoalInBackground();
 	refreshGeneratedAppsPanel();
 	await agent.waitForIdle();
 };
@@ -1279,18 +1612,24 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			})),
 		],
 	});
+	updateAppPreviewGoalExtensionActions();
+	setAppPreviewGoalStatusText();
 	applySkillSlashSuggestions();
 };
 
 const loadSession = async (sessionId: string): Promise<boolean> => {
 	pendingHandoffModelContext = undefined;
+	pendingHandoffAppPreviewGoal = false;
+	manualAppPreviewGoalEnabled = false;
 	if (!storage.sessions) return false;
 
 	try {
 		const runtimeDetail = await runClient.getSession(sessionId);
 		const activeRun = selectActiveRun(runtimeDetail.runs);
 		const activeRunEvents = activeRun ? await runClient.listRunEvents(activeRun.runId, 0) : [];
-		const runtimeMessages = trimMessagesForActiveRunReplay(runtimeDetail.messages).map(runtimeMessageToAgentMessage);
+		const runtimeMessages = trimMessagesForActiveRunReplay(runtimeDetail.messages, {
+			hideRecoverableProviderStallErrors: Boolean(activeRun),
+		}).map(runtimeMessageToAgentMessage);
 
 		await setCurrentSessionId(sessionId);
 		currentSessionCreatedAt = runtimeDetail.session.createdAt;
@@ -1328,6 +1667,7 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		}
 
 		await saveSession();
+		await refreshAppPreviewGoal();
 		renderApp();
 		if (!activeRun) {
 			resumeInterruptedSessionIfNeeded();
@@ -1366,6 +1706,7 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		tools: [],
 	});
 
+	await refreshAppPreviewGoal();
 	renderApp();
 	resumeInterruptedSessionIfNeeded();
 	return true;
@@ -1373,6 +1714,9 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 
 const startFreshSession = async (persistImmediately = false) => {
 	pendingHandoffModelContext = undefined;
+	currentAppPreviewGoal = undefined;
+	pendingHandoffAppPreviewGoal = false;
+	manualAppPreviewGoalEnabled = false;
 	currentTitle = "";
 	currentSessionCreatedAt = undefined;
 	resetRemoteRunState();
@@ -1441,11 +1785,17 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 		documentFiles.length > 0 ? markHandoffAttachmentsUiOnly(attachments, documentFiles) : attachments;
 	await applyHandoffDefaultThinkingLevel();
 	pendingHandoffModelContext = { documentFiles };
+	pendingHandoffAppPreviewGoal = true;
+	manualAppPreviewGoalEnabled = false;
+	currentAppPreviewGoal = undefined;
+	updateAppPreviewGoalExtensionActions();
+	setAppPreviewGoalStatusText();
 	chatPanel.agentInterface?.setInput(buildVisibleCodingHandoffPrompt(payload), inputAttachments);
 	if (currentSessionId) {
 		await saveSession();
 	}
 	renderApp();
+	requestChatPanelUpdate();
 };
 
 const restoreInitialSession = async () => {
@@ -1724,12 +2074,27 @@ const renderApp = () => {
 
 window.addEventListener(LANGUAGE_CHANGE_EVENT, () => {
 	document.documentElement.lang = getCurrentLanguage();
+	updateAppPreviewGoalExtensionActions();
+	setAppPreviewGoalStatusText();
 	chatPanel?.requestUpdate();
 	chatPanel?.agentInterface?.requestUpdate();
 	(
 		chatPanel?.agentInterface?.querySelector("message-editor") as { requestUpdate?: () => void } | null
 	)?.requestUpdate?.();
 	renderApp();
+});
+
+window.addEventListener("offline", () => {
+	if (!hasObservableRunInProgress()) return;
+	setRemoteRunTransientStatusText("connection", runConnectionStatusText("offline", i18nText));
+	requestChatPanelUpdate();
+});
+
+window.addEventListener("online", () => {
+	if (!hasObservableRunInProgress()) return;
+	setRemoteRunTransientStatusText("connection", runConnectionStatusText("online_syncing", i18nText));
+	requestChatPanelUpdate();
+	syncActiveRunStatusOnce();
 });
 
 export async function initApp() {

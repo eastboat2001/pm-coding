@@ -8,10 +8,7 @@ describe("custom provider model loading", () => {
 		const second = deferred<Model<any>[]>();
 		const calls: string[] = [];
 		const loading = loadCustomProviderModels(
-			[
-				provider("provider-a", "Provider A", "vllm"),
-				provider("provider-b", "Provider B", "ollama"),
-			],
+			[provider("provider-a", "Provider A", "vllm"), provider("provider-b", "Provider B", "ollama")],
 			{
 				discover: async (type) => {
 					calls.push(type);

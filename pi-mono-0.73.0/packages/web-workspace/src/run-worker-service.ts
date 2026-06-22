@@ -1,4 +1,9 @@
 import type { ClaimedRun, RunQueue, RunQueueIdentity } from "./run-queue.js";
+import {
+	RunRetryController,
+	type RunRetryControllerEvent,
+	type RunRetryControllerOptions,
+} from "./run-retry-controller.js";
 import type { RuntimeDbStore } from "./runtime-db.js";
 import type { JsonObject, RunStatus, RuntimeMessageRecord, RuntimeRunRecord, WorkerAgentInput } from "./types.js";
 
@@ -6,6 +11,9 @@ const DEFAULT_CANCEL_POLL_INTERVAL_MS = 500;
 const DEFAULT_CLAIM_TIMEOUT_MS = 0;
 const DEFAULT_IDLE_SLEEP_MS = 100;
 const QUEUE_ERROR_DIAGNOSTIC_THROTTLE_MS = 5000;
+const APP_PREVIEW_CONTINUATION_INTERNAL_MARKER = { kind: "app_preview_continuation" };
+const ASSISTANT_TAIL_CONTINUATION_PROMPT =
+	"Continue from the previous assistant response and complete the original request. Do not repeat completed work; inspect the current project state before making further changes when needed.";
 
 export interface WorkerAgentEvent extends JsonObject {
 	type: string;
@@ -28,6 +36,8 @@ export interface WorkspaceRunWorkerServiceOptions {
 	concurrency?: number;
 	createAgent(input: WorkerAgentInput): WorkerAgent;
 	diagnostics?: RunWorkerDiagnostics;
+	goalSupervisor?: { afterRunTerminal(run: RuntimeRunRecord): Promise<void> | void };
+	retry?: RunRetryControllerOptions;
 	cancelPollIntervalMs?: number;
 	claimTimeoutMs?: number;
 }
@@ -45,7 +55,9 @@ export class WorkspaceRunWorkerService {
 	private readonly concurrency: number;
 	private readonly db: RuntimeDbStore;
 	private readonly diagnostics: RunWorkerDiagnostics | undefined;
+	private readonly goalSupervisor: WorkspaceRunWorkerServiceOptions["goalSupervisor"];
 	private readonly queue: RunQueue;
+	private readonly retryController: RunRetryController;
 	private readonly workerId: string;
 	private readonly createAgent: (input: WorkerAgentInput) => WorkerAgent;
 	private loops: Array<Promise<void>> = [];
@@ -62,6 +74,16 @@ export class WorkspaceRunWorkerService {
 		this.cancelPollIntervalMs = options.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS;
 		this.claimTimeoutMs = options.claimTimeoutMs ?? DEFAULT_CLAIM_TIMEOUT_MS;
 		this.diagnostics = options.diagnostics;
+		this.goalSupervisor = options.goalSupervisor;
+		const onRetryEvent = options.retry?.onRetryEvent;
+		this.retryController = new RunRetryController({
+			...options.retry,
+			diagnostics: options.retry?.diagnostics ?? options.diagnostics,
+			onRetryEvent: (event) => {
+				this.persistRetryEvent(event);
+				onRetryEvent?.(event);
+			},
+		});
 	}
 
 	markOwnedRunningRunsInterrupted(): void {
@@ -103,23 +125,12 @@ export class WorkspaceRunWorkerService {
 			run = activeRun;
 
 			const abortController = new AbortController();
-			const agent = this.createAgent({
-				run: activeRun,
-				session,
-				messages,
-				model: activeRun.model,
-				thinkingLevel: activeRun.thinkingLevel,
-				signal: abortController.signal,
-			});
-			this.activeAgents.add(agent);
 			this.activeAbortControllers.add(abortController);
 			this.activeRuns.set(activeRunKey(activeRun), activeRun);
 
-			const unsubscribe = agent.subscribe((event) => {
-				this.persistAgentEvent(activeRun, event, messageEndKeys);
-			});
+			let activeAgent: WorkerAgent | undefined;
 			const cancelPoll = setInterval(() => {
-				void this.pollCancellation(activeRun, agent, abortController, () => {
+				void this.pollCancellation(activeRun, activeAgent, abortController, () => {
 					cancelRequested = true;
 				}).catch((error) => {
 					if (this.stopping && isQueueClosedError(error)) return;
@@ -128,13 +139,70 @@ export class WorkspaceRunWorkerService {
 			}, this.cancelPollIntervalMs);
 
 			try {
-				const tailMessage = messages.at(-1);
-				if (tailMessage && isUserPromptRole(tailMessage.role)) {
-					await agent.prompt(tailMessage);
-				} else {
-					await agent.continue();
-				}
-				await agent.waitForIdle?.();
+				await this.retryController.execute({
+					run: activeRun,
+					signal: abortController.signal,
+					action: async () => {
+						const agent = this.createAgent({
+							run: activeRun,
+							session,
+							messages,
+							model: activeRun.model,
+							thinkingLevel: activeRun.thinkingLevel,
+							signal: abortController.signal,
+						});
+						const attemptEvents: WorkerAgentEvent[] = [];
+						let persistedEventCount = 0;
+						let unsubscribe: (() => void) | undefined;
+						const flushAttemptEvents = () => {
+							while (persistedEventCount < attemptEvents.length) {
+								const event = attemptEvents[persistedEventCount];
+								this.persistAgentEvent(activeRun, event, messageEndKeys);
+								persistedEventCount += 1;
+							}
+						};
+						try {
+							activeAgent = agent;
+							this.activeAgents.add(agent);
+							unsubscribe = agent.subscribe((event) => {
+								attemptEvents.push(event);
+								if (persistedEventCount > 0 || shouldFlushAttemptEvents(event)) {
+									flushAttemptEvents();
+								}
+							});
+							const tailMessage = messages.at(-1);
+							try {
+								if (tailMessage && isUserPromptRole(tailMessage.role)) {
+									await agent.prompt(tailMessage);
+								} else if (tailMessage?.role === "assistant") {
+									await agent.prompt(createAssistantTailContinuationPrompt(activeRun));
+								} else {
+									await agent.continue();
+								}
+								await agent.waitForIdle?.();
+							} catch (error) {
+								if (persistedEventCount > 0) {
+									flushAttemptEvents();
+									throw new NonRetryableAgentAttemptError(errorMessage(error));
+								}
+								throw error;
+							}
+							const assistantError = assistantErrorMessageFromEvents(attemptEvents);
+							if (assistantError) {
+								if (persistedEventCount > 0 || attemptHasNonReplayableSideEffects(attemptEvents)) {
+									flushAttemptEvents();
+									throw new NonRetryableAgentAttemptError(assistantError);
+								}
+								throw new Error(assistantError);
+							}
+							flushAttemptEvents();
+						} finally {
+							if (unsubscribe) unsubscribe();
+							this.activeAgents.delete(agent);
+							if (activeAgent === agent) activeAgent = undefined;
+						}
+					},
+				});
 				const current = this.db.getRun(activeRun.clientId, activeRun.runId);
 				if (current && isTerminalStatus(current.status)) {
 					return true;
@@ -148,8 +216,6 @@ export class WorkspaceRunWorkerService {
 				}
 			} finally {
 				clearInterval(cancelPoll);
-				if (unsubscribe) unsubscribe();
-				this.activeAgents.delete(agent);
 				this.activeAbortControllers.delete(abortController);
 				this.activeRuns.delete(activeRunKey(activeRun));
 			}
@@ -171,6 +237,7 @@ export class WorkspaceRunWorkerService {
 			}
 			return true;
 		} finally {
+			if (run) await this.notifyGoalSupervisor(run);
 			await this.completeClaim(runIdentity);
 		}
 	}
@@ -209,6 +276,16 @@ export class WorkspaceRunWorkerService {
 		}
 	}
 
+	private async notifyGoalSupervisor(run: RuntimeRunRecord): Promise<void> {
+		const current = this.db.getRun(run.clientId, run.runId);
+		if (!current || !isTerminalStatus(current.status)) return;
+		try {
+			await this.goalSupervisor?.afterRunTerminal(current);
+		} catch (error) {
+			this.writeDiagnostic("worker_goal_supervisor_failed", current, error);
+		}
+	}
+
 	private persistAgentEvent(run: RuntimeRunRecord, event: WorkerAgentEvent, messageEndKeys: Set<string>): void {
 		this.db.appendRunEvent({
 			clientId: run.clientId,
@@ -229,6 +306,24 @@ export class WorkspaceRunWorkerService {
 		}
 	}
 
+	private persistRetryEvent(event: RunRetryControllerEvent): void {
+		if (event.eventType !== "retry_scheduled") return;
+		const type = "agent_retry_scheduled";
+		this.db.appendRunEvent({
+			clientId: event.run.clientId,
+			sessionId: event.run.sessionId,
+			runId: event.run.runId,
+			type,
+			payload: {
+				type,
+				attempt: event.attempt,
+				maxAttempts: event.maxAttempts,
+				reasonCode: event.reasonCode,
+				...(event.delayMs === undefined ? {} : { delayMs: event.delayMs }),
+			},
+		});
+	}
+
 	private shouldAppendMessage(message: RuntimeMessageRecord, messageEndKeys: Set<string>): boolean {
 		if (isUserPromptRole(message.role)) return false;
 		const key = messageKey(message);
@@ -239,14 +334,14 @@ export class WorkspaceRunWorkerService {
 
 	private async pollCancellation(
 		run: RuntimeRunRecord,
-		agent: WorkerAgent,
+		agent: WorkerAgent | undefined,
 		abortController: AbortController,
 		onCancel: () => void,
 	): Promise<void> {
 		if (!(await this.queue.isCancelRequested(run))) return;
 		onCancel();
 		abortController.abort();
-		agent.abort();
+		agent?.abort();
 		const current = this.db.getRun(run.clientId, run.runId);
 		if (current?.status === "running") {
 			this.db.updateRunStatus(run.runId, run.clientId, "cancelling");
@@ -318,6 +413,16 @@ export class WorkspaceRunWorkerService {
 	}
 }
 
+class NonRetryableAgentAttemptError extends Error {
+	readonly code = "PI_NON_RETRYABLE";
+	readonly retryable = false;
+
+	constructor(assistantError: string) {
+		super(`Agent attempt failed after non-replayable side effects: ${assistantError}`);
+		this.name = "NonRetryableAgentAttemptError";
+	}
+}
+
 function activeRunKey(run: RunQueueIdentity): string {
 	return JSON.stringify([run.clientId, run.runId]);
 }
@@ -332,6 +437,91 @@ function isTerminalStatus(status: RunStatus): boolean {
 
 function isUserPromptRole(role: string): boolean {
 	return role === "user" || role === "user-with-attachments";
+}
+
+function createAssistantTailContinuationPrompt(run: RuntimeRunRecord): RuntimeMessageRecord {
+	return {
+		messageId: 0,
+		sessionId: run.sessionId,
+		clientId: run.clientId,
+		role: "user",
+		payload: {
+			content: ASSISTANT_TAIL_CONTINUATION_PROMPT,
+			piInternal: APP_PREVIEW_CONTINUATION_INTERNAL_MARKER,
+		},
+		createdAt: new Date().toISOString(),
+	};
+}
+
+function attemptHasNonReplayableSideEffects(events: WorkerAgentEvent[]): boolean {
+	for (const event of events) {
+		if (event.type.startsWith("tool_execution_")) return true;
+		if (event.type === "message_end" && isNonReplayableSideEffectMessage(event.message)) return true;
+		if (event.messages?.some((message) => isNonReplayableSideEffectMessage(message))) return true;
+	}
+	return false;
+}
+
+function shouldFlushAttemptEvents(event: WorkerAgentEvent): boolean {
+	if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end") {
+		return !isAssistantFailureMarkerEvent(event) && !isReplayablePromptEvent(event);
+	}
+	if (event.type.startsWith("tool_execution_")) return true;
+	if (event.type === "agent_end") return !event.messages?.some((message) => isAssistantFailureMarker(message));
+	return false;
+}
+
+function isReplayablePromptEvent(event: WorkerAgentEvent): boolean {
+	return isReplayablePromptMessage(event.message);
+}
+
+function isReplayablePromptMessage(message: JsonObject | undefined): boolean {
+	const role = typeof message?.role === "string" ? message.role : undefined;
+	return role ? isUserPromptRole(role) : false;
+}
+
+function isAssistantFailureMarkerEvent(event: WorkerAgentEvent): boolean {
+	if (isAssistantFailureMarker(event.message)) return true;
+	return event.messages?.some((message) => isAssistantFailureMarker(message)) ?? false;
+}
+
+function isNonReplayableSideEffectMessage(message: JsonObject | undefined): boolean {
+	if (!message) return false;
+	const role = typeof message?.role === "string" ? message.role : undefined;
+	if (!role) return false;
+	if (role === "user" || role === "user-with-attachments") return false;
+	if (role === "toolResult") return true;
+	if (role === "assistant") return !isAssistantFailureMarker(message);
+	return true;
+}
+
+function isAssistantFailureMarker(message: JsonObject | undefined): boolean {
+	if (!message) return false;
+	if (assistantErrorMessageFromMessage(message)) return true;
+	const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+	return stopReason === "error";
+}
+
+function assistantErrorMessageFromEvents(events: WorkerAgentEvent[]): string | undefined {
+	for (const event of events) {
+		const messageError = assistantErrorMessageFromMessage(event.message);
+		if (messageError) return messageError;
+		for (const message of event.messages ?? []) {
+			const listMessageError = assistantErrorMessageFromMessage(message);
+			if (listMessageError) return listMessageError;
+		}
+	}
+	return undefined;
+}
+
+function assistantErrorMessageFromMessage(message: JsonObject | undefined): string | undefined {
+	if (!message) return undefined;
+	const role = typeof message.role === "string" ? message.role : undefined;
+	if (role && role !== "assistant") return undefined;
+	const errorMessage = message.errorMessage;
+	if (typeof errorMessage === "string" && errorMessage.length > 0) return errorMessage;
+	const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+	return stopReason === "error" ? "assistant stopped with error" : undefined;
 }
 
 function messageKey(message: RuntimeMessageRecord): string {

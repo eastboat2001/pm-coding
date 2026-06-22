@@ -339,6 +339,62 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("should not execute tool calls from length-stopped assistant messages", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		const stream = agentLoop([createUserMessage("echo something")], context, config, undefined, () => {
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage(
+					[
+						{ type: "text", text: "I was cut off while preparing a tool call." },
+						{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } },
+					],
+					"length",
+				);
+				mockStream.push({ type: "done", reason: "length", message });
+			});
+			return mockStream;
+		});
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const messages = await stream.result();
+		expect(executed).toEqual([]);
+		expect(events.some((event) => event.type === "tool_execution_start")).toBe(false);
+		expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+		const turnEnd = events.find((event) => event.type === "turn_end");
+		expect(turnEnd).toMatchObject({ type: "turn_end", toolResults: [] });
+	});
+
 	it("should execute mutated beforeToolCall args without revalidation", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: Array<string | number> = [];

@@ -18,6 +18,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { resolveOpenAICompatibleReasoningEffort } from "./openai-reasoning-effort.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
@@ -248,7 +249,9 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
 			const effort = options?.reasoningEffort
-				? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
+				? resolveOpenAICompatibleReasoningEffort(model, options.reasoningEffort, {
+						preserveNativeOpenAI: true,
+					})
 				: "medium";
 			params.reasoning = {
 				effort: effort as NonNullable<typeof params.reasoning>["effort"],

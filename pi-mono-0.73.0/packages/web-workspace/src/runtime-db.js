@@ -260,7 +260,10 @@ export class RuntimeDbStore {
 					thinking_level,
 					updated_at
 				) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.runId, input.sessionId, input.clientId, "queued", JSON.stringify(input.model), input.thinkingLevel, updatedAt);
-            this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt);
+            this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt, {
+                model: input.model,
+                thinkingLevel: input.thinkingLevel,
+            });
         });
         return requiredRecord(this.getRun(input.clientId, input.runId), "run");
     }
@@ -281,7 +284,10 @@ export class RuntimeDbStore {
 					thinking_level,
 					updated_at
 				) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.runId, input.sessionId, input.clientId, "queued", JSON.stringify(input.model), input.thinkingLevel, updatedAt);
-            this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt);
+            this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt, {
+                model: input.model,
+                thinkingLevel: input.thinkingLevel,
+            });
             return true;
         });
         return created ? requiredRecord(this.getRun(input.clientId, input.runId), "run") : undefined;
@@ -319,7 +325,10 @@ export class RuntimeDbStore {
 					thinking_level,
 					updated_at
 				) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.runId, input.sessionId, input.clientId, "queued", JSON.stringify(input.model), input.thinkingLevel, createdAt);
-            this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", createdAt);
+            this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", createdAt, {
+                model: input.model,
+                thinkingLevel: input.thinkingLevel,
+            });
             return true;
         });
         if (!created)
@@ -520,7 +529,15 @@ export class RuntimeDbStore {
             .get(clientId, eventId);
         return row ? toAppPreviewGoalEventRecord(row) : undefined;
     }
-    updateSessionRun(clientId, sessionId, runId, status, updatedAt) {
+    updateSessionRun(clientId, sessionId, runId, status, updatedAt, context) {
+        if (context) {
+            this.open()
+                .prepare(`UPDATE sessions
+					SET updated_at = ?, last_run_status = ?, last_run_id = ?, model_json = ?, thinking_level = ?
+					WHERE client_id = ? AND session_id = ?`)
+                .run(updatedAt, status, runId, JSON.stringify(context.model), context.thinkingLevel, clientId, sessionId);
+            return;
+        }
         this.open()
             .prepare(`UPDATE sessions
 				SET updated_at = ?, last_run_status = ?, last_run_id = ?

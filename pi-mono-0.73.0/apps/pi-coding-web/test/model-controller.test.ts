@@ -71,17 +71,66 @@ describe("ModelController", () => {
 		expect(model?.provider).toBe("custom-provider:provider-b");
 		expect(model?.baseUrl).toBe("http://localhost:9000/v1");
 	});
+
+	it("refreshes the active custom model from a saved provider update", async () => {
+		let providers: Array<Record<string, unknown>> = [
+			{
+				id: "provider-a",
+				name: "Local",
+				type: "openai-completions",
+				baseUrl: "https://old.example/v1",
+				apiKey: "old-key",
+				models: [manualModel("custom-provider:provider-a", "mimo", "https://old.example/v1")],
+			},
+		];
+		const controller = createController(undefined, () => providers);
+		const activeModel = await controller.resolveCustomModel({
+			provider: "custom-provider:provider-a",
+			id: "mimo",
+		});
+
+		providers = [
+			{
+				id: "provider-a",
+				name: "Local",
+				type: "openai-completions",
+				baseUrl: "https://new.example/v1",
+				apiKey: "new-key",
+				models: [manualModel("custom-provider:provider-a", "mimo", "https://new.example/v1")],
+			},
+		];
+
+		const refreshed = await controller.resolveSavedCustomProviderModel(activeModel, providers[0]);
+
+		expect(refreshed?.provider).toBe("custom-provider:provider-a");
+		expect(refreshed?.baseUrl).toBe("https://new.example/v1");
+	});
 });
+
+function manualModel(provider: string, id: string, baseUrl: string) {
+	return {
+		id,
+		name: id,
+		api: "openai-completions",
+		provider,
+		baseUrl,
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	};
+}
 
 function createController(
 	providerPatch: Record<string, unknown> | undefined = {},
-	providers?: Array<Record<string, unknown>>,
+	providers?: Array<Record<string, unknown>> | (() => Array<Record<string, unknown>>),
 ) {
 	return new ModelController(
 		{
 			customProviders: {
 				getAll: async () =>
-					providers ?? [
+					(typeof providers === "function" ? providers() : providers) ?? [
 					{
 						id: "local-vllm",
 						name: "Local vLLM",

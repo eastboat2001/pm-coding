@@ -173,6 +173,74 @@ describe("custom provider manual model config", () => {
 			},
 		});
 	});
+
+	it("preserves manually selected compatibility profiles after save and reload", () => {
+		const completionsProfiles: ManualModelConfig["openAICompletionsProfile"][] = [
+			"standard",
+			"local-basic",
+			"deepseek-mimo",
+			"openrouter",
+			"qwen",
+			"qwen-chat-template",
+			"zai",
+			"custom",
+		];
+		for (const profile of completionsProfiles) {
+			const config = {
+				...defaultConfig(`chat-${profile}`),
+				reasoning: true,
+				openAICompletionsProfile: profile,
+				thinkingFormat: profile === "custom" ? "openai" : profile === "deepseek-mimo" ? "deepseek" : "openai",
+				supportsReasoningEffort: profile !== "custom",
+				maxTokensField: profile === "custom" ? "max_tokens" : "max_completion_tokens",
+			} satisfies ManualModelConfig;
+			const [model] = createManualModelsFromConfigs(provider, [config]);
+
+			expect(manualModelConfigFromModel(model).openAICompletionsProfile).toBe(profile);
+		}
+
+		const responsesProvider: Omit<CustomProvider, "models"> = {
+			...provider,
+			type: "openai-responses",
+		};
+		for (const profile of [
+			"standard",
+			"generic-gateway",
+			"custom",
+		] satisfies ManualModelConfig["openAIResponsesProfile"][]) {
+			const config = {
+				...defaultConfig(`responses-${profile}`),
+				openAIResponsesProfile: profile,
+				sendSessionIdHeader: profile !== "custom",
+				openAIResponsesSupportsLongCacheRetention: profile !== "custom",
+			} satisfies ManualModelConfig;
+			const [model] = createManualModelsFromConfigs(responsesProvider, [config]);
+
+			expect(manualModelConfigFromModel(model).openAIResponsesProfile).toBe(profile);
+		}
+
+		const anthropicProvider: Omit<CustomProvider, "models"> = {
+			...provider,
+			type: "anthropic-messages",
+		};
+		for (const profile of [
+			"standard",
+			"mimo-deepseek",
+			"legacy-compatible",
+			"custom",
+		] satisfies ManualModelConfig["anthropicMessagesProfile"][]) {
+			const config = {
+				...defaultConfig(`anthropic-${profile}`),
+				reasoning: true,
+				anthropicMessagesProfile: profile,
+				anthropicReasoningReplayFormat: profile === "custom" ? "deepseek-reasoning-content" : "anthropic-signature",
+				supportsEagerToolInputStreaming: profile !== "custom",
+			} satisfies ManualModelConfig;
+			const [model] = createManualModelsFromConfigs(anthropicProvider, [config]);
+
+			expect(manualModelConfigFromModel(model).anthropicMessagesProfile).toBe(profile);
+		}
+	});
 });
 
 function defaultConfig(id: string): ManualModelConfig {

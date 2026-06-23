@@ -11,7 +11,14 @@ export type CompatibleThinkingFormat = NonNullable<OpenAICompletionsCompat["thin
 export type CompatibleMaxTokensField = NonNullable<OpenAICompletionsCompat["maxTokensField"]>;
 export type AnthropicReasoningReplayFormat = NonNullable<AnthropicMessagesCompat["reasoningReplayFormat"]>;
 type OpenAICompletionsCompatWithToolMode = OpenAICompletionsCompat & {
+	customProviderProfile?: OpenAICompletionsProfile;
 	useNonStreamingToolCalls?: boolean;
+};
+type OpenAIResponsesCompatWithProfile = OpenAIResponsesCompat & {
+	customProviderProfile?: OpenAIResponsesProfile;
+};
+type AnthropicMessagesCompatWithProfile = AnthropicMessagesCompat & {
+	customProviderProfile?: AnthropicMessagesProfile;
 };
 
 export type OpenAICompletionsProfile =
@@ -79,11 +86,13 @@ export function defaultManualModelConfig(id = ""): ManualModelConfig {
 
 export function manualModelConfigFromModel(model: Model<Api>): ManualModelConfig {
 	const openAICompletionsCompat =
-		model.api === "openai-completions" ? (model.compat as OpenAICompletionsCompat | undefined) : undefined;
+		model.api === "openai-completions"
+			? (model.compat as OpenAICompletionsCompatWithToolMode | undefined)
+			: undefined;
 	const openAIResponsesCompat =
-		model.api === "openai-responses" ? (model.compat as OpenAIResponsesCompat | undefined) : undefined;
+		model.api === "openai-responses" ? (model.compat as OpenAIResponsesCompatWithProfile | undefined) : undefined;
 	const anthropicCompat =
-		model.api === "anthropic-messages" ? (model.compat as AnthropicMessagesCompat | undefined) : undefined;
+		model.api === "anthropic-messages" ? (model.compat as AnthropicMessagesCompatWithProfile | undefined) : undefined;
 	const thinkingFormat = openAICompletionsCompat?.thinkingFormat ?? "openai";
 
 	return {
@@ -206,6 +215,7 @@ function createOpenAICompletionsCompat(config: ManualModelConfig): OpenAIComplet
 			break;
 	}
 
+	compat.customProviderProfile = config.openAICompletionsProfile;
 	compat.useNonStreamingToolCalls = config.useNonStreamingToolCalls;
 	return compat;
 }
@@ -230,40 +240,47 @@ function standardOpenAICompletionsCompat(): OpenAICompletionsCompatWithToolMode 
 	};
 }
 
-function createOpenAIResponsesCompat(config: ManualModelConfig): OpenAIResponsesCompat | undefined {
+function createOpenAIResponsesCompat(config: ManualModelConfig): OpenAIResponsesCompatWithProfile | undefined {
 	if (config.openAIResponsesProfile === "standard") return undefined;
 
 	return {
+		customProviderProfile: config.openAIResponsesProfile,
 		sendSessionIdHeader: config.openAIResponsesProfile === "generic-gateway" ? false : config.sendSessionIdHeader,
 		supportsLongCacheRetention:
 			config.openAIResponsesProfile === "generic-gateway" ? false : config.openAIResponsesSupportsLongCacheRetention,
 	};
 }
 
-function createAnthropicMessagesCompat(config: ManualModelConfig): AnthropicMessagesCompat | undefined {
+function createAnthropicMessagesCompat(config: ManualModelConfig): AnthropicMessagesCompatWithProfile | undefined {
 	if (config.anthropicMessagesProfile === "standard") return undefined;
 
 	if (config.anthropicMessagesProfile === "mimo-deepseek") {
 		return {
+			customProviderProfile: config.anthropicMessagesProfile,
 			reasoningReplayFormat: "deepseek-reasoning-content",
 		};
 	}
 
 	if (config.anthropicMessagesProfile === "legacy-compatible") {
 		return {
+			customProviderProfile: config.anthropicMessagesProfile,
 			supportsEagerToolInputStreaming: false,
 		};
 	}
 
 	return {
+		customProviderProfile: config.anthropicMessagesProfile,
 		reasoningReplayFormat: config.anthropicReasoningReplayFormat,
 		supportsEagerToolInputStreaming: config.supportsEagerToolInputStreaming,
 		supportsLongCacheRetention: config.anthropicSupportsLongCacheRetention,
 	};
 }
 
-function inferOpenAICompletionsProfile(compat: OpenAICompletionsCompat | undefined): OpenAICompletionsProfile {
+function inferOpenAICompletionsProfile(
+	compat: OpenAICompletionsCompatWithToolMode | undefined,
+): OpenAICompletionsProfile {
 	if (!compat) return "standard";
+	if (isOpenAICompletionsProfile(compat.customProviderProfile)) return compat.customProviderProfile;
 	if (compat.thinkingFormat === "deepseek" || compat.requiresReasoningContentOnAssistantMessages) {
 		return "deepseek-mimo";
 	}
@@ -282,19 +299,44 @@ function inferOpenAICompletionsProfile(compat: OpenAICompletionsCompat | undefin
 	return "standard";
 }
 
-function inferOpenAIResponsesProfile(compat: OpenAIResponsesCompat | undefined): OpenAIResponsesProfile {
+function inferOpenAIResponsesProfile(compat: OpenAIResponsesCompatWithProfile | undefined): OpenAIResponsesProfile {
 	if (!compat) return "standard";
+	if (isOpenAIResponsesProfile(compat.customProviderProfile)) return compat.customProviderProfile;
 	if (compat.sendSessionIdHeader === false || compat.supportsLongCacheRetention === false) {
 		return "generic-gateway";
 	}
 	return "custom";
 }
 
-function inferAnthropicMessagesProfile(compat: AnthropicMessagesCompat | undefined): AnthropicMessagesProfile {
+function inferAnthropicMessagesProfile(
+	compat: AnthropicMessagesCompatWithProfile | undefined,
+): AnthropicMessagesProfile {
 	if (!compat) return "standard";
+	if (isAnthropicMessagesProfile(compat.customProviderProfile)) return compat.customProviderProfile;
 	if (compat.reasoningReplayFormat === "deepseek-reasoning-content") return "mimo-deepseek";
 	if (compat.supportsEagerToolInputStreaming === false) return "legacy-compatible";
 	return "custom";
+}
+
+function isOpenAICompletionsProfile(value: unknown): value is OpenAICompletionsProfile {
+	return (
+		value === "standard" ||
+		value === "local-basic" ||
+		value === "deepseek-mimo" ||
+		value === "openrouter" ||
+		value === "qwen" ||
+		value === "qwen-chat-template" ||
+		value === "zai" ||
+		value === "custom"
+	);
+}
+
+function isOpenAIResponsesProfile(value: unknown): value is OpenAIResponsesProfile {
+	return value === "standard" || value === "generic-gateway" || value === "custom";
+}
+
+function isAnthropicMessagesProfile(value: unknown): value is AnthropicMessagesProfile {
+	return value === "standard" || value === "mimo-deepseek" || value === "legacy-compatible" || value === "custom";
 }
 
 function defaultSupportsReasoningEffort(thinkingFormat: CompatibleThinkingFormat): boolean {

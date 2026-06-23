@@ -8,6 +8,8 @@ import {
 	AppStorage,
 	type Attachment,
 	ChatPanel,
+	CUSTOM_PROVIDER_SAVED_EVENT,
+	type CustomProviderSavedEvent,
 	createStreamFn,
 	defaultConvertToLlm,
 	getCurrentLanguage,
@@ -44,38 +46,22 @@ import { Input } from "@mariozechner/mini-lit/dist/Input.js";
 import { DiagnosticLogsTab } from "../diagnostics/DiagnosticLogsTab.js";
 import { createDiagnosticClient, type DiagnosticData, type DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
 import { createLoggedStreamFn, type DiagnosticStreamLoggingConfig } from "../diagnostics/model-stream-logger.js";
+import { normalizeHandoffLanguage } from "../integrations/handoff-language.js";
 import {
 	buildCodingHandoffPromptFromSource,
-	buildVisibleCodingHandoffPrompt,
 	buildPmApiUrl,
+	buildVisibleCodingHandoffPrompt,
 	fetchPmHandoffPayload,
 	type HandoffDocumentFile,
 	type PmHandoffPayload,
 	prepareHandoffDocumentFiles,
 } from "../integrations/pm-handoff.js";
-import { normalizeHandoffLanguage } from "../integrations/handoff-language.js";
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
 import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
 import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
-import { trimRecoverableProviderStallErrors } from "../runtime/runtime-message-conversion.js";
-import { runConnectionStatusText } from "../runtime/run-connection-status.js";
-import {
-	retryStatusFromRunEvent,
-	retryStatusText,
-	shouldClearRetryStatusForRunEvent,
-} from "../runtime/run-retry-status.js";
-import {
-	providerStallStatusDelayMs,
-	providerStallStatusText,
-	selectRunTransientStatusText,
-	shouldClearProviderStallStatusForRunEvent,
-	shouldScheduleProviderStallStatusAfterRunEvent,
-	type RunTransientStatusSource,
-	type RunTransientStatusTexts,
-} from "../runtime/run-transient-status.js";
 import {
 	buildAppPreviewGoalStartRequest,
 	cancelRun as cancelRuntimeRun,
@@ -91,7 +77,23 @@ import {
 	renameSession as renameRuntimeSession,
 	startRun as startRuntimeRun,
 } from "../runtime/run-client.js";
+import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
+import {
+	retryStatusFromRunEvent,
+	retryStatusText,
+	shouldClearRetryStatusForRunEvent,
+} from "../runtime/run-retry-status.js";
+import {
+	providerStallStatusDelayMs,
+	providerStallStatusText,
+	type RunTransientStatusSource,
+	type RunTransientStatusTexts,
+	selectRunTransientStatusText,
+	shouldClearProviderStallStatusForRunEvent,
+	shouldScheduleProviderStallStatusAfterRunEvent,
+} from "../runtime/run-transient-status.js";
+import { trimRecoverableProviderStallErrors } from "../runtime/runtime-message-conversion.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
@@ -104,7 +106,6 @@ import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custo
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
 import { sessionLastMessageModifiedAt } from "../storage/session-timestamps.js";
 import "./CurrentProjectFilesPanel.js";
-import type { CurrentProjectFilesPanel } from "./CurrentProjectFilesPanel.js";
 import {
 	appPreviewGoalActionState,
 	appPreviewGoalContinuationProgress,
@@ -115,6 +116,7 @@ import {
 	isAppPreviewGoalEnabled,
 	isAppPreviewGoalSettledForRun,
 } from "./app-preview-goal-state.js";
+import type { CurrentProjectFilesPanel } from "./CurrentProjectFilesPanel.js";
 import {
 	CURRENT_PROJECT_FILE_PREVIEW_DRAWER_DEFAULT_WIDTH,
 	CURRENT_PROJECT_FILES_PANEL_DEFAULT_WIDTH,
@@ -1144,6 +1146,36 @@ const handleModelSelect = () => {
 	);
 };
 
+const syncActiveModelFromSavedCustomProvider = async (
+	provider: CustomProviderSavedEvent["detail"]["provider"],
+): Promise<void> => {
+	if (!agent?.state.model) return;
+	const refreshedModel = await modelController.resolveSavedCustomProviderModel(agent.state.model, provider);
+	if (!refreshedModel) return;
+
+	agent.state.model = refreshedModel;
+	await modelController.persistSelectedModel(refreshedModel);
+	if (currentSessionId) {
+		await saveSession();
+	}
+	requestChatPanelUpdate();
+	renderApp();
+};
+
+window.addEventListener(CUSTOM_PROVIDER_SAVED_EVENT, (event) => {
+	const provider = (event as CustomProviderSavedEvent).detail?.provider;
+	if (!provider) return;
+	void syncActiveModelFromSavedCustomProvider(provider).catch((error) => {
+		console.error("Failed to refresh active model from saved custom provider:", error);
+		writeDiagnosticEvent({
+			level: "error",
+			category: "storage",
+			eventType: "storage.custom_provider.active_model_refresh.error",
+			data: errorDiagnosticData(error, { providerId: provider.id }),
+		});
+	});
+});
+
 const resumeInterruptedSessionIfNeeded = () => {
 	if (!agent) return;
 	resumeInterruptedToolResultSession({
@@ -1254,7 +1286,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 		await drainCurrentRemoteRunEvents(run.runId);
 		closeRemoteRunConnection();
 		if (remoteAgentController?.activeRunId === run.runId) {
-			await remoteAgentController.settleRemoteRun(run.status);
+			await remoteAgentController.settleRemoteRun(run.status, run.error ?? undefined);
 		}
 		markRemoteRunSettled(run.runId, run.status, run.updatedAt);
 		await saveSession();
@@ -1409,7 +1441,11 @@ const connectToRemoteRun = (run: RuntimeRunRecord, controller: RemoteAgentContro
 		},
 		{
 			onStatusChange: (connection) => {
-				if (connection.closed || run.runId !== currentActiveRunId || remoteAgentController?.activeRunId !== run.runId) {
+				if (
+					connection.closed ||
+					run.runId !== currentActiveRunId ||
+					remoteAgentController?.activeRunId !== run.runId
+				) {
 					return;
 				}
 				if (connection.readyState === connection.CONNECTING && connection.lastError) {
@@ -1421,10 +1457,7 @@ const connectToRemoteRun = (run: RuntimeRunRecord, controller: RemoteAgentContro
 				}
 				if (connection.readyState === connection.OPEN && connectionWasInterrupted) {
 					connectionWasInterrupted = false;
-					setRemoteRunTransientStatusText(
-						"connection",
-						runConnectionStatusText("run_reconnected", i18nText),
-					);
+					setRemoteRunTransientStatusText("connection", runConnectionStatusText("run_reconnected", i18nText));
 					requestChatPanelUpdate();
 					syncActiveRunStatusOnce();
 				}
@@ -1748,10 +1781,7 @@ const applyHandoffDefaultThinkingLevel = async () => {
 	}
 };
 
-const markHandoffAttachmentsUiOnly = (
-	attachments: Attachment[],
-	documentFiles: HandoffDocumentFile[],
-): Attachment[] =>
+const markHandoffAttachmentsUiOnly = (attachments: Attachment[], documentFiles: HandoffDocumentFile[]): Attachment[] =>
 	attachments.map((attachment, index) => ({
 		...attachment,
 		llmContext: "none" as const,

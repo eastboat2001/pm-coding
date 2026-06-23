@@ -69,6 +69,11 @@ export { ThinkingBlock } from "./components/ThinkingBlock.js";
 export { ApiKeyPromptDialog } from "./dialogs/ApiKeyPromptDialog.js";
 export { AttachmentOverlay } from "./dialogs/AttachmentOverlay.js";
 export { CustomProviderDialog } from "./dialogs/CustomProviderDialog.js";
+export {
+	CUSTOM_PROVIDER_SAVED_EVENT,
+	type CustomProviderSavedEvent,
+	dispatchCustomProviderSavedEvent,
+} from "./dialogs/custom-provider-events.js";
 // Dialogs
 export { ModelSelector } from "./dialogs/ModelSelector.js";
 export { PersistentStorageDialog } from "./dialogs/PersistentStorageDialog.js";

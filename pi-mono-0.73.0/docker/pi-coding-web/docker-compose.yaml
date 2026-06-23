@@ -25,7 +25,7 @@ services:
     ports:
       - "${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
-      - pi-coding-web-data:/app/apps/pi-coding-web/data
+      - pi-coding-web-data:/app/apps/pi-coding-web/data:z
     depends_on:
       redis:
         condition: service_healthy
@@ -56,7 +56,7 @@ services:
       PI_REDIS_URL: redis://redis:6379
       PI_WORKER_ID: ${PI_WORKER_ID:-pi-worker}
     volumes:
-      - pi-coding-web-data:/app/apps/pi-coding-web/data
+      - pi-coding-web-data:/app/apps/pi-coding-web/data:z
     depends_on:
       redis:
         condition: service_healthy

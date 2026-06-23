@@ -38,6 +38,28 @@ describe("RemoteAgentController", () => {
 		expect(agent.state.isStreaming).toBe(false);
 	});
 
+	it("settles a failed remote run with a visible assistant error when no output event arrived", async () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		await controller.applyRunEvent(createRunEventRecord(1, "r1", { type: "agent_start" }));
+		await controller.settleRemoteRun("failed", "400 invalid reasoning_effort: minimal");
+
+		expect(controller.activeRunId).toBeUndefined();
+		expect(controller.lastSeq).toBe(1);
+		expect(agent.appliedEvents.map((event) => event.type)).toEqual(["agent_start", "message_end", "agent_end"]);
+		expect(agent.state.messages).toHaveLength(1);
+		const message = agent.state.messages[0];
+		expect(message.role).toBe("assistant");
+		if (message.role === "assistant") {
+			expect(message.stopReason).toBe("error");
+			expect(message.errorMessage).toContain("reasoning_effort");
+			expect(message.content).toEqual([{ type: "text", text: "Run failed: 400 invalid reasoning_effort: minimal" }]);
+		}
+		expect(agent.state.isStreaming).toBe(false);
+	});
+
 	it("ignores remote prompt echo events for a user message that is already in local state", async () => {
 		const userMessage = createUserMessage("hello");
 		const agent = createFakeRemoteAgent([userMessage]);

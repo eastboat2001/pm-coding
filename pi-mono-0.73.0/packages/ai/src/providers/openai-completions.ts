@@ -37,6 +37,7 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { extractToolCallsFromText } from "../utils/tool-call-extraction.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { resolveOpenAICompatibleReasoningEffort } from "./openai-reasoning-effort.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -712,22 +713,32 @@ function buildParams(
 	} else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
 		(params as any).thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
 		if (options?.reasoningEffort) {
-			(params as any).reasoning_effort =
-				model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+			const effort = resolveOpenAICompatibleReasoningEffort(model, options.reasoningEffort, {
+				preserveNativeOpenAI: true,
+			});
+			if (effort) {
+				(params as any).reasoning_effort = effort;
+			}
 		}
 	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
 		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
 		const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
 		if (options?.reasoningEffort) {
-			openRouterParams.reasoning = {
-				effort: model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort,
-			};
+			const effort = resolveOpenAICompatibleReasoningEffort(model, options.reasoningEffort);
+			if (effort) {
+				openRouterParams.reasoning = { effort };
+			}
 		} else if (model.thinkingLevelMap?.off !== null) {
 			openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
 		}
 	} else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
-		(params as any).reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+		const effort = resolveOpenAICompatibleReasoningEffort(model, options.reasoningEffort, {
+			preserveNativeOpenAI: true,
+		});
+		if (effort) {
+			(params as any).reasoning_effort = effort;
+		}
 	} else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		const offValue = model.thinkingLevelMap?.off;
 		if (typeof offValue === "string") {

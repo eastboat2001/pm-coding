@@ -48,7 +48,9 @@ export class ModelController {
 		if (!model.provider || !model.id) return undefined;
 
 		const customProviders = await this.storage.customProviders.getAll();
-		const customProvider = customProviders.find((provider) => customProviderMatchesIdentity(provider, model.provider));
+		const customProvider = customProviders.find((provider) =>
+			customProviderMatchesIdentity(provider, model.provider),
+		);
 		if (!customProvider) return undefined;
 
 		if (customProvider.models?.length) {
@@ -63,6 +65,14 @@ export class ModelController {
 
 		if (isCompleteModel(model)) return applyCustomProviderCompat(customProvider, model as Model<any>);
 		return createCustomProviderModel(customProvider, model.id);
+	}
+
+	async resolveSavedCustomProviderModel(
+		currentModel: Model<any> | undefined,
+		provider: CustomProviderModelSource,
+	): Promise<Model<any> | undefined> {
+		if (!currentModel || !customProviderMatchesIdentity(provider, currentModel.provider)) return undefined;
+		return await this.resolveCustomModel(currentModel);
 	}
 
 	private async isCustomProviderModel(model: Model<any> | undefined): Promise<boolean> {

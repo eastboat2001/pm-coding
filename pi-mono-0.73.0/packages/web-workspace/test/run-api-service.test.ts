@@ -224,6 +224,57 @@ describe("WorkspaceRunApiService", () => {
 		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
 	});
 
+	it("updates an existing runtime session model snapshot when starting a new prompt run", async () => {
+		db.createSession({
+			clientId: "client-a",
+			sessionId: "session-model-refresh",
+			title: "Refresh model",
+			model: { provider: "custom-provider:local", id: "mimo", baseUrl: "https://old.example/v1" },
+			thinkingLevel: "off",
+		});
+		const nextModel = { provider: "custom-provider:local", id: "mimo", baseUrl: "https://new.example/v1" };
+
+		await service.startRun("client-a", {
+			sessionId: "session-model-refresh",
+			title: "Refresh model",
+			message: { content: "use latest config" },
+			model: nextModel,
+			thinkingLevel: "minimal",
+		});
+
+		expect(db.getSession("client-a", "session-model-refresh")).toEqual(
+			expect.objectContaining({
+				model: nextModel,
+				thinkingLevel: "minimal",
+			}),
+		);
+	});
+
+	it("updates an existing runtime session model snapshot when starting a continuation run", async () => {
+		db.createSession({
+			clientId: "client-a",
+			sessionId: "session-continuation-model-refresh",
+			title: "Continue latest model",
+			model: { provider: "custom-provider:local", id: "mimo", baseUrl: "https://old.example/v1" },
+			thinkingLevel: "off",
+		});
+		const nextModel = { provider: "custom-provider:local", id: "mimo", baseUrl: "https://new.example/v1" };
+
+		await service.startRun("client-a", {
+			sessionId: "session-continuation-model-refresh",
+			title: "Continue latest model",
+			model: nextModel,
+			thinkingLevel: "low",
+		});
+
+		expect(db.getSession("client-a", "session-continuation-model-refresh")).toEqual(
+			expect.objectContaining({
+				model: nextModel,
+				thinkingLevel: "low",
+			}),
+		);
+	});
+
 	it("enables an app preview goal from startRun only after enqueue succeeds", async () => {
 		const goals = new AppPreviewGoalService(db);
 		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
@@ -332,17 +383,15 @@ describe("WorkspaceRunApiService", () => {
 		);
 		expect(goalService.getAppPreviewGoal("client-a", "session-manual")?.status).toBe("active");
 		const startedEvents = goalService.listAppPreviewGoalEvents("client-a", "session-manual");
-		expect(startedEvents).toEqual([
-			expect.objectContaining({ eventType: "goal_started", reasonCode: "enabled" }),
-		]);
+		expect(startedEvents).toEqual([expect.objectContaining({ eventType: "goal_started", reasonCode: "enabled" })]);
 
 		const disabled = goalService.disableAppPreviewGoal("client-a", "session-manual");
 
 		expect(disabled).toEqual(expect.objectContaining({ status: "disabled" }));
 		expect(goalService.getAppPreviewGoal("client-a", "session-manual")?.status).toBe("disabled");
-		expect(
-			goalService.listAppPreviewGoalEvents("client-a", "session-manual", startedEvents[0]?.eventId),
-		).toEqual([expect.objectContaining({ eventType: "goal_disabled", reasonCode: "user_disabled" })]);
+		expect(goalService.listAppPreviewGoalEvents("client-a", "session-manual", startedEvents[0]?.eventId)).toEqual([
+			expect.objectContaining({ eventType: "goal_disabled", reasonCode: "user_disabled" }),
+		]);
 	});
 
 	it("returns not found when manually enabling an app preview goal for a missing session", () => {

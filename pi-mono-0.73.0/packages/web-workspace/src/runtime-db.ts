@@ -106,6 +106,11 @@ type SeqRow = {
 	seq: number;
 };
 
+type SessionRunContext = {
+	model: JsonObject;
+	thinkingLevel: string;
+};
+
 export interface CreateRunWithMessageInput {
 	sessionId: string;
 	clientId: string;
@@ -435,7 +440,10 @@ export class RuntimeDbStore {
 				input.thinkingLevel,
 				updatedAt,
 			);
-			this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt);
+			this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt, {
+				model: input.model,
+				thinkingLevel: input.thinkingLevel,
+			});
 		});
 		return requiredRecord(this.getRun(input.clientId, input.runId), "run");
 	}
@@ -465,7 +473,10 @@ export class RuntimeDbStore {
 				input.thinkingLevel,
 				updatedAt,
 			);
-			this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt);
+			this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", updatedAt, {
+				model: input.model,
+				thinkingLevel: input.thinkingLevel,
+			});
 			return true;
 		});
 		return created ? requiredRecord(this.getRun(input.clientId, input.runId), "run") : undefined;
@@ -526,7 +537,10 @@ export class RuntimeDbStore {
 				input.thinkingLevel,
 				createdAt,
 			);
-			this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", createdAt);
+			this.updateSessionRun(input.clientId, input.sessionId, input.runId, "queued", createdAt, {
+				model: input.model,
+				thinkingLevel: input.thinkingLevel,
+			});
 			return true;
 		});
 		if (!created) return undefined;
@@ -813,7 +827,19 @@ export class RuntimeDbStore {
 		runId: string,
 		status: RunStatus,
 		updatedAt: string,
+		context?: SessionRunContext,
 	): void {
+		if (context) {
+			this.open()
+				.prepare(
+					`UPDATE sessions
+					SET updated_at = ?, last_run_status = ?, last_run_id = ?, model_json = ?, thinking_level = ?
+					WHERE client_id = ? AND session_id = ?`,
+				)
+				.run(updatedAt, status, runId, JSON.stringify(context.model), context.thinkingLevel, clientId, sessionId);
+			return;
+		}
+
 		this.open()
 			.prepare(
 				`UPDATE sessions

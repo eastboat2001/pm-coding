@@ -7,7 +7,7 @@
 - `docker-compose.yaml`：服务器运行用 Compose 文件，只运行已有镜像。
 - `docker-compose.build.yaml`：有完整源码时用于本地构建镜像。
 - `.env.example`：统一配置模板，复制为 `.env` 后使用。
-- `pi-coding-web-data`：Compose named volume，挂载到容器内 `/app/apps/pi-coding-web/data`，保存 PI 会话、项目和日志。
+- `pi-coding-web-data`：Compose named volume，挂载到容器内 `/app/apps/pi-coding-web/data`，保存 PI 会话、项目和日志；web 与 worker 共用该 volume，Podman/SELinux 环境需要使用共享标签 `:z`。
 - `pi-redis-data`：Compose named volume，挂载到 Redis `/data`。
 - `pi-coding-web-offline-0.73.0.tar`：可选的离线镜像包，包含 `pi-coding-web:0.73.0` 和 `redis:7-alpine`，由 `docker save` 生成，不应提交到 Git。
 
@@ -26,8 +26,10 @@ Podman 环境检查命令：
 
 ```bash
 podman --version
-podman compose version
+podman compose version || podman-compose --version
 ```
+
+部分服务器的 `docker compose` 会转交给外部 Podman provider 执行，日志里会出现 `Executing external compose provider "/usr/bin/podman-compose"`。这种环境仍然按本文命令操作，但排查镜像、容器和 volume 时优先使用 `podman images`、`podman ps`、`podman volume ls`。
 
 如果服务器不能访问 npm 或 Docker registry，建议在开发机或构建机先构建镜像并导出 tar，再复制到服务器。
 
@@ -47,7 +49,7 @@ PI_CODING_WEB_IMAGE=pi-coding-web:0.73.0
 PI_CODING_WEB_PORT=5173
 PI_CODING_WEB_PULL_POLICY=never
 
-PI_PREVIEW_BASE_URL=
+PI_PREVIEW_BASE_URL=http://server-ip-or-domain:5173
 PI_LOG_ENABLED=true
 PI_LANGFUSE_ENABLED=false
 LANGFUSE_PUBLIC_KEY=
@@ -63,6 +65,18 @@ LANGFUSE_SECRET_KEY=
 - `PI_LOG_ENABLED`：是否启用后台诊断日志。
 - `PI_LANGFUSE_ENABLED`：是否启用 Langfuse 导出。
 - `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`：Langfuse 密钥。`PI_LANGFUSE_ENABLED=false` 时可以留空。
+
+离线包加载到 Podman 后，镜像名可能显示为 `localhost/pi-coding-web:<tag>`。此时 `.env` 必须写实际镜像名，例如：
+
+```env
+PI_CODING_WEB_IMAGE=localhost/pi-coding-web:0.73.0-previewfix-20260622
+```
+
+也可以给镜像补一个兼容 tag，但更推荐直接在 `.env` 中使用明确的新 tag，避免分不清服务器实际运行的是哪个版本：
+
+```bash
+podman tag localhost/pi-coding-web:0.73.0-previewfix-20260622 pi-coding-web:0.73.0
+```
 
 Docker/Podman 部署统一使用一个 `.env`。这个文件同时给 Compose 提供镜像名、端口等部署变量，并通过 `env_file` 注入到容器进程环境。不要再把 `.env` bind mount 到 `/app/apps/pi-coding-web/.env`；rootless Podman 或受限文件系统下可能导致容器内读取 `.env` 报 `EACCES: permission denied`。`.env` 已被 Git 忽略，不要提交真实密钥。
 
@@ -109,48 +123,133 @@ docker compose up -d
 
 ```bash
 cd /path/to/pi-mono-0.73.0
-docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
-docker save -o docker/pi-coding-web/pi-coding-web-offline-0.73.0.tar pi-coding-web:0.73.0 redis:7-alpine
+docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com -t pi-coding-web:0.73.0-previewfix-20260622 -f apps/pi-coding-web/Dockerfile .
+docker save -o docker/pi-coding-web/pi-coding-web-offline-0.73.0-previewfix-20260622.tar pi-coding-web:0.73.0-previewfix-20260622 redis:7-alpine
 ```
 
 如果构建机访问官方 npm registry 稳定，可以去掉 `--build-arg NPM_REGISTRY=https://registry.npmmirror.com`，Dockerfile 默认使用 `https://registry.npmjs.org/`。
+
+建议每次上线使用新的镜像 tag，例如 `0.73.0-previewfix-20260622`。不要复用旧 tag，除非你能确认服务器端旧镜像已经删除或被覆盖。
 
 把 `docker/pi-coding-web` 目录复制到服务器，例如：
 
 ```text
 /opt/pi-coding-web/
   docker-compose.yaml
+  .env.example
   .env
-  pi-coding-web-offline-0.73.0.tar
+  pi-coding-web-offline-0.73.0-previewfix-20260622.tar
 ```
 
 在服务器加载镜像：
 
 ```bash
 cd /opt/pi-coding-web
-docker load -i pi-coding-web-offline-0.73.0.tar
-docker compose up -d --no-build
+docker load -i pi-coding-web-offline-0.73.0-previewfix-20260622.tar
+docker images | grep -E "pi-coding-web|redis"
+docker compose up -d --no-build --force-recreate
 ```
 
 `--no-build` 可以避免离线服务器误尝试构建源码。
+
+如果是 Podman 环境，加载后先确认真实镜像名：
+
+```bash
+podman images | grep -E "pi-coding-web|redis"
+```
+
+如果输出是 `localhost/pi-coding-web 0.73.0-previewfix-20260622`，则 `.env` 应写：
+
+```env
+PI_CODING_WEB_IMAGE=localhost/pi-coding-web:0.73.0-previewfix-20260622
+```
+
+## 开发阶段全新部署
+
+开发或测试服务器上的数据通常可以清空。全新部署时，不要只删除上传目录；Compose named volumes 不在部署目录里，删除目录不会删除旧会话、SQLite 或旧权限标签。
+
+推荐流程：
+
+```bash
+cd /opt/pi-coding-web
+
+cp .env.example .env
+vi .env
+
+docker load -i pi-coding-web-offline-0.73.0-previewfix-20260622.tar
+docker images | grep -E "pi-coding-web|redis"
+
+docker compose down -v --remove-orphans
+docker compose up -d --no-build --force-recreate
+docker compose ps
+```
+
+Podman 环境如果需要彻底清理残留容器和 volume，可以在 `down -v` 后补充：
+
+```bash
+podman rm -f pi-worker pi-coding-web pi-coding-redis 2>/dev/null || true
+podman volume ls | grep -E "pi-coding-web|pi-redis"
+podman volume rm -f <project>_pi-coding-web-data <project>_pi-redis-data 2>/dev/null || true
+```
+
+`<project>` 通常是部署目录名，例如目录是 `vc_platform` 时，volume 名可能是：
+
+```text
+vc_platform_pi-coding-web-data
+vc_platform_pi-redis-data
+```
+
+启动后验证 web、worker 和 Redis：
+
+```bash
+docker compose ps
+docker compose logs --tail=100 pi-coding-web
+docker compose logs --tail=100 pi-worker
+docker compose logs --tail=50 redis
+```
+
+验证 PI 数据目录可写：
+
+```bash
+podman exec pi-coding-web sh -lc 'id; ls -ld /app/apps/pi-coding-web/data; mkdir -p /app/apps/pi-coding-web/data/clients && touch /app/apps/pi-coding-web/data/web-test && echo web-ok'
+podman exec pi-worker sh -lc 'mkdir -p /app/apps/pi-coding-web/data/clients && touch /app/apps/pi-coding-web/data/worker-test && echo worker-ok'
+```
+
+如果宿主机端口是 `PI_CODING_WEB_PORT=9529`，访问地址是：
+
+```text
+http://server-ip-or-domain:9529
+```
 
 ## 数据卷与 Podman 权限
 
 默认 `docker-compose.yaml` 使用 Compose named volumes，而不是把宿主机 `./data` 目录直接 bind mount 到容器内：
 
 ```yaml
+services:
+  pi-coding-web:
+    volumes:
+      - pi-coding-web-data:/app/apps/pi-coding-web/data:z
+  pi-worker:
+    volumes:
+      - pi-coding-web-data:/app/apps/pi-coding-web/data:z
+
 volumes:
   pi-coding-web-data:
   pi-redis-data:
 ```
 
-这样可以避免 rootless Podman、SELinux、NFS 或受限企业文件系统下的常见权限错误：
+`pi-coding-web` 和 `pi-worker` 共用同一个 data volume。Podman/SELinux 环境必须使用共享标签小写 `:z`；不要让它变成私有标签大写 `:Z`。如果日志中看到 `-v ...:/app/apps/pi-coding-web/data:Z`，并且两个容器都要写这个 volume，就可能出现一个容器能写、另一个容器不能写的问题。
+
+这样可以降低 rootless Podman、SELinux、NFS 或受限企业文件系统下的常见权限错误：
 
 ```text
 EACCES: permission denied, mkdir '/app/apps/pi-coding-web/data/clients'
 EACCES: permission denied, open '/app/apps/pi-coding-web/.env'
 chown: .: Operation not permitted
 ```
+
+如果容器内显示 `uid=0(root)` 且目录是 `drwxrwxrwx`，但仍然报 `Permission denied`，通常不是普通 Unix 权限，而是 SELinux label 或 rootless Podman volume 映射问题。优先确认 volume 挂载是否使用小写 `:z`，然后执行全新部署里的 `down -v` 和 volume 清理。
 
 如果你使用 Podman，Compose 项目名会参与 volume 名称。可以用下面命令确认真实 volume 名：
 
@@ -172,7 +271,7 @@ podman volume inspect <volume-name>
 启动：
 
 ```bash
-docker compose up -d
+docker compose up -d --no-build --force-recreate
 ```
 
 查看状态：
@@ -192,6 +291,14 @@ docker compose logs -f pi-coding-web
 ```bash
 docker compose down
 ```
+
+开发阶段需要清空测试数据时：
+
+```bash
+docker compose down -v --remove-orphans
+```
+
+`-v` 会删除当前 Compose 项目的 named volumes，里面的会话、项目文件、runtime SQLite 和诊断日志都会清空。生产或需要保留数据时不要使用。
 
 ## 健康检查
 
@@ -342,8 +449,9 @@ docker compose up -d
 ```bash
 cd /opt/pi-coding-web
 docker compose down
-docker load -i pi-coding-web-offline-0.73.0.tar
-docker compose up -d --no-build
+docker load -i pi-coding-web-offline-0.73.0-previewfix-20260622.tar
+docker images | grep pi-coding-web
+docker compose up -d --no-build --force-recreate
 ```
 
 升级后检查：
@@ -377,6 +485,50 @@ podman logs --tail=200 pi-coding-redis
 如果看到：
 
 ```text
+Error: pi-coding-web:<tag>: image not known
+```
+
+说明 `.env` 中的 `PI_CODING_WEB_IMAGE` 和服务器实际镜像名不一致，或还没有加载离线包。先查镜像：
+
+```bash
+podman images | grep -E "pi-coding-web|redis"
+```
+
+如果镜像名带 `localhost/` 前缀，把 `.env` 改成实际名字：
+
+```env
+PI_CODING_WEB_IMAGE=localhost/pi-coding-web:<tag>
+```
+
+如果没有单独的 worker 镜像，这是正常的。`pi-worker` 和 `pi-coding-web` 使用同一个 `pi-coding-web` 镜像，只是 worker 容器覆盖启动命令为：
+
+```text
+npm run worker --workspace=pi-coding-web
+```
+
+如果启动时出现：
+
+```text
+Error: no container with name or ID "pi-worker" found
+```
+
+这是 `--force-recreate` 尝试停止旧容器时发现旧容器不存在，通常可以忽略。真正要看后续 `podman run ... exit code` 是否为 `0`。
+
+如果看到：
+
+```text
+env file .../.env not found
+```
+
+说明还没有从 `.env.example` 复制出实际 `.env`：
+
+```bash
+cp .env.example .env
+```
+
+如果看到：
+
+```text
 EACCES: permission denied, open '/app/apps/pi-coding-web/.env'
 ```
 
@@ -388,7 +540,23 @@ EACCES: permission denied, open '/app/apps/pi-coding-web/.env'
 EACCES: permission denied, mkdir '/app/apps/pi-coding-web/data/clients'
 ```
 
-说明容器不能写 `/app/apps/pi-coding-web/data`。使用默认 named volume，或者修复宿主机 bind mount 目录权限。
+说明容器不能写 `/app/apps/pi-coding-web/data`。开发阶段先用全新清理：
+
+```bash
+docker compose down -v --remove-orphans
+podman rm -f pi-worker pi-coding-web pi-coding-redis 2>/dev/null || true
+podman volume ls | grep -E "pi-coding-web|pi-redis"
+podman volume rm -f <project>_pi-coding-web-data <project>_pi-redis-data 2>/dev/null || true
+docker compose up -d --no-build --force-recreate
+```
+
+如果清理后仍然报错，检查 `docker-compose.yaml` 中 web 和 worker 的 data volume 是否都是小写 `:z`：
+
+```yaml
+- pi-coding-web-data:/app/apps/pi-coding-web/data:z
+```
+
+不要只删除部署目录。named volumes 存在于 Docker/Podman 自己的 volume 存储里，删除上传目录不会删除它们。
 
 如果 Redis 日志反复出现：
 

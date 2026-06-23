@@ -1,4 +1,5 @@
 import type { Agent, AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { RunStatus, RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
@@ -16,6 +17,7 @@ export class RemoteAgentController {
 	private _activeRunId: string | undefined;
 	private _lastSeq = 0;
 	private agentEndApplied = false;
+	private assistantMessageEndApplied = false;
 
 	constructor(private readonly agent: Agent) {}
 
@@ -31,6 +33,7 @@ export class RemoteAgentController {
 		this._activeRunId = runId;
 		this._lastSeq = 0;
 		this.agentEndApplied = false;
+		this.assistantMessageEndApplied = false;
 	}
 
 	async applyRunEvent(event: RuntimeRunEventRecord): Promise<void> {
@@ -42,7 +45,11 @@ export class RemoteAgentController {
 		}
 
 		const payload = event.payload as AgentEvent;
-		if (isRemoteRunStatusEvent(payload) || isInternalContinuationPromptEvent(payload) || this.isLocalPromptEcho(payload)) {
+		if (
+			isRemoteRunStatusEvent(payload) ||
+			isInternalContinuationPromptEvent(payload) ||
+			this.isLocalPromptEcho(payload)
+		) {
 			this._lastSeq = Math.max(this._lastSeq, event.seq);
 			return;
 		}
@@ -51,6 +58,9 @@ export class RemoteAgentController {
 		this._lastSeq = Math.max(this._lastSeq, event.seq);
 		if (payload.type === "agent_end") {
 			this.agentEndApplied = true;
+		}
+		if (isAssistantMessageEndEvent(payload)) {
+			this.assistantMessageEndApplied = true;
 		}
 	}
 
@@ -73,6 +83,9 @@ export class RemoteAgentController {
 			if (payload.type === "agent_end") {
 				this.agentEndApplied = true;
 			}
+			if (isAssistantMessageEndEvent(payload)) {
+				this.assistantMessageEndApplied = true;
+			}
 		}
 	}
 
@@ -84,12 +97,29 @@ export class RemoteAgentController {
 		await this.agent.endRemoteRun();
 		this._activeRunId = undefined;
 		this.agentEndApplied = false;
+		this.assistantMessageEndApplied = false;
 	}
 
-	async settleRemoteRun(status: RunStatus): Promise<void> {
+	async settleRemoteRun(status: RunStatus, errorMessage?: string): Promise<void> {
 		if (!this._activeRunId) throw new Error("No active remote run to settle.");
 		if (!TERMINAL_RUN_STATUSES.has(status)) throw new Error(`Remote run status ${status} is not terminal.`);
 		if (!this.agentEndApplied) {
+			const failureMessage =
+				status === "failed" && !this.assistantMessageEndApplied
+					? createRemoteRunFailureMessage(errorMessage)
+					: undefined;
+			if (failureMessage) {
+				await this.applyRunEvent({
+					eventId: 0,
+					runId: this._activeRunId,
+					sessionId: "",
+					clientId: "",
+					seq: this._lastSeq,
+					type: "message_end",
+					payload: { type: "message_end", message: failureMessage },
+					createdAt: new Date().toISOString(),
+				});
+			}
 			await this.applyRunEvent({
 				eventId: 0,
 				runId: this._activeRunId,
@@ -97,7 +127,7 @@ export class RemoteAgentController {
 				clientId: "",
 				seq: this._lastSeq,
 				type: "agent_end",
-				payload: { type: "agent_end", messages: [] },
+				payload: { type: "agent_end", messages: failureMessage ? [failureMessage] : [] },
 				createdAt: new Date().toISOString(),
 			});
 		}
@@ -210,6 +240,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isRemoteRunStatusEvent(value: unknown): boolean {
 	if (!isRecord(value)) return false;
 	return value.type === "agent_retry_scheduled";
+}
+
+function isAssistantMessageEndEvent(event: AgentEvent): boolean {
+	if (event.type !== "message_end") return false;
+	const message: unknown = event.message;
+	return isRecord(message) && message.role === "assistant";
+}
+
+function createRemoteRunFailureMessage(errorMessage?: string): AssistantMessage {
+	const normalizedError = errorMessage?.trim() || "Remote run failed before producing a response.";
+	return {
+		role: "assistant",
+		content: [{ type: "text", text: `Run failed: ${normalizedError}` }],
+		api: "remote-run",
+		provider: "remote-run",
+		model: "remote-run",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "error",
+		errorMessage: normalizedError,
+		timestamp: Date.now(),
+	};
 }
 
 function isInternalContinuationPromptEvent(event: AgentEvent): boolean {

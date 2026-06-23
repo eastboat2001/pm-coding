@@ -19,6 +19,7 @@ import { Plus, X } from "lucide";
 import { getAppStorage } from "../storage/app-storage.js";
 import type { CustomProvider, CustomProviderType } from "../storage/stores/custom-providers-store.js";
 import { discoverModels } from "../utils/model-discovery.js";
+import { dispatchCustomProviderSavedEvent } from "./custom-provider-events.js";
 import {
 	type AnthropicMessagesProfile,
 	type AnthropicReasoningReplayFormat,
@@ -229,6 +230,7 @@ export class CustomProviderDialog extends DialogBase {
 			};
 
 			await storage.customProviders.set(provider);
+			dispatchCustomProviderSavedEvent(provider);
 
 			if (this.onSaveCallback) {
 				this.onSaveCallback();

@@ -116,4 +116,296 @@ describe("WorkspaceDiagnosticExportService", () => {
 			customProviders: [{ id: "test", name: "test", apiKey: "provider-key" }],
 		});
 	});
+
+	it("exports a multi-file archive manifest with runtime events and full settings", async () => {
+		sessions.writeSettings(
+			{
+				providerKeys: { "custom-provider:test": "server-key" },
+				customProviders: [{ id: "test", name: "test", apiKey: "provider-key" }],
+			},
+			"client-a",
+		);
+		runtimeDb.createSession({
+			clientId: "client-a",
+			sessionId: "session-1",
+			title: "Runaway thinking repro",
+			model: { id: "mimo-v2.5", provider: "custom-provider:test", maxTokens: 512 },
+			thinkingLevel: "high",
+			createdAt: "2026-06-12T00:00:00.000Z",
+		});
+		runtimeDb.appendMessage({
+			clientId: "client-a",
+			sessionId: "session-1",
+			role: "user",
+			payload: { content: "make a dashboard" },
+			createdAt: "2026-06-12T00:00:01.000Z",
+		});
+		runtimeDb.createRun({
+			clientId: "client-a",
+			sessionId: "session-1",
+			runId: "run-1",
+			model: { id: "mimo-v2.5", provider: "custom-provider:test", maxTokens: 512 },
+			thinkingLevel: "high",
+			createdAt: "2026-06-12T00:00:02.000Z",
+		});
+		for (let index = 0; index < 25; index += 1) {
+			runtimeDb.appendRunEvent({
+				clientId: "client-a",
+				sessionId: "session-1",
+				runId: "run-1",
+				type: "message_update",
+				payload: { type: "message_update", delta: `thinking chunk ${index}` },
+				createdAt: `2026-06-12T00:00:${String(index + 3).padStart(2, "0")}.000Z`,
+			});
+		}
+		runtimeDb.appendRunEvent({
+			clientId: "client-a",
+			sessionId: "session-1",
+			runId: "run-1",
+			type: "message_end",
+			payload: { type: "message_end", message: { stopReason: "length", usage: { output: 512 } } },
+			createdAt: "2026-06-12T00:00:40.000Z",
+		});
+		diagnostics.writeEvents({
+			events: [
+				{
+					clientId: "client-a",
+					sessionId: "session-1",
+					category: "model",
+					eventType: "model.stream.summary",
+					data: { stopReason: "length", thinkingDeltaCount: 25 },
+				},
+			],
+		});
+
+		const service = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
+		const archive = service.exportArchive({ clientId: "client-a", sessionId: "session-1" });
+		const files = await collectArchiveFiles(archive.entries);
+		const zipBuffer = Buffer.concat(await collectArchiveChunks(archive.stream()));
+
+		expect(archive.filename).toMatch(/^pi-diagnostics-session-1-.*\.zip$/);
+		expect(zipBuffer.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+		expect(zipBuffer.includes(Buffer.from("manifest.json"))).toBe(true);
+		expect(zipBuffer.includes(Buffer.from("runtime/run-events/run-1.events.ndjson"))).toBe(true);
+		expect(Object.keys(files).sort()).toEqual([
+			"diagnostics/events.ndjson",
+			"diagnostics/global-events.ndjson",
+			"diagnostics/overview.json",
+			"diagnostics/session-events.ndjson",
+			"diagnostics/status.json",
+			"diagnostics/timeline.ndjson",
+			"manifest.json",
+			"runtime/messages.ndjson",
+			"runtime/run-events/run-1.events.ndjson",
+			"runtime/run-events/run-1.summary.json",
+			"runtime/runs.json",
+			"runtime/session.json",
+			"settings/settings.json",
+		]);
+		const manifest = JSON.parse(files["manifest.json"]);
+		expect(manifest).toMatchObject({
+			format: "pi-diagnostic-archive",
+			query: { clientId: "client-a", sessionId: "session-1" },
+		});
+		expect(manifest.files).toContainEqual({
+			path: "runtime/run-events/run-1.events.ndjson",
+			kind: "runtime-run-events",
+		});
+		expect(JSON.parse(files["runtime/session.json"])).toMatchObject({
+			sessionId: "session-1",
+			model: { id: "mimo-v2.5", provider: "custom-provider:test" },
+			thinkingLevel: "high",
+		});
+		expect(files["runtime/messages.ndjson"].trim().split("\n")).toHaveLength(1);
+		expect(files["runtime/run-events/run-1.events.ndjson"].trim().split("\n")).toHaveLength(26);
+		expect(JSON.parse(files["runtime/run-events/run-1.summary.json"])).toMatchObject({
+			runId: "run-1",
+			totalEvents: 26,
+			eventTypes: { message_update: 25, message_end: 1 },
+		});
+		expect(files["diagnostics/events.ndjson"]).toContain("model.stream.summary");
+		expect(files["diagnostics/session-events.ndjson"]).toContain("model.stream.summary");
+		expect(files["diagnostics/timeline.ndjson"]).toContain("runtime.run_event");
+		expect(JSON.parse(files["diagnostics/overview.json"])).toMatchObject({
+			session: { sessionId: "session-1", title: "Runaway thinking repro" },
+			counts: { messages: 1, runs: 1 },
+			runs: [{ runId: "run-1", eventCount: 26 }],
+		});
+		expect(JSON.parse(files["settings/settings.json"])).toMatchObject({
+			providerKeys: { "custom-provider:test": "server-key" },
+			customProviders: [{ id: "test", name: "test", apiKey: "provider-key" }],
+		});
+	});
+
+	it("exports global diagnostics, timeline, and findings for a queued run with no worker progress", async () => {
+		runtimeDb.createSession({
+			clientId: "client-a",
+			sessionId: "session-queued",
+			title: "你好你好",
+			model: { id: "ATS_MAX", provider: "custom-provider:ats" },
+			thinkingLevel: "off",
+			createdAt: "2026-06-23T07:50:36.355Z",
+		});
+		runtimeDb.appendMessage({
+			clientId: "client-a",
+			sessionId: "session-queued",
+			role: "user",
+			payload: { content: "你好你好" },
+			createdAt: "2026-06-23T07:50:36.355Z",
+		});
+		runtimeDb.createRun({
+			clientId: "client-a",
+			sessionId: "session-queued",
+			runId: "run-queued",
+			model: { id: "ATS_MAX", provider: "custom-provider:ats" },
+			thinkingLevel: "off",
+			createdAt: "2026-06-23T07:50:36.545Z",
+		});
+		runtimeDb.updateRunStatus("run-queued", "client-a", "cancelled", {
+			endedAt: "2026-06-23T07:51:16.782Z",
+			updatedAt: "2026-06-23T07:51:16.782Z",
+		});
+		diagnostics.writeEvents({
+			events: [
+				{
+					timestamp: "2026-01-01T00:00:00.000Z",
+					level: "error",
+					category: "system",
+					eventType: "worker.queue.claim.error",
+					data: { queue: "pi:runs", message: "old redis outage" },
+				},
+				{
+					timestamp: "2026-06-23T07:50:35.000Z",
+					level: "info",
+					category: "system",
+					eventType: "system.worker.starting",
+					data: { workerId: "pi-worker-1" },
+				},
+				{
+					timestamp: "2026-06-23T07:50:38.000Z",
+					level: "info",
+					category: "system",
+					eventType: "system.worker.starting",
+					data: { workerId: "pi-worker-1" },
+				},
+				{
+					timestamp: "2026-06-23T07:50:41.000Z",
+					level: "info",
+					category: "system",
+					eventType: "system.worker.starting",
+					data: { workerId: "pi-worker-1" },
+				},
+				{
+					timestamp: "2026-06-23T07:50:45.000Z",
+					level: "error",
+					category: "system",
+					eventType: "worker.queue.claim.error",
+					data: { queue: "pi:runs", message: "connect ECONNREFUSED 127.0.0.1:6379" },
+				},
+				{
+					timestamp: "2026-06-23T07:50:45.500Z",
+					level: "info",
+					category: "system",
+					eventType: "system.worker.recovered_active_runs",
+					data: { workerId: "pi-worker-1", recoveredCount: 2 },
+				},
+				{
+					timestamp: "2026-06-23T07:50:46.000Z",
+					clientId: "client-a",
+					sessionId: "session-queued",
+					level: "info",
+					category: "agent",
+					eventType: "agent.run.enqueued",
+					data: {
+						clientId: "client-a",
+						sessionId: "session-queued",
+						runId: "run-queued",
+						status: "queued",
+					},
+				},
+				{
+					timestamp: "2026-06-23T07:50:46.641Z",
+					clientId: "client-a",
+					sessionId: "session-queued",
+					level: "error",
+					category: "agent",
+					eventType: "agent.remote_run.queued_timeout",
+					data: {
+						runId: "run-queued",
+						status: "queued",
+						queuedMs: 10237,
+						message: "Run stayed queued without worker progress; PI worker or Redis may not be running.",
+					},
+				},
+			],
+		});
+
+		const service = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
+		const archive = service.exportArchive({ clientId: "client-a", sessionId: "session-queued" });
+		const files = await collectArchiveFiles(archive.entries);
+		const overview = JSON.parse(files["diagnostics/overview.json"]);
+
+		expect(files["diagnostics/session-events.ndjson"]).toContain("agent.remote_run.queued_timeout");
+		expect(files["diagnostics/global-events.ndjson"]).toContain("worker.queue.claim.error");
+		expect(files["diagnostics/global-events.ndjson"]).not.toContain("old redis outage");
+		expect(files["diagnostics/timeline.ndjson"]).toContain("runtime.run");
+		expect(files["diagnostics/timeline.ndjson"]).toContain("agent.remote_run.queued_timeout");
+		expect(overview.findings).toContainEqual(
+			expect.objectContaining({ code: "run_queued_timeout", severity: "error" }),
+		);
+		expect(overview.findings).toContainEqual(
+			expect.objectContaining({ code: "run_never_started", severity: "error" }),
+		);
+		expect(overview.findings).toContainEqual(expect.objectContaining({ code: "run_has_no_events" }));
+		expect(overview.findings).toContainEqual(
+			expect.objectContaining({ code: "model_request_not_observed", severity: "warn" }),
+		);
+		expect(overview.findings).toContainEqual(
+			expect.objectContaining({ code: "worker_queue_error", severity: "error" }),
+		);
+		expect(overview.findings).toContainEqual(
+			expect.objectContaining({ code: "worker_start_not_confirmed", severity: "warn" }),
+		);
+		expect(overview.findings).toContainEqual(
+			expect.objectContaining({ code: "worker_repeated_starting", severity: "warn" }),
+		);
+		expect(overview.findings).toContainEqual(
+			expect.objectContaining({ code: "worker_recovered_active_claims", severity: "warn" }),
+		);
+		expect(overview.findings).toContainEqual(
+			expect.objectContaining({ code: "run_enqueued_but_not_claimed", severity: "error" }),
+		);
+		expect(overview.runs).toEqual([
+			expect.objectContaining({
+				runId: "run-queued",
+				status: "cancelled",
+				eventCount: 0,
+				workerId: null,
+			}),
+		]);
+	});
 });
+
+async function collectArchiveFiles(
+	entries: Array<{ path: string; chunks(): Iterable<string | Uint8Array> | AsyncIterable<string | Uint8Array> }>,
+): Promise<Record<string, string>> {
+	const decoder = new TextDecoder();
+	const files: Record<string, string> = {};
+	for (const entry of entries) {
+		let content = "";
+		for await (const chunk of entry.chunks()) {
+			content += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+		}
+		content += decoder.decode();
+		files[entry.path] = content;
+	}
+	return files;
+}
+
+async function collectArchiveChunks(chunks: AsyncIterable<Uint8Array>): Promise<Buffer[]> {
+	const buffers: Buffer[] = [];
+	for await (const chunk of chunks) {
+		buffers.push(Buffer.from(chunk));
+	}
+	return buffers;
+}

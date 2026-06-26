@@ -187,6 +187,32 @@ export class RuntimeDbStore {
             .all(clientId, sessionId);
         return rows.map(toMessageRecord);
     }
+    getSessionMessageStats(clientId, sessionId) {
+        const row = this.open()
+            .prepare(`SELECT
+					COUNT(*) AS message_count,
+					SUM(length(payload_json)) AS total_payload_bytes,
+					MAX(length(payload_json)) AS largest_payload_bytes
+				FROM messages
+				WHERE client_id = ? AND session_id = ?`)
+            .get(clientId, sessionId);
+        return {
+            messageCount: row?.message_count ?? 0,
+            totalPayloadBytes: row?.total_payload_bytes ?? 0,
+            largestPayloadBytes: row?.largest_payload_bytes ?? 0,
+        };
+    }
+    *iterateMessages(clientId, sessionId) {
+        const rows = this.open()
+            .prepare(`SELECT id, session_id, client_id, role, payload_json, created_at
+				FROM messages
+				WHERE client_id = ? AND session_id = ?
+				ORDER BY id ASC`)
+            .iterate(clientId, sessionId);
+        for (const row of rows) {
+            yield toMessageRecord(row);
+        }
+    }
     getRun(clientId, runId) {
         const row = this.open()
             .prepare(`SELECT run_id, session_id, client_id, status, worker_id, model_json, thinking_level, started_at, updated_at, ended_at, error
@@ -367,6 +393,8 @@ export class RuntimeDbStore {
                 .get(input.clientId, input.runId);
             db.prepare(`INSERT INTO run_events (run_id, session_id, client_id, seq, event_type, payload_json, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.runId, run.sessionId, input.clientId, seqRow.seq, input.type, JSON.stringify(input.payload), createdAt);
+            db.prepare("UPDATE runs SET updated_at = ? WHERE client_id = ? AND run_id = ?").run(createdAt, input.clientId, input.runId);
+            this.updateSessionRun(input.clientId, run.sessionId, run.runId, run.status, createdAt);
             return db.prepare("SELECT last_insert_rowid() AS id").get();
         });
         return requiredRecord(this.getRunEvent(input.clientId, row.id), "run event");
@@ -379,6 +407,17 @@ export class RuntimeDbStore {
 				ORDER BY seq ASC`)
             .all(clientId, runId, afterSeq);
         return rows.map(toRunEventRecord);
+    }
+    *iterateRunEvents(clientId, runId, afterSeq) {
+        const rows = this.open()
+            .prepare(`SELECT id, run_id, session_id, client_id, seq, event_type, payload_json, created_at
+				FROM run_events
+				WHERE client_id = ? AND run_id = ? AND seq > ?
+				ORDER BY seq ASC`)
+            .iterate(clientId, runId, afterSeq);
+        for (const row of rows) {
+            yield toRunEventRecord(row);
+        }
     }
     upsertAppPreviewGoal(input) {
         const createdAt = input.createdAt ?? now();

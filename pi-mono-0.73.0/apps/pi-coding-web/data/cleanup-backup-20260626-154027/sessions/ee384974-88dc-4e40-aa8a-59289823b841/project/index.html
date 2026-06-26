@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QDM Finished Lot Yield Dashboard</title>
+  <link rel="stylesheet" href="./css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <button class="menu-toggle" id="menuToggle" aria-label="Toggle filters">☰</button>
+      <div class="header-logo">
+        <div class="logo-icon">Q</div>
+        <div>
+          <div class="logo-text">QDM Yield Dashboard</div>
+          <div class="logo-sub">QUALITY OPERATION CENTER</div>
+        </div>
+      </div>
+    </div>
+    <div class="header-right">
+      <span id="lastUpdated" style="font-size:11px;color:var(--text-muted)"></span>
+      <button class="btn btn-ghost btn-sm" id="btnExport" title="Export data to CSV">📥 Export</button>
+      <button class="btn btn-primary btn-sm" id="refreshBtn" title="Refresh data">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- Body -->
+  <div class="app-body">
+
+    <!-- Sidebar Filters -->
+    <aside class="filter-sidebar" id="filterSidebar">
+      <div class="sidebar-title">Filters</div>
+
+      <div class="filter-group">
+        <label class="filter-label">Customer</label>
+        <div class="multi-select" id="filterCustomer">
+          <div class="multi-select-trigger" data-key="customer">
+            <span class="multi-select-label">All Selected</span>
+          </div>
+          <ul class="multi-select-list"></ul>
+        </div>
+      </div>
+
+      <div class="filter-group">
+        <label class="filter-label">Plant</label>
+        <div class="multi-select" id="filterPlant">
+          <div class="multi-select-trigger" data-key="plant">
+            <span class="multi-select-label">All Selected</span>
+          </div>
+          <ul class="multi-select-list"></ul>
+        </div>
+      </div>
+
+      <div class="filter-group">
+        <label class="filter-label">Date Type</label>
+        <select class="filter-select" id="filterDateType"></select>
+      </div>
+
+      <div class="filter-group">
+        <label class="filter-label">Lot Type</label>
+        <select class="filter-select" id="filterLotType"></select>
+      </div>
+
+      <div class="filter-group">
+        <label class="filter-label">Unit Type</label>
+        <select class="filter-select" id="filterUnitType"></select>
+      </div>
+
+      <div class="filter-group">
+        <label class="filter-label">Project Type</label>
+        <select class="filter-select" id="filterProjectType"></select>
+      </div>
+
+      <div style="margin-top:16px;">
+        <div class="section-title" style="font-size:12px; margin-bottom:8px;">
+          Selected Week
+          <span class="badge" id="selectedWeekLabel" style="background:var(--primary-soft);color:var(--primary)">—</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Page Title -->
+      <div class="page-title-bar">
+        <div class="page-title">Weekly Finished Lot Performance Overview</div>
+        <div class="page-subtitle">Quality Operation Center — Yield Dashboard | Filters update charts in real-time</div>
+      </div>
+
+      <!-- Section 1: Trend + KPI -->
+      <section class="section" id="trendSection">
+        <div class="loading-spinner">
+          <div class="spinner"></div>
+        </div>
+        <div class="section-header">
+          <div class="section-title">
+            Finished Lot Performance Overview Trend
+            <span class="badge">Yield &amp; Output</span>
+          </div>
+        </div>
+        <div class="trend-layout">
+          <div class="trend-chart-area" id="trendChartWrap">
+            <canvas id="trendChart"></canvas>
+          </div>
+          <div class="kpi-sidebar" id="kpiPanel">
+            <!-- KPI cards injected by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Defect Pareto + Drilldown -->
+      <section class="section" id="defectSection">
+        <div class="loading-spinner">
+          <div class="spinner"></div>
+        </div>
+        <div class="section-header">
+          <div class="section-title">
+            Loss Ratio By Defect Code
+            <span class="badge">Pareto Analysis</span>
+          </div>
+        </div>
+        <div class="defect-layout">
+          <div class="pareto-chart-area" id="paretoChartWrap">
+            <canvas id="paretoChart"></canvas>
+          </div>
+          <div class="drilldown-area" id="drilldownPanel">
+            <!-- Drilldown injected by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <div class="app-footer">
+        Dashboard data is updated daily via automated scheduled scripts.
+        <span id="footerLastSync"></span>
+      </div>
+    </main>
+  </div>
+
+  <script src="./js/mock-data.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>

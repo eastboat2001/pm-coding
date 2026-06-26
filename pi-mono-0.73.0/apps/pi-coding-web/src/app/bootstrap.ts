@@ -32,6 +32,7 @@ import {
 import type {
 	AppPreviewGoalRecord,
 	AppPreviewGoalSource,
+	DeleteSessionResult,
 	RunStatus,
 	RuntimeMessageRecord,
 	RuntimeRunEventRecord,
@@ -59,6 +60,7 @@ import {
 import { compactProjectToolHistory } from "../project-tools/history.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
+import { piClientHeaders } from "../runtime/client-id.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
 import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
 import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
@@ -266,7 +268,7 @@ sessions.setBackend(backend);
 const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 setAppStorage(storage);
 const modelController = new ModelController(storage, configuredStorage);
-const diagnosticClient = createDiagnosticClient();
+const diagnosticClient = createDiagnosticClient({ headers: piClientHeaders });
 
 const getProviderApiKey = async (provider: string): Promise<string | undefined> => {
 	return (await storage.providerKeys.get(provider)) ?? undefined;
@@ -868,10 +870,16 @@ const renameSessionProject = async (sessionId: string, title: string) => {
 };
 
 const deleteSessionEverywhere = async (sessionId: string) => {
+	let runtimeDeleteResult: DeleteSessionResult | undefined;
 	try {
-		await deleteRuntimeSession(sessionId);
+		runtimeDeleteResult = await deleteRuntimeSession(sessionId, { force: true });
 	} catch (error) {
 		if (!isRuntimeSessionMissingError(error)) throw error;
+	}
+	if (runtimeDeleteResult && !runtimeDeleteResult.deleted) {
+		refreshGeneratedAppsPanel();
+		if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+		return;
 	}
 	if (storage.sessions) {
 		await storage.sessions.deleteSession(sessionId);

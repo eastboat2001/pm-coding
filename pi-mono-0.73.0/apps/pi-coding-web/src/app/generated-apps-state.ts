@@ -227,10 +227,7 @@ export async function cancelGeneratedAppRunWithRollback(
 	}
 }
 
-export function markGeneratedAppRunCancelling(
-	projects: GeneratedAppRecord[],
-	projectId: string,
-): GeneratedAppRecord[] {
+export function markGeneratedAppRunCancelling(projects: GeneratedAppRecord[], projectId: string): GeneratedAppRecord[] {
 	return projects.map((candidate) =>
 		candidate.projectId === projectId
 			? { ...candidate, status: "running" as const, runStatus: "cancelling" }

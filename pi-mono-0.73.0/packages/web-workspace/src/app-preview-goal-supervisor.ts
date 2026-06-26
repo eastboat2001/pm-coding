@@ -52,13 +52,7 @@ export class AppPreviewGoalSupervisor {
 				completedAt: new Date().toISOString(),
 			});
 			if (updated) {
-				this.goals.event(
-					updated,
-					"blocked",
-					"run_cancelled",
-					{ terminalStatus: run.status },
-					run.runId,
-				);
+				this.goals.event(updated, "blocked", "run_cancelled", { terminalStatus: run.status }, run.runId);
 			}
 			return;
 		}
@@ -73,13 +67,7 @@ export class AppPreviewGoalSupervisor {
 				completedAt: new Date().toISOString(),
 			});
 			if (updated) {
-				this.goals.event(
-					updated,
-					"blocked",
-					"run_interrupted",
-					{ terminalStatus: run.status },
-					run.runId,
-				);
+				this.goals.event(updated, "blocked", "run_interrupted", { terminalStatus: run.status }, run.runId);
 			}
 			return;
 		}

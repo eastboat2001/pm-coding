@@ -17,10 +17,10 @@ export class GeneratedAppsPanel extends LitElement {
 	@property({ attribute: false }) openSession: (sessionId: string) => Promise<unknown> | unknown = () => undefined;
 	@property({ attribute: false }) deleteSession: (sessionId: string) => Promise<unknown> | unknown = () => undefined;
 	@property({ attribute: false }) cancelRun: (runId: string) => Promise<unknown> | unknown = () => undefined;
-	@property({ attribute: false }) renameProject: (project: GeneratedAppRecord, title: string) => Promise<unknown> | unknown = (
-		project,
-		title,
-	) => renameGeneratedApp(project.projectId, title);
+	@property({ attribute: false }) renameProject: (
+		project: GeneratedAppRecord,
+		title: string,
+	) => Promise<unknown> | unknown = (project, title) => renameGeneratedApp(project.projectId, title);
 	@property({ attribute: false }) loadProjects: () => Promise<GeneratedAppRecord[]> = () => loadGeneratedApps();
 	@property({ type: String }) selectedSessionStatus: "running" | "idle" = "idle";
 

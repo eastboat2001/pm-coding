@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync, } from "node:fs";
 import { dirname, extname, relative, resolve } from "node:path";
 import { PROJECT_FILE_GET_MAX_BYTES } from "./constants.js";
-import { assertInside, listProjectSourceFiles, safeRelativeProjectPath, workspaceContext, } from "./workspace-paths.js";
+import { assertInside, listProjectSourceFiles, safeRelativeProjectPath, workspaceContext } from "./workspace-paths.js";
 export class WorkspaceFileService {
     config;
     constructor(config) {

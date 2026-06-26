@@ -221,7 +221,9 @@ export class WorkspacePreviewService {
 	private listProjectMetadata(clientId?: string): Array<{ metadata: JsonObject; metadataPath: string }> {
 		const clientsRoot = this.config.clientsRootDir;
 		if (!existsSync(clientsRoot)) return [];
-		const clientNames = clientId ? [sanitizePathComponent(clientId)].filter(Boolean) : clientDirectoryNames(clientsRoot);
+		const clientNames = clientId
+			? [sanitizePathComponent(clientId)].filter(Boolean)
+			: clientDirectoryNames(clientsRoot);
 		const records: Array<{ metadata: JsonObject; metadataPath: string }> = [];
 		for (const clientName of clientNames) {
 			const sessionsRoot = join(clientsRoot, clientName, "sessions");

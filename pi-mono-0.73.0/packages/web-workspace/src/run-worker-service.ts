@@ -9,11 +9,16 @@ import type { JsonObject, RunStatus, RuntimeMessageRecord, RuntimeRunRecord, Wor
 
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 500;
 const DEFAULT_CLAIM_TIMEOUT_MS = 0;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_IDLE_SLEEP_MS = 100;
+const DEFAULT_MAX_SESSION_HISTORY_MESSAGES = 2000;
+const DEFAULT_MAX_SESSION_HISTORY_PAYLOAD_BYTES = 64 * 1024 * 1024;
 const QUEUE_ERROR_DIAGNOSTIC_THROTTLE_MS = 5000;
 const APP_PREVIEW_CONTINUATION_INTERNAL_MARKER = { kind: "app_preview_continuation" };
 const ASSISTANT_TAIL_CONTINUATION_PROMPT =
 	"Continue from the previous assistant response and complete the original request. Do not repeat completed work; inspect the current project state before making further changes when needed.";
+
+type WorkerDiagnosticLevel = "info" | "warn" | "error";
 
 export interface WorkerAgentEvent extends JsonObject {
 	type: string;
@@ -40,6 +45,9 @@ export interface WorkspaceRunWorkerServiceOptions {
 	retry?: RunRetryControllerOptions;
 	cancelPollIntervalMs?: number;
 	claimTimeoutMs?: number;
+	heartbeatIntervalMs?: number;
+	maxSessionHistoryMessages?: number;
+	maxSessionHistoryPayloadBytes?: number;
 }
 
 export interface RunWorkerDiagnostics {
@@ -59,7 +67,11 @@ export class WorkspaceRunWorkerService {
 	private readonly queue: RunQueue;
 	private readonly retryController: RunRetryController;
 	private readonly workerId: string;
+	private readonly heartbeatIntervalMs: number;
+	private readonly maxSessionHistoryMessages: number;
+	private readonly maxSessionHistoryPayloadBytes: number;
 	private readonly createAgent: (input: WorkerAgentInput) => WorkerAgent;
+	private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 	private loops: Array<Promise<void>> = [];
 	private lastQueueErrorDiagnosticAt = 0;
 	private running = false;
@@ -73,6 +85,10 @@ export class WorkspaceRunWorkerService {
 		this.createAgent = options.createAgent;
 		this.cancelPollIntervalMs = options.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS;
 		this.claimTimeoutMs = options.claimTimeoutMs ?? DEFAULT_CLAIM_TIMEOUT_MS;
+		this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+		this.maxSessionHistoryMessages = options.maxSessionHistoryMessages ?? DEFAULT_MAX_SESSION_HISTORY_MESSAGES;
+		this.maxSessionHistoryPayloadBytes =
+			options.maxSessionHistoryPayloadBytes ?? DEFAULT_MAX_SESSION_HISTORY_PAYLOAD_BYTES;
 		this.diagnostics = options.diagnostics;
 		this.goalSupervisor = options.goalSupervisor;
 		const onRetryEvent = options.retry?.onRetryEvent;
@@ -93,7 +109,10 @@ export class WorkspaceRunWorkerService {
 	}
 
 	async recoverOwnedRuns(): Promise<void> {
-		await this.queue.requeueActive(this.workerId);
+		const recoveredCount = await this.queue.requeueActive(this.workerId);
+		this.writeWorkerLifecycleDiagnostic("system.worker.recovered_active_runs", "info", {
+			recoveredCount,
+		});
 		this.markOwnedRunningRunsInterrupted();
 	}
 
@@ -106,6 +125,10 @@ export class WorkspaceRunWorkerService {
 			throw error;
 		}
 		if (!claimed) return false;
+		this.writeWorkerLifecycleDiagnostic("worker.queue.claimed", "info", {
+			clientId: claimed.clientId ?? null,
+			runId: claimed.runId,
+		});
 		if (!claimed.clientId) {
 			await this.completeClaim(claimed);
 			return true;
@@ -116,10 +139,18 @@ export class WorkspaceRunWorkerService {
 		let run = this.db.getRun(claimed.clientId, claimed.runId);
 		let cancelRequested = false;
 		try {
-			if (!run || run.status !== "queued") return true;
+			if (!run) {
+				this.writeDiscardedClaimDiagnostic(claimed, "missing_runtime_run");
+				return true;
+			}
+			if (run.status !== "queued") {
+				this.writeDiscardedClaimDiagnostic(claimed, "status_not_queued", run.status);
+				return true;
+			}
 
 			const session = this.db.getSession(run.clientId, run.sessionId);
 			if (!session) throw new Error("Runtime session not found");
+			this.assertSessionHistoryWithinLimits(run);
 			const messages = this.db.listMessages(run.clientId, run.sessionId);
 			const activeRun = this.db.updateRunStatus(run.runId, run.clientId, "running", { workerId: this.workerId });
 			run = activeRun;
@@ -166,7 +197,10 @@ export class WorkspaceRunWorkerService {
 							this.activeAgents.add(agent);
 							unsubscribe = agent.subscribe((event) => {
 								attemptEvents.push(event);
-								if (persistedEventCount > 0 || shouldFlushAttemptEvents(event)) {
+								if (
+									shouldFlushAttemptEvents(event) ||
+									(persistedEventCount > 0 && !isAssistantFailureMarkerEvent(event))
+								) {
 									flushAttemptEvents();
 								}
 							});
@@ -189,7 +223,7 @@ export class WorkspaceRunWorkerService {
 							}
 							const assistantError = assistantErrorMessageFromEvents(attemptEvents);
 							if (assistantError) {
-								if (persistedEventCount > 0 || attemptHasNonReplayableSideEffects(attemptEvents)) {
+								if (attemptHasNonReplayableSideEffects(attemptEvents)) {
 									flushAttemptEvents();
 									throw new NonRetryableAgentAttemptError(assistantError);
 								}
@@ -245,14 +279,29 @@ export class WorkspaceRunWorkerService {
 	async start(): Promise<void> {
 		if (this.running) return;
 		this.stopping = false;
-		await this.recoverOwnedRuns();
-		this.running = true;
-		this.loops = Array.from({ length: this.concurrency }, () => this.runLoop());
+		try {
+			await this.recoverOwnedRuns();
+			this.running = true;
+			this.loops = Array.from({ length: this.concurrency }, () => this.runLoop());
+			this.startHeartbeat();
+			this.writeWorkerLifecycleDiagnostic("system.worker.started", "info", {
+				concurrency: this.concurrency,
+			});
+		} catch (error) {
+			this.running = false;
+			this.loops = [];
+			this.writeWorkerLifecycleDiagnostic("system.worker.service_start_failed", "error", {
+				message: errorMessage(error),
+				hint: "The worker service failed during startup recovery or run-loop initialization.",
+			});
+			throw error;
+		}
 	}
 
 	async stop(): Promise<void> {
 		this.stopping = true;
 		this.running = false;
+		this.stopHeartbeat();
 		for (const run of this.activeRuns.values()) {
 			const current = this.db.getRun(run.clientId, run.runId);
 			if (current?.status === "running" || current?.status === "cancelling") {
@@ -319,6 +368,7 @@ export class WorkspaceRunWorkerService {
 				attempt: event.attempt,
 				maxAttempts: event.maxAttempts,
 				reasonCode: event.reasonCode,
+				message: event.message,
 				...(event.delayMs === undefined ? {} : { delayMs: event.delayMs }),
 			},
 		});
@@ -371,23 +421,21 @@ export class WorkspaceRunWorkerService {
 	}
 
 	private writeDiagnostic(eventType: string, run: RuntimeRunRecord, error: unknown): void {
-		this.diagnostics?.writeEvents({
-			events: [
-				{
-					eventType,
-					level: "error",
-					category: "agent",
-					sessionId: run.sessionId,
-					traceId: run.sessionId,
-					data: {
-						clientId: run.clientId,
-						runId: run.runId,
-						workerId: this.workerId,
-						message: errorMessage(error),
-					},
+		this.writeDiagnosticEvents([
+			{
+				eventType,
+				level: "error",
+				category: "agent",
+				sessionId: run.sessionId,
+				traceId: run.sessionId,
+				data: {
+					clientId: run.clientId,
+					runId: run.runId,
+					workerId: this.workerId,
+					message: errorMessage(error),
 				},
-			],
-		});
+			},
+		]);
 	}
 
 	private writeQueueDiagnostic(eventType: string, error: unknown): void {
@@ -396,20 +444,96 @@ export class WorkspaceRunWorkerService {
 			return;
 		}
 		this.lastQueueErrorDiagnosticAt = now;
-		this.diagnostics?.writeEvents({
-			events: [
-				{
-					eventType,
-					level: "error",
-					category: "system",
-					data: {
-						workerId: this.workerId,
-						message: errorMessage(error),
-						hint: "Redis may be unavailable or the run queue connection may be broken.",
-					},
+		this.writeDiagnosticEvents([
+			{
+				eventType,
+				level: "error",
+				category: "system",
+				data: {
+					workerId: this.workerId,
+					message: errorMessage(error),
+					hint: "Redis may be unavailable or the run queue connection may be broken.",
 				},
-			],
+			},
+		]);
+	}
+
+	private writeDiscardedClaimDiagnostic(claimed: ClaimedRun, reason: string, status?: string): void {
+		this.writeWorkerLifecycleDiagnostic("worker.queue.discarded_claim", "warn", {
+			clientId: claimed.clientId ?? null,
+			runId: claimed.runId,
+			reason,
+			...(status ? { status } : {}),
 		});
+	}
+
+	private assertSessionHistoryWithinLimits(run: RuntimeRunRecord): void {
+		const stats = this.db.getSessionMessageStats(run.clientId, run.sessionId);
+		const tooManyMessages = stats.messageCount > this.maxSessionHistoryMessages;
+		const tooManyPayloadBytes = stats.totalPayloadBytes > this.maxSessionHistoryPayloadBytes;
+		if (!tooManyMessages && !tooManyPayloadBytes) return;
+
+		this.writeDiagnosticEvents([
+			{
+				eventType: "worker_session_history_too_large",
+				level: "error",
+				category: "agent",
+				sessionId: run.sessionId,
+				traceId: run.sessionId,
+				data: {
+					clientId: run.clientId,
+					runId: run.runId,
+					workerId: this.workerId,
+					messageCount: stats.messageCount,
+					totalPayloadBytes: stats.totalPayloadBytes,
+					largestPayloadBytes: stats.largestPayloadBytes,
+					maxMessages: this.maxSessionHistoryMessages,
+					maxPayloadBytes: this.maxSessionHistoryPayloadBytes,
+				},
+			},
+		]);
+		throw new Error(
+			`Session history is too large to load safely: ${stats.messageCount} messages, ${stats.totalPayloadBytes} payload bytes.`,
+		);
+	}
+
+	private writeWorkerLifecycleDiagnostic(eventType: string, level: WorkerDiagnosticLevel, data: JsonObject): void {
+		this.writeDiagnosticEvents([
+			{
+				eventType,
+				level,
+				category: "system",
+				data: {
+					workerId: this.workerId,
+					...data,
+				},
+			},
+		]);
+	}
+
+	private writeDiagnosticEvents(events: JsonObject[]): void {
+		try {
+			this.diagnostics?.writeEvents({ events });
+		} catch {
+			// Diagnostics must not interrupt worker run processing.
+		}
+	}
+
+	private startHeartbeat(): void {
+		this.stopHeartbeat();
+		if (this.heartbeatIntervalMs <= 0) return;
+		this.heartbeatTimer = setInterval(() => {
+			this.writeWorkerLifecycleDiagnostic("system.worker.heartbeat", "info", {
+				concurrency: this.concurrency,
+				activeRuns: this.activeRuns.size,
+			});
+		}, this.heartbeatIntervalMs);
+	}
+
+	private stopHeartbeat(): void {
+		if (!this.heartbeatTimer) return;
+		clearInterval(this.heartbeatTimer);
+		this.heartbeatTimer = undefined;
 	}
 }
 

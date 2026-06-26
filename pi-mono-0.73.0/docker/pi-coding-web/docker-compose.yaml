@@ -4,7 +4,7 @@ services:
     container_name: pi-coding-redis
     restart: unless-stopped
     volumes:
-      - pi-redis-data:/data
+      - pi-redis-data:/data:Z
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -48,7 +48,7 @@ services:
     container_name: pi-worker
     init: true
     restart: unless-stopped
-    command: ["npm", "run", "worker", "--workspace=pi-coding-web"]
+    command: ["node", "dist-worker/worker/main.js"]
     env_file:
       - ./.env
     environment:

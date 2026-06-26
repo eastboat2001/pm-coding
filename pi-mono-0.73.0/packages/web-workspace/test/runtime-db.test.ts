@@ -85,6 +85,43 @@ describe("RuntimeDbStore", () => {
 		expect(store.listRunEvents("client-a", "run-1", 1)).toEqual([]);
 	});
 
+	it("updates run and session timestamps when appending run events", () => {
+		store.upsertClient("client-a");
+		store.createSession({
+			clientId: "client-a",
+			sessionId: "session-1",
+			title: "Streaming session",
+			model: {},
+			thinkingLevel: "medium",
+			createdAt: "2026-06-23T00:00:00.000Z",
+		});
+		store.createRun({
+			clientId: "client-a",
+			sessionId: "session-1",
+			runId: "run-1",
+			model: {},
+			thinkingLevel: "medium",
+			createdAt: "2026-06-23T00:00:00.000Z",
+		});
+		store.updateRunStatus("run-1", "client-a", "running", {
+			workerId: "worker-1",
+			updatedAt: "2026-06-23T00:00:00.000Z",
+		});
+
+		store.appendRunEvent({
+			clientId: "client-a",
+			sessionId: "session-1",
+			runId: "run-1",
+			type: "message_update",
+			payload: { content: "still streaming" },
+			createdAt: "2026-06-23T00:45:00.000Z",
+		});
+
+		expect(store.getRun("client-a", "run-1")?.updatedAt).toBe("2026-06-23T00:45:00.000Z");
+		expect(store.getSession("client-a", "session-1")?.updatedAt).toBe("2026-06-23T00:45:00.000Z");
+		expect(store.getSession("client-a", "session-1")?.lastRunStatus).toBe("running");
+	});
+
 	it("rejects run events with a mismatched session id", () => {
 		store.upsertClient("client-a");
 		store.createSession({

@@ -1,8 +1,8 @@
 import type {
-	SkillInterfaceMetadata as WorkspaceSkillInterfaceMetadata,
 	SkillListResult,
 	SkillLoadResult,
 	SkillResourceResult,
+	SkillInterfaceMetadata as WorkspaceSkillInterfaceMetadata,
 	SkillResourceSummary as WorkspaceSkillResourceSummary,
 	SkillSummary as WorkspaceSkillSummary,
 } from "@mariozechner/pi-web-workspace";

@@ -20,6 +20,16 @@ describe("InMemoryRunQueue", () => {
 		await expect(queue.isCancelRequested("r1")).resolves.toBe(true);
 	});
 
+	it("removes queued runs when cancellation is requested before claim", async () => {
+		const queue = new InMemoryRunQueue();
+
+		await queue.enqueue({ clientId: "client-a", runId: "r1" });
+		await queue.requestCancel({ clientId: "client-a", runId: "r1" });
+
+		await expect(queue.claim("w1", 10)).resolves.toBeUndefined();
+		await expect(queue.isCancelRequested({ clientId: "client-a", runId: "r1" })).resolves.toBe(true);
+	});
+
 	it("uses client and run identity for claims and cancellations", async () => {
 		const queue = new InMemoryRunQueue();
 
@@ -43,6 +53,18 @@ describe("InMemoryRunQueue", () => {
 
 		await expect(queue.requeueActive("w1")).resolves.toBe(1);
 		await expect(queue.claim("w2", 10)).resolves.toEqual({ clientId: "client-a", runId: "r1" });
+	});
+
+	it("does not prioritize recovered active claims ahead of fresh queued runs", async () => {
+		const queue = new InMemoryRunQueue();
+
+		await queue.enqueue({ clientId: "client-a", runId: "stale" });
+		await expect(queue.claim("w1", 10)).resolves.toEqual({ clientId: "client-a", runId: "stale" });
+		await queue.enqueue({ clientId: "client-a", runId: "fresh" });
+
+		await expect(queue.requeueActive("w1")).resolves.toBe(1);
+		await expect(queue.claim("w2", 10)).resolves.toEqual({ clientId: "client-a", runId: "fresh" });
+		await expect(queue.claim("w2", 10)).resolves.toEqual({ clientId: "client-a", runId: "stale" });
 	});
 
 	it("rejects operations after close", async () => {

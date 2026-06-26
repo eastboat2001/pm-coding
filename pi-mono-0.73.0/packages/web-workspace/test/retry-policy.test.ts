@@ -25,6 +25,7 @@ describe("RetryPolicy", () => {
 		expect(policy.classify(new Error("network disconnect")).retryable).toBe(true);
 		expect(policy.classify(new Error("disconnected from provider")).retryable).toBe(true);
 		expect(policy.classify(new Error("request timeout")).retryable).toBe(true);
+		expect(policy.classify(new Error("database is locked")).retryable).toBe(true);
 	});
 
 	it("does not retry cancellation, auth, validation, or context overflow", () => {

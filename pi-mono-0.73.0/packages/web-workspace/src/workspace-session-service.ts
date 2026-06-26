@@ -127,7 +127,11 @@ export class WorkspaceSessionService {
 
 	private getSettingsPath(clientId?: string): string {
 		if (!clientId) return this.config.settingsFile;
-		const settingsPath = join(this.config.clientsRootDir, requiredSafePathId(clientId, "client"), basename(this.config.settingsFile));
+		const settingsPath = join(
+			this.config.clientsRootDir,
+			requiredSafePathId(clientId, "client"),
+			basename(this.config.settingsFile),
+		);
 		assertInside(this.config.clientsRootDir, settingsPath);
 		return settingsPath;
 	}

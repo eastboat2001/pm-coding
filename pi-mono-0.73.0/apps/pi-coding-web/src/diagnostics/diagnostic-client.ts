@@ -38,6 +38,7 @@ export type DiagnosticClient = {
 export type DiagnosticClientOptions = {
 	endpoint?: string;
 	fetch?: (input: string, init?: RequestInit) => Promise<Response>;
+	headers?: () => Record<string, string>;
 	maxBatchSize?: number;
 };
 
@@ -83,6 +84,7 @@ export function sanitizeDiagnosticData(data: DiagnosticData): DiagnosticData {
 class QueuedDiagnosticClient implements DiagnosticClient {
 	private readonly endpoint: string;
 	private readonly fetchFn: (input: string, init?: RequestInit) => Promise<Response>;
+	private readonly headers: () => Record<string, string>;
 	private readonly maxBatchSize: number;
 	private queue: DiagnosticEvent[] = [];
 	private flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -91,6 +93,7 @@ class QueuedDiagnosticClient implements DiagnosticClient {
 	constructor(options: DiagnosticClientOptions) {
 		this.endpoint = options.endpoint ?? DEFAULT_ENDPOINT;
 		this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
+		this.headers = options.headers ?? (() => ({}));
 		this.maxBatchSize = options.maxBatchSize ?? DEFAULT_BATCH_SIZE;
 	}
 
@@ -135,7 +138,7 @@ class QueuedDiagnosticClient implements DiagnosticClient {
 		try {
 			await this.fetchFn(this.endpoint, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: { "Content-Type": "application/json", ...this.headers() },
 				body: JSON.stringify({ events }),
 			});
 		} catch {

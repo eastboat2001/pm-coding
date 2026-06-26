@@ -21,6 +21,7 @@ import type {
 } from "./types.js";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running", "cancelling"]);
+const STALE_ACTIVE_RUN_DELETE_AGE_MS = 30 * 60 * 1000;
 
 export interface RunApiDiagnostics {
 	writeEvents(input: { events: DiagnosticLogEventInput[] }): unknown;
@@ -127,29 +128,51 @@ export class WorkspaceRunApiService {
 			const cause = errorMessage(error);
 			const message = `queue enqueue failed: ${cause}`;
 			this.db.updateRunStatus(run.runId, run.clientId, "failed", { error: message });
-			this.diagnostics?.writeEvents({
-				events: [
-					{
-						level: "error",
-						category: "agent",
-						eventType: "agent.run.enqueue.error",
+			this.writeDiagnosticEvents([
+				{
+					level: "error",
+					category: "agent",
+					eventType: "agent.run.enqueue.error",
+					sessionId: run.sessionId,
+					traceId: run.sessionId,
+					data: {
+						clientId: run.clientId,
 						sessionId: run.sessionId,
-						traceId: run.sessionId,
-						data: {
-							clientId: run.clientId,
-							sessionId: run.sessionId,
-							runId: run.runId,
-							status: "failed",
-							message: cause,
-						},
+						runId: run.runId,
+						status: "failed",
+						message: cause,
 					},
-				],
-			});
+				},
+			]);
 			throw new RunApiError("Run queue unavailable", 503);
+		}
+		this.writeDiagnosticEvents([
+			{
+				level: "info",
+				category: "agent",
+				eventType: "agent.run.enqueued",
+				sessionId: run.sessionId,
+				traceId: run.sessionId,
+				data: {
+					clientId: run.clientId,
+					sessionId: run.sessionId,
+					runId: run.runId,
+					status: "queued",
+				},
+			},
+		]);
+	}
+
+	private writeDiagnosticEvents(events: DiagnosticLogEventInput[]): void {
+		try {
+			this.diagnostics?.writeEvents({ events });
+		} catch {
+			// Diagnostics must never interrupt runtime control paths.
 		}
 	}
 
 	listSessions(clientId: string): RuntimeSessionRecord[] {
+		this.markStaleActiveRunsForClient(clientId);
 		return this.db.listSessions(clientId);
 	}
 
@@ -182,6 +205,14 @@ export class WorkspaceRunApiService {
 			throw new RunApiError(`Session ${sessionId} already has an active run`, 409);
 		}
 		if (activeRuns.length > 0 && options.force) {
+			if (activeRuns.every(isStaleActiveRun)) {
+				for (const run of activeRuns) {
+					this.markStaleActiveRunTerminal(run);
+				}
+				const deleted = this.db.deleteSession(clientId, sessionId);
+				if (deleted) await this.sessionWorkspaces?.deleteSessionWorkspace(clientId, sessionId);
+				return { deleted, sessionId, cancelledRuns: activeRuns.length };
+			}
 			await Promise.all(activeRuns.map((run) => this.cancelActiveRun(run)));
 			return { deleted: false, sessionId, cancelledRuns: activeRuns.length };
 		}
@@ -218,6 +249,13 @@ export class WorkspaceRunApiService {
 		return this.db.updateRunStatus(runId, clientId, "cancelling");
 	}
 
+	private markStaleActiveRunTerminal(run: RuntimeRunRecord): RuntimeRunRecord {
+		const status = run.status === "queued" ? "cancelled" : "interrupted";
+		return this.db.updateRunStatus(run.runId, run.clientId, status, {
+			error: "Deleted stale active run",
+		});
+	}
+
 	listRunEvents(clientId: string, runId: string, afterSeq: number): RuntimeRunEventRecord[] {
 		return this.db.listRunEvents(clientId, runId, afterSeq);
 	}
@@ -226,11 +264,7 @@ export class WorkspaceRunApiService {
 		return this.appPreviewGoals?.get(clientId, sessionId);
 	}
 
-	listAppPreviewGoalEvents(
-		clientId: string,
-		sessionId: string,
-		afterEventId = 0,
-	): AppPreviewGoalEventRecord[] {
+	listAppPreviewGoalEvents(clientId: string, sessionId: string, afterEventId = 0): AppPreviewGoalEventRecord[] {
 		return this.appPreviewGoals?.events(clientId, sessionId, afterEventId) ?? [];
 	}
 
@@ -254,6 +288,16 @@ export class WorkspaceRunApiService {
 
 	private hasActiveRun(clientId: string, sessionId: string): boolean {
 		return this.activeRuns(clientId, sessionId).length > 0;
+	}
+
+	private markStaleActiveRunsForClient(clientId: string): void {
+		for (const session of this.db.listSessions(clientId)) {
+			for (const run of this.activeRuns(clientId, session.sessionId)) {
+				if (isStaleActiveRun(run)) {
+					this.markStaleActiveRunTerminal(run);
+				}
+			}
+		}
 	}
 
 	private async ensureProjectWorkspace(clientId: string, sessionId: string, title: string): Promise<void> {
@@ -326,6 +370,16 @@ function normalizeProjectFiles(value: unknown): StartRunProjectFile[] {
 		}
 		return { filename, content: entry.content };
 	});
+}
+
+function isStaleActiveRun(run: RuntimeRunRecord): boolean {
+	if (run.status === "cancelling" && run.startedAt && isStaleTimestamp(run.startedAt)) return true;
+	return isStaleTimestamp(run.updatedAt);
+}
+
+function isStaleTimestamp(value: string): boolean {
+	const timestampMs = Date.parse(value);
+	return Number.isFinite(timestampMs) && Date.now() - timestampMs >= STALE_ACTIVE_RUN_DELETE_AGE_MS;
 }
 
 function errorMessage(error: unknown): string {

@@ -28,9 +28,7 @@ describe("skill tool contract", () => {
 	});
 
 	it("rejects missing skill tool arguments with stable messages", () => {
-		expect(() => prepareSkillLoadArguments({ arguments: {} })).toThrow(
-			'skill_load requires: {"name":"skill-name"}',
-		);
+		expect(() => prepareSkillLoadArguments({ arguments: {} })).toThrow('skill_load requires: {"name":"skill-name"}');
 		expect(() => prepareSkillResourceArguments({ name: "ui-polish" })).toThrow(
 			'skill_resource requires: {"name":"skill-name","path":"references/file.md"}',
 		);

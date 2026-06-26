@@ -20,10 +20,7 @@ export interface AppPreviewGoalActionState {
 	nextAction: AppPreviewGoalAction;
 }
 
-export function appPreviewGoalToggleLabel(
-	goal: AppPreviewGoalStateInput | undefined,
-	previewPending = false,
-): string {
+export function appPreviewGoalToggleLabel(goal: AppPreviewGoalStateInput | undefined, previewPending = false): string {
 	return previewPending || goal?.status === "active" ? "Enabled" : "Not enabled";
 }
 
@@ -48,7 +45,6 @@ export function appPreviewGoalStageLabel(
 			return "Preview generation failed";
 		case "cancelled":
 			return "Preview generation cancelled";
-		case "disabled":
 		default:
 			return undefined;
 	}

@@ -6,7 +6,7 @@ const MAX_ATTEMPTS_CAP = 5;
 const MAX_ERROR_SIGNAL_LENGTH = 2000;
 const TRUNCATED_SIGNAL_SUFFIX = "...[truncated]";
 const NOT_RETRYABLE_PATTERN = /AbortError|request.?aborted.?by.?user|aborted.?by.?(?:user|caller)|(?:user|caller).?aborted|cancelled|canceled|unauthorized|forbidden|401|403|invalid.?request|bad.?request|400|context.?window|context.?length|prompt.?too.?long|request.?too.?large/i;
-const TRANSIENT_PATTERN = /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|5\d\d|service.?unavailable|server.?error|internal.?error|network.?error|disconnect(?:ed|ion)?|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay|ECONNRESET|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i;
+const TRANSIENT_PATTERN = /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|5\d\d|service.?unavailable|server.?error|internal.?error|database.?is.?locked|network.?error|disconnect(?:ed|ion)?|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay|ECONNRESET|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i;
 const MAX_CAUSE_DEPTH = 3;
 export class RetryPolicy {
     baseDelayMs;

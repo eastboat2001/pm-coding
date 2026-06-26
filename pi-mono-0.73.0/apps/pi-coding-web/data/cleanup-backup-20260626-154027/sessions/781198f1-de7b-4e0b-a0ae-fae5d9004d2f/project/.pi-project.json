@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "projectId": "project-b471d4d4-781198f1",
+  "clientId": "b471d4d4-b583-4c84-86c0-2ac204e25190",
+  "sessionId": "781198f1-de7b-4e0b-a0ae-fae5d9004d2f",
+  "title": "QDM Finished Lot Yield Dashboard...",
+  "status": "running",
+  "mode": "static",
+  "previewUrl": "http://localhost:5173/preview/project-b471d4d4-781198f1/",
+  "projectRoot": "C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\clients\\b471d4d4-b583-4c84-86c0-2ac204e25190\\sessions\\781198f1-de7b-4e0b-a0ae-fae5d9004d2f\\project",
+  "serveRoot": "C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\clients\\b471d4d4-b583-4c84-86c0-2ac204e25190\\sessions\\781198f1-de7b-4e0b-a0ae-fae5d9004d2f\\project",
+  "fileCount": 7,
+  "updatedAt": "2026-06-22T05:40:51.679Z",
+  "logs": [
+    "Project root: C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\clients\\b471d4d4-b583-4c84-86c0-2ac204e25190\\sessions\\781198f1-de7b-4e0b-a0ae-fae5d9004d2f\\project\n",
+    "No package.json found; serving static files directly.\n",
+    "Serving static output: C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\clients\\b471d4d4-b583-4c84-86c0-2ac204e25190\\sessions\\781198f1-de7b-4e0b-a0ae-fae5d9004d2f\\project\n"
+  ]
+}

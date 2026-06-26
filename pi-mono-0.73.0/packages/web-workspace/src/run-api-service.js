@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isObject } from "./json.js";
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "cancelling"]);
+const STALE_ACTIVE_RUN_DELETE_AGE_MS = 30 * 60 * 1000;
 export class RunApiError extends Error {
     statusCode;
     constructor(message, statusCode) {
@@ -91,28 +92,50 @@ export class WorkspaceRunApiService {
             const cause = errorMessage(error);
             const message = `queue enqueue failed: ${cause}`;
             this.db.updateRunStatus(run.runId, run.clientId, "failed", { error: message });
-            this.diagnostics?.writeEvents({
-                events: [
-                    {
-                        level: "error",
-                        category: "agent",
-                        eventType: "agent.run.enqueue.error",
+            this.writeDiagnosticEvents([
+                {
+                    level: "error",
+                    category: "agent",
+                    eventType: "agent.run.enqueue.error",
+                    sessionId: run.sessionId,
+                    traceId: run.sessionId,
+                    data: {
+                        clientId: run.clientId,
                         sessionId: run.sessionId,
-                        traceId: run.sessionId,
-                        data: {
-                            clientId: run.clientId,
-                            sessionId: run.sessionId,
-                            runId: run.runId,
-                            status: "failed",
-                            message: cause,
-                        },
+                        runId: run.runId,
+                        status: "failed",
+                        message: cause,
                     },
-                ],
-            });
+                },
+            ]);
             throw new RunApiError("Run queue unavailable", 503);
+        }
+        this.writeDiagnosticEvents([
+            {
+                level: "info",
+                category: "agent",
+                eventType: "agent.run.enqueued",
+                sessionId: run.sessionId,
+                traceId: run.sessionId,
+                data: {
+                    clientId: run.clientId,
+                    sessionId: run.sessionId,
+                    runId: run.runId,
+                    status: "queued",
+                },
+            },
+        ]);
+    }
+    writeDiagnosticEvents(events) {
+        try {
+            this.diagnostics?.writeEvents({ events });
+        }
+        catch {
+            // Diagnostics must never interrupt runtime control paths.
         }
     }
     listSessions(clientId) {
+        this.markStaleActiveRunsForClient(clientId);
         return this.db.listSessions(clientId);
     }
     getSession(clientId, sessionId) {
@@ -142,6 +165,15 @@ export class WorkspaceRunApiService {
             throw new RunApiError(`Session ${sessionId} already has an active run`, 409);
         }
         if (activeRuns.length > 0 && options.force) {
+            if (activeRuns.every(isStaleActiveRun)) {
+                for (const run of activeRuns) {
+                    this.markStaleActiveRunTerminal(run);
+                }
+                const deleted = this.db.deleteSession(clientId, sessionId);
+                if (deleted)
+                    await this.sessionWorkspaces?.deleteSessionWorkspace(clientId, sessionId);
+                return { deleted, sessionId, cancelledRuns: activeRuns.length };
+            }
             await Promise.all(activeRuns.map((run) => this.cancelActiveRun(run)));
             return { deleted: false, sessionId, cancelledRuns: activeRuns.length };
         }
@@ -175,6 +207,12 @@ export class WorkspaceRunApiService {
         }
         return this.db.updateRunStatus(runId, clientId, "cancelling");
     }
+    markStaleActiveRunTerminal(run) {
+        const status = run.status === "queued" ? "cancelled" : "interrupted";
+        return this.db.updateRunStatus(run.runId, run.clientId, status, {
+            error: "Deleted stale active run",
+        });
+    }
     listRunEvents(clientId, runId, afterSeq) {
         return this.db.listRunEvents(clientId, runId, afterSeq);
     }
@@ -198,6 +236,15 @@ export class WorkspaceRunApiService {
     }
     hasActiveRun(clientId, sessionId) {
         return this.activeRuns(clientId, sessionId).length > 0;
+    }
+    markStaleActiveRunsForClient(clientId) {
+        for (const session of this.db.listSessions(clientId)) {
+            for (const run of this.activeRuns(clientId, session.sessionId)) {
+                if (isStaleActiveRun(run)) {
+                    this.markStaleActiveRunTerminal(run);
+                }
+            }
+        }
     }
     async ensureProjectWorkspace(clientId, sessionId, title) {
         if (!this.projectFiles?.ensureWorkspace)
@@ -271,6 +318,15 @@ function normalizeProjectFiles(value) {
         }
         return { filename, content: entry.content };
     });
+}
+function isStaleActiveRun(run) {
+    if (run.status === "cancelling" && run.startedAt && isStaleTimestamp(run.startedAt))
+        return true;
+    return isStaleTimestamp(run.updatedAt);
+}
+function isStaleTimestamp(value) {
+    const timestampMs = Date.parse(value);
+    return Number.isFinite(timestampMs) && Date.now() - timestampMs >= STALE_ACTIVE_RUN_DELETE_AGE_MS;
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);

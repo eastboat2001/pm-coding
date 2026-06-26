@@ -20,18 +20,19 @@ describe("project execution and preview hardening", () => {
 		const config = { ...testConfig(root), projectInstallCommand: "", projectBuildCommand: "npm run build" };
 		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
 		mkdirSync(projectDir, { recursive: true });
-		writeFileSync(
-			join(projectDir, "package.json"),
-			JSON.stringify({ scripts: { build: "node build.js" } }),
-			"utf8",
-		);
+		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ scripts: { build: "node build.js" } }), "utf8");
 
 		const commands: string[] = [];
 		const service = new WorkspaceTaskService(config, undefined, async (command) => {
 			commands.push(command);
 		});
 
-		const result = await service.run({ task: "build_static", clientId: "client-a", sessionId: "s1", title: "Hardening" });
+		const result = await service.run({
+			task: "build_static",
+			clientId: "client-a",
+			sessionId: "s1",
+			title: "Hardening",
+		});
 
 		expect(commands).toEqual([]);
 		expect(result.status).toBe("failed");

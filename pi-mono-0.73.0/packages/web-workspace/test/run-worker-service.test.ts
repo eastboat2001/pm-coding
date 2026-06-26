@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type ClaimedRun, InMemoryRunQueue, type RunQueue, type RunQueueItem } from "../src/run-queue.js";
 import { type WorkerAgent, type WorkerAgentEvent, WorkspaceRunWorkerService } from "../src/run-worker-service.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
@@ -93,6 +93,35 @@ describe("WorkspaceRunWorkerService", () => {
 		await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
 	});
 
+	it("records startup recovery diagnostics with reclaimed active run count", async () => {
+		const run = createRunFixture(db);
+		const diagnostics = new RecordingDiagnostics();
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+		await expect(queue.claim("w1", 1)).resolves.toEqual({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		await worker.recoverOwnedRuns();
+
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "info",
+				category: "system",
+				eventType: "system.worker.recovered_active_runs",
+				data: expect.objectContaining({
+					workerId: "w1",
+					recoveredCount: 1,
+				}),
+			}),
+		);
+	});
+
 	it("processes one queued run through the fake agent", async () => {
 		const run = createRunFixture(db);
 		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
@@ -113,6 +142,167 @@ describe("WorkspaceRunWorkerService", () => {
 			"user",
 			"assistant",
 		]);
+	});
+
+	it("processes a queued run when diagnostic logging is locked", async () => {
+		const run = createRunFixture(db);
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics: new LockedDiagnostics(),
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
+		await expect(queue.claim("w1", 1)).resolves.toBeUndefined();
+	});
+
+	it("records queue claim diagnostics when a worker claims a run", async () => {
+		const run = createRunFixture(db);
+		const diagnostics = new RecordingDiagnostics();
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "info",
+				category: "system",
+				eventType: "worker.queue.claimed",
+				data: expect.objectContaining({
+					workerId: "w1",
+					clientId: run.clientId,
+					runId: run.runId,
+				}),
+			}),
+		);
+	});
+
+	it("records discarded claim diagnostics for terminal runtime runs", async () => {
+		const run = createRunFixture(db);
+		const diagnostics = new RecordingDiagnostics();
+		db.updateRunStatus(run.runId, run.clientId, "cancelled");
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			createAgent: () => {
+				throw new Error("terminal runs should not create agents");
+			},
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "warn",
+				category: "system",
+				eventType: "worker.queue.discarded_claim",
+				data: expect.objectContaining({
+					workerId: "w1",
+					clientId: run.clientId,
+					runId: run.runId,
+					reason: "status_not_queued",
+					status: "cancelled",
+				}),
+			}),
+		);
+	});
+
+	it("records discarded claim diagnostics for missing runtime runs", async () => {
+		const diagnostics = new RecordingDiagnostics();
+		await queue.enqueue({ clientId: "client-a", runId: "missing-run" });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			createAgent: () => {
+				throw new Error("missing runs should not create agents");
+			},
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "warn",
+				category: "system",
+				eventType: "worker.queue.discarded_claim",
+				data: expect.objectContaining({
+					workerId: "w1",
+					clientId: "client-a",
+					runId: "missing-run",
+					reason: "missing_runtime_run",
+				}),
+			}),
+		);
+	});
+
+	it("fails a run before loading oversized session history into memory", async () => {
+		const run = createRunFixture(db);
+		const diagnostics = new RecordingDiagnostics();
+		db.appendMessage({
+			clientId: run.clientId,
+			sessionId: run.sessionId,
+			role: "assistant",
+			payload: { content: "x".repeat(128) },
+		});
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			maxSessionHistoryPayloadBytes: 64,
+			createAgent: () => {
+				throw new Error("oversized history should not create an agent");
+			},
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(db.getRun(run.clientId, run.runId)).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				error: expect.stringContaining("Session history is too large"),
+			}),
+		);
+		await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				category: "agent",
+				eventType: "worker_session_history_too_large",
+				sessionId: run.sessionId,
+				traceId: run.sessionId,
+				data: expect.objectContaining({
+					clientId: run.clientId,
+					runId: run.runId,
+					workerId: "w1",
+					messageCount: 2,
+					maxPayloadBytes: 64,
+				}),
+			}),
+		);
 	});
 
 	it("retries transient agent failures before completing the run", async () => {
@@ -156,7 +346,16 @@ describe("WorkspaceRunWorkerService", () => {
 			"user",
 			"assistant",
 		]);
-		expect(JSON.stringify(db.listRunEvents(run.clientId, run.runId, 0))).not.toContain("503 service unavailable");
+		expect(
+			db
+				.listRunEvents(run.clientId, run.runId, 0)
+				.filter(
+					(event) =>
+						event.type === "message_end" &&
+						eventMessageRole(event.payload) === "assistant" &&
+						JSON.stringify(event.payload).includes("503 service unavailable"),
+				),
+		).toHaveLength(0);
 		expect(diagnostics.events).toContainEqual(
 			expect.objectContaining({
 				eventType: "agent.retry_scheduled",
@@ -196,9 +395,17 @@ describe("WorkspaceRunWorkerService", () => {
 		const events = db.listRunEvents(run.clientId, run.runId, 0);
 		expect(factoryCalls).toBe(2);
 		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
-		expect(JSON.stringify(events)).not.toContain("503 service unavailable");
-		expect(events.filter((event) => event.type === "message_end" && eventMessageRole(event.payload) === "user"))
-			.toHaveLength(1);
+		expect(
+			events.filter(
+				(event) =>
+					event.type === "message_end" &&
+					eventMessageRole(event.payload) === "assistant" &&
+					JSON.stringify(event.payload).includes("503 service unavailable"),
+			),
+		).toHaveLength(0);
+		expect(
+			events.filter((event) => event.type === "message_end" && eventMessageRole(event.payload) === "user"),
+		).toHaveLength(1);
 		expect(diagnostics.events.map((event) => event.eventType)).toContain("agent.retry_scheduled");
 	});
 
@@ -288,6 +495,44 @@ describe("WorkspaceRunWorkerService", () => {
 		expect(diagnostics.events.map((event) => event.eventType)).not.toContain("agent.retry_scheduled");
 	});
 
+	it("retries transient assistant errors after thinking-only streamed events", async () => {
+		const run = createRunFixture(db);
+		let factoryCalls = 0;
+		const diagnostics = new RecordingDiagnostics();
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			retry: { sleep: async () => {} },
+			createAgent: () => {
+				factoryCalls += 1;
+				return factoryCalls === 1 ? new ThinkingOnlyThenAssistantErrorAgent() : new ScriptedAgent();
+			},
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(factoryCalls).toBe(2);
+		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
+		const events = db.listRunEvents(run.clientId, run.runId, 0);
+		expect(events.map((event) => event.type)).toContain("agent_retry_scheduled");
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				type: "agent_retry_scheduled",
+				payload: expect.objectContaining({ message: expect.stringContaining("database is locked") }),
+			}),
+		);
+		expect(db.listMessages(run.clientId, run.sessionId).map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+		]);
+		expect(diagnostics.events.map((event) => event.eventType)).toContain("agent.retry_scheduled");
+		expect(diagnostics.events.map((event) => event.eventType)).not.toContain("agent.retry_exhausted");
+	});
+
 	it("fails assistant stopReason error without an error message before side effects", async () => {
 		const run = createRunFixture(db);
 		let factoryCalls = 0;
@@ -310,7 +555,9 @@ describe("WorkspaceRunWorkerService", () => {
 
 		expect(factoryCalls).toBe(1);
 		expect(db.getRun(run.clientId, run.runId)?.status).toBe("failed");
-		expect(JSON.stringify(db.listRunEvents(run.clientId, run.runId, 0))).not.toContain("assistant stopped with error");
+		expect(JSON.stringify(db.listRunEvents(run.clientId, run.runId, 0))).not.toContain(
+			"assistant stopped with error",
+		);
 		expect(diagnostics.events.map((event) => event.eventType)).toContain("agent.retry_exhausted");
 	});
 
@@ -365,10 +612,10 @@ describe("WorkspaceRunWorkerService", () => {
 			expect.objectContaining({
 				clientId: run.clientId,
 				runId: run.runId,
-			status: "completed",
-		}),
-	);
-});
+				status: "completed",
+			}),
+		);
+	});
 
 	it("notifies the goal supervisor before completing the queue claim", async () => {
 		const run = createRunFixture(db);
@@ -655,7 +902,7 @@ describe("WorkspaceRunWorkerService", () => {
 			diagnostics,
 			retry: {
 				sleep: (_ms, signal) =>
-					new Promise<void>((resolve, reject) => {
+					new Promise<void>((_resolve, reject) => {
 						sleepStarted.resolve();
 						if (signal?.aborted) {
 							reject(new Error("Retry cancelled"));
@@ -723,6 +970,94 @@ describe("WorkspaceRunWorkerService", () => {
 		await stopped;
 
 		expect(db.getRun(run.clientId, run.runId)?.status).toBe("interrupted");
+	});
+
+	it("records worker startup success diagnostics", async () => {
+		const diagnostics = new RecordingDiagnostics();
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		await worker.start();
+		await worker.stop();
+
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "info",
+				category: "system",
+				eventType: "system.worker.started",
+				data: expect.objectContaining({
+					workerId: "w1",
+					concurrency: 1,
+				}),
+			}),
+		);
+	});
+
+	it("records worker heartbeat diagnostics while running", async () => {
+		vi.useFakeTimers();
+		const diagnostics = new RecordingDiagnostics();
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			heartbeatIntervalMs: 25,
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		try {
+			await worker.start();
+			await vi.advanceTimersByTimeAsync(25);
+
+			expect(diagnostics.events).toContainEqual(
+				expect.objectContaining({
+					level: "info",
+					category: "system",
+					eventType: "system.worker.heartbeat",
+					data: expect.objectContaining({
+						workerId: "w1",
+						concurrency: 1,
+						activeRuns: 0,
+					}),
+				}),
+			);
+		} finally {
+			const stopped = worker.stop();
+			await vi.advanceTimersByTimeAsync(100);
+			await stopped;
+			vi.useRealTimers();
+		}
+	});
+
+	it("records worker startup failure diagnostics", async () => {
+		const diagnostics = new RecordingDiagnostics();
+		const failingQueue = new StartupFailingQueue();
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue: failingQueue,
+			workerId: "w1",
+			diagnostics,
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		await expect(worker.start()).rejects.toThrow("redis unavailable during startup recovery");
+
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				category: "system",
+				eventType: "system.worker.service_start_failed",
+				data: expect.objectContaining({
+					workerId: "w1",
+					message: "redis unavailable during startup recovery",
+				}),
+			}),
+		);
 	});
 
 	it("records queue claim failures without letting the worker loop die silently", async () => {
@@ -944,6 +1279,37 @@ class PromptEchoThenAssistantSuccessAgent extends ScriptedAgent {
 	}
 }
 
+class ThinkingOnlyThenAssistantErrorAgent extends ScriptedAgent {
+	override async prompt(message: RuntimeMessageRecord): Promise<void> {
+		const startedAssistant: JsonObject = {
+			role: "assistant",
+			content: [],
+			stopReason: "stop",
+			timestamp: 123,
+		};
+		const thinkingAssistant: JsonObject = {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "The user is greeting me" }],
+			stopReason: "stop",
+			timestamp: 123,
+		};
+		const failedAssistant: JsonObject = {
+			...thinkingAssistant,
+			stopReason: "error",
+			errorMessage: "database is locked",
+		};
+		this.emit({ type: "agent_start" });
+		this.emit({ type: "turn_start" });
+		this.emit({ type: "message_start", message });
+		this.emit({ type: "message_end", message });
+		this.emit({ type: "message_start", message: startedAssistant });
+		this.emit({ type: "message_update", message: thinkingAssistant });
+		this.emit({ type: "message_end", message: failedAssistant });
+		this.emit({ type: "turn_end", message: failedAssistant, toolResults: [] });
+		this.emit({ type: "agent_end", messages: [message, failedAssistant] });
+	}
+}
+
 class SideEffectThenAssistantErrorAgent extends ScriptedAgent {
 	override async prompt(_message: RuntimeMessageRecord): Promise<void> {
 		const assistant: JsonObject = {
@@ -1082,6 +1448,12 @@ class ClaimFailingQueue implements RunQueue {
 	}
 }
 
+class StartupFailingQueue extends InMemoryRunQueue {
+	override async requeueActive(_workerId: string): Promise<number> {
+		throw new Error("redis unavailable during startup recovery");
+	}
+}
+
 class CompleteRecordingQueue extends InMemoryRunQueue {
 	constructor(private readonly order: string[]) {
 		super();
@@ -1099,6 +1471,12 @@ class RecordingDiagnostics {
 	writeEvents(input: { events: JsonObject[] }): JsonObject {
 		this.events.push(...input.events);
 		return { accepted: input.events.length, dropped: 0 };
+	}
+}
+
+class LockedDiagnostics {
+	writeEvents(_input: { events: JsonObject[] }): JsonObject {
+		throw new Error("database is locked");
 	}
 }
 

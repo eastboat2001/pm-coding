@@ -186,7 +186,9 @@ export class WorkspacePreviewService {
         const clientsRoot = this.config.clientsRootDir;
         if (!existsSync(clientsRoot))
             return [];
-        const clientNames = clientId ? [sanitizePathComponent(clientId)].filter(Boolean) : clientDirectoryNames(clientsRoot);
+        const clientNames = clientId
+            ? [sanitizePathComponent(clientId)].filter(Boolean)
+            : clientDirectoryNames(clientsRoot);
         const records = [];
         for (const clientName of clientNames) {
             const sessionsRoot = join(clientsRoot, clientName, "sessions");

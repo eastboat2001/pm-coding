@@ -53,12 +53,18 @@ export function prepareHandoffDocumentFiles(
 ): HandoffDocumentFile[] {
 	const used = new Set<string>();
 	return documents.map((document, index) => {
-		const attachment = attachments[index] ?? attachments.find((candidate) => candidate.fileName === document.filename);
+		const attachment =
+			attachments[index] ?? attachments.find((candidate) => candidate.fileName === document.filename);
 		const content = attachment?.extractedText;
 		if (!content) {
-			throw new Error(`PM handoff document has no extracted text: ${document.filename || document.kind || index + 1}`);
+			throw new Error(
+				`PM handoff document has no extracted text: ${document.filename || document.kind || index + 1}`,
+			);
 		}
-		const basename = uniqueFilename(sanitizeDocumentFilename(document.filename, `handoff-document-${index + 1}.md`), used);
+		const basename = uniqueFilename(
+			sanitizeDocumentFilename(document.filename, `handoff-document-${index + 1}.md`),
+			used,
+		);
 		return {
 			kind: document.kind,
 			sourceFilename: document.filename,
@@ -68,17 +74,11 @@ export function prepareHandoffDocumentFiles(
 	});
 }
 
-export function buildCodingHandoffPrompt(
-	payload: PmHandoffPayload,
-	documentFiles: HandoffDocumentFile[] = [],
-): string {
+export function buildCodingHandoffPrompt(payload: PmHandoffPayload, documentFiles: HandoffDocumentFile[] = []): string {
 	return buildCodingHandoffPromptFromSource(payload.implementation_prompt || "", documentFiles);
 }
 
-export function buildCodingHandoffPromptFromSource(
-	source: string,
-	documentFiles: HandoffDocumentFile[] = [],
-): string {
+export function buildCodingHandoffPromptFromSource(source: string, documentFiles: HandoffDocumentFile[] = []): string {
 	const sourcePrompt = source.trim();
 	const handoffDocumentInstructions = buildHandoffDocumentInstructions(documentFiles);
 	return [sourcePrompt, handoffDocumentInstructions, PI_CODING_HANDOFF_INSTRUCTIONS_EN]

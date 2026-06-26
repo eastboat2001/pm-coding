@@ -70,8 +70,12 @@ export async function getSession(sessionId: string): Promise<RuntimeSessionDetai
 	});
 }
 
-export async function deleteSession(sessionId: string): Promise<DeleteSessionResult> {
-	return requestRunApi<DeleteSessionResult>(`${SESSIONS_API_PREFIX}/${encodeURIComponent(sessionId)}`, {
+export async function deleteSession(
+	sessionId: string,
+	options: { force?: boolean } = {},
+): Promise<DeleteSessionResult> {
+	const forceQuery = options.force ? "?force=true" : "";
+	return requestRunApi<DeleteSessionResult>(`${SESSIONS_API_PREFIX}/${encodeURIComponent(sessionId)}${forceQuery}`, {
 		method: "DELETE",
 	});
 }

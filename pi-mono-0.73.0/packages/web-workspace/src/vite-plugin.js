@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { AppPreviewGoalService } from "./app-preview-goal-service.js";
@@ -11,11 +12,11 @@ import { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunQueue } from "./run-queue.js";
 import { RuntimeDbStore } from "./runtime-db.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
+import { deleteSessionWorkspace } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
-import { deleteSessionWorkspace } from "./workspace-paths.js";
 export function configuredStoragePlugin(envFile) {
     const rootDir = process.cwd();
     const config = loadStorageConfig(rootDir, envFile);
@@ -343,12 +344,27 @@ async function handleLogsApi(method, route, url, req, res, config, diagnostics, 
         sendJson(res, diagnostics.status());
         return;
     }
-    const clientId = readConfiguredApiClientId(req, config);
-    if (method === "GET" && route === "/export") {
+    if ((method === "GET" || method === "HEAD") && route === "/export") {
+        const clientId = readDiagnosticExportClientId(req, url, config);
         const sessionId = queryString(url, "sessionId");
         const runId = queryString(url, "runId");
         if (!sessionId && !runId) {
             sendJson(res, { error: "Query parameter `sessionId` or `runId` is required." }, 400);
+            return;
+        }
+        if (queryString(url, "format") !== "json") {
+            const archive = diagnosticExports.exportArchive({
+                clientId: clientId ?? "",
+                sessionId,
+                runId,
+                includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : true,
+                maxDiagnosticEvents: queryNumber(url, "maxDiagnosticEvents"),
+            });
+            if (method === "HEAD") {
+                sendDiagnosticArchiveHead(res, archive);
+                return;
+            }
+            await sendDiagnosticArchive(res, archive);
             return;
         }
         const payload = diagnosticExports.export({
@@ -359,9 +375,15 @@ async function handleLogsApi(method, route, url, req, res, config, diagnostics, 
             maxDiagnosticEvents: queryNumber(url, "maxDiagnosticEvents"),
         });
         res.setHeader("Content-Disposition", `attachment; filename="${diagnosticExportFilename(sessionId, runId)}"`);
+        if (method === "HEAD") {
+            res.statusCode = 200;
+            res.end();
+            return;
+        }
         sendPrettyJson(res, payload);
         return;
     }
+    const clientId = readConfiguredApiClientId(req, config);
     if (method === "POST" && route === "/events") {
         const body = await readJsonBody(req);
         sendJson(res, diagnostics.writeEvents(withDiagnosticClientId(body, clientId)));
@@ -372,6 +394,34 @@ async function handleLogsApi(method, route, url, req, res, config, diagnostics, 
         return;
     }
     sendJson(res, { error: "Not found." }, 404);
+}
+function sendDiagnosticArchiveHead(res, archive) {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", archive.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${archive.filename}"`);
+    res.end();
+}
+async function sendDiagnosticArchive(res, archive) {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", archive.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${archive.filename}"`);
+    for await (const chunk of archive.stream()) {
+        if (!res.write(chunk)) {
+            await once(res, "drain");
+        }
+    }
+    res.end();
+}
+function readDiagnosticExportClientId(req, url, config) {
+    const headerValue = req.headers["x-pi-client-id"];
+    if (headerValue !== undefined)
+        return normalizeClientId(Array.isArray(headerValue) ? headerValue[0] : headerValue);
+    const queryClientId = queryString(url, "clientId");
+    if (queryClientId)
+        return normalizeClientId(queryClientId);
+    if (config.clientIdRequired)
+        return readClientIdHeader(req);
+    return undefined;
 }
 function readConfiguredApiClientId(req, config) {
     if (config.clientIdRequired)

@@ -15,7 +15,7 @@ for i = 1, #entries, 2 do
 	local owner = entries[i + 1]
 	if owner == ARGV[1] then
 		redis.call("HDEL", KEYS[1], runKey)
-		redis.call("RPUSH", KEYS[2], runKey)
+		redis.call("LPUSH", KEYS[2], runKey)
 		reclaimed = reclaimed + 1
 	end
 end
@@ -82,13 +82,17 @@ export class InMemoryRunQueue implements RunQueue {
 			this.active.delete(key);
 			reclaimed.push(runFromKey(key));
 		}
-		this.queued.unshift(...reclaimed);
+		this.queued.push(...reclaimed);
 		return reclaimed.length;
 	}
 
 	async requestCancel(run: RunQueueItem | ClaimedRun): Promise<void> {
 		this.assertOpen();
-		this.cancelRequests.add(runKey(run));
+		const key = runKey(run);
+		this.cancelRequests.add(key);
+		for (let index = this.queued.length - 1; index >= 0; index -= 1) {
+			if (runKey(this.queued[index]) === key) this.queued.splice(index, 1);
+		}
 	}
 
 	async isCancelRequested(run: RunQueueItem | ClaimedRun): Promise<boolean> {
@@ -189,7 +193,10 @@ export class RedisRunQueue implements RunQueue {
 	async requestCancel(run: RunQueueItem | ClaimedRun): Promise<void> {
 		this.assertOpen();
 		const client = await this.connectedClient();
-		await client.set(this.cancelKey(run), "1", { EX: this.cancelTtlSeconds });
+		await Promise.all([
+			client.set(this.cancelKey(run), "1", { EX: this.cancelTtlSeconds }),
+			client.lRem(this.queueName, 0, serializeRunQueueEntry(run)),
+		]);
 	}
 
 	async isCancelRequested(run: RunQueueItem | ClaimedRun): Promise<boolean> {
@@ -297,6 +304,12 @@ function serializeQueueItem(run: RunQueueItem): string {
 }
 
 function serializeClaimedRun(run: ClaimedRun): string {
+	if (!run.clientId) return run.runId;
+	return JSON.stringify({ clientId: run.clientId, runId: run.runId });
+}
+
+function serializeRunQueueEntry(run: RunQueueItem | ClaimedRun): string {
+	if (typeof run === "string") return run;
 	if (!run.clientId) return run.runId;
 	return JSON.stringify({ clientId: run.clientId, runId: run.runId });
 }

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "projectId": "qdm-finished-lot-yield-dashboard-f975bfdf",
+  "sessionId": "f975bfdf-e965-40f5-8624-840cb946a851",
+  "title": "QDM Finished Lot Yield Dashboard...",
+  "status": "running",
+  "mode": "static",
+  "previewUrl": "http://localhost:5173/preview/qdm-finished-lot-yield-dashboard-f975bfdf/",
+  "projectRoot": "C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\projects\\qdm-finished-lot-yield-dashboard-f975bfdf",
+  "serveRoot": "C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\projects\\qdm-finished-lot-yield-dashboard-f975bfdf",
+  "fileCount": 6,
+  "updatedAt": "2026-06-11T02:33:33.093Z",
+  "logs": [
+    "Project root: C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\projects\\qdm-finished-lot-yield-dashboard-f975bfdf\n",
+    "No package.json found; serving static files directly.\n",
+    "Serving static output: C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\projects\\qdm-finished-lot-yield-dashboard-f975bfdf\n"
+  ]
+}

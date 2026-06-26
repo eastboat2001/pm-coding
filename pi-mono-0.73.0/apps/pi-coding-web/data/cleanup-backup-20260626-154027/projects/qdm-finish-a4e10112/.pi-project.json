@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "projectId": "qdm-finish-a4e10112",
+  "sessionId": "a4e10112-b418-41f0-8c43-8bb352298e0f",
+  "title": "QDM Finish...",
+  "status": "running",
+  "mode": "static",
+  "previewUrl": "http://localhost:5173/preview/qdm-finish-a4e10112/",
+  "projectRoot": "C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\projects\\qdm-finish-a4e10112",
+  "serveRoot": "C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\projects\\qdm-finish-a4e10112",
+  "fileCount": 9,
+  "updatedAt": "2026-06-10T06:44:07.254Z",
+  "logs": [
+    "Project root: C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\projects\\qdm-finish-a4e10112\n",
+    "No package.json found; serving static files directly.\n",
+    "Serving static output: C:\\VibeCoding\\pm-coding\\pi-mono-0.73.0\\apps\\pi-coding-web\\data\\projects\\qdm-finish-a4e10112\n"
+  ]
+}

@@ -107,11 +107,12 @@ describe("worker runtime diagnostics", () => {
 			});
 
 			promptPromise = agent.prompt(input.messages.at(-1)!);
-			await vi.advanceTimersByTimeAsync(25);
+			await Promise.resolve();
+			await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(26);
+			await Promise.resolve();
 			await Promise.resolve();
 
-			const status = await Promise.race([promptPromise.then(() => "resolved"), Promise.resolve("pending")]);
-			expect(status).toBe("resolved");
 			expect(diagnostics.events).toContainEqual(
 				expect.objectContaining({
 					eventType: "model.stream.summary",

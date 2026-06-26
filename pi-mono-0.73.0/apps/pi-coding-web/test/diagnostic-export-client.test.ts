@@ -10,10 +10,13 @@ describe("diagnostic export client helpers", () => {
 	it("builds a session export endpoint from a selected runtime session", () => {
 		const endpoint = buildDiagnosticExportEndpoint({
 			sessionId: "session/with spaces",
+			clientId: "client-1",
 			maxDiagnosticEvents: 200000,
 		});
 
-		expect(endpoint).toBe("/api/pi-logs/export?sessionId=session%2Fwith+spaces&maxDiagnosticEvents=200000");
+		expect(endpoint).toBe(
+			"/api/pi-logs/export?sessionId=session%2Fwith+spaces&clientId=client-1&format=archive&maxDiagnosticEvents=200000",
+		);
 	});
 
 	it("uses readable labels and filesystem-safe download names for selected sessions", () => {
@@ -29,6 +32,6 @@ describe("diagnostic export client helpers", () => {
 
 		expect(diagnosticSessionTitle(session)).toBe("Token limit repro");
 		expect(diagnosticExportDownloadName(session)).toMatch(/^pi-diagnostics-Token_limit_repro-session_one-/);
-		expect(diagnosticExportDownloadName(session)).toMatch(/\.json$/);
+		expect(diagnosticExportDownloadName(session)).toMatch(/\.zip$/);
 	});
 });

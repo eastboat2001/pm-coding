@@ -15,6 +15,7 @@ import {
 	createServerDirectProjectTools,
 	createServerDirectSkillTools,
 	type DiagnosticLogEventInput,
+	type JsonObject,
 	loadStorageConfig,
 	PreviewReadinessChecker,
 	RedisRunQueue,
@@ -39,11 +40,14 @@ import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../s
 import { readServerProviderApiKey } from "./provider-keys.js";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 
 async function main(): Promise<void> {
 	const config = loadStorageConfig(process.cwd());
 	const diagnostics = new WorkspaceDiagnosticLogService(config);
 	diagnostics.ensureDirs();
+	const removeFatalDiagnostics = installWorkerFatalDiagnostics(config, diagnostics);
+	const removeProcessLifecycleDiagnostics = installWorkerProcessLifecycleDiagnostics(config, diagnostics);
 	diagnostics.writeEvents({
 		events: [
 			...createWorkerStartupDiagnosticEvents(config),
@@ -60,80 +64,108 @@ async function main(): Promise<void> {
 		],
 	});
 
-	const runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
-	runtimeDb.ensureSchema();
+	let runtimeDb: RuntimeDbStore | undefined;
+	try {
+		runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
+		runtimeDb.ensureSchema();
 
-	const queue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
-	const appPreviewGoals = new AppPreviewGoalService(runtimeDb);
-	const previewReadiness = new PreviewReadinessChecker(config);
-	const appPreviewGoalSupervisor = new AppPreviewGoalSupervisor({
-		db: runtimeDb,
-		queue,
-		goals: appPreviewGoals,
-		readiness: previewReadiness,
-	});
-	const skills = new WorkspaceSkillService(config, diagnostics);
-	const skillList = skills.list();
+		const queue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
+		const appPreviewGoals = new AppPreviewGoalService(runtimeDb);
+		const previewReadiness = new PreviewReadinessChecker(config);
+		const appPreviewGoalSupervisor = new AppPreviewGoalSupervisor({
+			db: runtimeDb,
+			queue,
+			goals: appPreviewGoals,
+			readiness: previewReadiness,
+		});
+		const skills = new WorkspaceSkillService(config, diagnostics);
+		const skillList = skills.list();
 
-	const worker = new WorkspaceRunWorkerService({
-		db: runtimeDb,
-		queue,
-		workerId: config.workerId,
-		concurrency: config.workerConcurrency,
-		diagnostics,
-		goalSupervisor: appPreviewGoalSupervisor,
-		createAgent(input) {
-			return createRunAgent(input, {
-				config,
-				diagnostics,
-				skills,
-				promptSkills: skillList.promptSkills,
-				defaultSkills: skillList.defaultSkills,
+		const worker = new WorkspaceRunWorkerService({
+			db: runtimeDb,
+			queue,
+			workerId: config.workerId,
+			concurrency: config.workerConcurrency,
+			diagnostics,
+			goalSupervisor: appPreviewGoalSupervisor,
+			createAgent(input) {
+				return createRunAgent(input, {
+					config,
+					diagnostics,
+					skills,
+					promptSkills: skillList.promptSkills,
+					defaultSkills: skillList.defaultSkills,
+				});
+			},
+		});
+
+		let shuttingDown = false;
+		const shutdown = async (signal: NodeJS.Signals): Promise<number> => {
+			if (shuttingDown) {
+				console.error(`PI worker received ${signal} while shutdown is already in progress; forcing exit.`);
+				return 1;
+			}
+			shuttingDown = true;
+			console.log(`PI worker received ${signal}; stopping.`);
+			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopping", "info", { signal });
+			let exitCode = 0;
+			try {
+				await worker.stop();
+			} catch (error) {
+				exitCode = 1;
+				logCleanupError("worker.stop", error);
+			}
+			try {
+				await diagnostics.flushLangfuse();
+			} catch (error) {
+				exitCode = 1;
+				logCleanupError("diagnostics.flushLangfuse", error);
+			}
+			try {
+				runtimeDb?.close();
+			} catch (error) {
+				exitCode = 1;
+				logCleanupError("runtimeDb.close", error);
+			}
+			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopped", exitCode === 0 ? "info" : "error", {
+				signal,
+				exitCode,
 			});
-		},
-	});
+			removeProcessLifecycleDiagnostics();
+			removeFatalDiagnostics();
+			return exitCode;
+		};
 
-	let shuttingDown = false;
-	const shutdown = async (signal: NodeJS.Signals): Promise<number> => {
-		if (shuttingDown) {
-			console.error(`PI worker received ${signal} while shutdown is already in progress; forcing exit.`);
-			return 1;
-		}
-		shuttingDown = true;
-		console.log(`PI worker received ${signal}; stopping.`);
-		let exitCode = 0;
-		try {
-			await worker.stop();
-		} catch (error) {
-			exitCode = 1;
-			logCleanupError("worker.stop", error);
-		}
+		process.once("SIGINT", () => {
+			void shutdown("SIGINT").then((exitCode) => process.exit(exitCode), exitAfterShutdownFailure);
+		});
+		process.once("SIGTERM", () => {
+			void shutdown("SIGTERM").then((exitCode) => process.exit(exitCode), exitAfterShutdownFailure);
+		});
+
+		await worker.start();
+		console.log(
+			`PI worker ${config.workerId} started with concurrency ${config.workerConcurrency} on queue ${config.runQueueName}.`,
+		);
+	} catch (error) {
+		writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.start_failed", "error", {
+			...diagnosticErrorData(error),
+			hint: "The worker process failed before it could stay online and claim queued runs.",
+		});
 		try {
 			await diagnostics.flushLangfuse();
-		} catch (error) {
-			exitCode = 1;
-			logCleanupError("diagnostics.flushLangfuse", error);
+		} catch (flushError) {
+			logCleanupError("diagnostics.flushLangfuse", flushError);
 		}
 		try {
-			runtimeDb.close();
-		} catch (error) {
-			exitCode = 1;
-			logCleanupError("runtimeDb.close", error);
+			runtimeDb?.close();
+		} catch (closeError) {
+			logCleanupError("runtimeDb.close", closeError);
 		}
-		return exitCode;
-	};
-
-	process.once("SIGINT", () => {
-		void shutdown("SIGINT").then((exitCode) => process.exit(exitCode), exitAfterShutdownFailure);
-	});
-	process.once("SIGTERM", () => {
-		void shutdown("SIGTERM").then((exitCode) => process.exit(exitCode), exitAfterShutdownFailure);
-	});
-
-	await worker.start();
-	console.log(
-		`PI worker ${config.workerId} started with concurrency ${config.workerConcurrency} on queue ${config.runQueueName}.`,
-	);
+		removeProcessLifecycleDiagnostics();
+		removeFatalDiagnostics();
+		throw error;
+	}
 }
 
 function createWorkerStartupDiagnosticEvents(config: StorageConfig): DiagnosticLogEventInput[] {
@@ -157,6 +189,9 @@ function createWorkerStartupDiagnosticEvents(config: StorageConfig): DiagnosticL
 				logStdoutEnabled: config.logStdoutEnabled,
 				logsDbFile: config.logsDbFile,
 				modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
+				pid: process.pid,
+				ppid: process.ppid,
+				nodeVersion: process.version,
 			},
 		},
 	];
@@ -174,6 +209,112 @@ function createWorkerStartupDiagnosticEvents(config: StorageConfig): DiagnosticL
 	}
 
 	return events;
+}
+
+function installWorkerFatalDiagnostics(
+	config: StorageConfig,
+	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse" | "writeEvents">,
+): () => void {
+	let exiting = false;
+	const exitAfterFatal = (eventType: string, error: unknown): void => {
+		writeWorkerProcessDiagnostic(config, diagnostics, eventType, "error", {
+			...diagnosticErrorData(error),
+			hint: "The worker process received a fatal Node.js error and will exit.",
+		});
+		logCleanupError(eventType, error);
+		if (exiting) return;
+		exiting = true;
+		const forcedExit = setTimeout(() => process.exit(1), 1000);
+		forcedExit.unref();
+		void diagnostics.flushLangfuse().finally(() => process.exit(1));
+	};
+	const onUncaughtException = (error: Error): void => {
+		exitAfterFatal("system.worker.uncaught_exception", error);
+	};
+	const onUnhandledRejection = (reason: unknown): void => {
+		exitAfterFatal("system.worker.unhandled_rejection", reason);
+	};
+	process.on("uncaughtException", onUncaughtException);
+	process.on("unhandledRejection", onUnhandledRejection);
+	return () => {
+		process.off("uncaughtException", onUncaughtException);
+		process.off("unhandledRejection", onUnhandledRejection);
+	};
+}
+
+function installWorkerProcessLifecycleDiagnostics(
+	config: StorageConfig,
+	diagnostics: Pick<WorkspaceDiagnosticLogService, "writeEvents">,
+): () => void {
+	let beforeExitWritten = false;
+	const lifecycleData = (code: number): JsonObject => ({
+		code,
+		pid: process.pid,
+		ppid: process.ppid,
+		uptimeMs: Math.round(process.uptime() * 1000),
+	});
+	const onBeforeExit = (code: number): void => {
+		beforeExitWritten = true;
+		writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.before_exit", "warn", lifecycleData(code));
+	};
+	const onExit = (code: number): void => {
+		writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.exit", code === 0 ? "info" : "error", {
+			...lifecycleData(code),
+			beforeExitWritten,
+		});
+	};
+	process.on("beforeExit", onBeforeExit);
+	process.on("exit", onExit);
+	return () => {
+		process.off("beforeExit", onBeforeExit);
+		process.off("exit", onExit);
+	};
+}
+
+function writeWorkerProcessDiagnostic(
+	config: StorageConfig,
+	diagnostics: Pick<WorkspaceDiagnosticLogService, "writeEvents">,
+	eventType: string,
+	level: WorkerProcessDiagnosticLevel,
+	data: JsonObject,
+): void {
+	diagnostics.writeEvents({
+		events: [
+			{
+				level,
+				category: "system",
+				eventType,
+				data: {
+					workerId: config.workerId,
+					workerConcurrency: config.workerConcurrency,
+					runQueueName: config.runQueueName,
+					...data,
+				},
+			},
+		],
+	});
+}
+
+function diagnosticErrorData(error: unknown): JsonObject {
+	if (error instanceof Error) {
+		return {
+			name: error.name,
+			message: error.message,
+			stack: error.stack ?? null,
+		};
+	}
+	return {
+		message: stringifyDiagnosticValue(error),
+	};
+}
+
+function stringifyDiagnosticValue(value: unknown): string {
+	if (typeof value === "string") return value;
+	try {
+		const json = JSON.stringify(value);
+		if (json) return json;
+	} catch {}
+	return String(value);
 }
 
 function redactConnectionUrl(value: string): string {

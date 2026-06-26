@@ -143,7 +143,9 @@ export class WorkspaceDiagnosticLogService {
 		const events = Array.isArray(request.events) ? request.events : [];
 		if (events.length === 0) return { accepted: 0, dropped: 0 };
 
-		const insert = this.open().prepare(`
+		const normalizedEvents = events.map((event) => normalizeEvent(event));
+		const db = this.open();
+		const insert = db.prepare(`
 			INSERT INTO diagnostic_events (
 				timestamp,
 				client_id,
@@ -162,33 +164,37 @@ export class WorkspaceDiagnosticLogService {
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`);
 
-		let accepted = 0;
-		const normalizedEvents: NormalizedDiagnosticEvent[] = [];
-		for (const event of events) {
-			const normalized = normalizeEvent(event);
-			normalizedEvents.push(normalized);
-			insert.run(
-				normalized.timestamp,
-				normalized.clientId ?? null,
-				normalized.level,
-				normalized.category,
-				normalized.eventType,
-				normalized.sessionId ?? null,
-				normalized.traceId ?? null,
-				normalized.spanId ?? null,
-				normalized.parentSpanId ?? null,
-				normalized.requestId ?? null,
-				normalized.provider ?? null,
-				normalized.model ?? null,
-				normalized.durationMs ?? null,
-				JSON.stringify(normalized.data),
-			);
-			accepted += 1;
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			for (const normalized of normalizedEvents) {
+				insert.run(
+					normalized.timestamp,
+					normalized.clientId ?? null,
+					normalized.level,
+					normalized.category,
+					normalized.eventType,
+					normalized.sessionId ?? null,
+					normalized.traceId ?? null,
+					normalized.spanId ?? null,
+					normalized.parentSpanId ?? null,
+					normalized.requestId ?? null,
+					normalized.provider ?? null,
+					normalized.model ?? null,
+					normalized.durationMs ?? null,
+					JSON.stringify(normalized.data),
+				);
+			}
+			db.exec("COMMIT");
+		} catch (error) {
+			db.exec("ROLLBACK");
+			throw error;
+		}
+		for (const normalized of normalizedEvents) {
 			this.writeStdoutSummary(normalized);
 		}
 		this.langfuse.enqueue(normalizedEvents);
 		this.cleanupAfterWrite();
-		return { accepted, dropped: events.length - accepted };
+		return { accepted: normalizedEvents.length, dropped: events.length - normalizedEvents.length };
 	}
 
 	async flushLangfuse(): Promise<void> {
@@ -238,7 +244,11 @@ export class WorkspaceDiagnosticLogService {
 		addClause(clauses, values, "level", diagnosticLevel(query.level));
 		addClause(clauses, values, "category", diagnosticCategory(query.category));
 		addClause(clauses, values, "event_type", stringField(query.eventType));
+		addTimestampClause(clauses, values, ">=", isoTimestamp(query.since));
+		addTimestampClause(clauses, values, "<=", isoTimestamp(query.until));
+		if (query.globalOnly) clauses.push("session_id IS NULL");
 		const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+		const order = exportOrder(query.order);
 		const countRow = this.open()
 			.prepare(`SELECT COUNT(*) AS count FROM diagnostic_events ${where}`)
 			.get(...values) as CountRow | undefined;
@@ -247,7 +257,7 @@ export class WorkspaceDiagnosticLogService {
 				`SELECT id, timestamp, client_id, level, category, event_type, session_id, trace_id, span_id, parent_span_id, request_id, provider, model, duration_ms, data_json
 				FROM diagnostic_events
 				${where}
-				ORDER BY id ASC
+				ORDER BY id ${order}
 				LIMIT ?`,
 			)
 			.all(...values, limit) as DiagnosticEventRow[];
@@ -261,10 +271,44 @@ export class WorkspaceDiagnosticLogService {
 		};
 	}
 
+	*iterateExportEvents(query: DiagnosticLogExportQuery = {}): Iterable<DiagnosticLogEventRecord> {
+		const limit = clampExportLimit(query.maxEvents ?? query.limit);
+		if (!this.config.loggingEnabled || !existsSync(this.config.logsDbFile)) return;
+		const clauses: string[] = [];
+		const values: (string | number)[] = [];
+		addClause(clauses, values, "client_id", stringField(query.clientId));
+		addClause(clauses, values, "session_id", stringField(query.sessionId));
+		addClause(clauses, values, "trace_id", stringField(query.traceId));
+		addClause(clauses, values, "level", diagnosticLevel(query.level));
+		addClause(clauses, values, "category", diagnosticCategory(query.category));
+		addClause(clauses, values, "event_type", stringField(query.eventType));
+		addTimestampClause(clauses, values, ">=", isoTimestamp(query.since));
+		addTimestampClause(clauses, values, "<=", isoTimestamp(query.until));
+		if (query.globalOnly) clauses.push("session_id IS NULL");
+		const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+		const order = exportOrder(query.order);
+		const rows = this.open()
+			.prepare(
+				`SELECT id, timestamp, client_id, level, category, event_type, session_id, trace_id, span_id, parent_span_id, request_id, provider, model, duration_ms, data_json
+				FROM diagnostic_events
+				${where}
+				ORDER BY id ${order}
+				LIMIT ?`,
+			)
+			.iterate(...values, limit) as Iterable<DiagnosticEventRow>;
+		for (const row of rows) {
+			yield toRecord(row);
+		}
+	}
+
 	private open(): DatabaseSync {
 		if (!this.database) {
 			this.ensureDirs();
 			this.database = new DatabaseSync(this.config.logsDbFile);
+			this.database.exec(`
+				PRAGMA journal_mode = WAL;
+				PRAGMA busy_timeout = 5000;
+			`);
 			this.database.exec(`
 				CREATE TABLE IF NOT EXISTS diagnostic_events (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -531,4 +575,19 @@ function addClause(clauses: string[], values: (string | number)[], column: strin
 	if (!value) return;
 	clauses.push(`${column} = ?`);
 	values.push(value);
+}
+
+function addTimestampClause(
+	clauses: string[],
+	values: (string | number)[],
+	operator: ">=" | "<=",
+	value: string | undefined,
+): void {
+	if (!value) return;
+	clauses.push(`timestamp ${operator} ?`);
+	values.push(value);
+}
+
+function exportOrder(value: unknown): "ASC" | "DESC" {
+	return value === "desc" ? "DESC" : "ASC";
 }

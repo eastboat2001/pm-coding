@@ -297,7 +297,9 @@ function localStaticResourceReferences(html: string): string[] {
 	const references: string[] = [];
 	const tagPattern = /<(script|link|img|source|video|audio|track)\b[^>]*>/gi;
 	let match: RegExpExecArray | null;
-	while ((match = tagPattern.exec(html)) !== null) {
+	while (true) {
+		match = tagPattern.exec(html);
+		if (match === null) break;
 		const tag = match[0];
 		const tagName = match[1]?.toLowerCase();
 		if (tagName === "link") {

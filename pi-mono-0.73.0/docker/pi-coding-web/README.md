@@ -503,8 +503,18 @@ PI_CODING_WEB_IMAGE=localhost/pi-coding-web:<tag>
 如果没有单独的 worker 镜像，这是正常的。`pi-worker` 和 `pi-coding-web` 使用同一个 `pi-coding-web` 镜像，只是 worker 容器覆盖启动命令为：
 
 ```text
-npm run worker --workspace=pi-coding-web
+node dist-worker/worker/main.js
 ```
+
+升级应用代码时通常不需要重新部署 Redis 镜像；Redis 只是队列状态存储。需要注意的是 `pi-redis-data` volume 会保留旧的 `pi:runs` 和 `pi:runs:active` 队列数据。开发/测试环境如果确认没有要保留的运行中任务，可以在停掉 worker 后清空运行队列，避免旧 active claim 反复被恢复：
+
+```bash
+docker compose stop pi-worker
+docker compose exec redis redis-cli DEL pi:runs pi:runs:active
+docker compose up -d --no-build --force-recreate pi-worker
+```
+
+如果 `.env` 中改过 `PI_RUN_QUEUE_NAME`，把命令里的 `pi:runs` 换成实际队列名，active key 是 `<队列名>:active`。生产环境不要在有真实运行任务时执行这个清理命令。
 
 如果启动时出现：
 

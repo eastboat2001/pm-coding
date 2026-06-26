@@ -54,6 +54,51 @@ describe("WorkspaceRunApiService", () => {
 		expect(db.listMessages("client-a", "session-1")).toHaveLength(1);
 	});
 
+	it("records successful run enqueue diagnostics", async () => {
+		const diagnostics = new RecordingDiagnostics();
+		const diagnosticService = new WorkspaceRunApiService(db, queue, diagnostics);
+
+		const result = await diagnosticService.startRun("client-a", {
+			sessionId: "session-1",
+			title: "Queue diagnostics",
+			message: { content: "hello" },
+			model: { provider: "openai", id: "gpt-5" },
+			thinkingLevel: "high",
+		});
+
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "info",
+				category: "agent",
+				eventType: "agent.run.enqueued",
+				sessionId: "session-1",
+				traceId: "session-1",
+				data: expect.objectContaining({
+					clientId: "client-a",
+					sessionId: "session-1",
+					runId: result.run.runId,
+					status: "queued",
+				}),
+			}),
+		);
+	});
+
+	it("keeps a run queued when enqueue succeeds but diagnostic logging is locked", async () => {
+		const diagnosticService = new WorkspaceRunApiService(db, queue, new LockedDiagnostics());
+
+		const result = await diagnosticService.startRun("client-a", {
+			sessionId: "session-1",
+			title: "Queue diagnostics locked",
+			message: { content: "hello" },
+			model: { provider: "openai", id: "gpt-5" },
+			thinkingLevel: "high",
+		});
+
+		expect(result.run.status).toBe("queued");
+		expect(db.getRun("client-a", result.run.runId)?.status).toBe("queued");
+		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
+	});
+
 	it("allows only one concurrent startRun for the same session to create an active run", async () => {
 		db.createSession({
 			clientId: "client-a",
@@ -94,6 +139,56 @@ describe("WorkspaceRunApiService", () => {
 			runId,
 		});
 		await expect(queue.claim("worker-1", 1)).resolves.toBeUndefined();
+	});
+
+	it("marks stale active runs terminal before listing sessions", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-1",
+			title: "Old running app",
+			message: { content: "build app" },
+			model: {},
+			thinkingLevel: "medium",
+		});
+		const staleAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+		db.updateRunStatus(result.run.runId, "client-a", "running", {
+			workerId: "old-worker",
+			startedAt: staleAt,
+			updatedAt: staleAt,
+		});
+
+		const sessions = service.listSessions("client-a");
+
+		expect(sessions).toEqual([
+			expect.objectContaining({
+				sessionId: "session-1",
+				lastRunStatus: "interrupted",
+			}),
+		]);
+		expect(db.getRun("client-a", result.run.runId)?.status).toBe("interrupted");
+	});
+
+	it("marks old cancelling runs terminal even when cancellation refreshed the update time", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-1",
+			title: "Old cancelling app",
+			message: { content: "build app" },
+			model: {},
+			thinkingLevel: "medium",
+		});
+		const staleAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+		db.updateRunStatus(result.run.runId, "client-a", "running", {
+			workerId: "old-worker",
+			startedAt: staleAt,
+			updatedAt: staleAt,
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "cancelling", {
+			updatedAt: new Date().toISOString(),
+		});
+
+		const sessions = service.listSessions("client-a");
+
+		expect(sessions[0]?.lastRunStatus).toBe("interrupted");
+		expect(db.getRun("client-a", result.run.runId)?.status).toBe("interrupted");
 	});
 
 	it("seeds request project files into the final runtime session before enqueueing", async () => {
@@ -623,6 +718,51 @@ describe("WorkspaceRunApiService", () => {
 		expect(db.getRun("client-a", queued.run.runId)?.status).toBe("cancelling");
 		await expect(queue.isCancelRequested({ clientId: "client-a", runId: queued.run.runId })).resolves.toBe(true);
 	});
+
+	it("force delete removes a session whose active run is stale", async () => {
+		const queued = await service.startRun("client-a", {
+			sessionId: "session-1",
+			title: "Stale delete",
+			message: { content: "stuck" },
+			model: {},
+			thinkingLevel: "medium",
+		});
+		const staleAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+		db.updateRunStatus(queued.run.runId, "client-a", "running", {
+			workerId: "worker-1",
+			startedAt: staleAt,
+			updatedAt: staleAt,
+		});
+
+		const result = await service.deleteSession("client-a", "session-1", { force: true });
+
+		expect(result).toEqual({ deleted: true, sessionId: "session-1", cancelledRuns: 1 });
+		expect(service.getSession("client-a", "session-1")).toBeUndefined();
+	});
+
+	it("force delete removes an old cancelling session even when cancellation refreshed the update time", async () => {
+		const queued = await service.startRun("client-a", {
+			sessionId: "session-1",
+			title: "Stale cancelling delete",
+			message: { content: "stuck" },
+			model: {},
+			thinkingLevel: "medium",
+		});
+		const staleAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+		db.updateRunStatus(queued.run.runId, "client-a", "running", {
+			workerId: "worker-1",
+			startedAt: staleAt,
+			updatedAt: staleAt,
+		});
+		db.updateRunStatus(queued.run.runId, "client-a", "cancelling", {
+			updatedAt: new Date().toISOString(),
+		});
+
+		const result = await service.deleteSession("client-a", "session-1", { force: true });
+
+		expect(result).toEqual({ deleted: true, sessionId: "session-1", cancelledRuns: 1 });
+		expect(service.getSession("client-a", "session-1")).toBeUndefined();
+	});
 });
 
 class FailingRunQueue implements RunQueue {
@@ -655,5 +795,11 @@ class RecordingDiagnostics {
 	writeEvents(input: { events: Array<Record<string, unknown>> }): { accepted: number; dropped: number } {
 		this.events.push(...input.events);
 		return { accepted: input.events.length, dropped: 0 };
+	}
+}
+
+class LockedDiagnostics {
+	writeEvents(_input: { events: Array<Record<string, unknown>> }): never {
+		throw new Error("database is locked");
 	}
 }

@@ -371,6 +371,10 @@ export interface DiagnosticLogQueryResult extends JsonObject {
 }
 
 export interface DiagnosticLogExportQuery extends DiagnosticLogQuery {
+	since?: string;
+	until?: string;
+	globalOnly?: boolean;
+	order?: "asc" | "desc";
 	maxEvents?: number;
 }
 

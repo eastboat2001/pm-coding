@@ -23,12 +23,7 @@ import type {
 	ProjectRequestContext,
 	StorageConfig,
 } from "./types.js";
-import {
-	assertInside,
-	listProjectSourceFiles,
-	safeRelativeProjectPath,
-	workspaceContext,
-} from "./workspace-paths.js";
+import { assertInside, listProjectSourceFiles, safeRelativeProjectPath, workspaceContext } from "./workspace-paths.js";
 
 export class WorkspaceFileService {
 	constructor(private readonly config: StorageConfig) {}

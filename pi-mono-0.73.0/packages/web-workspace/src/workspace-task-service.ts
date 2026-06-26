@@ -17,10 +17,7 @@ import {
 	runCommand,
 	truncateProjectLogs,
 } from "./workspace-command-service.js";
-import {
-	listProjectSourceFiles,
-	workspaceContext,
-} from "./workspace-paths.js";
+import { listProjectSourceFiles, workspaceContext } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 
 type ProjectCommandRunner = (

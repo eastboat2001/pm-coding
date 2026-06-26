@@ -9,6 +9,22 @@ import { createDiagnosticClient, summarizeProviderPayload } from "../src/diagnos
 import { createLoggedStreamFn } from "../src/diagnostics/model-stream-logger.js";
 
 describe("diagnostic client", () => {
+	it("posts queued events with configured request headers", async () => {
+		let headers: HeadersInit | undefined;
+		const client = createDiagnosticClient({
+			headers: () => ({ "X-PI-Client-ID": "550e8400-e29b-41d4-a716-446655440000" }),
+			fetch: async (_url, init) => {
+				headers = init?.headers;
+				return new Response(JSON.stringify({ accepted: 1, dropped: 0 }), { status: 200 });
+			},
+		});
+
+		client.write({ level: "info", category: "system", eventType: "system.test" });
+		await client.flush();
+
+		expect(headers).toMatchObject({ "X-PI-Client-ID": "550e8400-e29b-41d4-a716-446655440000" });
+	});
+
 	it("redacts sensitive payload fields and summarizes message content", () => {
 		const summary = summarizeProviderPayload({
 			Authorization: "Bearer secret",

@@ -48,6 +48,12 @@ type MessageRow = {
 	created_at: string;
 };
 
+type MessageStatsRow = {
+	message_count: number;
+	total_payload_bytes: number | null;
+	largest_payload_bytes: number | null;
+};
+
 type RunRow = {
 	run_id: string;
 	session_id: string;
@@ -339,6 +345,41 @@ export class RuntimeDbStore {
 		return rows.map(toMessageRecord);
 	}
 
+	getSessionMessageStats(
+		clientId: string,
+		sessionId: string,
+	): { messageCount: number; totalPayloadBytes: number; largestPayloadBytes: number } {
+		const row = this.open()
+			.prepare(
+				`SELECT
+					COUNT(*) AS message_count,
+					SUM(length(payload_json)) AS total_payload_bytes,
+					MAX(length(payload_json)) AS largest_payload_bytes
+				FROM messages
+				WHERE client_id = ? AND session_id = ?`,
+			)
+			.get(clientId, sessionId) as MessageStatsRow | undefined;
+		return {
+			messageCount: row?.message_count ?? 0,
+			totalPayloadBytes: row?.total_payload_bytes ?? 0,
+			largestPayloadBytes: row?.largest_payload_bytes ?? 0,
+		};
+	}
+
+	*iterateMessages(clientId: string, sessionId: string): Iterable<RuntimeMessageRecord> {
+		const rows = this.open()
+			.prepare(
+				`SELECT id, session_id, client_id, role, payload_json, created_at
+				FROM messages
+				WHERE client_id = ? AND session_id = ?
+				ORDER BY id ASC`,
+			)
+			.iterate(clientId, sessionId) as Iterable<MessageRow>;
+		for (const row of rows) {
+			yield toMessageRecord(row);
+		}
+	}
+
 	getRun(clientId: string, runId: string): RuntimeRunRecord | undefined {
 		const row = this.open()
 			.prepare(
@@ -591,6 +632,12 @@ export class RuntimeDbStore {
 				JSON.stringify(input.payload),
 				createdAt,
 			);
+			db.prepare("UPDATE runs SET updated_at = ? WHERE client_id = ? AND run_id = ?").run(
+				createdAt,
+				input.clientId,
+				input.runId,
+			);
+			this.updateSessionRun(input.clientId, run.sessionId, run.runId, run.status, createdAt);
 			return db.prepare("SELECT last_insert_rowid() AS id").get() as { id: number };
 		});
 		return requiredRecord(this.getRunEvent(input.clientId, row.id), "run event");
@@ -606,6 +653,20 @@ export class RuntimeDbStore {
 			)
 			.all(clientId, runId, afterSeq) as RunEventRow[];
 		return rows.map(toRunEventRecord);
+	}
+
+	*iterateRunEvents(clientId: string, runId: string, afterSeq: number): Iterable<RuntimeRunEventRecord> {
+		const rows = this.open()
+			.prepare(
+				`SELECT id, run_id, session_id, client_id, seq, event_type, payload_json, created_at
+				FROM run_events
+				WHERE client_id = ? AND run_id = ? AND seq > ?
+				ORDER BY seq ASC`,
+			)
+			.iterate(clientId, runId, afterSeq) as Iterable<RunEventRow>;
+		for (const row of rows) {
+			yield toRunEventRecord(row);
+		}
 	}
 
 	upsertAppPreviewGoal(input: UpsertAppPreviewGoalInput): AppPreviewGoalRecord {

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>霓虹蛇 | Neon Snake</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="scanlines"></div>
+    <div class="noise"></div>
+    
+    <div class="container">
+        <header class="header">
+            <div class="title-container">
+                <h1 class="game-title">
+                    <span class="neon-text">霓虹蛇</span>
+                    <span class="subtitle">NEON SNAKE</span>
+                </h1>
+                <div class="title-decoration">
+                    <div class="decoration-line"></div>
+                    <div class="decoration-diamond"></div>
+                    <div class="decoration-line"></div>
+                </div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="game-panel">
+                <div class="panel-header">
+                    <div class="panel-title">游戏控制台</div>
+                    <div class="panel-indicator">
+                        <span class="indicator-dot"></span>
+                        <span class="indicator-text">ONLINE</span>
+                    </div>
+                </div>
+                
+                <div class="game-area">
+                    <canvas id="gameCanvas" width="400" height="400"></canvas>
+                    <div class="game-overlay" id="gameOverlay">
+                        <div class="overlay-content">
+                            <div class="overlay-icon">🐍</div>
+                            <div class="overlay-title">准备开始</div>
+                            <div class="overlay-subtitle">按空格键或点击开始</div>
+                            <div class="overlay-controls">
+                                <div class="control-hint">
+                                    <span class="key">WASD</span> / <span class="key">↑↓←→</span> 移动
+                                </div>
+                                <div class="control-hint">
+                                    <span class="key">SPACE</span> 开始/暂停
+                                </div>
+                                <div class="control-hint">
+                                    <span class="key">R</span> 重新开始
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="panel-footer">
+                    <div class="score-display">
+                        <div class="score-label">得分</div>
+                        <div class="score-value" id="scoreDisplay">0000</div>
+                    </div>
+                    <div class="score-display">
+                        <div class="score-label">最高分</div>
+                        <div class="score-value" id="highScoreDisplay">0000</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats-panel">
+                <div class="panel-header">
+                    <div class="panel-title">系统状态</div>
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">游戏状态</div>
+                        <div class="stat-value" id="gameStatus">待机</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">蛇身长度</div>
+                        <div class="stat-value" id="snakeLength">3</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">游戏速度</div>
+                        <div class="stat-value" id="gameSpeed">1x</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">存活时间</div>
+                        <div class="stat-value" id="survivalTime">00:00</div>
+                    </div>
+                </div>
+                
+                <div class="mini-map">
+                    <div class="mini-map-title">迷你地图</div>
+                    <canvas id="miniMap" width="120" height="120"></canvas>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <div class="footer-text">
+                <span class="neon-accent">MI</span> Snake Terminal v2.5
+            </div>
+            <div class="footer-decoration">
+                <div class="decoration-dots">
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <div class="mobile-controls" id="mobileControls">
+        <div class="control-row">
+            <button class="control-btn" data-direction="up" aria-label="向上移动">
+                <span class="btn-icon">▲</span>
+            </button>
+        </div>
+        <div class="control-row">
+            <button class="control-btn" data-direction="left" aria-label="向左移动">
+                <span class="btn-icon">◀</span>
+            </button>
+            <button class="control-btn action-btn" data-action="start" aria-label="开始游戏">
+                <span class="btn-icon">●</span>
+            </button>
+            <button class="control-btn" data-direction="right" aria-label="向右移动">
+                <span class="btn-icon">▶</span>
+            </button>
+        </div>
+        <div class="control-row">
+            <button class="control-btn" data-direction="down" aria-label="向下移动">
+                <span class="btn-icon">▼</span>
+            </button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>

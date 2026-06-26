@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { isObject, readJsonFile } from "./json.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import { appendProjectLog, isUnsafeProjectCommand, runCommand, truncateProjectLogs, } from "./workspace-command-service.js";
-import { listProjectSourceFiles, workspaceContext, } from "./workspace-paths.js";
+import { listProjectSourceFiles, workspaceContext } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 export class WorkspaceTaskService {
     config;

@@ -1,5 +1,5 @@
 import type { RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
-import { piClientHeaders } from "../runtime/client-id.js";
+import { getOrCreatePiClientId, piClientHeaders } from "../runtime/client-id.js";
 
 const LOGS_API_PREFIX = "/api/pi-logs";
 const DEFAULT_MAX_DIAGNOSTIC_EVENTS = 200000;
@@ -7,6 +7,7 @@ const DEFAULT_MAX_DIAGNOSTIC_EVENTS = 200000;
 export interface DiagnosticExportEndpointOptions {
 	sessionId?: string;
 	runId?: string;
+	clientId?: string;
 	maxDiagnosticEvents?: number;
 	includeSettings?: boolean;
 }
@@ -15,6 +16,8 @@ export function buildDiagnosticExportEndpoint(options: DiagnosticExportEndpointO
 	const params = new URLSearchParams();
 	if (options.sessionId) params.set("sessionId", options.sessionId);
 	if (options.runId) params.set("runId", options.runId);
+	if (options.clientId) params.set("clientId", options.clientId);
+	params.set("format", "archive");
 	params.set("maxDiagnosticEvents", String(options.maxDiagnosticEvents ?? DEFAULT_MAX_DIAGNOSTIC_EVENTS));
 	if (options.includeSettings === false) params.set("includeSettings", "false");
 	return `${LOGS_API_PREFIX}/export?${params.toString()}`;
@@ -28,28 +31,24 @@ export function diagnosticExportDownloadName(session: RuntimeSessionRecord): str
 	const title = sanitizeFilenamePart(diagnosticSessionTitle(session));
 	const sessionId = sanitizeFilenamePart(session.sessionId);
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-	return `pi-diagnostics-${title}-${sessionId}-${timestamp}.json`;
+	return `pi-diagnostics-${title}-${sessionId}-${timestamp}.zip`;
 }
 
 export async function downloadDiagnosticSessionExport(session: RuntimeSessionRecord): Promise<void> {
-	const endpoint = buildDiagnosticExportEndpoint({ sessionId: session.sessionId });
-	const response = await fetch(new URL(endpoint, window.location.origin).toString(), {
-		method: "GET",
+	const clientId = getOrCreatePiClientId();
+	const endpoint = buildDiagnosticExportEndpoint({ sessionId: session.sessionId, clientId });
+	const url = new URL(endpoint, window.location.origin).toString();
+	const response = await fetch(url, {
+		method: "HEAD",
 		headers: piClientHeaders(),
 	});
 	if (!response.ok) {
-		const message = await response
-			.json()
-			.then((body) => (typeof body?.error === "string" ? body.error : ""))
-			.catch(() => "");
-		throw new Error(message || `Diagnostic export failed with HTTP ${response.status}`);
+		throw new Error(`Diagnostic export failed with HTTP ${response.status}`);
 	}
-	const blob = await response.blob();
-	downloadBlob(blob, diagnosticExportDownloadName(session));
+	downloadUrl(url, diagnosticExportDownloadName(session));
 }
 
-function downloadBlob(blob: Blob, filename: string): void {
-	const url = URL.createObjectURL(blob);
+function downloadUrl(url: string, filename: string): void {
 	const anchor = document.createElement("a");
 	anchor.href = url;
 	anchor.download = filename;
@@ -57,7 +56,6 @@ function downloadBlob(blob: Blob, filename: string): void {
 	document.body.appendChild(anchor);
 	anchor.click();
 	anchor.remove();
-	URL.revokeObjectURL(url);
 }
 
 function sanitizeFilenamePart(value: string): string {

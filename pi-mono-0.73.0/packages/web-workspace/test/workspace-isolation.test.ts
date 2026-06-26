@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WorkspaceDiagnosticLogService } from "../src/diagnostic-log-service.js";
 import type { StorageConfig } from "../src/types.js";
 import { WorkspaceFileService } from "../src/workspace-file-service.js";
+import { projectDirectory, projectSlug } from "../src/workspace-paths.js";
 import { WorkspacePreviewService } from "../src/workspace-preview-service.js";
 import { WorkspaceSessionService } from "../src/workspace-session-service.js";
-import { projectDirectory, projectSlug } from "../src/workspace-paths.js";
 
 describe("workspace client isolation and path safety", () => {
 	let root: string;
@@ -90,9 +90,7 @@ describe("workspace client isolation and path safety", () => {
 		expect(stableProjectDir).toBe(join(config.clientsRootDir, "client-a", "sessions", "session-1", "project"));
 		expect(stableProjectDir).not.toContain("Snake");
 		expect(stableProjectDir).not.toContain("生成");
-		expect(projectDirectory(config.clientsRootDir, "session-1", "client-b")).not.toBe(
-			stableProjectDir,
-		);
+		expect(projectDirectory(config.clientsRootDir, "session-1", "client-b")).not.toBe(stableProjectDir);
 	});
 
 	it("does not migrate or read legacy flat project directories", () => {

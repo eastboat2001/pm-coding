@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { RuntimeDbStore } from "./runtime-db.js";
+import type { RuntimeStore } from "./runtime-store.js";
 import type {
 	AppPreviewGoalEventRecord,
 	AppPreviewGoalEventType,
@@ -30,12 +30,12 @@ export function budgetForSource(source: AppPreviewGoalSource): number {
 }
 
 export class AppPreviewGoalService {
-	constructor(private readonly db: RuntimeDbStore) {}
+	constructor(private readonly db: RuntimeStore) {}
 
-	enable(input: EnableAppPreviewGoalInput): AppPreviewGoalRecord {
-		const existing = this.db.getAppPreviewGoal(input.clientId, input.sessionId);
+	async enable(input: EnableAppPreviewGoalInput): Promise<AppPreviewGoalRecord> {
+		const existing = await this.db.getAppPreviewGoal(input.clientId, input.sessionId);
 		const resumeActive = existing?.status === "active";
-		const goal = this.db.upsertAppPreviewGoal({
+		const goal = await this.db.upsertAppPreviewGoal({
 			goalId: existing?.goalId ?? randomUUID(),
 			clientId: input.clientId,
 			sessionId: input.sessionId,
@@ -50,15 +50,15 @@ export class AppPreviewGoalService {
 			createdAt: existing?.createdAt,
 			completedAt: resumeActive ? existing.completedAt : undefined,
 		});
-		this.event(goal, "goal_started", "enabled", { source: input.source }, input.runId);
+		await this.event(goal, "goal_started", "enabled", { source: input.source }, input.runId);
 		return goal;
 	}
 
-	disable(input: DisableAppPreviewGoalInput): AppPreviewGoalRecord | undefined {
-		const existing = this.db.getAppPreviewGoal(input.clientId, input.sessionId);
+	async disable(input: DisableAppPreviewGoalInput): Promise<AppPreviewGoalRecord | undefined> {
+		const existing = await this.db.getAppPreviewGoal(input.clientId, input.sessionId);
 		if (!existing) return undefined;
 
-		const goal = this.db.updateAppPreviewGoal({
+		const goal = await this.db.updateAppPreviewGoal({
 			clientId: input.clientId,
 			sessionId: input.sessionId,
 			status: "disabled",
@@ -66,30 +66,30 @@ export class AppPreviewGoalService {
 		});
 		if (!goal) return undefined;
 
-		this.event(goal, "goal_disabled", "user_disabled", {}, input.runId);
+		await this.event(goal, "goal_disabled", "user_disabled", {}, input.runId);
 		return goal;
 	}
 
-	get(clientId: string, sessionId: string): AppPreviewGoalRecord | undefined {
-		return this.db.getAppPreviewGoal(clientId, sessionId);
+	async get(clientId: string, sessionId: string): Promise<AppPreviewGoalRecord | undefined> {
+		return await this.db.getAppPreviewGoal(clientId, sessionId);
 	}
 
-	events(clientId: string, sessionId: string, afterEventId: number): AppPreviewGoalEventRecord[] {
-		return this.db.listAppPreviewGoalEvents(clientId, sessionId, afterEventId);
+	async events(clientId: string, sessionId: string, afterEventId: number): Promise<AppPreviewGoalEventRecord[]> {
+		return await this.db.listAppPreviewGoalEvents(clientId, sessionId, afterEventId);
 	}
 
-	mark(input: UpdateAppPreviewGoalInput): AppPreviewGoalRecord | undefined {
-		return this.db.updateAppPreviewGoal(input);
+	async mark(input: UpdateAppPreviewGoalInput): Promise<AppPreviewGoalRecord | undefined> {
+		return await this.db.updateAppPreviewGoal(input);
 	}
 
-	event(
+	async event(
 		goal: AppPreviewGoalRecord,
 		eventType: AppPreviewGoalEventType,
 		reasonCode?: string,
 		payload?: JsonObject,
 		runId?: string,
-	): AppPreviewGoalEventRecord {
-		return this.db.appendAppPreviewGoalEvent({
+	): Promise<AppPreviewGoalEventRecord> {
+		return await this.db.appendAppPreviewGoalEvent({
 			goalId: goal.goalId,
 			clientId: goal.clientId,
 			sessionId: goal.sessionId,

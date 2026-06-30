@@ -22,17 +22,17 @@ export class RunRetryController {
                 const classification = this.policy.classify(error);
                 attempt += 1;
                 if (!classification.retryable || !this.policy.shouldRetry(attempt + 1)) {
-                    this.writeRetryEvent("retry_exhausted", input.run, attempt, classification.reasonCode, classification.message);
+                    await this.writeRetryEvent("retry_exhausted", input.run, attempt, classification.reasonCode, classification.message);
                     throw error;
                 }
                 const delayMs = this.policy.delayMs(attempt);
-                this.writeRetryEvent("retry_scheduled", input.run, attempt, classification.reasonCode, classification.message, delayMs);
+                await this.writeRetryEvent("retry_scheduled", input.run, attempt, classification.reasonCode, classification.message, delayMs);
                 await this.sleep(delayMs, input.signal);
             }
         }
     }
-    writeRetryEvent(eventType, run, attempt, reasonCode, message, delayMs) {
-        this.options.onRetryEvent?.({
+    async writeRetryEvent(eventType, run, attempt, reasonCode, message, delayMs) {
+        await this.options.onRetryEvent?.({
             eventType,
             run,
             attempt,

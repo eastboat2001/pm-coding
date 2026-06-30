@@ -9,10 +9,10 @@ export class AppPreviewGoalService {
     constructor(db) {
         this.db = db;
     }
-    enable(input) {
-        const existing = this.db.getAppPreviewGoal(input.clientId, input.sessionId);
+    async enable(input) {
+        const existing = await this.db.getAppPreviewGoal(input.clientId, input.sessionId);
         const resumeActive = existing?.status === "active";
-        const goal = this.db.upsertAppPreviewGoal({
+        const goal = await this.db.upsertAppPreviewGoal({
             goalId: existing?.goalId ?? randomUUID(),
             clientId: input.clientId,
             sessionId: input.sessionId,
@@ -27,14 +27,14 @@ export class AppPreviewGoalService {
             createdAt: existing?.createdAt,
             completedAt: resumeActive ? existing.completedAt : undefined,
         });
-        this.event(goal, "goal_started", "enabled", { source: input.source }, input.runId);
+        await this.event(goal, "goal_started", "enabled", { source: input.source }, input.runId);
         return goal;
     }
-    disable(input) {
-        const existing = this.db.getAppPreviewGoal(input.clientId, input.sessionId);
+    async disable(input) {
+        const existing = await this.db.getAppPreviewGoal(input.clientId, input.sessionId);
         if (!existing)
             return undefined;
-        const goal = this.db.updateAppPreviewGoal({
+        const goal = await this.db.updateAppPreviewGoal({
             clientId: input.clientId,
             sessionId: input.sessionId,
             status: "disabled",
@@ -42,20 +42,20 @@ export class AppPreviewGoalService {
         });
         if (!goal)
             return undefined;
-        this.event(goal, "goal_disabled", "user_disabled", {}, input.runId);
+        await this.event(goal, "goal_disabled", "user_disabled", {}, input.runId);
         return goal;
     }
-    get(clientId, sessionId) {
-        return this.db.getAppPreviewGoal(clientId, sessionId);
+    async get(clientId, sessionId) {
+        return await this.db.getAppPreviewGoal(clientId, sessionId);
     }
-    events(clientId, sessionId, afterEventId) {
-        return this.db.listAppPreviewGoalEvents(clientId, sessionId, afterEventId);
+    async events(clientId, sessionId, afterEventId) {
+        return await this.db.listAppPreviewGoalEvents(clientId, sessionId, afterEventId);
     }
-    mark(input) {
-        return this.db.updateAppPreviewGoal(input);
+    async mark(input) {
+        return await this.db.updateAppPreviewGoal(input);
     }
-    event(goal, eventType, reasonCode, payload, runId) {
-        return this.db.appendAppPreviewGoalEvent({
+    async event(goal, eventType, reasonCode, payload, runId) {
+        return await this.db.appendAppPreviewGoalEvent({
             goalId: goal.goalId,
             clientId: goal.clientId,
             sessionId: goal.sessionId,

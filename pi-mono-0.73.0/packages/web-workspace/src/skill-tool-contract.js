@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 export const skillLoadSchema = Type.Object({
     name: Type.String({
-        description: "Configured global skill name, such as ui-polish.",
+        description: "Only use a name listed in <available_skills>; do not invent or infer unlisted skill names.",
     }),
 }, { additionalProperties: false });
 export const skillResourceSchema = Type.Object({

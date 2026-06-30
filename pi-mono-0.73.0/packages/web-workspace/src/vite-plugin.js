@@ -8,15 +8,18 @@ import { API_PREFIX, LOGS_API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, RUNS_
 import { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
+import { RedisRunEventBus } from "./run-event-bus.js";
 import { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunQueue } from "./run-queue.js";
-import { RuntimeDbStore } from "./runtime-db.js";
+import { createRuntimeStore } from "./runtime-store-factory.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
-import { deleteSessionWorkspace } from "./workspace-paths.js";
+import { deleteSessionWorkspace, sanitizePathComponent } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
+const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
+const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 export function configuredStoragePlugin(envFile) {
     const rootDir = process.cwd();
     const config = loadStorageConfig(rootDir, envFile);
@@ -26,10 +29,15 @@ export function configuredStoragePlugin(envFile) {
     const previews = new WorkspacePreviewService(config, diagnostics);
     const tasks = new WorkspaceTaskService(config, previews, undefined, diagnostics);
     const skills = new WorkspaceSkillService(config, diagnostics);
-    const runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
+    const runtimeDb = createRuntimeStore(config);
     const appPreviewGoals = new AppPreviewGoalService(runtimeDb);
     const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
     const runQueue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
+    const runEventBus = new RedisRunEventBus({
+        redisUrl: config.redisUrl,
+        maxLen: config.runEventStreamMaxLen,
+        ttlSeconds: config.runEventStreamTtlSeconds,
+    });
     const runApi = new WorkspaceRunApiService(runtimeDb, runQueue, diagnostics, {
         ensureWorkspace(context) {
             files.ensureProjectWorkspace({
@@ -53,15 +61,44 @@ export function configuredStoragePlugin(envFile) {
             return deleteSessionWorkspace(config.clientsRootDir, sessionId, clientId);
         },
     }, appPreviewGoals);
+    return createConfiguredStoragePlugin({
+        config,
+        diagnostics,
+        sessions,
+        files,
+        previews,
+        tasks,
+        skills,
+        runtimeDb,
+        diagnosticExports,
+        runApi,
+        runEventBus,
+    });
+}
+export function createConfiguredStoragePluginForTest(services) {
+    return createConfiguredStoragePlugin(services);
+}
+function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, previews, tasks, skills, runtimeDb, diagnosticExports, runApi, runEventBus, }) {
     let startupDiagnosticsWritten = false;
-    const ensureStorageDirs = () => {
-        sessions.ensureDirs();
-        mkdirSync(dirname(config.settingsFile), { recursive: true });
-        mkdirSync(config.skillsDir, { recursive: true });
-        mkdirSync(config.defaultSkillsDir, { recursive: true });
-        diagnostics.ensureDirs();
-        runtimeDb.ensureSchema();
-        writeStartupDiagnosticsOnce();
+    let storageDirsReady = false;
+    let storageDirsPromise;
+    const ensureStorageDirs = async () => {
+        if (storageDirsReady)
+            return;
+        storageDirsPromise ??= (async () => {
+            sessions.ensureDirs();
+            mkdirSync(dirname(config.settingsFile), { recursive: true });
+            mkdirSync(config.skillsDir, { recursive: true });
+            mkdirSync(config.defaultSkillsDir, { recursive: true });
+            diagnostics.ensureDirs();
+            await runtimeDb.ensureSchema();
+            writeStartupDiagnosticsOnce();
+            storageDirsReady = true;
+        })().catch((error) => {
+            storageDirsPromise = undefined;
+            throw error;
+        });
+        await storageDirsPromise;
     };
     const writeStartupDiagnosticsOnce = () => {
         if (startupDiagnosticsWritten)
@@ -72,7 +109,7 @@ export function configuredStoragePlugin(envFile) {
     const handler = async (req, res, next) => {
         if (req.url?.startsWith(PREVIEW_PREFIX)) {
             try {
-                ensureStorageDirs();
+                await ensureStorageDirs();
                 if (previews.servePreviewRequest(req, res))
                     return;
             }
@@ -91,7 +128,7 @@ export function configuredStoragePlugin(envFile) {
             return;
         }
         try {
-            ensureStorageDirs();
+            await ensureStorageDirs();
             const url = new URL(req.url, "http://localhost");
             const isProjectsApi = url.pathname.startsWith(PROJECTS_API_PREFIX);
             const isSkillsApi = url.pathname.startsWith(SKILLS_API_PREFIX);
@@ -128,7 +165,7 @@ export function configuredStoragePlugin(envFile) {
                 return;
             }
             if (isRunsApi) {
-                await handleRuntimeRunsApi(method, route, url, req, res, runApi);
+                await handleRuntimeRunsApi(method, route, url, req, res, runApi, runEventBus);
                 return;
             }
             await handleStorageApi(method, route, req, res, config, sessions);
@@ -136,6 +173,16 @@ export function configuredStoragePlugin(envFile) {
         catch (error) {
             sendRuntimeApiError(res, error);
         }
+    };
+    let runEventBusClosePromise;
+    const closeRunEventBusOnce = () => {
+        runEventBusClosePromise ??= Promise.resolve(runEventBus.close()).catch(() => undefined);
+        return runEventBusClosePromise;
+    };
+    const registerRunEventBusCleanup = (server) => {
+        server.httpServer?.once?.("close", () => {
+            void closeRunEventBusOnce();
+        });
     };
     return {
         name: "pi-web-ui-configured-storage",
@@ -149,9 +196,11 @@ export function configuredStoragePlugin(envFile) {
             };
         },
         configureServer(server) {
+            registerRunEventBusCleanup(server);
             server.middlewares.use(handler);
         },
         configurePreviewServer(server) {
+            registerRunEventBusCleanup(server);
             server.middlewares.use(handler);
         },
     };
@@ -229,6 +278,20 @@ async function handleProjectsApi(method, route, req, res, config, files, preview
         sendJson(res, previews.listProjects(req, clientId));
         return;
     }
+    if (method === "POST" && route === "/batch-summary") {
+        const body = await readJsonBody(req);
+        const summaries = normalizeBatchSummarySessions(body).map((session) => {
+            const summary = files.listProjectFiles(withClientId(session, clientId));
+            return {
+                projectId: summary.projectId,
+                sessionId: summary.sessionId,
+                title: summary.title,
+                fileCount: summary.fileCount,
+            };
+        });
+        sendJson(res, { summaries });
+        return;
+    }
     if (method === "POST" && route === "/workspace/files") {
         const body = withClientId(await readJsonBody(req), clientId);
         sendJson(res, files.listProjectFiles(body));
@@ -271,6 +334,24 @@ async function handleProjectsApi(method, route, req, res, config, files, preview
         return;
     }
     sendJson(res, { error: "Not found." }, 404);
+}
+function normalizeBatchSummarySessions(body) {
+    const rawSessions = Array.isArray(body.sessions) ? body.sessions : [];
+    const sessions = [];
+    const seen = new Set();
+    for (const rawSession of rawSessions) {
+        if (sessions.length >= PROJECT_BATCH_SUMMARY_LIMIT)
+            break;
+        if (!isObject(rawSession))
+            continue;
+        const sessionId = typeof rawSession.sessionId === "string" ? rawSession.sessionId.trim() : "";
+        if (!sessionId || !sanitizePathComponent(sessionId) || seen.has(sessionId))
+            continue;
+        seen.add(sessionId);
+        const title = typeof rawSession.title === "string" ? rawSession.title.trim() : "";
+        sessions.push({ sessionId, title });
+    }
+    return sessions;
 }
 async function handleStorageApi(method, route, req, res, config, sessions) {
     if (method === "GET" && route === "/status") {
@@ -353,7 +434,7 @@ async function handleLogsApi(method, route, url, req, res, config, diagnostics, 
             return;
         }
         if (queryString(url, "format") !== "json") {
-            const archive = diagnosticExports.exportArchive({
+            const archive = await diagnosticExports.exportArchive({
                 clientId: clientId ?? "",
                 sessionId,
                 runId,
@@ -367,7 +448,7 @@ async function handleLogsApi(method, route, url, req, res, config, diagnostics, 
             await sendDiagnosticArchive(res, archive);
             return;
         }
-        const payload = diagnosticExports.export({
+        const payload = await diagnosticExports.export({
             clientId: clientId ?? "",
             sessionId,
             runId,
@@ -450,20 +531,20 @@ async function handleRuntimeSessionsApi(method, route, url, req, res, runApi) {
     try {
         const clientId = readClientIdHeader(req);
         if (method === "GET" && (route === "/" || route === "")) {
-            sendJson(res, { sessions: runApi.listSessions(clientId) });
+            sendJson(res, { sessions: await runApi.listSessions(clientId) });
             return;
         }
         const sessionMatch = route.match(/^\/([^/]+)$/);
         if (sessionMatch) {
             const sessionId = decodeURIComponent(sessionMatch[1]);
             if (method === "GET") {
-                const detail = runApi.getSession(clientId, sessionId);
+                const detail = await runApi.getSession(clientId, sessionId);
                 sendJson(res, detail || { error: "Session not found." }, detail ? 200 : 404);
                 return;
             }
             if (method === "PUT") {
                 const body = await readJsonBody(req);
-                sendJson(res, runApi.renameSession(clientId, sessionId, String(body.title || "")));
+                sendJson(res, await runApi.renameSession(clientId, sessionId, String(body.title || "")));
                 return;
             }
             if (method === "DELETE") {
@@ -477,7 +558,7 @@ async function handleRuntimeSessionsApi(method, route, url, req, res, runApi) {
         sendRuntimeApiError(res, error);
     }
 }
-async function handleRuntimeRunsApi(method, route, url, req, res, runApi) {
+async function handleRuntimeRunsApi(method, route, url, req, res, runApi, runEventBus) {
     try {
         const clientId = readClientIdHeader(req);
         if (method === "POST" && (route === "/" || route === "" || route === "/start")) {
@@ -486,7 +567,7 @@ async function handleRuntimeRunsApi(method, route, url, req, res, runApi) {
             return;
         }
         if (method === "GET" && (route === "/" || route === "")) {
-            sendJson(res, { runs: runApi.listRuns(clientId) });
+            sendJson(res, { runs: await runApi.listRuns(clientId) });
             return;
         }
         if (method === "GET" && route === "/goals/app-preview") {
@@ -495,8 +576,8 @@ async function handleRuntimeRunsApi(method, route, url, req, res, runApi) {
                 throw new RunApiError("sessionId is required", 400);
             const afterEventId = queryNumber(url, "afterEventId") ?? 0;
             sendJson(res, {
-                goal: runApi.getAppPreviewGoal(clientId, sessionId) ?? null,
-                events: runApi.listAppPreviewGoalEvents(clientId, sessionId, afterEventId),
+                goal: (await runApi.getAppPreviewGoal(clientId, sessionId)) ?? null,
+                events: await runApi.listAppPreviewGoalEvents(clientId, sessionId, afterEventId),
             });
             return;
         }
@@ -504,13 +585,13 @@ async function handleRuntimeRunsApi(method, route, url, req, res, runApi) {
             const body = await readJsonBody(req);
             const sessionId = normalizeRequiredBodyString(body.sessionId, "sessionId");
             const source = normalizeAppPreviewGoalSource(body.source);
-            sendJson(res, { goal: runApi.enableAppPreviewGoal(clientId, sessionId, source) ?? null });
+            sendJson(res, { goal: (await runApi.enableAppPreviewGoal(clientId, sessionId, source)) ?? null });
             return;
         }
         if (method === "POST" && route === "/goals/app-preview/disable") {
             const body = await readJsonBody(req);
             const sessionId = normalizeRequiredBodyString(body.sessionId, "sessionId");
-            sendJson(res, { goal: runApi.disableAppPreviewGoal(clientId, sessionId) ?? null });
+            sendJson(res, { goal: (await runApi.disableAppPreviewGoal(clientId, sessionId)) ?? null });
             return;
         }
         const eventsMatch = route.match(/^\/([^/]+)\/events$/);
@@ -518,11 +599,11 @@ async function handleRuntimeRunsApi(method, route, url, req, res, runApi) {
             const runId = decodeURIComponent(eventsMatch[1]);
             const afterSeq = queryNumber(url, "afterSeq") ?? 0;
             if (wantsEventStream(req, url)) {
-                streamRunEvents(res, req, runApi, clientId, runId, afterSeq);
+                await streamRunEvents(res, req, runApi, runEventBus, clientId, runId, afterSeq);
                 return;
             }
             sendJson(res, {
-                events: runApi.listRunEvents(clientId, runId, afterSeq),
+                events: await runApi.listRunEvents(clientId, runId, afterSeq),
             });
             return;
         }
@@ -533,13 +614,13 @@ async function handleRuntimeRunsApi(method, route, url, req, res, runApi) {
         }
         const statusMatch = route.match(/^\/([^/]+)\/status$/);
         if (method === "GET" && statusMatch) {
-            const run = runApi.getRunStatus(clientId, decodeURIComponent(statusMatch[1]));
+            const run = await runApi.getRunStatus(clientId, decodeURIComponent(statusMatch[1]));
             sendJson(res, run || { error: "Run not found." }, run ? 200 : 404);
             return;
         }
         const runMatch = route.match(/^\/([^/]+)$/);
         if (method === "GET" && runMatch) {
-            const run = runApi.getRunStatus(clientId, decodeURIComponent(runMatch[1]));
+            const run = await runApi.getRunStatus(clientId, decodeURIComponent(runMatch[1]));
             sendJson(res, run || { error: "Run not found." }, run ? 200 : 404);
             return;
         }
@@ -557,57 +638,116 @@ function wantsEventStream(req, url) {
         ? accept.some((value) => value.includes("text/event-stream"))
         : typeof accept === "string" && accept.includes("text/event-stream");
 }
-function streamRunEvents(res, req, runApi, clientId, runId, afterSeq) {
+async function streamRunEvents(res, req, runApi, runEventBus, clientId, runId, afterSeq) {
     let lastSeq = afterSeq;
     let closed = false;
     let heartbeatAt = Date.now();
-    let timer;
+    let streamStarted = false;
+    const abortController = new AbortController();
     const closeStream = () => {
         if (closed)
             return;
         closed = true;
-        if (timer !== undefined)
-            clearInterval(timer);
+        if (!abortController.signal.aborted)
+            abortController.abort();
     };
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders?.();
-    res.write(": connected\n\n");
-    const sendEvents = () => {
+    req.on("close", closeStream);
+    const responseWithOn = res;
+    if (typeof responseWithOn.on === "function") {
+        responseWithOn.on("close", closeStream);
+    }
+    try {
+        const run = await runApi.getRunForEvents(clientId, runId);
+        const durableEvents = await runApi.listDurableRunEvents(clientId, runId, afterSeq);
         if (closed || res.destroyed)
             return;
-        try {
-            const events = runApi.listRunEvents(clientId, runId, lastSeq);
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.setHeader("Connection", "keep-alive");
+        res.flushHeaders?.();
+        streamStarted = true;
+        res.write(": connected\n\n");
+        for (const event of durableEvents) {
+            if (!writeRunEventIfFresh(res, event, lastSeq))
+                continue;
+            lastSeq = event.seq;
+        }
+        while (!closed && !res.destroyed) {
+            const events = await runEventBus.read({
+                clientId,
+                sessionId: run.sessionId,
+                runId,
+                afterSeq: lastSeq,
+                blockMs: 15000,
+                signal: abortController.signal,
+            });
+            if (closed || res.destroyed)
+                break;
+            if (events.length === 0) {
+                heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
+                await waitForRunEventReadBackoff(abortController.signal, EMPTY_RUN_EVENT_READ_BACKOFF_MS);
+                continue;
+            }
             for (const event of events) {
-                if (closed || res.destroyed)
-                    return;
-                writeServerSentRunEvent(res, event);
-                lastSeq = Math.max(lastSeq, event.seq);
+                if (!writeRunEventIfFresh(res, event, lastSeq))
+                    continue;
+                lastSeq = event.seq;
             }
-            const now = Date.now();
-            if (now - heartbeatAt > 15000) {
-                res.write(": keep-alive\n\n");
-                heartbeatAt = now;
-            }
+            heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
         }
-        catch (error) {
-            if (!res.destroyed) {
-                res.write(`: ${errorMessage(error).replace(/\r?\n/g, " ")}\n\n`);
-                res.end();
-            }
-            closeStream();
-        }
-    };
-    sendEvents();
-    if (!closed) {
-        timer = setInterval(sendEvents, 100);
     }
-    req.on("close", closeStream);
+    catch (error) {
+        if (!streamStarted) {
+            throw error;
+        }
+        if (!closed && !res.destroyed) {
+            writeServerSentError(res, "Runtime event stream unavailable.");
+            res.end();
+        }
+        closeStream();
+    }
+    finally {
+        req.off?.("close", closeStream);
+        if (typeof responseWithOn.off === "function") {
+            responseWithOn.off("close", closeStream);
+        }
+    }
+}
+function writeRunEventIfFresh(res, event, lastSeq) {
+    if (event.seq <= lastSeq)
+        return false;
+    writeServerSentRunEvent(res, event);
+    return true;
+}
+function writeHeartbeatIfDue(res, heartbeatAt) {
+    const now = Date.now();
+    if (now - heartbeatAt > 15000) {
+        res.write(": keep-alive\n\n");
+        return now;
+    }
+    return heartbeatAt;
+}
+function waitForRunEventReadBackoff(signal, delayMs) {
+    if (signal.aborted)
+        return Promise.resolve();
+    return new Promise((resolve) => {
+        let timeout;
+        const done = () => {
+            if (timeout !== undefined)
+                clearTimeout(timeout);
+            signal.removeEventListener("abort", done);
+            resolve();
+        };
+        timeout = setTimeout(done, delayMs);
+        signal.addEventListener("abort", done, { once: true });
+    });
 }
 function writeServerSentRunEvent(res, event) {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+function writeServerSentError(res, message) {
+    res.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
 }
 function toDiagnosticLogQuery(url) {
     return {

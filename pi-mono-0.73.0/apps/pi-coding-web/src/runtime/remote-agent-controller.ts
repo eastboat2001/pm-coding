@@ -89,6 +89,21 @@ export class RemoteAgentController {
 		}
 	}
 
+	hydrateCheckpoint(event: RuntimeRunEventRecord | undefined, afterSeq: number): void {
+		if (!this._activeRunId) {
+			throw new Error("startRemoteRun() must be called before hydrateCheckpoint().");
+		}
+		if (event) {
+			if (event.runId !== this._activeRunId) {
+				throw new Error(`Remote run event ${event.runId} does not match active run ${this._activeRunId}.`);
+			}
+			if (event.seq > this._lastSeq) {
+				this.hydrateRunEvents([event]);
+			}
+		}
+		this._lastSeq = Math.max(this._lastSeq, afterSeq);
+	}
+
 	async finishRemoteRun(status: RunStatus): Promise<void> {
 		if (!this._activeRunId) throw new Error("No active remote run to finish.");
 		if (!TERMINAL_RUN_STATUSES.has(status)) throw new Error(`Remote run status ${status} is not terminal.`);
@@ -103,23 +118,22 @@ export class RemoteAgentController {
 	async settleRemoteRun(status: RunStatus, errorMessage?: string): Promise<void> {
 		if (!this._activeRunId) throw new Error("No active remote run to settle.");
 		if (!TERMINAL_RUN_STATUSES.has(status)) throw new Error(`Remote run status ${status} is not terminal.`);
+		const terminalMessage = this.shouldAppendTerminalMessage(status)
+			? createRemoteRunTerminalMessage(status, errorMessage)
+			: undefined;
+		if (terminalMessage) {
+			await this.applyRunEvent({
+				eventId: 0,
+				runId: this._activeRunId,
+				sessionId: "",
+				clientId: "",
+				seq: this._lastSeq,
+				type: "message_end",
+				payload: { type: "message_end", message: terminalMessage },
+				createdAt: new Date().toISOString(),
+			});
+		}
 		if (!this.agentEndApplied) {
-			const failureMessage =
-				status === "failed" && !this.assistantMessageEndApplied
-					? createRemoteRunFailureMessage(errorMessage)
-					: undefined;
-			if (failureMessage) {
-				await this.applyRunEvent({
-					eventId: 0,
-					runId: this._activeRunId,
-					sessionId: "",
-					clientId: "",
-					seq: this._lastSeq,
-					type: "message_end",
-					payload: { type: "message_end", message: failureMessage },
-					createdAt: new Date().toISOString(),
-				});
-			}
 			await this.applyRunEvent({
 				eventId: 0,
 				runId: this._activeRunId,
@@ -127,11 +141,16 @@ export class RemoteAgentController {
 				clientId: "",
 				seq: this._lastSeq,
 				type: "agent_end",
-				payload: { type: "agent_end", messages: failureMessage ? [failureMessage] : [] },
+				payload: { type: "agent_end", messages: terminalMessage ? [terminalMessage] : [] },
 				createdAt: new Date().toISOString(),
 			});
 		}
 		await this.finishRemoteRun(status);
+	}
+
+	private shouldAppendTerminalMessage(status: RunStatus): boolean {
+		if (status === "cancelled") return !hasCancelledAssistantMessage(this.agent.state.messages);
+		return !this.assistantMessageEndApplied;
 	}
 
 	get activeRunId(): string | undefined {
@@ -248,6 +267,23 @@ function isAssistantMessageEndEvent(event: AgentEvent): boolean {
 	return isRecord(message) && message.role === "assistant";
 }
 
+function createRemoteRunTerminalMessage(status: RunStatus, errorMessage?: string): AssistantMessage | undefined {
+	if (status === "failed") return createRemoteRunFailureMessage(errorMessage);
+	if (status === "cancelled") return createRemoteRunCancelledMessage();
+	return undefined;
+}
+
+function createRemoteRunUsage(): AssistantMessage["usage"] {
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+}
+
 function createRemoteRunFailureMessage(errorMessage?: string): AssistantMessage {
 	const normalizedError = errorMessage?.trim() || "Remote run failed before producing a response.";
 	return {
@@ -256,18 +292,32 @@ function createRemoteRunFailureMessage(errorMessage?: string): AssistantMessage 
 		api: "remote-run",
 		provider: "remote-run",
 		model: "remote-run",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: createRemoteRunUsage(),
 		stopReason: "error",
 		errorMessage: normalizedError,
 		timestamp: Date.now(),
 	};
+}
+
+function createRemoteRunCancelledMessage(): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: "remote-run",
+		provider: "remote-run",
+		model: "remote-run",
+		usage: createRemoteRunUsage(),
+		stopReason: "aborted",
+		errorMessage: "Request was aborted.",
+		timestamp: Date.now(),
+	};
+}
+
+function hasCancelledAssistantMessage(messages: readonly unknown[]): boolean {
+	return messages.some((message) => {
+		if (!isRecord(message) || message.role !== "assistant") return false;
+		return message.stopReason === "aborted" || message.errorMessage === "Request was aborted.";
+	});
 }
 
 function isInternalContinuationPromptEvent(event: AgentEvent): boolean {

@@ -22,17 +22,17 @@ describe("AppPreviewGoalService", () => {
 		rmSync(dir, { force: true, recursive: true });
 	});
 
-	it("uses source-specific budgets when enabling a goal", () => {
+	it("uses source-specific budgets when enabling a goal", async () => {
 		createSession("session-pm");
 		createSession("session-manual");
 
-		const pmGoal = service.enable({
+		const pmGoal = await service.enable({
 			clientId: "client-a",
 			sessionId: "session-pm",
 			source: "pm_handoff",
 			runId: "run-pm",
 		});
-		const manualGoal = service.enable({
+		const manualGoal = await service.enable({
 			clientId: "client-a",
 			sessionId: "session-manual",
 			source: "manual",
@@ -49,21 +49,21 @@ describe("AppPreviewGoalService", () => {
 		expect(manualGoal.lastRunId).toBe("run-manual");
 	});
 
-	it("disables an existing goal without replacing its event history", () => {
+	it("disables an existing goal without replacing its event history", async () => {
 		createSession("session-1");
-		const started = service.enable({
+		const started = await service.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "pm_handoff",
 			runId: "run-1",
 		});
 
-		const disabled = service.disable({
+		const disabled = await service.disable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			runId: "run-2",
 		});
-		const events = service.events("client-a", "session-1", 0);
+		const events = await service.events("client-a", "session-1", 0);
 
 		expect(disabled?.goalId).toBe(started.goalId);
 		expect(disabled?.status).toBe("disabled");
@@ -75,16 +75,16 @@ describe("AppPreviewGoalService", () => {
 		expect(events[1]?.reasonCode).toBe("user_disabled");
 	});
 
-	it("resets counters and clears terminal fields when re-enabling a non-active goal", () => {
+	it("resets counters and clears terminal fields when re-enabling a non-active goal", async () => {
 		createSession("session-1");
-		const started = service.enable({
+		const started = await service.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
 			runId: "run-1",
 		});
 		const completedAt = new Date().toISOString();
-		service.mark({
+		await service.mark({
 			clientId: "client-a",
 			sessionId: "session-1",
 			status: "preview_ready",
@@ -95,13 +95,13 @@ describe("AppPreviewGoalService", () => {
 			completedAt,
 		});
 
-		const restarted = service.enable({
+		const restarted = await service.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
 			runId: "run-2",
 		});
-		const events = service.events("client-a", "session-1", 0);
+		const events = await service.events("client-a", "session-1", 0);
 
 		expect(restarted.goalId).toBe(started.goalId);
 		expect(restarted.createdAt).toBe(started.createdAt);

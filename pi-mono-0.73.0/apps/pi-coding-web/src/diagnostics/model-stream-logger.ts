@@ -8,7 +8,7 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 } from "@mariozechner/pi-ai";
-import type { DiagnosticClient, DiagnosticData } from "./diagnostic-client.js";
+import type { DiagnosticClient, DiagnosticData, DiagnosticEvent } from "./diagnostic-client.js";
 import { summarizeProviderPayload } from "./diagnostic-client.js";
 
 type ModelStreamFn = (
@@ -68,6 +68,14 @@ const EMPTY_USAGE = {
 	},
 };
 
+function writeDiagnosticSafely(client: DiagnosticClient, event: DiagnosticEvent): void {
+	try {
+		client.write(event);
+	} catch {
+		// Diagnostics must not interrupt model execution.
+	}
+}
+
 export function createLoggedStreamFn(
 	streamFn: ModelStreamFn,
 	client: DiagnosticClient,
@@ -85,7 +93,7 @@ export function createLoggedStreamFn(
 		const spanId = requestId;
 		const traceId = traceContext.traceId ?? traceContext.sessionId ?? requestId;
 		const baseData = modelDiagnosticData(model, context);
-		client.write({
+		writeDiagnosticSafely(client, {
 			level: "info",
 			category: "provider",
 			eventType: "provider.request.start",
@@ -111,7 +119,7 @@ export function createLoggedStreamFn(
 				onPayload: async (payload, requestModel) => {
 					const replacement = await options?.onPayload?.(payload, requestModel);
 					const effectivePayload = replacement ?? payload;
-					client.write({
+					writeDiagnosticSafely(client, {
 						level: "debug",
 						category: "provider",
 						eventType: "provider.payload",
@@ -155,7 +163,7 @@ export function createLoggedStreamFn(
 				},
 				onResponse: async (response, responseModel) => {
 					await options?.onResponse?.(response, responseModel);
-					client.write({
+					writeDiagnosticSafely(client, {
 						level: response.status >= 400 ? "error" : "info",
 						category: "provider",
 						eventType: "provider.response",
@@ -188,7 +196,7 @@ export function createLoggedStreamFn(
 			});
 		} catch (error) {
 			const message = errorMessage(error);
-			client.write({
+			writeDiagnosticSafely(client, {
 				level: "error",
 				category: "provider",
 				eventType: "provider.request.error",
@@ -332,7 +340,7 @@ function writePromptSnapshot(
 	requestId: string,
 	snapshot: DiagnosticData,
 ): void {
-	client.write({
+	writeDiagnosticSafely(client, {
 		level: "debug",
 		category: "model",
 		eventType: "model.prompt.snapshot",
@@ -356,7 +364,7 @@ function writeProviderPayloadSnapshot(
 	requestId: string,
 	snapshot: DiagnosticData,
 ): void {
-	client.write({
+	writeDiagnosticSafely(client, {
 		level: "debug",
 		category: "provider",
 		eventType: "provider.payload.snapshot",
@@ -390,7 +398,7 @@ function writeProviderRawChunk(
 	}
 	const snapshot = snapshotUnknown(chunk, remaining);
 	state.usedChars += snapshot.loggedChars;
-	client.write({
+	writeDiagnosticSafely(client, {
 		level: "debug",
 		category: "provider",
 		eventType: "provider.raw_chunk",
@@ -423,7 +431,7 @@ function writeProviderRawChunkTruncatedNotice(
 ): void {
 	if (state.truncatedNoticeWritten) return;
 	state.truncatedNoticeWritten = true;
-	client.write({
+	writeDiagnosticSafely(client, {
 		level: "debug",
 		category: "provider",
 		eventType: "provider.raw_chunk.truncated",
@@ -450,7 +458,7 @@ function writeRawStreamEvent(options: ObserveOptions, event: AssistantMessageEve
 	}
 	const data = summarizeRawStreamEvent(event, remaining);
 	options.rawStreamState.usedChars += data.loggedChars;
-	options.client.write({
+	writeDiagnosticSafely(options.client, {
 		level: "debug",
 		category: "model",
 		eventType: "model.stream.raw_event",
@@ -469,7 +477,7 @@ function writeRawStreamEvent(options: ObserveOptions, event: AssistantMessageEve
 function writeRawStreamTruncatedNotice(options: ObserveOptions): void {
 	if (options.rawStreamState.truncatedNoticeWritten) return;
 	options.rawStreamState.truncatedNoticeWritten = true;
-	options.client.write({
+	writeDiagnosticSafely(options.client, {
 		level: "debug",
 		category: "model",
 		eventType: "model.stream.raw_event.truncated",
@@ -583,7 +591,7 @@ function writeStreamSummary(
 	level: "info" | "error",
 	outputSnapshot: OutputSnapshotState | undefined,
 ): void {
-	options.client.write({
+	writeDiagnosticSafely(options.client, {
 		level,
 		category: "model",
 		eventType: "model.stream.summary",

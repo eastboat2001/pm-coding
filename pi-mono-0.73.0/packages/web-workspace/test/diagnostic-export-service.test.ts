@@ -30,7 +30,7 @@ describe("WorkspaceDiagnosticExportService", () => {
 		rmSync(dir, { force: true, recursive: true });
 	});
 
-	it("exports runtime and diagnostic data for a session without extra export-layer redaction", () => {
+	it("exports runtime and diagnostic data for a session without extra export-layer redaction", async () => {
 		sessions.writeSettings(
 			{
 				providerKeys: { "custom-provider:test": "server-key" },
@@ -91,7 +91,7 @@ describe("WorkspaceDiagnosticExportService", () => {
 		});
 
 		const service = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
-		const exported = service.export({ clientId: "client-a", sessionId: "session-1" });
+		const exported = await service.export({ clientId: "client-a", sessionId: "session-1" });
 
 		expect(exported.query).toMatchObject({ clientId: "client-a", sessionId: "session-1" });
 		expect(exported.runtime).toMatchObject({
@@ -179,7 +179,7 @@ describe("WorkspaceDiagnosticExportService", () => {
 		});
 
 		const service = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
-		const archive = service.exportArchive({ clientId: "client-a", sessionId: "session-1" });
+		const archive = await service.exportArchive({ clientId: "client-a", sessionId: "session-1" });
 		const files = await collectArchiveFiles(archive.entries);
 		const zipBuffer = Buffer.concat(await collectArchiveChunks(archive.stream()));
 
@@ -341,7 +341,7 @@ describe("WorkspaceDiagnosticExportService", () => {
 		});
 
 		const service = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
-		const archive = service.exportArchive({ clientId: "client-a", sessionId: "session-queued" });
+		const archive = await service.exportArchive({ clientId: "client-a", sessionId: "session-queued" });
 		const files = await collectArchiveFiles(archive.entries);
 		const overview = JSON.parse(files["diagnostics/overview.json"]);
 

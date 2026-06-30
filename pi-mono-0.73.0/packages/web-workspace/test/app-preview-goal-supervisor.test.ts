@@ -49,7 +49,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			status: "running",
 		};
 		const terminalRun = createTerminalRun("run-1");
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "pm_handoff",
@@ -58,8 +58,8 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(terminalRun);
 
-		const goal = goals.get("client-a", "session-1");
-		const events = goals.events("client-a", "session-1", 0);
+		const goal = await goals.get("client-a", "session-1");
+		const events = await goals.events("client-a", "session-1", 0);
 		expect(goal?.status).toBe("preview_ready");
 		expect(goal?.lastRunId).toBe("run-1");
 		expect(goal?.lastPreviewUrl).toBe("http://localhost:5173/preview/project-client-a-session-1/");
@@ -76,7 +76,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			detail: "empty body",
 		};
 		const terminalRun = createTerminalRun("run-1");
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
@@ -85,10 +85,10 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(terminalRun);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const continuation = db.getRun("client-a", "continuation-1");
 		const claimed = await queue.claim("worker-1", 1);
-		const events = goals.events("client-a", "session-1", 0);
+		const events = await goals.events("client-a", "session-1", 0);
 		expect(goal?.status).toBe("active");
 		expect(goal?.continuationRunsUsed).toBe(1);
 		expect(goal?.lastRunId).toBe("continuation-1");
@@ -115,7 +115,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			type: "message_end",
 			payload: { type: "message_end", message: { role: "assistant", content: "Created project files." } },
 		});
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
@@ -124,10 +124,10 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(terminalRun);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const continuation = db.getRun("client-a", "continuation-1");
 		const claimed = await queue.claim("worker-1", 1);
-		const events = goals.events("client-a", "session-1", 0);
+		const events = await goals.events("client-a", "session-1", 0);
 		expect(goal?.status).toBe("active");
 		expect(goal?.continuationRunsUsed).toBe(1);
 		expect(goal?.lastRunId).toBe("continuation-1");
@@ -160,7 +160,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			type: "agent_retry_scheduled",
 			payload: { type: "agent_retry_scheduled", attempt: 4, maxAttempts: 5, reasonCode: "transient_provider_error" },
 		});
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "pm_handoff",
@@ -169,9 +169,9 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(terminalRun);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const claimed = await queue.claim("worker-1", 1);
-		const events = goals.events("client-a", "session-1", 0);
+		const events = await goals.events("client-a", "session-1", 0);
 		expect(readinessChecks).toBe(0);
 		expect(goal?.status).toBe("blocked");
 		expect(goal?.continuationRunsUsed).toBe(0);
@@ -200,7 +200,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			createRunId: () => "continuation-1",
 		});
 		const terminalRun = createTerminalRun("run-1", "cancelled");
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
@@ -209,9 +209,9 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(terminalRun);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const claimed = await queue.claim("worker-1", 1);
-		const events = goals.events("client-a", "session-1", 0);
+		const events = await goals.events("client-a", "session-1", 0);
 		expect(readinessChecks).toBe(0);
 		expect(goal?.status).toBe("cancelled");
 		expect(goal?.lastRunId).toBe("run-1");
@@ -239,7 +239,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			createRunId: () => "continuation-1",
 		});
 		const terminalRun = createTerminalRun("run-1", "interrupted");
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
@@ -248,9 +248,9 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(terminalRun);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const claimed = await queue.claim("worker-1", 1);
-		const events = goals.events("client-a", "session-1", 0);
+		const events = await goals.events("client-a", "session-1", 0);
 		expect(readinessChecks).toBe(0);
 		expect(goal?.status).toBe("blocked");
 		expect(goal?.lastRunId).toBe("run-1");
@@ -278,7 +278,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			createRunId: () => "continuation-1",
 		});
 		const terminalRun = createTerminalRun("run-1");
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
@@ -287,10 +287,10 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(terminalRun);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const continuation = db.getRun("client-a", "continuation-1");
 		const claimed = await queue.claim("worker-1", 1);
-		const events = goals.events("client-a", "session-1", 0);
+		const events = await goals.events("client-a", "session-1", 0);
 		const queueUnavailable = events.find((event) => event.eventType === "queue_unavailable");
 		expect(continuation?.status).toBe("failed");
 		expect(continuation?.error).toBe("queue enqueue failed: redis unavailable");
@@ -311,13 +311,13 @@ describe("AppPreviewGoalSupervisor", () => {
 	it("marks the goal budget_limited when the continuation budget is exhausted", async () => {
 		readinessResult = { ready: false, reasonCode: "http_not_ok", detail: "HTTP 404" };
 		const terminalRun = createTerminalRun("run-1");
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
 			runId: "run-1",
 		});
-		goals.mark({
+		await goals.mark({
 			clientId: "client-a",
 			sessionId: "session-1",
 			continuationRunsUsed: 5,
@@ -325,9 +325,9 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(terminalRun);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const claimed = await queue.claim("worker-1", 1);
-		const events = goals.events("client-a", "session-1", 0);
+		const events = await goals.events("client-a", "session-1", 0);
 		expect(goal?.status).toBe("budget_limited");
 		expect(goal?.lastRunId).toBe("run-1");
 		expect(goal?.lastFailureReason).toBe("http_not_ok");
@@ -350,7 +350,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			createRunId: () => "continuation-1",
 		});
 		const staleRun = createTerminalRun("run-old");
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
@@ -359,7 +359,7 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(staleRun);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const claimed = await queue.claim("worker-1", 1);
 		expect(readinessChecks).toBe(0);
 		expect(goal?.status).toBe("active");
@@ -384,7 +384,7 @@ describe("AppPreviewGoalSupervisor", () => {
 			createRunId: () => "continuation-1",
 		});
 		const run = createQueuedRun("run-1");
-		goals.enable({
+		await goals.enable({
 			clientId: "client-a",
 			sessionId: "session-1",
 			source: "manual",
@@ -393,7 +393,7 @@ describe("AppPreviewGoalSupervisor", () => {
 
 		await supervisor.afterRunTerminal(run);
 
-		const goal = goals.get("client-a", "session-1");
+		const goal = await goals.get("client-a", "session-1");
 		const claimed = await queue.claim("worker-1", 1);
 		expect(readinessChecks).toBe(0);
 		expect(goal?.status).toBe("active");

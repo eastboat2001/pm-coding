@@ -21,7 +21,8 @@ export class GeneratedAppsPanel extends LitElement {
 		project: GeneratedAppRecord,
 		title: string,
 	) => Promise<unknown> | unknown = (project, title) => renameGeneratedApp(project.projectId, title);
-	@property({ attribute: false }) loadProjects: () => Promise<GeneratedAppRecord[]> = () => loadGeneratedApps();
+	@property({ attribute: false }) loadProjects: (options?: { force?: boolean }) => Promise<GeneratedAppRecord[]> = (options) =>
+		loadGeneratedApps(undefined, undefined, options);
 	@property({ type: String }) selectedSessionStatus: "running" | "idle" = "idle";
 
 	@state() private projects: GeneratedAppRecord[] = [];
@@ -35,6 +36,8 @@ export class GeneratedAppsPanel extends LitElement {
 	@state() private deleteProjectId = "";
 	@state() private deletingProjectId = "";
 	@state() private deleteError = "";
+	private pendingForceRefresh = false;
+	private postCancelRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
 		return this;
@@ -45,16 +48,31 @@ export class GeneratedAppsPanel extends LitElement {
 		void this.refresh();
 	}
 
-	async refresh(): Promise<void> {
-		if (this.loading) return;
+	override disconnectedCallback(): void {
+		super.disconnectedCallback();
+		if (this.postCancelRefreshTimer !== undefined) {
+			clearTimeout(this.postCancelRefreshTimer);
+			this.postCancelRefreshTimer = undefined;
+		}
+	}
+
+	async refresh(options: { force?: boolean } = {}): Promise<void> {
+		if (this.loading) {
+			if (options.force) this.pendingForceRefresh = true;
+			return;
+		}
 		this.loading = true;
 		this.error = "";
 		try {
-			this.projects = await this.loadProjects();
+			this.projects = await this.loadProjects(options);
 		} catch (error) {
 			this.error = error instanceof Error ? error.message : String(error);
 		} finally {
 			this.loading = false;
+			if (this.pendingForceRefresh) {
+				this.pendingForceRefresh = false;
+				void this.refresh({ force: true });
+			}
 		}
 	}
 
@@ -73,7 +91,7 @@ export class GeneratedAppsPanel extends LitElement {
 						<button
 							type="button"
 							class="generated-apps-panel__header-button"
-							@click=${() => void this.refresh()}
+							@click=${() => void this.refresh({ force: true })}
 							title=${t("Refresh")}
 							aria-label=${t("Refresh")}
 						>
@@ -410,6 +428,18 @@ export class GeneratedAppsPanel extends LitElement {
 		await cancelGeneratedAppRunWithRollback(this.projects, project, this.cancelRun, (projects) => {
 			this.projects = projects;
 		});
+		await this.refresh({ force: true });
+		this.schedulePostCancelRefresh();
+	}
+
+	private schedulePostCancelRefresh(): void {
+		if (this.postCancelRefreshTimer !== undefined) clearTimeout(this.postCancelRefreshTimer);
+		this.postCancelRefreshTimer = setTimeout(() => {
+			this.postCancelRefreshTimer = undefined;
+			if (!this.isConnected) return;
+			void this.refresh({ force: true });
+		}, 1000);
+		(this.postCancelRefreshTimer as { unref?: () => void }).unref?.();
 	}
 
 	private cancelDelete(): void {

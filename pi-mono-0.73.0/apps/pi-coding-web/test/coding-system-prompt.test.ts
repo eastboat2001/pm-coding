@@ -42,6 +42,11 @@ describe("coding system prompt", () => {
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("without switching the output language");
 	});
 
+	it("does not invite skill tool calls when no skills are listed", () => {
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("Only call skill_load for skill names listed in <available_skills>");
+		expect(DEFAULT_SYSTEM_PROMPT).toContain("If there is no <available_skills> section");
+	});
+
 	it("tells the model to read document attachments from project workspace paths", () => {
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("User attachments are saved into the current session project workspace");
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("Ordinary document and image attachments are also included in the message context");

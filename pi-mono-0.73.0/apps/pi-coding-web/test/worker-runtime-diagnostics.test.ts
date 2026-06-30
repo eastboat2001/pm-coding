@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	type Api,
 	type AssistantMessage,
 	type Context,
 	type Model,
@@ -14,8 +15,13 @@ import { loadStorageConfig } from "../../../packages/web-workspace/src/config.js
 import { RuntimeDbStore } from "../../../packages/web-workspace/src/runtime-db.js";
 import { InMemoryRunQueue } from "../../../packages/web-workspace/src/run-queue.js";
 import { WorkspaceRunWorkerService } from "../../../packages/web-workspace/src/run-worker-service.js";
-import type { JsonObject, WorkerAgentInput } from "../../../packages/web-workspace/src/types.js";
-import { createRunAgent } from "../src/worker/main.js";
+import type {
+	JsonObject,
+	RedisRunEventBusOptions,
+	RunEventSinkOptions,
+	WorkerAgentInput,
+} from "../../../packages/web-workspace/src/index.js";
+import { createRunAgent, createWorkerRunEventOptions } from "../src/worker/main.js";
 
 describe("worker runtime diagnostics", () => {
 	let dir: string | undefined;
@@ -133,6 +139,32 @@ describe("worker runtime diagnostics", () => {
 		}
 	});
 
+	it("maps worker run event retention config into Redis bus and sink options", () => {
+		dir = mkdtempSync(join(tmpdir(), "pi-worker-runtime-run-events-"));
+		const config = {
+			...loadStorageConfig(dir),
+			redisUrl: "redis://127.0.0.1:6380",
+			runEventStreamMaxLen: 1234,
+			runEventStreamTtlSeconds: 5678,
+			runEventCheckpointIntervalMs: 90,
+			runEventCheckpointMinChars: 12,
+		};
+
+		const options = createWorkerRunEventOptions(config);
+		const busOptions: RedisRunEventBusOptions = options.bus;
+		const sinkOptions: Pick<RunEventSinkOptions, "checkpointIntervalMs" | "checkpointMinChars"> = options.sink;
+
+		expect(busOptions).toEqual({
+			redisUrl: "redis://127.0.0.1:6380",
+			maxLen: 1234,
+			ttlSeconds: 5678,
+		});
+		expect(sinkOptions).toEqual({
+			checkpointIntervalMs: 90,
+			checkpointMinChars: 12,
+		});
+	});
+
 	it("retries production stream error final events before persisting assistant errors", async () => {
 		dir = mkdtempSync(join(tmpdir(), "pi-worker-runtime-retry-"));
 		const diagnostics = new RecordingDiagnostics();
@@ -208,6 +240,59 @@ describe("worker runtime diagnostics", () => {
 			db.close();
 		}
 	});
+
+	it("keeps worker runs alive when diagnostic logging is locked", async () => {
+		dir = mkdtempSync(join(tmpdir(), "pi-worker-runtime-diagnostics-locked-"));
+		const diagnostics = new LockedDiagnostics();
+		const config = loadStorageConfig(dir);
+		const db = new RuntimeDbStore(join(dir, "runtime.sqlite"));
+		const queue = new InMemoryRunQueue();
+
+		try {
+			db.ensureSchema();
+			const run = createQueuedRun(db);
+			await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+			const worker = new WorkspaceRunWorkerService({
+				db,
+				queue,
+				workerId: "worker-1",
+				diagnostics,
+				createAgent(input) {
+					const model = input.model as Model<Api>;
+					return createRunAgent(input, {
+						config,
+						diagnostics,
+						skills: { load: () => ({ name: "unused", content: "unused" }) },
+						promptSkills: [],
+						defaultSkills: [],
+						streamFn: async (_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+							await options?.onPayload?.({ messages: [{ role: "user", content: "hello" }] }, model);
+							const stream = createAssistantMessageEventStream();
+							queueMicrotask(() => {
+								const message = createAssistantMessage({ text: "done" });
+								stream.push({ type: "start", partial: message });
+								stream.push({ type: "text_delta", contentIndex: 0, delta: "done", partial: message });
+								stream.push({ type: "done", reason: "stop", message });
+							});
+							return stream;
+						},
+					});
+				},
+			});
+
+			await expect(worker.processOne()).resolves.toBe(true);
+
+			expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
+			const messages = db.listMessages(run.clientId, run.sessionId);
+			expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+			expect(JSON.stringify(messages)).toContain("done");
+			expect(JSON.stringify(messages)).not.toContain("database is locked");
+		} finally {
+			await queue.close();
+			db.close();
+		}
+	});
 });
 
 class RecordingDiagnostics {
@@ -216,6 +301,12 @@ class RecordingDiagnostics {
 	writeEvents(input: { events: JsonObject[] }): JsonObject {
 		this.events.push(...input.events);
 		return { accepted: input.events.length, dropped: 0 };
+	}
+}
+
+class LockedDiagnostics {
+	writeEvents(): JsonObject {
+		throw new Error("database is locked");
 	}
 }
 

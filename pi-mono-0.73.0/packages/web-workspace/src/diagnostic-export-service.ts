@@ -1,5 +1,5 @@
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
-import type { RuntimeDbStore } from "./runtime-db.js";
+import type { MaybeAsyncIterable, RuntimeStore } from "./runtime-store.js";
 import type {
 	DiagnosticLogEventRecord,
 	DiagnosticLogExportQuery,
@@ -88,25 +88,25 @@ interface TimelineRecord extends JsonObject {
 
 export class WorkspaceDiagnosticExportService {
 	constructor(
-		private readonly runtimeDb: RuntimeDbStore,
+		private readonly runtimeDb: RuntimeStore,
 		private readonly diagnostics: WorkspaceDiagnosticLogService,
 		private readonly sessions: WorkspaceSessionService,
 	) {}
 
-	export(request: DiagnosticExportRequest): DiagnosticExportResult {
+	async export(request: DiagnosticExportRequest): Promise<DiagnosticExportResult> {
 		const clientId = stringField(request.clientId);
 		if (!clientId) throw new Error("Client id is required.");
 		if (!request.sessionId && !request.runId) throw new Error("Query parameter `sessionId` or `runId` is required.");
 
-		const requestedRun = request.runId ? this.runtimeDb.getRun(clientId, request.runId) : undefined;
+		const requestedRun = request.runId ? await this.runtimeDb.getRun(clientId, request.runId) : undefined;
 		if (request.runId && !requestedRun) throw new Error("Runtime run not found.");
 		const sessionId = stringField(request.sessionId) ?? requestedRun?.sessionId;
 		if (!sessionId) throw new Error("Runtime session id could not be resolved.");
 		if (requestedRun && requestedRun.sessionId !== sessionId)
 			throw new Error("Run does not belong to requested session.");
 
-		const session = this.runtimeDb.getSession(clientId, sessionId);
-		const runs = requestedRun ? [requestedRun] : this.runtimeDb.listRunsForSession(clientId, sessionId);
+		const session = await this.runtimeDb.getSession(clientId, sessionId);
+		const runs = requestedRun ? [requestedRun] : await this.runtimeDb.listRunsForSession(clientId, sessionId);
 		const diagnosticEvents = this.diagnostics.exportEvents({
 			clientId,
 			sessionId,
@@ -127,9 +127,9 @@ export class WorkspaceDiagnosticExportService {
 			},
 			runtime: {
 				session: session ?? null,
-				messages: session ? this.runtimeDb.listMessages(clientId, sessionId) : [],
+				messages: session ? await this.runtimeDb.listMessages(clientId, sessionId) : [],
 				runs,
-				runEventsByRunId: collectRunEvents(this.runtimeDb, clientId, runs),
+				runEventsByRunId: await collectRunEvents(this.runtimeDb, clientId, runs),
 				sessionFile: null,
 			},
 			diagnostics: {
@@ -140,8 +140,8 @@ export class WorkspaceDiagnosticExportService {
 		};
 	}
 
-	exportArchive(request: DiagnosticExportRequest): DiagnosticArchiveExport {
-		const context = this.resolveContext(request);
+	async exportArchive(request: DiagnosticExportRequest): Promise<DiagnosticArchiveExport> {
+		const context = await this.resolveContext(request);
 		const exportedAt = new Date().toISOString();
 		const includeSettings = request.includeSettings !== false;
 		const entries: DiagnosticArchiveEntry[] = [];
@@ -160,8 +160,11 @@ export class WorkspaceDiagnosticExportService {
 		for (const run of context.runs) {
 			const runId = safeFilenamePart(run.runId);
 			add(
-				jsonEntry(`runtime/run-events/${runId}.summary.json`, "runtime-run-events-summary", () =>
-					summarizeRunEvents(run.runId, this.runtimeDb.iterateRunEvents(context.clientId, run.runId, 0)),
+				jsonEntry(`runtime/run-events/${runId}.summary.json`, "runtime-run-events-summary", async () =>
+					summarizeRunEvents(
+						run.runId,
+						await this.runtimeDb.iterateRunEvents(context.clientId, run.runId, 0),
+					),
 				),
 			);
 			add(
@@ -246,11 +249,11 @@ export class WorkspaceDiagnosticExportService {
 		};
 	}
 
-	private resolveContext(request: DiagnosticExportRequest): DiagnosticExportContext {
+	private async resolveContext(request: DiagnosticExportRequest): Promise<DiagnosticExportContext> {
 		const clientId = stringField(request.clientId);
 		if (!clientId) throw new Error("Client id is required.");
 		if (!request.sessionId && !request.runId) throw new Error("Query parameter `sessionId` or `runId` is required.");
-		const requestedRun = request.runId ? this.runtimeDb.getRun(clientId, request.runId) : undefined;
+		const requestedRun = request.runId ? await this.runtimeDb.getRun(clientId, request.runId) : undefined;
 		if (request.runId && !requestedRun) throw new Error("Runtime run not found.");
 		const sessionId = stringField(request.sessionId) ?? requestedRun?.sessionId;
 		if (!sessionId) throw new Error("Runtime session id could not be resolved.");
@@ -259,32 +262,32 @@ export class WorkspaceDiagnosticExportService {
 		return {
 			clientId,
 			sessionId,
-			session: this.runtimeDb.getSession(clientId, sessionId),
-			runs: requestedRun ? [requestedRun] : this.runtimeDb.listRunsForSession(clientId, sessionId),
+			session: await this.runtimeDb.getSession(clientId, sessionId),
+			runs: requestedRun ? [requestedRun] : await this.runtimeDb.listRunsForSession(clientId, sessionId),
 		};
 	}
 }
 
-function collectRunEvents(
-	runtimeDb: RuntimeDbStore,
+async function collectRunEvents(
+	runtimeDb: RuntimeStore,
 	clientId: string,
 	runs: RuntimeRunRecord[],
-): Record<string, RuntimeRunEventRecord[]> {
+): Promise<Record<string, RuntimeRunEventRecord[]>> {
 	const eventsByRunId: Record<string, RuntimeRunEventRecord[]> = {};
 	for (const run of runs) {
-		eventsByRunId[run.runId] = runtimeDb.listRunEvents(clientId, run.runId, 0);
+		eventsByRunId[run.runId] = await runtimeDb.listRunEvents(clientId, run.runId, 0);
 	}
 	return eventsByRunId;
 }
 
-function buildDiagnosticOverview(input: {
+async function buildDiagnosticOverview(input: {
 	context: DiagnosticExportContext;
 	diagnostics: WorkspaceDiagnosticLogService;
 	exportedAt: string;
 	maxDiagnosticEvents?: number;
-	runtimeDb: RuntimeDbStore;
-}): JsonObject {
-	const messages = collectMessages(input.runtimeDb, input.context);
+	runtimeDb: RuntimeStore;
+}): Promise<JsonObject> {
+	const messages = await collectMessages(input.runtimeDb, input.context);
 	const allDiagnostics = Array.from(
 		input.diagnostics.iterateExportEvents(diagnosticContextQuery(input.context, input.maxDiagnosticEvents)),
 	);
@@ -294,7 +297,7 @@ function buildDiagnosticOverview(input: {
 	);
 	const sessionDiagnostics = allDiagnostics.filter((event) => event.sessionId === input.context.sessionId);
 	const globalDiagnostics = allDiagnostics.filter((event) => !event.sessionId);
-	const runs = buildRunOverviews(input.runtimeDb, input.context, relevantDiagnostics);
+	const runs = await buildRunOverviews(input.runtimeDb, input.context, relevantDiagnostics);
 	const findings = buildDiagnosticFindings({
 		context: input.context,
 		globalDiagnostics,
@@ -332,22 +335,23 @@ function buildDiagnosticOverview(input: {
 	};
 }
 
-function collectMessages(runtimeDb: RuntimeDbStore, context: DiagnosticExportContext): RuntimeMessageRecord[] {
+async function collectMessages(runtimeDb: RuntimeStore, context: DiagnosticExportContext): Promise<RuntimeMessageRecord[]> {
 	if (!context.session) return [];
-	return Array.from(runtimeDb.iterateMessages(context.clientId, context.sessionId));
+	return await arrayFromMaybeAsync(await runtimeDb.iterateMessages(context.clientId, context.sessionId));
 }
 
-function buildRunOverviews(
-	runtimeDb: RuntimeDbStore,
+async function buildRunOverviews(
+	runtimeDb: RuntimeStore,
 	context: DiagnosticExportContext,
 	diagnosticEvents: DiagnosticLogEventRecord[],
-): RuntimeRunOverview[] {
-	return context.runs.map((run) => {
-		const events = Array.from(runtimeDb.iterateRunEvents(context.clientId, run.runId, 0));
+): Promise<RuntimeRunOverview[]> {
+	const overviews: RuntimeRunOverview[] = [];
+	for (const run of context.runs) {
+		const events = await arrayFromMaybeAsync(await runtimeDb.iterateRunEvents(context.clientId, run.runId, 0));
 		const diagnosticsForRun = diagnosticEvents.filter((event) => diagnosticEventRunId(event) === run.runId);
 		const firstEventAt = events[0]?.createdAt ?? null;
 		const lastEventAt = events.at(-1)?.createdAt ?? null;
-		return {
+		overviews.push({
 			runId: run.runId,
 			sessionId: run.sessionId,
 			status: run.status,
@@ -363,8 +367,9 @@ function buildRunOverviews(
 			firstEventAt,
 			lastEventAt,
 			diagnosticEventTypes: countDiagnosticEventTypes(diagnosticsForRun),
-		};
-	});
+		});
+	}
+	return overviews;
 }
 
 function buildDiagnosticFindings(input: {
@@ -559,12 +564,12 @@ function buildDiagnosticFindings(input: {
 	return findings;
 }
 
-function buildDiagnosticTimeline(input: {
+async function buildDiagnosticTimeline(input: {
 	context: DiagnosticExportContext;
 	diagnostics: WorkspaceDiagnosticLogService;
 	maxDiagnosticEvents?: number;
-	runtimeDb: RuntimeDbStore;
-}): TimelineRecord[] {
+	runtimeDb: RuntimeStore;
+}): Promise<TimelineRecord[]> {
 	const records: TimelineRecord[] = [];
 	let order = 0;
 	if (input.context.session) {
@@ -579,7 +584,7 @@ function buildDiagnosticTimeline(input: {
 			thinkingLevel: input.context.session.thinkingLevel,
 		});
 	}
-	for (const message of collectMessages(input.runtimeDb, input.context)) {
+	for (const message of await collectMessages(input.runtimeDb, input.context)) {
 		records.push({
 			timestamp: message.createdAt,
 			source: "runtime",
@@ -606,7 +611,7 @@ function buildDiagnosticTimeline(input: {
 			endedAt: run.endedAt ?? null,
 			error: run.error ?? null,
 		});
-		for (const event of input.runtimeDb.iterateRunEvents(input.context.clientId, run.runId, 0)) {
+		for await (const event of await input.runtimeDb.iterateRunEvents(input.context.clientId, run.runId, 0)) {
 			records.push({
 				timestamp: event.createdAt,
 				source: "runtime",
@@ -644,6 +649,14 @@ function buildDiagnosticTimeline(input: {
 		});
 	}
 	return records.sort(compareTimelineRecords);
+}
+
+async function arrayFromMaybeAsync<T>(values: MaybeAsyncIterable<T>): Promise<T[]> {
+	const result: T[] = [];
+	for await (const value of values) {
+		result.push(value);
+	}
+	return result;
 }
 
 function isRelevantDiagnosticEvent(
@@ -767,36 +780,40 @@ function stringField(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function jsonEntry(path: string, kind: string, value: () => unknown): DiagnosticArchiveEntry {
+function jsonEntry(path: string, kind: string, value: () => unknown | Promise<unknown>): DiagnosticArchiveEntry {
 	return {
 		path,
 		kind,
-		*chunks() {
-			yield `${JSON.stringify(value(), null, 2)}\n`;
+		async *chunks() {
+			yield `${JSON.stringify(await value(), null, 2)}\n`;
 		},
 	};
 }
 
-function ndjsonEntry<T>(path: string, kind: string, values: () => Iterable<T>): DiagnosticArchiveEntry {
+function ndjsonEntry<T>(
+	path: string,
+	kind: string,
+	values: () => MaybeAsyncIterable<T> | Promise<MaybeAsyncIterable<T>>,
+): DiagnosticArchiveEntry {
 	return {
 		path,
 		kind,
-		*chunks() {
-			for (const value of values()) {
+		async *chunks() {
+			for await (const value of await values()) {
 				yield `${JSON.stringify(value)}\n`;
 			}
 		},
 	};
 }
 
-function summarizeRunEvents(runId: string, events: Iterable<RuntimeRunEventRecord>): JsonObject {
+async function summarizeRunEvents(runId: string, events: MaybeAsyncIterable<RuntimeRunEventRecord>): Promise<JsonObject> {
 	let totalEvents = 0;
 	let payloadBytes = 0;
 	let largestPayloadBytes = 0;
 	let firstSeq: number | undefined;
 	let lastSeq: number | undefined;
 	const eventTypes: Record<string, number> = {};
-	for (const event of events) {
+	for await (const event of events) {
 		totalEvents += 1;
 		firstSeq ??= event.seq;
 		lastSeq = event.seq;

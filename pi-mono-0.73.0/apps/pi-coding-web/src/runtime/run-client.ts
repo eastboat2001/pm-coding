@@ -312,13 +312,38 @@ async function deliverServerSentEvent(
 	rawEvent: string,
 	onEvent: (event: RuntimeRunEventRecord) => void | Promise<void>,
 ): Promise<void> {
-	const data = rawEvent
-		.split(/\r?\n/)
-		.filter((line) => line.startsWith("data:"))
-		.map((line) => line.slice("data:".length).trimStart())
-		.join("\n");
+	let eventType = "message";
+	const dataLines: string[] = [];
+	for (const line of rawEvent.split(/\r?\n/)) {
+		if (!line || line.startsWith(":")) continue;
+		if (line.startsWith("event:")) {
+			eventType = line.slice("event:".length).trimStart() || "message";
+			continue;
+		}
+		if (line.startsWith("data:")) {
+			dataLines.push(line.slice("data:".length).trimStart());
+		}
+	}
+	const data = dataLines.join("\n");
 	if (!data) return;
+	if (eventType === "error") {
+		throw new Error(serverSentErrorMessage(data));
+	}
 	await onEvent(JSON.parse(data) as RuntimeRunEventRecord);
+}
+
+function serverSentErrorMessage(data: string): string {
+	try {
+		const payload: unknown = JSON.parse(data);
+		if (typeof payload === "object" && payload !== null && "message" in payload) {
+			const message = String((payload as { message: unknown }).message || "").trim();
+			if (message) return message;
+		}
+	} catch {
+		const message = data.trim();
+		if (message) return message;
+	}
+	return "Runtime event stream unavailable.";
 }
 
 async function requestRunApi<T>(path: string, init: RequestInit = {}): Promise<T> {

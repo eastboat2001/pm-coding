@@ -1,3 +1,5 @@
+import { InMemoryRunEventBus } from "./run-event-bus.js";
+import { RunEventSink } from "./run-event-sink.js";
 import { RunRetryController, } from "./run-retry-controller.js";
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 500;
 const DEFAULT_CLAIM_TIMEOUT_MS = 0;
@@ -19,6 +21,7 @@ export class WorkspaceRunWorkerService {
     diagnostics;
     goalSupervisor;
     queue;
+    runEventSink;
     retryController;
     workerId;
     heartbeatIntervalMs;
@@ -44,19 +47,27 @@ export class WorkspaceRunWorkerService {
             options.maxSessionHistoryPayloadBytes ?? DEFAULT_MAX_SESSION_HISTORY_PAYLOAD_BYTES;
         this.diagnostics = options.diagnostics;
         this.goalSupervisor = options.goalSupervisor;
+        this.runEventSink =
+            options.runEventSink ?? new RunEventSink({ store: this.db, bus: new InMemoryRunEventBus() });
         const onRetryEvent = options.retry?.onRetryEvent;
         this.retryController = new RunRetryController({
             ...options.retry,
             diagnostics: options.retry?.diagnostics ?? options.diagnostics,
-            onRetryEvent: (event) => {
-                this.persistRetryEvent(event);
-                onRetryEvent?.(event);
+            onRetryEvent: async (event) => {
+                try {
+                    await this.persistRetryEvent(event);
+                }
+                catch (error) {
+                    this.writeDiagnostic("worker_retry_event_persist_failed", event.run, error);
+                    throw error;
+                }
+                await onRetryEvent?.(event);
             },
         });
     }
-    markOwnedRunningRunsInterrupted() {
-        for (const run of this.db.listRunningRunsByWorker(this.workerId)) {
-            this.db.updateRunStatus(run.runId, run.clientId, "interrupted");
+    async markOwnedRunningRunsInterrupted() {
+        for (const run of await this.db.listRunningRunsByWorker(this.workerId)) {
+            await this.db.updateRunStatus(run.runId, run.clientId, "interrupted");
         }
     }
     async recoverOwnedRuns() {
@@ -64,7 +75,7 @@ export class WorkspaceRunWorkerService {
         this.writeWorkerLifecycleDiagnostic("system.worker.recovered_active_runs", "info", {
             recoveredCount,
         });
-        this.markOwnedRunningRunsInterrupted();
+        await this.markOwnedRunningRunsInterrupted();
     }
     async processOne() {
         let claimed;
@@ -87,8 +98,7 @@ export class WorkspaceRunWorkerService {
             return true;
         }
         const runIdentity = { clientId: claimed.clientId, runId: claimed.runId };
-        const messageEndKeys = new Set();
-        let run = this.db.getRun(claimed.clientId, claimed.runId);
+        let run = await this.db.getRun(claimed.clientId, claimed.runId);
         let cancelRequested = false;
         try {
             if (!run) {
@@ -99,12 +109,14 @@ export class WorkspaceRunWorkerService {
                 this.writeDiscardedClaimDiagnostic(claimed, "status_not_queued", run.status);
                 return true;
             }
-            const session = this.db.getSession(run.clientId, run.sessionId);
+            const session = await this.db.getSession(run.clientId, run.sessionId);
             if (!session)
                 throw new Error("Runtime session not found");
-            this.assertSessionHistoryWithinLimits(run);
-            const messages = this.db.listMessages(run.clientId, run.sessionId);
-            const activeRun = this.db.updateRunStatus(run.runId, run.clientId, "running", { workerId: this.workerId });
+            await this.assertSessionHistoryWithinLimits(run);
+            const messages = await this.db.listMessages(run.clientId, run.sessionId);
+            const activeRun = await this.db.updateRunStatus(run.runId, run.clientId, "running", {
+                workerId: this.workerId,
+            });
             run = activeRun;
             const abortController = new AbortController();
             this.activeAbortControllers.add(abortController);
@@ -135,12 +147,61 @@ export class WorkspaceRunWorkerService {
                         const attemptEvents = [];
                         let persistedEventCount = 0;
                         let unsubscribe;
+                        let flushPromise = Promise.resolve();
+                        let flushError;
+                        let flushing = false;
+                        let flushTargetCount = 0;
                         const flushAttemptEvents = () => {
-                            while (persistedEventCount < attemptEvents.length) {
-                                const event = attemptEvents[persistedEventCount];
-                                this.persistAgentEvent(activeRun, event, messageEndKeys);
-                                persistedEventCount += 1;
+                            if (flushing)
+                                return flushPromise;
+                            flushing = true;
+                            const drain = () => {
+                                while (persistedEventCount < flushTargetCount) {
+                                    const event = attemptEvents[persistedEventCount];
+                                    const persisted = this.persistAgentEvent(activeRun, event);
+                                    if (isPromiseLike(persisted)) {
+                                        return persisted.then(() => {
+                                            persistedEventCount += 1;
+                                            return drain();
+                                        });
+                                    }
+                                    persistedEventCount += 1;
+                                }
+                            };
+                            const finish = () => {
+                                flushing = false;
+                            };
+                            try {
+                                const drained = drain();
+                                if (isPromiseLike(drained)) {
+                                    flushPromise = drained.finally(finish);
+                                    return flushPromise;
+                                }
+                                finish();
                             }
+                            catch (error) {
+                                finish();
+                                throw error;
+                            }
+                        };
+                        const queueFlushAttemptEvents = () => {
+                            flushTargetCount = Math.max(flushTargetCount, attemptEvents.length);
+                            const flushed = flushAttemptEvents();
+                            if (isPromiseLike(flushed)) {
+                                flushPromise = flushed.catch((error) => {
+                                    flushError ??= error;
+                                });
+                            }
+                        };
+                        const flushAllAttemptEvents = async () => {
+                            flushTargetCount = attemptEvents.length;
+                            const flushed = flushAttemptEvents();
+                            if (isPromiseLike(flushed)) {
+                                await flushed;
+                            }
+                            await flushPromise;
+                            if (flushError)
+                                throw flushError;
                         };
                         try {
                             activeAgent = agent;
@@ -149,7 +210,7 @@ export class WorkspaceRunWorkerService {
                                 attemptEvents.push(event);
                                 if (shouldFlushAttemptEvents(event) ||
                                     (persistedEventCount > 0 && !isAssistantFailureMarkerEvent(event))) {
-                                    flushAttemptEvents();
+                                    queueFlushAttemptEvents();
                                 }
                             });
                             const tailMessage = messages.at(-1);
@@ -166,21 +227,27 @@ export class WorkspaceRunWorkerService {
                                 await agent.waitForIdle?.();
                             }
                             catch (error) {
-                                if (persistedEventCount > 0) {
-                                    flushAttemptEvents();
+                                await flushPromise;
+                                if (flushError)
+                                    throw flushError;
+                                if (persistedEventCount > 0 || attemptHasNonReplayableSideEffects(attemptEvents)) {
+                                    await flushAllAttemptEvents();
                                     throw new NonRetryableAgentAttemptError(errorMessage(error));
                                 }
                                 throw error;
                             }
+                            await flushPromise;
+                            if (flushError)
+                                throw flushError;
                             const assistantError = assistantErrorMessageFromEvents(attemptEvents);
                             if (assistantError) {
                                 if (attemptHasNonReplayableSideEffects(attemptEvents)) {
-                                    flushAttemptEvents();
+                                    await flushAllAttemptEvents();
                                     throw new NonRetryableAgentAttemptError(assistantError);
                                 }
                                 throw new Error(assistantError);
                             }
-                            flushAttemptEvents();
+                            await flushAllAttemptEvents();
                         }
                         finally {
                             if (unsubscribe)
@@ -191,18 +258,18 @@ export class WorkspaceRunWorkerService {
                         }
                     },
                 });
-                const current = this.db.getRun(activeRun.clientId, activeRun.runId);
+                const current = await this.db.getRun(activeRun.clientId, activeRun.runId);
                 if (current && isTerminalStatus(current.status)) {
                     return true;
                 }
                 if (this.stopping) {
-                    this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "interrupted");
+                    await this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "interrupted");
                 }
                 else if (cancelRequested || (await this.safeIsCancelRequested(activeRun))) {
-                    this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "cancelled");
+                    await this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "cancelled");
                 }
                 else {
-                    this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "completed");
+                    await this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "completed");
                 }
             }
             finally {
@@ -214,18 +281,18 @@ export class WorkspaceRunWorkerService {
         }
         catch (error) {
             if (run) {
-                const current = this.db.getRun(run.clientId, run.runId);
+                const current = await this.db.getRun(run.clientId, run.runId);
                 if (current && isTerminalStatus(current.status)) {
                     return true;
                 }
                 if (cancelRequested || (await this.safeIsCancelRequested(run))) {
-                    this.db.updateRunStatus(run.runId, run.clientId, "cancelled");
+                    await this.db.updateRunStatus(run.runId, run.clientId, "cancelled");
                 }
                 else if (this.stopping || isQueueClosedError(error)) {
-                    this.db.updateRunStatus(run.runId, run.clientId, "interrupted");
+                    await this.db.updateRunStatus(run.runId, run.clientId, "interrupted");
                 }
                 else {
-                    this.db.updateRunStatus(run.runId, run.clientId, "failed", { error: errorMessage(error) });
+                    await this.db.updateRunStatus(run.runId, run.clientId, "failed", { error: errorMessage(error) });
                     this.writeDiagnostic("worker_run_failed", run, error);
                 }
             }
@@ -265,12 +332,12 @@ export class WorkspaceRunWorkerService {
         this.running = false;
         this.stopHeartbeat();
         for (const run of this.activeRuns.values()) {
-            const current = this.db.getRun(run.clientId, run.runId);
+            const current = await this.db.getRun(run.clientId, run.runId);
             if (current?.status === "running" || current?.status === "cancelling") {
-                this.db.updateRunStatus(run.runId, run.clientId, "interrupted");
+                await this.db.updateRunStatus(run.runId, run.clientId, "interrupted");
             }
         }
-        this.markOwnedRunningRunsInterrupted();
+        await this.markOwnedRunningRunsInterrupted();
         for (const abortController of this.activeAbortControllers)
             abortController.abort();
         for (const agent of this.activeAgents)
@@ -290,7 +357,7 @@ export class WorkspaceRunWorkerService {
         }
     }
     async notifyGoalSupervisor(run) {
-        const current = this.db.getRun(run.clientId, run.runId);
+        const current = await this.db.getRun(run.clientId, run.runId);
         if (!current || !isTerminalStatus(current.status))
             return;
         try {
@@ -300,51 +367,21 @@ export class WorkspaceRunWorkerService {
             this.writeDiagnostic("worker_goal_supervisor_failed", current, error);
         }
     }
-    persistAgentEvent(run, event, messageEndKeys) {
-        this.db.appendRunEvent({
-            clientId: run.clientId,
-            sessionId: run.sessionId,
-            runId: run.runId,
-            type: event.type,
-            payload: event,
-        });
-        const message = event.type === "message_end" ? runtimeMessageFromEvent(run, event.message) : undefined;
-        if (message && this.shouldAppendMessage(message, messageEndKeys)) {
-            this.db.appendMessage({
-                clientId: run.clientId,
-                sessionId: run.sessionId,
-                role: message.role,
-                payload: message.payload,
-            });
-        }
+    persistAgentEvent(run, event) {
+        return this.runEventSink.persistAgentEvent(run, event);
     }
     persistRetryEvent(event) {
         if (event.eventType !== "retry_scheduled")
             return;
         const type = "agent_retry_scheduled";
-        this.db.appendRunEvent({
-            clientId: event.run.clientId,
-            sessionId: event.run.sessionId,
-            runId: event.run.runId,
+        return this.runEventSink.persistAgentEvent(event.run, {
             type,
-            payload: {
-                type,
-                attempt: event.attempt,
-                maxAttempts: event.maxAttempts,
-                reasonCode: event.reasonCode,
-                message: event.message,
-                ...(event.delayMs === undefined ? {} : { delayMs: event.delayMs }),
-            },
+            attempt: event.attempt,
+            maxAttempts: event.maxAttempts,
+            reasonCode: event.reasonCode,
+            message: event.message,
+            ...(event.delayMs === undefined ? {} : { delayMs: event.delayMs }),
         });
-    }
-    shouldAppendMessage(message, messageEndKeys) {
-        if (isUserPromptRole(message.role))
-            return false;
-        const key = messageKey(message);
-        if (messageEndKeys.has(key))
-            return false;
-        messageEndKeys.add(key);
-        return true;
     }
     async pollCancellation(run, agent, abortController, onCancel) {
         if (!(await this.queue.isCancelRequested(run)))
@@ -352,9 +389,9 @@ export class WorkspaceRunWorkerService {
         onCancel();
         abortController.abort();
         agent?.abort();
-        const current = this.db.getRun(run.clientId, run.runId);
+        const current = await this.db.getRun(run.clientId, run.runId);
         if (current?.status === "running") {
-            this.db.updateRunStatus(run.runId, run.clientId, "cancelling");
+            await this.db.updateRunStatus(run.runId, run.clientId, "cancelling");
         }
     }
     async runLoop() {
@@ -426,8 +463,8 @@ export class WorkspaceRunWorkerService {
             ...(status ? { status } : {}),
         });
     }
-    assertSessionHistoryWithinLimits(run) {
-        const stats = this.db.getSessionMessageStats(run.clientId, run.sessionId);
+    async assertSessionHistoryWithinLimits(run) {
+        const stats = await this.db.getSessionMessageStats(run.clientId, run.sessionId);
         const tooManyMessages = stats.messageCount > this.maxSessionHistoryMessages;
         const tooManyPayloadBytes = stats.totalPayloadBytes > this.maxSessionHistoryPayloadBytes;
         if (!tooManyMessages && !tooManyPayloadBytes)
@@ -605,30 +642,11 @@ function assistantErrorMessageFromMessage(message) {
     const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
     return stopReason === "error" ? "assistant stopped with error" : undefined;
 }
-function messageKey(message) {
-    return JSON.stringify([message.role, message.payload]);
-}
-function runtimeMessageFromEvent(run, message) {
-    if (!message)
-        return undefined;
-    const role = typeof message.role === "string" ? message.role : undefined;
-    if (!role)
-        return undefined;
-    const payload = isJsonObject(message.payload) ? message.payload : message;
-    return {
-        messageId: typeof message.messageId === "number" ? message.messageId : 0,
-        sessionId: run.sessionId,
-        clientId: run.clientId,
-        role,
-        payload,
-        createdAt: typeof message.createdAt === "string" ? message.createdAt : new Date().toISOString(),
-    };
-}
-function isJsonObject(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function isPromiseLike(value) {
+    return typeof value?.then === "function";
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);

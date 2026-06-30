@@ -12,6 +12,7 @@ packages/*/dist-firefox/
 # Environment
 .env
 *.secrets.env
+apps/pi-coding-web/.env.backup-*
 
 # Editor files
 .vscode/
@@ -68,3 +69,5 @@ pi-mono-0.73.0/docker/**/data/
 .worktrees/
 .npm-cache/
 apps/pi-coding-web/data/clients/
+apps/pi-coding-web/data/cleanup-backup-*/
+data/

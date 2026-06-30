@@ -78,6 +78,13 @@ export interface AppPreviewGoalStartRequest extends JsonObject {
 	source: AppPreviewGoalSource;
 }
 
+export type StartRunContinuationSource = "interrupted_recovery";
+
+export interface StartRunContinuationRequest extends JsonObject {
+	source: StartRunContinuationSource;
+	parentRunId: string;
+}
+
 export interface AppPreviewGoalRecord extends JsonObject {
 	goalId: string;
 	clientId: string;
@@ -115,6 +122,7 @@ export interface StartRunRequest extends JsonObject {
 	thinkingLevel?: string;
 	projectFiles?: StartRunProjectFile[];
 	appPreviewGoal?: AppPreviewGoalStartRequest;
+	continuation?: StartRunContinuationRequest;
 }
 
 export interface StartRunProjectFile extends JsonObject {
@@ -128,10 +136,17 @@ export interface StartRunResult extends JsonObject {
 	run: RuntimeRunRecord;
 }
 
+export interface RuntimeActiveRunRestore extends JsonObject {
+	run: RuntimeRunRecord;
+	checkpointEvent?: RuntimeRunEventRecord;
+	afterSeq: number;
+}
+
 export interface RuntimeSessionDetail extends JsonObject {
 	session: RuntimeSessionRecord;
 	messages: RuntimeMessageRecord[];
 	runs: RuntimeRunRecord[];
+	activeRun?: RuntimeActiveRunRestore;
 }
 
 export interface DeleteSessionResult extends JsonObject {
@@ -201,6 +216,7 @@ export interface AppendRunEventInput extends JsonObject {
 	runId: string;
 	sessionId: string;
 	clientId: string;
+	seq?: number;
 	type: string;
 	payload: JsonObject;
 	createdAt?: string;
@@ -255,11 +271,17 @@ export interface StorageConfig {
 	defaultSkillsDir: string;
 	runtimeDbFile: string;
 	redisUrl: string;
+	runtimeStore: "postgres" | "sqlite";
+	postgresUrl: string;
 	runsEnabled: boolean;
 	workerId: string;
 	workerConcurrency: number;
 	runQueueName: string;
 	runEventRetentionDays: number;
+	runEventStreamMaxLen: number;
+	runEventStreamTtlSeconds: number;
+	runEventCheckpointIntervalMs: number;
+	runEventCheckpointMinChars: number;
 	clientIdRequired: boolean;
 	previewBaseUrl: string;
 	projectInstallCommand: string;

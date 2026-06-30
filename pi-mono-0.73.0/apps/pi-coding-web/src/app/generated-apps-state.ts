@@ -1,3 +1,4 @@
+import type { DeleteSessionResult } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "../runtime/client-id.js";
 import { formatSessionUpdatedAt } from "../storage/session-timestamps.js";
 
@@ -5,6 +6,7 @@ export const GENERATED_APPS_PANEL_WIDTH_KEY = "pi-generated-apps-panel-width";
 export const GENERATED_APPS_PANEL_DEFAULT_WIDTH = 360;
 export const GENERATED_APPS_PANEL_MIN_WIDTH = 280;
 export const GENERATED_APPS_PANEL_MAX_VIEWPORT_RATIO = 0.5;
+export const SUMMARY_CACHE_TTL_MS = 15_000;
 
 export type GeneratedAppRecord = {
 	projectId: string;
@@ -27,12 +29,19 @@ type RuntimeSessionsResponse = {
 	sessions?: unknown;
 };
 
-type WorkspaceFilesResponse = {
-	projectId?: unknown;
-	sessionId?: unknown;
-	title?: unknown;
-	fileCount?: unknown;
-	files?: unknown;
+type BatchProjectSummaryResponse = {
+	summaries?: unknown;
+};
+
+type SessionProjectSummary = {
+	projectId: string;
+	sessionId: string;
+	title: string;
+	fileCount: number;
+};
+
+type LoadGeneratedAppsOptions = {
+	force?: boolean;
 };
 
 export type SessionProjectSource = {
@@ -46,25 +55,31 @@ export type SessionProjectSource = {
 	runUpdatedAt?: string;
 };
 
+export function isRuntimeSessionDeletionDeferred(result: DeleteSessionResult | undefined): boolean {
+	return Boolean(result && !result.deleted && (result.cancelledRuns ?? 0) > 0);
+}
+
 export async function loadGeneratedApps(
 	fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
 	origin = globalThis.location?.origin || "http://localhost",
+	options: LoadGeneratedAppsOptions = {},
 ): Promise<GeneratedAppRecord[]> {
 	const [projects, sessions] = await Promise.all([
 		loadPreviewProjects(fetchImpl, origin),
 		loadRuntimeSessionSources(fetchImpl, origin).catch(() => []),
 	]);
 	if (sessions.length === 0) return projects;
-	return mergeSessionProjectRecords(sessions, projects, fetchImpl, origin);
+	return mergeSessionProjectRecords(sessions, projects, fetchImpl, origin, options);
 }
 
 export async function loadSessionProjectApps(
 	sessions: SessionProjectSource[],
 	fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
 	origin = globalThis.location?.origin || "http://localhost",
+	options: LoadGeneratedAppsOptions = {},
 ): Promise<GeneratedAppRecord[]> {
 	const projects = await loadPreviewProjects(fetchImpl, origin);
-	return mergeSessionProjectRecords(sessions, projects, fetchImpl, origin);
+	return mergeSessionProjectRecords(sessions, projects, fetchImpl, origin, options);
 }
 
 async function loadPreviewProjects(fetchImpl: typeof fetch, origin: string): Promise<GeneratedAppRecord[]> {
@@ -109,29 +124,28 @@ async function mergeSessionProjectRecords(
 	previewProjects: GeneratedAppRecord[],
 	fetchImpl: typeof fetch,
 	origin: string,
+	options: LoadGeneratedAppsOptions,
 ): Promise<GeneratedAppRecord[]> {
 	const previewBySessionId = new Map(previewProjects.map((project) => [project.sessionId, project]));
-	const records = await Promise.all(
-		sessions.map(async (session) => {
-			const preview = previewBySessionId.get(session.id);
-			const files = await loadSessionProjectFileSummary(session, fetchImpl, origin).catch(() => undefined);
-			const status: GeneratedAppRecord["status"] = isActiveRunStatus(session.runStatus) ? "running" : "idle";
-			return {
-				projectId: preview?.projectId || files?.projectId || fallbackProjectId(session.id),
-				sessionId: session.id,
-				title: session.title || preview?.title || "Untitled session",
-				status,
-				mode: "static" as const,
-				previewUrl: preview?.previewUrl || "",
-				fileCount: files?.fileCount ?? preview?.fileCount ?? 0,
-				updatedAt: session.runUpdatedAt || session.lastModified || preview?.updatedAt || session.createdAt,
-				...(isActiveRunStatus(session.runStatus) && session.activeRunId
-					? { activeRunId: session.activeRunId }
-					: {}),
-				...(session.runStatus ? { runStatus: session.runStatus } : {}),
-			};
-		}),
-	);
+	const summaries = await loadBatchSessionProjectSummaries(sessions, fetchImpl, origin, options);
+	const summaryBySessionId = new Map(summaries.map((summary) => [summary.sessionId, summary]));
+	const records = sessions.map((session) => {
+		const preview = previewBySessionId.get(session.id);
+		const files = summaryBySessionId.get(session.id);
+		const status: GeneratedAppRecord["status"] = isActiveRunStatus(session.runStatus) ? "running" : "idle";
+		return {
+			projectId: preview?.projectId || files?.projectId || fallbackProjectId(session.id),
+			sessionId: session.id,
+			title: session.title || preview?.title || files?.title || "Untitled session",
+			status,
+			mode: "static" as const,
+			previewUrl: preview?.previewUrl || "",
+			fileCount: files?.fileCount ?? preview?.fileCount ?? 0,
+			updatedAt: session.runUpdatedAt || session.lastModified || preview?.updatedAt || session.createdAt,
+			...(isActiveRunStatus(session.runStatus) && session.activeRunId ? { activeRunId: session.activeRunId } : {}),
+			...(session.runStatus ? { runStatus: session.runStatus } : {}),
+		};
+	});
 	for (const project of previewProjects) {
 		if (!sessions.some((session) => session.id === project.sessionId)) {
 			records.push(project);
@@ -143,25 +157,57 @@ async function mergeSessionProjectRecords(
 	);
 }
 
-async function loadSessionProjectFileSummary(
-	session: SessionProjectSource,
+const summaryCache = new Map<string, { expiresAt: number; summaries: SessionProjectSummary[] }>();
+
+async function loadBatchSessionProjectSummaries(
+	sessions: SessionProjectSource[],
 	fetchImpl: typeof fetch,
 	origin: string,
-): Promise<{ projectId: string; fileCount: number }> {
-	const endpoint = new URL("/api/pi-projects/workspace/files", origin).toString();
+	options: LoadGeneratedAppsOptions,
+): Promise<SessionProjectSummary[]> {
+	if (sessions.length === 0) return [];
+	const requestSessions = sessions.map((session) => ({ sessionId: session.id, title: session.title || "" }));
+	const clientHeaders = piClientHeaders();
+	const cacheSessions = sessions.map((session) => ({
+		sessionId: session.id,
+		title: session.title || "",
+		lastModified: session.lastModified || "",
+		runUpdatedAt: session.runUpdatedAt || "",
+		runStatus: session.runStatus || "",
+		activeRunId: session.activeRunId || "",
+	}));
+	const cacheKey = JSON.stringify({ origin, clientId: clientHeaders["X-PI-Client-ID"] || "", sessions: cacheSessions });
+	const now = Date.now();
+	const cached = summaryCache.get(cacheKey);
+	if (!options.force && cached && cached.expiresAt > now) return cached.summaries;
+
+	const endpoint = new URL("/api/pi-projects/batch-summary", origin).toString();
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
-		headers: { Accept: "application/json", "Content-Type": "application/json", ...piClientHeaders() },
-		body: JSON.stringify({ sessionId: session.id, title: session.title || "" }),
+		headers: { Accept: "application/json", "Content-Type": "application/json", ...clientHeaders },
+		body: JSON.stringify({ sessions: requestSessions }),
 	});
-	const result = (await response.json().catch(() => ({}))) as WorkspaceFilesResponse & { error?: unknown };
+	const result = (await response.json().catch(() => ({}))) as BatchProjectSummaryResponse & { error?: unknown };
 	if (!response.ok)
-		throw new Error(result.error ? String(result.error) : `Project files API failed with HTTP ${response.status}`);
-	const files = Array.isArray(result.files) ? result.files : [];
-	return {
-		projectId: stringValue(result.projectId) || fallbackProjectId(session.id),
-		fileCount: numberValue(result.fileCount) ?? files.length,
-	};
+		throw new Error(result.error ? String(result.error) : `Project batch summary API failed with HTTP ${response.status}`);
+	const summaries = Array.isArray(result.summaries)
+		? result.summaries.flatMap((summary) => {
+				const record = toSessionProjectSummary(summary);
+				return record ? [record] : [];
+			})
+		: [];
+	summaryCache.set(cacheKey, { expiresAt: now + SUMMARY_CACHE_TTL_MS, summaries });
+	return summaries;
+}
+
+function toSessionProjectSummary(value: unknown): SessionProjectSummary | undefined {
+	if (!isRecord(value)) return undefined;
+	const projectId = stringValue(value.projectId);
+	const sessionId = stringValue(value.sessionId);
+	const title = stringValue(value.title);
+	const fileCount = numberValue(value.fileCount);
+	if (!projectId || !sessionId || fileCount === undefined) return undefined;
+	return { projectId, sessionId, title, fileCount };
 }
 
 export async function renameGeneratedApp(
@@ -207,7 +253,21 @@ export function formatGeneratedAppUpdatedAt(value: string, now = new Date()): st
 }
 
 export function projectSessionStatusLabel(status: string | undefined): string {
-	return isActiveRunStatus(status) ? "正在执行" : "空闲";
+	switch (status) {
+		case "queued":
+		case "running":
+			return "正在执行";
+		case "cancelling":
+			return "正在取消";
+		case "cancelled":
+			return "已取消";
+		case "interrupted":
+			return "已中断";
+		case "failed":
+			return "失败";
+		default:
+			return "空闲";
+	}
 }
 
 export async function cancelGeneratedAppRunWithRollback(
@@ -283,7 +343,6 @@ function toGeneratedAppRecord(value: unknown): GeneratedAppRecord | undefined {
 		previewUrl,
 		fileCount,
 		updatedAt,
-		...(status ? { runStatus: status } : {}),
 	};
 }
 

@@ -63,7 +63,7 @@ import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import { piClientHeaders } from "../runtime/client-id.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
 import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
-import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
+import { resolveActiveRunRestore, resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import {
 	buildAppPreviewGoalStartRequest,
 	cancelRun as cancelRuntimeRun,
@@ -134,11 +134,13 @@ import type { GeneratedAppsPanel } from "./GeneratedAppsPanel.js";
 import {
 	clampGeneratedAppsPanelWidth,
 	GENERATED_APPS_PANEL_DEFAULT_WIDTH,
+	isRuntimeSessionDeletionDeferred,
 	loadSessionProjectApps,
 	readGeneratedAppsPanelWidth,
 	writeGeneratedAppsPanelWidth,
 } from "./generated-apps-state.js";
 import { ModelController, SELECTED_MODEL_KEY } from "./model-controller.js";
+import { createCoalescedRenderScheduler } from "./render-scheduler.js";
 import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessionTitle } from "./session-controller.js";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running", "cancelling"]);
@@ -222,6 +224,7 @@ type SkillDiagnostic = SkillListDetails["diagnostics"][number];
 type SessionMetadataWithRunState = SessionMetadata & {
 	runStatus?: RunStatus;
 	activeRunId?: string;
+	lastRunId?: string;
 	runUpdatedAt?: string;
 };
 
@@ -351,6 +354,7 @@ let remoteRunConnection: RunEventConnection | undefined;
 let remoteRunStatusPollId: ReturnType<typeof setTimeout> | undefined;
 let remoteRunProviderStallStatusTimerId: ReturnType<typeof setTimeout> | undefined;
 let currentActiveRunId: string | undefined;
+let currentLastRunId: string | undefined;
 let currentRunStatus: RunStatus | undefined;
 let currentRunUpdatedAt: string | undefined;
 const remoteRunTransientStatusTexts: RunTransientStatusTexts = {};
@@ -361,6 +365,9 @@ let currentProjectFilesPanelWidth = safeReadCurrentProjectFilesPanelWidth();
 let generatedAppsPanelWidth = safeReadGeneratedAppsPanelWidth();
 let currentProjectFilePreviewFilename = "";
 let currentProjectFilePreviewDrawerWidth = safeReadCurrentProjectFilePreviewDrawerWidth();
+const scheduleRemoteRunRender = createCoalescedRenderScheduler(() => {
+	renderApp();
+});
 
 const getDisplayTitle = () => (isDefaultNewSessionTitle(currentTitle) ? i18n("New Session") : currentTitle);
 
@@ -382,6 +389,7 @@ const trackRemoteRun = (run?: Pick<RuntimeRunRecord, "runId" | "status" | "updat
 	currentActiveRunId = run?.runId;
 	currentRunStatus = run?.status;
 	currentRunUpdatedAt = run?.updatedAt;
+	if (run?.runId) currentLastRunId = run.runId;
 };
 
 const closeRemoteRunConnection = (): void => {
@@ -468,6 +476,7 @@ const resetRemoteRunState = (): void => {
 	reportedQueuedRunTimeouts.clear();
 	clearRemoteRunTransientStatusTexts();
 	trackRemoteRun(undefined);
+	currentLastRunId = undefined;
 };
 
 const requestChatPanelUpdate = (): void => {
@@ -551,10 +560,9 @@ async function attachAppPreviewGoalContinuationRun(runId: string): Promise<boole
 	if (runId === currentActiveRunId && remoteAgentController?.activeRunId === runId) return true;
 
 	const detail = await runClient.getSession(currentSessionId);
-	const run = detail.runs.find((candidate) => candidate.runId === runId);
-	if (!run || !isActiveRunStatus(run.status)) return false;
+	const activeRun = resolveActiveRunRestore(detail, runId);
+	if (!activeRun) return false;
 
-	const runEvents = await runClient.listRunEvents(run.runId, 0);
 	const runtimeMessages = trimMessagesForActiveRunReplay(detail.messages, {
 		hideRecoverableProviderStallErrors: true,
 	}).map(runtimeMessageToAgentMessage);
@@ -569,10 +577,10 @@ async function attachAppPreviewGoalContinuationRun(runId: string): Promise<boole
 	});
 
 	const controller = new RemoteAgentController(agent);
-	controller.startRemoteRun(run.runId);
-	controller.hydrateRunEvents(runEvents);
+	controller.startRemoteRun(activeRun.run.runId);
+	controller.hydrateCheckpoint(activeRun.checkpointEvent, activeRun.afterSeq);
 	remoteAgentController = controller;
-	connectToRemoteRun(run, controller);
+	connectToRemoteRun(activeRun.run, controller);
 	renderApp();
 	requestChatPanelUpdate();
 	await saveSession();
@@ -619,16 +627,12 @@ const markRemoteRunSettled = (runId: string, status: RunStatus, updatedAt?: stri
 	clearProviderStallStatusTimer();
 	remoteAgentController = undefined;
 	currentActiveRunId = undefined;
+	currentLastRunId = runId;
 	currentRunStatus = status;
 	currentRunUpdatedAt = updatedAt ?? currentRunUpdatedAt;
 	clearRemoteRunTransientStatusTexts();
 	refreshAppPreviewGoalAfterTerminalRunInBackground(runId);
 };
-
-const selectActiveRun = (runs: RuntimeRunRecord[]): RuntimeRunRecord | undefined =>
-	runs
-		.filter((run) => isActiveRunStatus(run.status))
-		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
 
 const runtimeMessageToAgentMessage = (message: RuntimeMessageRecord): AgentMessage => {
 	const payload = isRecord(message.payload) ? message.payload : {};
@@ -660,6 +664,7 @@ const buildSessionMetadata = (
 	preview: generateTitle(state.messages),
 	...(currentRunStatus ? { runStatus: currentRunStatus } : {}),
 	...(currentActiveRunId ? { activeRunId: currentActiveRunId } : {}),
+	...(currentLastRunId ? { lastRunId: currentLastRunId } : {}),
 	...(currentRunUpdatedAt ? { runUpdatedAt: currentRunUpdatedAt } : {}),
 });
 
@@ -847,9 +852,9 @@ const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
 	}
 };
 
-const loadGeneratedAppsForSessions = async () => {
+const loadGeneratedAppsForSessions = async (options: { force?: boolean } = {}) => {
 	const browserSessions = await getBrowserSessions();
-	return loadSessionProjectApps(browserSessions);
+	return loadSessionProjectApps(browserSessions, undefined, undefined, options);
 };
 
 const renameSessionProject = async (sessionId: string, title: string) => {
@@ -876,7 +881,7 @@ const deleteSessionEverywhere = async (sessionId: string) => {
 	} catch (error) {
 		if (!isRuntimeSessionMissingError(error)) throw error;
 	}
-	if (runtimeDeleteResult && !runtimeDeleteResult.deleted) {
+	if (isRuntimeSessionDeletionDeferred(runtimeDeleteResult)) {
 		refreshGeneratedAppsPanel();
 		if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 		return;
@@ -923,9 +928,13 @@ const handleAgentEvent = async (event: AgentEvent) => {
 			if (currentSessionId) {
 				await saveSession();
 			}
-			renderApp();
+			if (remoteAgentController?.activeRunId) {
+				scheduleRemoteRunRender();
+			} else {
+				renderApp();
+			}
 			if (event.type === "agent_end") {
-				if (activeSidebarPanel === "apps") refreshGeneratedAppsPanel();
+				if (activeSidebarPanel === "apps") refreshGeneratedAppsPanel({ force: true });
 				if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 			}
 			break;
@@ -1030,10 +1039,10 @@ function refreshCurrentProjectFilesPanel(): void {
 	});
 }
 
-function refreshGeneratedAppsPanel(): void {
+function refreshGeneratedAppsPanel(options: { force?: boolean } = {}): void {
 	requestAnimationFrame(() => {
 		const panel = document.querySelector("pi-generated-apps-panel") as GeneratedAppsPanel | null;
-		void panel?.refresh();
+		void panel?.refresh(options);
 	});
 }
 
@@ -1190,6 +1199,7 @@ const resumeInterruptedSessionIfNeeded = () => {
 		activeRunId: currentActiveRunId,
 		isStreaming: agent.state.isStreaming,
 		messages: agent.state.messages,
+		parentRunId: currentLastRunId,
 		resumedSessions: resumedInterruptedSessions,
 		runStatus: currentRunStatus,
 		sessionId: currentSessionId,
@@ -1300,7 +1310,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
-		refreshGeneratedAppsPanel();
+		refreshGeneratedAppsPanel({ force: true });
 		if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 		return true;
 	}
@@ -1373,7 +1383,7 @@ const cancelCurrentRemoteRun = async (runId: string): Promise<void> => {
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
-		refreshGeneratedAppsPanel();
+		refreshGeneratedAppsPanel({ force: true });
 
 		void syncCurrentRunStatusFromServer(runId, 60, 1000).catch((error) => {
 			console.error("Failed to settle remote run cancellation:", error);
@@ -1406,6 +1416,7 @@ const applyConnectedRunEvent = async (event: RuntimeRunEventRecord): Promise<voi
 		setRemoteRunTransientStatusText("providerStalled");
 	}
 	if (shouldScheduleProviderStallStatusAfterRunEvent(payloadType)) scheduleProviderStallStatus(event.runId);
+	if (payloadType !== "agent_end") scheduleRemoteRunRender();
 	currentRunUpdatedAt = event.createdAt;
 
 	if (payloadType === "agent_end") {
@@ -1416,9 +1427,9 @@ const applyConnectedRunEvent = async (event: RuntimeRunEventRecord): Promise<voi
 			}
 			markRemoteRunSettled(event.runId, "completed", event.createdAt);
 			await saveSession();
-			renderApp();
+			scheduleRemoteRunRender();
 			requestChatPanelUpdate();
-			refreshGeneratedAppsPanel();
+			refreshGeneratedAppsPanel({ force: true });
 			if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 		}
 	}
@@ -1540,7 +1551,7 @@ const startRemotePrompt = async (
 	await agent.waitForIdle();
 };
 
-const startRemoteContinuationRun = async (): Promise<void> => {
+const startRemoteContinuationRun = async (parentRunId: string): Promise<void> => {
 	await ensureSessionIdentity();
 	const projectFiles = collectProjectFilesFromMessages(agent.state.messages);
 	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
@@ -1551,6 +1562,10 @@ const startRemoteContinuationRun = async (): Promise<void> => {
 			title: sessionTitle(currentTitle, agent.state.messages),
 			model: agent.state.model as unknown as Record<string, unknown>,
 			thinkingLevel: agent.state.thinkingLevel,
+			continuation: {
+				source: "interrupted_recovery",
+				parentRunId,
+			},
 			...(projectFiles.length > 0 ? { projectFiles } : {}),
 			...(appPreviewGoal ? { appPreviewGoal } : {}),
 		});
@@ -1666,8 +1681,7 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 
 	try {
 		const runtimeDetail = await runClient.getSession(sessionId);
-		const activeRun = selectActiveRun(runtimeDetail.runs);
-		const activeRunEvents = activeRun ? await runClient.listRunEvents(activeRun.runId, 0) : [];
+		const activeRun = resolveActiveRunRestore(runtimeDetail);
 		const runtimeMessages = trimMessagesForActiveRunReplay(runtimeDetail.messages, {
 			hideRecoverableProviderStallErrors: Boolean(activeRun),
 		}).map(runtimeMessageToAgentMessage);
@@ -1675,13 +1689,6 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		await setCurrentSessionId(sessionId);
 		currentSessionCreatedAt = runtimeDetail.session.createdAt;
 		currentTitle = isDefaultNewSessionTitle(runtimeDetail.session.title) ? "" : runtimeDetail.session.title || "";
-		if (activeRun) {
-			trackRemoteRun(activeRun);
-		} else {
-			currentActiveRunId = undefined;
-			currentRunStatus = runtimeDetail.session.lastRunStatus;
-			currentRunUpdatedAt = runtimeDetail.session.updatedAt;
-		}
 
 		const sessionModel = await modelController.resolveCustomModel(
 			runtimeDetail.session.model as unknown as Model<any>,
@@ -1700,11 +1707,17 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		});
 
 		if (activeRun) {
+			trackRemoteRun(activeRun.run);
 			const controller = new RemoteAgentController(agent);
-			controller.startRemoteRun(activeRun.runId);
-			controller.hydrateRunEvents(activeRunEvents);
+			controller.startRemoteRun(activeRun.run.runId);
+			controller.hydrateCheckpoint(activeRun.checkpointEvent, activeRun.afterSeq);
 			remoteAgentController = controller;
-			connectToRemoteRun(activeRun, controller);
+			connectToRemoteRun(activeRun.run, controller);
+		} else {
+			currentActiveRunId = undefined;
+			currentLastRunId = runtimeDetail.session.lastRunId;
+			currentRunStatus = runtimeDetail.session.lastRunStatus;
+			currentRunUpdatedAt = runtimeDetail.session.updatedAt;
 		}
 
 		await saveSession();
@@ -1732,9 +1745,6 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 	currentSessionCreatedAt = sessionData.createdAt;
 	currentTitle = isDefaultNewSessionTitle(sessionData.title) ? "" : sessionData.title || "";
 	const sessionMetadata = (await storage.sessions.getMetadata(sessionId)) as SessionMetadataWithRunState | null;
-	currentActiveRunId = sessionMetadata?.activeRunId;
-	currentRunStatus = sessionMetadata?.runStatus;
-	currentRunUpdatedAt = sessionMetadata?.runUpdatedAt;
 	const sessionModel = await modelController.resolveCustomModel(sessionData.model);
 	if (sessionModel) {
 		await modelController.persistSelectedModel(sessionModel);
@@ -1746,6 +1756,10 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		messages: sessionData.messages,
 		tools: [],
 	});
+	currentActiveRunId = sessionMetadata?.activeRunId;
+	currentLastRunId = sessionMetadata?.lastRunId ?? sessionMetadata?.activeRunId;
+	currentRunStatus = sessionMetadata?.runStatus;
+	currentRunUpdatedAt = sessionMetadata?.runUpdatedAt;
 
 	await refreshAppPreviewGoal();
 	renderApp();

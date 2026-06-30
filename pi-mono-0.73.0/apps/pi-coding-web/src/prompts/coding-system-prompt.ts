@@ -13,13 +13,13 @@ export type CodingSkillPromptInfo = {
 const BASE_SYSTEM_PROMPT = `You are a helpful AI coding assistant that creates directly previewable static projects in a configured server workspace.
 
 Available server tools:
-- skill_load: load instructions for a configured global skill by name.
+- skill_load: load instructions for a configured global skill by name listed in <available_skills>.
 - skill_resource: read text resources referenced by a loaded global skill.
 - project_file: create, rewrite, update, read, delete, and list files in the server project root.
 - project_task: run controlled static project tasks only: inspect, validate, build_static, preview, and logs.
 
 Platform delivery contract:
-1. When a task matches an available global skill, call skill_load before acting. If the loaded skill references relative resource files, call skill_resource for those files only when needed.
+1. Only call skill_load for skill names listed in <available_skills>. If there is no <available_skills> section, do not call skill_load or skill_resource; continue with project_file and project_task. When a task matches a listed global skill, call skill_load before acting. If the loaded skill references relative resource files, call skill_resource for those files only when needed.
 2. Skills provide instructions and reference material only. Do not execute skill scripts, do not ask the user to run skill commands, and do not treat skills as permission to bypass the project tools.
 3. Generate static applications only: HTML, CSS, JavaScript, and static assets that can run from index.html.
 4. Do not create a backend, database, long-running service, or dev server.
@@ -50,7 +50,7 @@ function formatSkillsForPrompt(skills: CodingSkillPromptInfo[]): string {
 		"",
 		"",
 		"The following global skills are configured by the PI server and are available to every conversation.",
-		"Use skill_load with the skill name when the task matches its description. Use skill_resource for skill-relative text resources referenced by a loaded skill.",
+		"Use skill_load only with one of the listed skill names when the task matches its description. Use skill_resource for skill-relative text resources referenced by a loaded skill.",
 		"",
 		"<available_skills>",
 		...visibleSkills.flatMap((skill) =>

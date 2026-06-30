@@ -10,7 +10,7 @@ export interface RunRetryControllerOptions {
 	policy?: RetryPolicy;
 	diagnostics?: RunRetryControllerDiagnostics;
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-	onRetryEvent?: (event: RunRetryControllerEvent) => void;
+	onRetryEvent?: (event: RunRetryControllerEvent) => Promise<void> | void;
 }
 
 export interface RunRetryExecutionInput {
@@ -51,7 +51,7 @@ export class RunRetryController {
 				const classification = this.policy.classify(error);
 				attempt += 1;
 				if (!classification.retryable || !this.policy.shouldRetry(attempt + 1)) {
-					this.writeRetryEvent(
+					await this.writeRetryEvent(
 						"retry_exhausted",
 						input.run,
 						attempt,
@@ -61,7 +61,7 @@ export class RunRetryController {
 					throw error;
 				}
 				const delayMs = this.policy.delayMs(attempt);
-				this.writeRetryEvent(
+				await this.writeRetryEvent(
 					"retry_scheduled",
 					input.run,
 					attempt,
@@ -74,15 +74,15 @@ export class RunRetryController {
 		}
 	}
 
-	private writeRetryEvent(
+	private async writeRetryEvent(
 		eventType: "retry_scheduled" | "retry_exhausted",
 		run: RuntimeRunRecord,
 		attempt: number,
 		reasonCode: RetryClassification["reasonCode"],
 		message: string,
 		delayMs?: number,
-	): void {
-		this.options.onRetryEvent?.({
+	): Promise<void> {
+		await this.options.onRetryEvent?.({
 			eventType,
 			run,
 			attempt,

@@ -25,7 +25,7 @@ describe("WorkspaceRunWorkerService", () => {
 		rmSync(dir, { force: true, recursive: true });
 	});
 
-	it("marks owned running runs interrupted on startup recovery", () => {
+	it("marks owned running runs interrupted on startup recovery", async () => {
 		const run = createRunFixture(db);
 		db.updateRunStatus(run.runId, run.clientId, "running", { workerId: "w1" });
 		db.updateRunStatus("other-run", "client-a", "running", { workerId: "w1" });
@@ -46,7 +46,7 @@ describe("WorkspaceRunWorkerService", () => {
 			createAgent: () => new ScriptedAgent(),
 		});
 
-		worker.markOwnedRunningRunsInterrupted();
+		await worker.markOwnedRunningRunsInterrupted();
 
 		expect(db.getRun(run.clientId, run.runId)?.status).toBe("interrupted");
 		expect(db.getRun("client-a", "other-run")?.status).toBe("interrupted");
@@ -142,6 +142,25 @@ describe("WorkspaceRunWorkerService", () => {
 			"user",
 			"assistant",
 		]);
+	});
+
+	it("persists worker agent events through the injected run event sink", async () => {
+		const run = createRunFixture(db);
+		const runEventSink = new RecordingRunEventSink();
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			runEventSink,
+			createAgent: () => new ScriptedAgent(),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(runEventSink.events.map((event) => event.event.type)).toContain("agent_end");
+		expect(db.listRunEvents(run.clientId, run.runId, 0)).toEqual([]);
 	});
 
 	it("processes a queued run when diagnostic logging is locked", async () => {
@@ -369,6 +388,87 @@ describe("WorkspaceRunWorkerService", () => {
 		);
 	});
 
+	it("persists retry scheduled events through the injected run event sink", async () => {
+		const run = createRunFixture(db);
+		const agents = [new PreSideEffectAssistantErrorAgent(), new ScriptedAgent()];
+		const runEventSink = new RecordingRunEventSink();
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			runEventSink,
+			retry: { sleep: async () => {} },
+			createAgent: () => {
+				const agent = agents.shift();
+				if (!agent) throw new Error("unexpected retry attempt");
+				return agent;
+			},
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(runEventSink.events).toContainEqual(
+			expect.objectContaining({
+				run: expect.objectContaining({ runId: run.runId }),
+				event: expect.objectContaining({
+					type: "agent_retry_scheduled",
+					attempt: 1,
+					maxAttempts: 5,
+					reasonCode: "transient_provider_error",
+				}),
+			}),
+		);
+		expect(db.listRunEvents(run.clientId, run.runId, 0)).toEqual([]);
+	});
+
+	it("fails the run when retry scheduled event persistence fails", async () => {
+		const run = createRunFixture(db);
+		const agents = [new PreSideEffectAssistantErrorAgent(), new ScriptedAgent()];
+		const diagnostics = new RecordingDiagnostics();
+		const runEventSink = new RejectingRetryScheduledRunEventSink();
+		let factoryCalls = 0;
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			runEventSink,
+			retry: { sleep: async () => {} },
+			createAgent: () => {
+				factoryCalls += 1;
+				const agent = agents.shift();
+				if (!agent) throw new Error("unexpected retry attempt");
+				return agent;
+			},
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(factoryCalls).toBe(1);
+		expect(db.getRun(run.clientId, run.runId)).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				error: "retry scheduled persist failed",
+			}),
+		);
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				eventType: "worker_run_failed",
+				level: "error",
+				category: "agent",
+				data: expect.objectContaining({
+					runId: run.runId,
+					message: "retry scheduled persist failed",
+				}),
+			}),
+		);
+		expect(diagnostics.events.map((event) => event.eventType)).toContain("worker_retry_event_persist_failed");
+	});
+
 	it("retries transient assistant errors after replayable user prompt echoes", async () => {
 		const run = createRunFixture(db);
 		const agents = [new PromptEchoThenAssistantErrorAgent(), new PromptEchoThenAssistantSuccessAgent()];
@@ -409,33 +509,12 @@ describe("WorkspaceRunWorkerService", () => {
 		expect(diagnostics.events.map((event) => event.eventType)).toContain("agent.retry_scheduled");
 	});
 
-	it("persists streamed events before the agent attempt completes", async () => {
+	it.each([
+		["message_start/message_end", true],
+		["message_end only", false],
+	])("retries transient prompt errors after replayable user prompt echo events: %s", async (_label, emitStart) => {
 		const run = createRunFixture(db);
-		const agent = new StreamingPauseAgent();
-		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
-
-		const worker = new WorkspaceRunWorkerService({
-			db,
-			queue,
-			workerId: "w1",
-			createAgent: () => agent,
-		});
-
-		const processing = worker.processOne();
-		await agent.waitForStreamStart();
-
-		expect(db.listRunEvents(run.clientId, run.runId, 0).map((event) => event.type)).toEqual([
-			"agent_start",
-			"message_start",
-		]);
-
-		agent.finish();
-		await expect(processing).resolves.toBe(true);
-		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
-	});
-
-	it("does not retry transient failures after visible output has streamed", async () => {
-		const run = createRunFixture(db);
+		const agents = [new PromptEchoThenThrowAgent(emitStart), new ScriptedAgent()];
 		let factoryCalls = 0;
 		const diagnostics = new RecordingDiagnostics();
 		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
@@ -448,6 +527,73 @@ describe("WorkspaceRunWorkerService", () => {
 			retry: { sleep: async () => {} },
 			createAgent: () => {
 				factoryCalls += 1;
+				const agent = agents.shift();
+				if (!agent) throw new Error("unexpected retry attempt");
+				return agent;
+			},
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		const events = db.listRunEvents(run.clientId, run.runId, 0);
+		const persistedUserEchoEvents = events.filter(
+			(event) =>
+				(event.type === "message_start" || event.type === "message_end") &&
+				eventMessageRole(event.payload) === "user",
+		);
+		expect(factoryCalls).toBe(2);
+		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
+		expect(persistedUserEchoEvents).toHaveLength(0);
+		expect(db.listMessages(run.clientId, run.sessionId).map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+		]);
+		expect(diagnostics.events.map((event) => event.eventType)).toContain("agent.retry_scheduled");
+		expect(diagnostics.events.map((event) => event.eventType)).not.toContain("worker_run_failed");
+	});
+
+	it("persists streamed events before the agent attempt completes", async () => {
+		const run = createRunFixture(db);
+		const agent = new StreamingPauseAgent();
+		const runEventSink = new RecordingRunEventSink();
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			runEventSink,
+			createAgent: () => agent,
+		});
+
+		const processing = worker.processOne();
+		await agent.waitForStreamStart();
+
+		await vi.waitFor(() => {
+			expect(runEventSink.events.map((event) => event.event.type)).toEqual(["agent_start", "message_start"]);
+		});
+
+		agent.finish();
+		await expect(processing).resolves.toBe(true);
+		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
+	});
+
+	it("does not retry transient failures after visible output has streamed", async () => {
+		const run = createRunFixture(db);
+		let factoryCalls = 0;
+		const diagnostics = new RecordingDiagnostics();
+		const runEventSink = new RecordingRunEventSink();
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			runEventSink,
+			retry: { sleep: async () => {} },
+			createAgent: () => {
+				factoryCalls += 1;
 				return new PartialThenThrowAgent();
 			},
 		});
@@ -456,10 +602,7 @@ describe("WorkspaceRunWorkerService", () => {
 
 		expect(factoryCalls).toBe(1);
 		expect(db.getRun(run.clientId, run.runId)?.status).toBe("failed");
-		expect(db.listRunEvents(run.clientId, run.runId, 0).map((event) => event.type)).toEqual([
-			"agent_start",
-			"message_start",
-		]);
+		expect(runEventSink.events.map((event) => event.event.type)).toEqual(["agent_start", "message_start"]);
 		expect(diagnostics.events.map((event) => event.eventType)).not.toContain("agent.retry_scheduled");
 	});
 
@@ -488,10 +631,7 @@ describe("WorkspaceRunWorkerService", () => {
 		const events = db.listRunEvents(run.clientId, run.runId, 0);
 		expect(events.map((event) => event.type)).toEqual(["tool_execution_started", "message_end", "agent_end"]);
 		expect(JSON.stringify(events)).toContain("503 service unavailable");
-		expect(db.listMessages(run.clientId, run.sessionId).map((message) => message.role)).toEqual([
-			"user",
-			"assistant",
-		]);
+		expect(db.listMessages(run.clientId, run.sessionId).map((message) => message.role)).toEqual(["user"]);
 		expect(diagnostics.events.map((event) => event.eventType)).not.toContain("agent.retry_scheduled");
 	});
 
@@ -828,6 +968,62 @@ describe("WorkspaceRunWorkerService", () => {
 		expect(agent.promptCalls).toBe(0);
 		expect(agent.continueCalls).toBe(1);
 		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
+	});
+
+	it.each([
+		["message_start/message_end", true],
+		["message_end only", false],
+	])("retries transient continuation errors after replayable user echo events: %s", async (_label, emitStart) => {
+		const run = createRunFixture(db);
+		const failingAgent = new ContinueEchoThenThrowAgent(emitStart);
+		const succeedingAgent = new ScriptedAgent();
+		const agents = [failingAgent, succeedingAgent];
+		let factoryCalls = 0;
+		const diagnostics = new RecordingDiagnostics();
+		db.appendMessage({
+			clientId: run.clientId,
+			sessionId: run.sessionId,
+			role: "toolResult",
+			payload: { content: "prior tool result", toolCallId: "tc1" },
+		});
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			retry: { sleep: async () => {} },
+			createAgent: () => {
+				factoryCalls += 1;
+				const agent = agents.shift();
+				if (!agent) throw new Error("unexpected retry attempt");
+				return agent;
+			},
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		const events = db.listRunEvents(run.clientId, run.runId, 0);
+		const persistedUserEchoEvents = events.filter(
+			(event) =>
+				(event.type === "message_start" || event.type === "message_end") &&
+				eventMessageRole(event.payload) === "user",
+		);
+		expect(factoryCalls).toBe(2);
+		expect(failingAgent.promptCalls).toBe(0);
+		expect(failingAgent.continueCalls).toBe(1);
+		expect(succeedingAgent.promptCalls).toBe(0);
+		expect(succeedingAgent.continueCalls).toBe(1);
+		expect(db.getRun(run.clientId, run.runId)?.status).toBe("completed");
+		expect(persistedUserEchoEvents).toHaveLength(0);
+		expect(db.listMessages(run.clientId, run.sessionId).map((message) => message.role)).toEqual([
+			"user",
+			"toolResult",
+			"assistant",
+		]);
+		expect(diagnostics.events.map((event) => event.eventType)).toContain("agent.retry_scheduled");
+		expect(diagnostics.events.map((event) => event.eventType)).not.toContain("worker_run_failed");
 	});
 
 	it("uses an internal follow-up prompt when a continuation run follows an assistant message", async () => {
@@ -1279,6 +1475,36 @@ class PromptEchoThenAssistantSuccessAgent extends ScriptedAgent {
 	}
 }
 
+class PromptEchoThenThrowAgent extends ScriptedAgent {
+	constructor(private readonly emitStart: boolean) {
+		super();
+	}
+
+	override async prompt(message: RuntimeMessageRecord): Promise<void> {
+		if (this.emitStart) this.emit({ type: "message_start", message });
+		this.emit({ type: "message_end", message });
+		throw new Error("503 service unavailable");
+	}
+}
+
+class ContinueEchoThenThrowAgent extends ScriptedAgent {
+	constructor(private readonly emitStart: boolean) {
+		super();
+	}
+
+	override async continue(): Promise<void> {
+		this.continueCalls += 1;
+		const message: JsonObject = {
+			role: "user",
+			content: "continue after tool result",
+			timestamp: 123,
+		};
+		if (this.emitStart) this.emit({ type: "message_start", message });
+		this.emit({ type: "message_end", message });
+		throw new Error("503 service unavailable");
+	}
+}
+
 class ThinkingOnlyThenAssistantErrorAgent extends ScriptedAgent {
 	override async prompt(message: RuntimeMessageRecord): Promise<void> {
 		const startedAssistant: JsonObject = {
@@ -1471,6 +1697,23 @@ class RecordingDiagnostics {
 	writeEvents(input: { events: JsonObject[] }): JsonObject {
 		this.events.push(...input.events);
 		return { accepted: input.events.length, dropped: 0 };
+	}
+}
+
+class RecordingRunEventSink {
+	readonly events: Array<{ run: RuntimeRunRecord; event: WorkerAgentEvent }> = [];
+
+	async persistAgentEvent(run: RuntimeRunRecord, event: WorkerAgentEvent): Promise<void> {
+		this.events.push({ run, event });
+	}
+}
+
+class RejectingRetryScheduledRunEventSink extends RecordingRunEventSink {
+	override async persistAgentEvent(run: RuntimeRunRecord, event: WorkerAgentEvent): Promise<void> {
+		if (event.type === "agent_retry_scheduled") {
+			throw new Error("retry scheduled persist failed");
+		}
+		await super.persistAgentEvent(run, event);
 	}
 }
 

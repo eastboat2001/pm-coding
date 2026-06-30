@@ -1,15 +1,21 @@
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { Connect } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WorkspaceDiagnosticLogService } from "../src/diagnostic-log-service.js";
 import type { StorageConfig } from "../src/types.js";
+import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 import { WorkspaceFileService } from "../src/workspace-file-service.js";
 import { projectDirectory, projectSlug } from "../src/workspace-paths.js";
 import { WorkspacePreviewService } from "../src/workspace-preview-service.js";
 import { WorkspaceSessionService } from "../src/workspace-session-service.js";
 
 describe("workspace client isolation and path safety", () => {
+	const clientA = "11111111-1111-4111-8111-111111111111";
+	const clientB = "22222222-2222-4222-8222-222222222222";
 	let root: string;
 	let config: StorageConfig;
 
@@ -147,6 +153,61 @@ describe("workspace client isolation and path safety", () => {
 		);
 	});
 
+	it("uses the configured client id for batch project summaries instead of trusting the body", async () => {
+		const files = new WorkspaceFileService(config);
+		files.handle({
+			clientId: clientA,
+			sessionId: "session-1",
+			title: "Client A App",
+			command: "create",
+			filename: "index.html",
+			content: "<h1>client-a</h1>",
+		});
+		files.handle({
+			clientId: clientB,
+			sessionId: "session-1",
+			title: "Client B App",
+			command: "create",
+			filename: "index.html",
+			content: "<h1>client-b</h1>",
+		});
+		files.handle({
+			clientId: clientB,
+			sessionId: "session-1",
+			title: "Client B App",
+			command: "create",
+			filename: "secret.js",
+			content: "export const secret = true;",
+		});
+		const harness = createProjectsApiHarness(config, files);
+
+		const response = await dispatchJson(harness.middleware, "/api/pi-projects/batch-summary", {
+			headers: { "x-pi-client-id": clientA },
+			body: {
+				clientId: clientB,
+				sessions: [
+					{ clientId: clientB, sessionId: "session-1", title: "Client A App" },
+					{ sessionId: "", title: "ignored" },
+				],
+			},
+		});
+
+		expect(response.statusCode).toBe(200);
+		expect(JSON.parse(response.body)).toEqual({
+			summaries: [
+				{
+					projectId: projectSlug("session-1", clientA),
+					sessionId: "session-1",
+					title: "Client A App",
+					fileCount: 1,
+				},
+			],
+		});
+		expect(response.body).not.toContain(clientB);
+		expect(response.body).not.toContain("secret.js");
+		expect(response.body).not.toContain("projectRoot");
+	});
+
 	it("filters diagnostic events by client id", () => {
 		const diagnostics = new WorkspaceDiagnosticLogService(config);
 		diagnostics.ensureDirs();
@@ -179,11 +240,17 @@ function testConfig(root: string): StorageConfig {
 		defaultSkillsDir: join(root, "data", "default-skills"),
 		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
+		runtimeStore: "postgres",
+		postgresUrl: "postgres://pi:pi@postgres:5432/pi_coding",
 		runsEnabled: false,
 		workerId: "test-worker",
 		workerConcurrency: 2,
 		runQueueName: "pi:runs",
 		runEventRetentionDays: 30,
+		runEventStreamMaxLen: 5000,
+		runEventStreamTtlSeconds: 3600,
+		runEventCheckpointIntervalMs: 400,
+		runEventCheckpointMinChars: 256,
 		clientIdRequired: true,
 		previewBaseUrl: "http://localhost:5173",
 		projectInstallCommand: "npm install",
@@ -222,4 +289,106 @@ function testConfig(root: string): StorageConfig {
 		otelServiceName: "pi-coding-web",
 		otelDeploymentEnvironment: "",
 	};
+}
+
+type TestServices = Parameters<typeof createConfiguredStoragePluginForTest>[0];
+type Middleware = (
+	req: Connect.IncomingMessage,
+	res: ServerResponse,
+	next: Connect.NextFunction,
+) => void | Promise<void>;
+
+function createProjectsApiHarness(config: StorageConfig, files: WorkspaceFileService): { middleware: Middleware } {
+	let middleware: Middleware | undefined;
+	const services = {
+		config,
+		diagnostics: {
+			ensureDirs() {},
+			writeEvents() {},
+		} as unknown as TestServices["diagnostics"],
+		sessions: new WorkspaceSessionService(config),
+		files,
+		previews: new WorkspacePreviewService(config),
+		tasks: {} as TestServices["tasks"],
+		skills: {} as TestServices["skills"],
+		runtimeDb: { ensureSchema: async () => undefined } as unknown as TestServices["runtimeDb"],
+		diagnosticExports: {} as TestServices["diagnosticExports"],
+		runApi: {} as TestServices["runApi"],
+		runEventBus: { close: async () => undefined } as TestServices["runEventBus"],
+	} satisfies TestServices;
+	const plugin = createConfiguredStoragePluginForTest(services);
+	const configureServer = plugin.configureServer as (server: { middlewares: { use(handler: Middleware): void } }) => void;
+	configureServer({
+		middlewares: {
+			use(handler) {
+				middleware = handler;
+			},
+		},
+	});
+	if (!middleware) throw new Error("configured storage plugin did not register middleware");
+	return { middleware };
+}
+
+async function dispatchJson(
+	middleware: Middleware,
+	url: string,
+	options: { headers?: Record<string, string>; body?: unknown } = {},
+): Promise<FakeResponse> {
+	const request = new FakeRequest(url, options);
+	const response = new FakeResponse();
+	const done = Promise.resolve(
+		middleware(
+			request as unknown as Connect.IncomingMessage,
+			response as unknown as ServerResponse,
+			() => undefined,
+		),
+	);
+	await done;
+	return response;
+}
+
+class FakeRequest extends EventEmitter {
+	readonly method = "POST";
+	readonly headers: Record<string, string>;
+	private readonly rawBody: string;
+	private flushed = false;
+
+	constructor(readonly url: string, options: { headers?: Record<string, string>; body?: unknown }) {
+		super();
+		this.headers = options.headers || {};
+		this.rawBody = JSON.stringify(options.body || {});
+	}
+
+	setEncoding(_encoding: BufferEncoding): void {}
+
+	override on(eventName: string | symbol, listener: (...args: any[]) => void): this {
+		super.on(eventName, listener);
+		if ((eventName === "data" || eventName === "end") && this.listenerCount("data") > 0 && this.listenerCount("end") > 0) {
+			queueMicrotask(() => this.flush());
+		}
+		return this;
+	}
+
+	private flush(): void {
+		if (this.flushed) return;
+		this.flushed = true;
+		this.emit("data", this.rawBody);
+		this.emit("end");
+	}
+}
+
+class FakeResponse {
+	statusCode = 200;
+	body = "";
+	readonly headers = new Map<string, number | string | readonly string[]>();
+
+	setHeader(name: string, value: number | string | readonly string[]): this {
+		this.headers.set(name, value);
+		return this;
+	}
+
+	end(chunk?: unknown): this {
+		if (chunk !== undefined) this.body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+		return this;
+	}
 }

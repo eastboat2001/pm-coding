@@ -18,9 +18,14 @@ import {
 	type JsonObject,
 	loadStorageConfig,
 	PreviewReadinessChecker,
+	RedisRunEventBus,
+	type RedisRunEventBusOptions,
 	RedisRunQueue,
-	RuntimeDbStore,
+	RunEventSink,
+	type RunEventSinkOptions,
+	createRuntimeStore,
 	type RuntimeMessageRecord,
+	type RuntimeStore,
 	type SkillSummary,
 	type StorageConfig,
 	type WorkerAgent,
@@ -64,12 +69,16 @@ async function main(): Promise<void> {
 		],
 	});
 
-	let runtimeDb: RuntimeDbStore | undefined;
+	let runtimeDb: RuntimeStore | undefined;
+	let runEventBus: RedisRunEventBus | undefined;
 	try {
-		runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
-		runtimeDb.ensureSchema();
+		runtimeDb = createRuntimeStore(config);
+		await runtimeDb.ensureSchema();
 
 		const queue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
+		const runEventOptions = createWorkerRunEventOptions(config);
+		runEventBus = new RedisRunEventBus(runEventOptions.bus);
+		const runEventSink = new RunEventSink({ store: runtimeDb, bus: runEventBus, ...runEventOptions.sink });
 		const appPreviewGoals = new AppPreviewGoalService(runtimeDb);
 		const previewReadiness = new PreviewReadinessChecker(config);
 		const appPreviewGoalSupervisor = new AppPreviewGoalSupervisor({
@@ -88,6 +97,7 @@ async function main(): Promise<void> {
 			concurrency: config.workerConcurrency,
 			diagnostics,
 			goalSupervisor: appPreviewGoalSupervisor,
+			runEventSink,
 			createAgent(input) {
 				return createRunAgent(input, {
 					config,
@@ -116,13 +126,19 @@ async function main(): Promise<void> {
 				logCleanupError("worker.stop", error);
 			}
 			try {
+				await runEventBus?.close();
+			} catch (error) {
+				exitCode = 1;
+				logCleanupError("runEventBus.close", error);
+			}
+			try {
 				await diagnostics.flushLangfuse();
 			} catch (error) {
 				exitCode = 1;
 				logCleanupError("diagnostics.flushLangfuse", error);
 			}
 			try {
-				runtimeDb?.close();
+				await runtimeDb?.close();
 			} catch (error) {
 				exitCode = 1;
 				logCleanupError("runtimeDb.close", error);
@@ -158,7 +174,12 @@ async function main(): Promise<void> {
 			logCleanupError("diagnostics.flushLangfuse", flushError);
 		}
 		try {
-			runtimeDb?.close();
+			await runEventBus?.close();
+		} catch (closeError) {
+			logCleanupError("runEventBus.close", closeError);
+		}
+		try {
+			await runtimeDb?.close();
 		} catch (closeError) {
 			logCleanupError("runtimeDb.close", closeError);
 		}
@@ -166,6 +187,23 @@ async function main(): Promise<void> {
 		removeFatalDiagnostics();
 		throw error;
 	}
+}
+
+export function createWorkerRunEventOptions(config: StorageConfig): {
+	bus: RedisRunEventBusOptions;
+	sink: Pick<RunEventSinkOptions, "checkpointIntervalMs" | "checkpointMinChars">;
+} {
+	return {
+		bus: {
+			redisUrl: config.redisUrl,
+			maxLen: config.runEventStreamMaxLen,
+			ttlSeconds: config.runEventStreamTtlSeconds,
+		},
+		sink: {
+			checkpointIntervalMs: config.runEventCheckpointIntervalMs,
+			checkpointMinChars: config.runEventCheckpointMinChars,
+		},
+	};
 }
 
 function createWorkerStartupDiagnosticEvents(config: StorageConfig): DiagnosticLogEventInput[] {
@@ -416,7 +454,11 @@ function createWorkerDiagnosticClient(
 		},
 		writeMany(events: DiagnosticEvent[]) {
 			if (events.length === 0) return;
-			diagnostics.writeEvents({ events: events.map((event) => ({ ...event, clientId })) });
+			try {
+				diagnostics.writeEvents({ events: events.map((event) => ({ ...event, clientId })) });
+			} catch {
+				// Diagnostics must not interrupt worker run processing.
+			}
 		},
 		async flush() {},
 	};

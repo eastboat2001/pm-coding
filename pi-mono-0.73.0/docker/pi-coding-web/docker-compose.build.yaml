@@ -3,3 +3,8 @@ services:
     build:
       context: ../..
       dockerfile: apps/pi-coding-web/Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        NPM_REPLACE_REGISTRY_HOST: ${NPM_REPLACE_REGISTRY_HOST:-npmjs}
+        NPM_FETCH_TIMEOUT: ${NPM_FETCH_TIMEOUT:-600000}
+        NPM_FETCH_RETRIES: ${NPM_FETCH_RETRIES:-5}

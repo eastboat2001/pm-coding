@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isObject } from "./json.js";
+import type { CreateRunWithMessageInput, RuntimeStore } from "./runtime-store.js";
 import type {
 	AppendAppPreviewGoalEventInput,
 	AppendMessageInput,
@@ -24,6 +25,8 @@ import type {
 	UpdateAppPreviewGoalInput,
 	UpsertAppPreviewGoalInput,
 } from "./types.js";
+
+export type { CreateRunWithMessageInput } from "./runtime-store.js";
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
 
@@ -117,19 +120,7 @@ type SessionRunContext = {
 	thinkingLevel: string;
 };
 
-export interface CreateRunWithMessageInput {
-	sessionId: string;
-	clientId: string;
-	title: string;
-	model: JsonObject;
-	thinkingLevel: string;
-	messageRole: string;
-	payload: JsonObject;
-	runId: string;
-	createdAt?: string;
-}
-
-export class RuntimeDbStore {
+export class RuntimeDbStore implements RuntimeStore {
 	private database: DatabaseSync | undefined;
 
 	constructor(private readonly dbFile: string) {}
@@ -617,9 +608,11 @@ export class RuntimeDbStore {
 		const row = this.writeTransaction(db, () => {
 			const run = requiredRecord(this.getRun(input.clientId, input.runId), "run");
 			if (run.sessionId !== input.sessionId) throw new Error("Run event session does not match run session");
-			const seqRow = db
-				.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_events WHERE client_id = ? AND run_id = ?")
-				.get(input.clientId, input.runId) as SeqRow;
+			const seq =
+				input.seq ??
+				(db
+					.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_events WHERE client_id = ? AND run_id = ?")
+					.get(input.clientId, input.runId) as SeqRow).seq;
 			db.prepare(
 				`INSERT INTO run_events (run_id, session_id, client_id, seq, event_type, payload_json, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -627,7 +620,7 @@ export class RuntimeDbStore {
 				input.runId,
 				run.sessionId,
 				input.clientId,
-				seqRow.seq,
+				seq,
 				input.type,
 				JSON.stringify(input.payload),
 				createdAt,
@@ -653,6 +646,19 @@ export class RuntimeDbStore {
 			)
 			.all(clientId, runId, afterSeq) as RunEventRow[];
 		return rows.map(toRunEventRecord);
+	}
+
+	getLatestRunCheckpoint(clientId: string, runId: string): RuntimeRunEventRecord | undefined {
+		const row = this.open()
+			.prepare(
+				`SELECT id, run_id, session_id, client_id, seq, event_type, payload_json, created_at
+				FROM run_events
+				WHERE client_id = ? AND run_id = ? AND event_type = 'message_update'
+				ORDER BY seq DESC
+				LIMIT 1`,
+			)
+			.get(clientId, runId) as RunEventRow | undefined;
+		return row ? toRunEventRecord(row) : undefined;
 	}
 
 	*iterateRunEvents(clientId: string, runId: string, afterSeq: number): Iterable<RuntimeRunEventRecord> {

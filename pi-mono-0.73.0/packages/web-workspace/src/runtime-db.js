@@ -388,11 +388,12 @@ export class RuntimeDbStore {
             const run = requiredRecord(this.getRun(input.clientId, input.runId), "run");
             if (run.sessionId !== input.sessionId)
                 throw new Error("Run event session does not match run session");
-            const seqRow = db
-                .prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_events WHERE client_id = ? AND run_id = ?")
-                .get(input.clientId, input.runId);
+            const seq = input.seq ??
+                db
+                    .prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_events WHERE client_id = ? AND run_id = ?")
+                    .get(input.clientId, input.runId).seq;
             db.prepare(`INSERT INTO run_events (run_id, session_id, client_id, seq, event_type, payload_json, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.runId, run.sessionId, input.clientId, seqRow.seq, input.type, JSON.stringify(input.payload), createdAt);
+				VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.runId, run.sessionId, input.clientId, seq, input.type, JSON.stringify(input.payload), createdAt);
             db.prepare("UPDATE runs SET updated_at = ? WHERE client_id = ? AND run_id = ?").run(createdAt, input.clientId, input.runId);
             this.updateSessionRun(input.clientId, run.sessionId, run.runId, run.status, createdAt);
             return db.prepare("SELECT last_insert_rowid() AS id").get();
@@ -407,6 +408,16 @@ export class RuntimeDbStore {
 				ORDER BY seq ASC`)
             .all(clientId, runId, afterSeq);
         return rows.map(toRunEventRecord);
+    }
+    getLatestRunCheckpoint(clientId, runId) {
+        const row = this.open()
+            .prepare(`SELECT id, run_id, session_id, client_id, seq, event_type, payload_json, created_at
+				FROM run_events
+				WHERE client_id = ? AND run_id = ? AND event_type = 'message_update'
+				ORDER BY seq DESC
+				LIMIT 1`)
+            .get(clientId, runId);
+        return row ? toRunEventRecord(row) : undefined;
     }
     *iterateRunEvents(clientId, runId, afterSeq) {
         const rows = this.open()

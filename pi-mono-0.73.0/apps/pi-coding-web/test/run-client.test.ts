@@ -345,6 +345,53 @@ describe("run client", () => {
 		connection.close();
 	});
 
+	it("treats SSE error events as connection errors and reconnects", async () => {
+		vi.useFakeTimers();
+		const events = [createRunEventRecord(1)];
+		const statusChanges: Array<{ readyState: RunEventConnection["readyState"]; error?: string }> = [];
+		const fetchMock = vi
+			.fn<() => Promise<Response>>()
+			.mockResolvedValueOnce(sseTextResponse('event: error\ndata: {"message":"Runtime event stream unavailable."}\n\n'))
+			.mockResolvedValueOnce(sseResponse(events));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const received: RuntimeRunEventRecord[] = [];
+		const connection = connectRunEvents(
+			"run-1",
+			0,
+			(event) => {
+				received.push(event);
+			},
+			{
+				onStatusChange: (nextConnection) => {
+					statusChanges.push({
+						readyState: nextConnection.readyState,
+						error: nextConnection.lastError?.message,
+					});
+				},
+			},
+		);
+
+		await vi.waitFor(() => {
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(connection.lastError?.message).toBe("Runtime event stream unavailable.");
+		});
+		expect(received).toEqual([]);
+		expect(statusChanges).toContainEqual({
+			readyState: connection.CONNECTING,
+			error: "Runtime event stream unavailable.",
+		});
+
+		await vi.advanceTimersByTimeAsync(1000);
+		await vi.waitFor(() => {
+			expect(received).toEqual(events);
+		});
+		expect(connection.lastError).toBeUndefined();
+		expect(statusChanges).toContainEqual({ readyState: connection.OPEN, error: undefined });
+
+		connection.close();
+	});
+
 	it("does not advance the event checkpoint until an async handler resolves", async () => {
 		const event = createRunEventRecord(1);
 		vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ events: [event] })));
@@ -463,6 +510,19 @@ function sseResponse(events: RuntimeRunEventRecord[]): Response {
 			for (const event of events) {
 				controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
 			}
+			controller.close();
+		},
+	});
+	return new Response(stream, {
+		status: 200,
+		headers: { "Content-Type": "text/event-stream" },
+	});
+}
+
+function sseTextResponse(text: string): Response {
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(text));
 			controller.close();
 		},
 	});

@@ -156,7 +156,7 @@ describe("WorkspaceRunApiService", () => {
 			updatedAt: staleAt,
 		});
 
-		const sessions = service.listSessions("client-a");
+		const sessions = await service.listSessions("client-a");
 
 		expect(sessions).toEqual([
 			expect.objectContaining({
@@ -185,7 +185,7 @@ describe("WorkspaceRunApiService", () => {
 			updatedAt: new Date().toISOString(),
 		});
 
-		const sessions = service.listSessions("client-a");
+		const sessions = await service.listSessions("client-a");
 
 		expect(sessions[0]?.lastRunStatus).toBe("interrupted");
 		expect(db.getRun("client-a", result.run.runId)?.status).toBe("interrupted");
@@ -290,7 +290,7 @@ describe("WorkspaceRunApiService", () => {
 		]);
 	});
 
-	it("starts a continuation run for an existing interrupted session without appending a prompt message", async () => {
+	it("starts an interrupted recovery continuation without appending a prompt message", async () => {
 		db.createSession({
 			clientId: "client-a",
 			sessionId: "session-continue",
@@ -298,6 +298,14 @@ describe("WorkspaceRunApiService", () => {
 			model: { provider: "openai", id: "gpt-5" },
 			thinkingLevel: "high",
 		});
+		const parentRun = db.createRun({
+			clientId: "client-a",
+			sessionId: "session-continue",
+			runId: "run-interrupted-parent",
+			model: { provider: "openai", id: "gpt-5" },
+			thinkingLevel: "high",
+		});
+		db.updateRunStatus(parentRun.runId, "client-a", "interrupted");
 		db.appendMessage({
 			clientId: "client-a",
 			sessionId: "session-continue",
@@ -310,6 +318,10 @@ describe("WorkspaceRunApiService", () => {
 			title: "Continue tool",
 			model: { provider: "openai", id: "gpt-5" },
 			thinkingLevel: "high",
+			continuation: {
+				source: "interrupted_recovery",
+				parentRunId: parentRun.runId,
+			},
 		});
 
 		expect(result.session.sessionId).toBe("session-continue");
@@ -317,6 +329,175 @@ describe("WorkspaceRunApiService", () => {
 		expect(result.run.status).toBe("queued");
 		expect(db.listMessages("client-a", "session-continue").map((message) => message.role)).toEqual(["toolResult"]);
 		await expect(queue.claim("worker-1", 1)).resolves.toEqual({ clientId: "client-a", runId: result.run.runId });
+	});
+
+	it("returns active run restore detail with the latest checkpoint", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-active-restore",
+			title: "Restore active run",
+			message: { content: "stream" },
+			model: {},
+			thinkingLevel: "high",
+		});
+		db.appendRunEvent({
+			clientId: "client-a",
+			sessionId: result.session.sessionId,
+			runId: result.run.runId,
+			seq: 1,
+			type: "message_update",
+			payload: { type: "message_update", message: { role: "assistant", content: "first" } },
+		});
+		const latestCheckpoint = db.appendRunEvent({
+			clientId: "client-a",
+			sessionId: result.session.sessionId,
+			runId: result.run.runId,
+			seq: 3,
+			type: "message_update",
+			payload: { type: "message_update", message: { role: "assistant", content: "latest" } },
+		});
+
+		const detail = await service.getSession("client-a", "session-active-restore");
+
+		expect(detail?.activeRun).toEqual({
+			run: expect.objectContaining({ runId: result.run.runId, status: "queued" }),
+			checkpointEvent: latestCheckpoint,
+			afterSeq: 3,
+		});
+	});
+
+	it("omits active run restore detail when the session has no active run", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-completed-restore",
+			title: "Completed run",
+			message: { content: "done" },
+			model: {},
+			thinkingLevel: "high",
+		});
+		db.appendRunEvent({
+			clientId: "client-a",
+			sessionId: result.session.sessionId,
+			runId: result.run.runId,
+			type: "message_update",
+			payload: { type: "message_update", message: { role: "assistant", content: "complete" } },
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "completed");
+
+		const detail = await service.getSession("client-a", "session-completed-restore");
+
+		expect(detail?.activeRun).toBeUndefined();
+	});
+
+	it("returns a synthetic cancelled assistant marker for cancelled runs without assistant output", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-cancelled-marker",
+			title: "Cancelled run",
+			message: { content: "stop me" },
+			model: {},
+			thinkingLevel: "high",
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "cancelled", {
+			endedAt: "2026-06-30T06:00:00.000Z",
+			updatedAt: "2026-06-30T06:00:00.000Z",
+		});
+
+		const detail = await service.getSession("client-a", "session-cancelled-marker");
+
+		expect(db.listMessages("client-a", "session-cancelled-marker")).toHaveLength(1);
+		expect(detail?.messages).toHaveLength(2);
+		expect(detail?.messages[1]).toMatchObject({
+			role: "assistant",
+			createdAt: "2026-06-30T06:00:00.000Z",
+			synthetic: true,
+			payload: {
+				role: "assistant",
+				content: [],
+				stopReason: "aborted",
+				errorMessage: "Request was aborted.",
+			},
+		});
+	});
+
+	it("returns a synthetic cancelled assistant marker when only a tool-use assistant exists", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-cancelled-after-tool-use",
+			title: "Cancelled after tool use",
+			message: { content: "stop after skill" },
+			model: {},
+			thinkingLevel: "high",
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "running", {
+			startedAt: result.run.updatedAt,
+			updatedAt: result.run.updatedAt,
+		});
+		const afterRunStart = new Date(Date.parse(result.run.updatedAt) + 1000).toISOString();
+		db.appendMessage({
+			clientId: "client-a",
+			sessionId: result.session.sessionId,
+			role: "assistant",
+			payload: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "call-1", name: "skill_load", arguments: { name: "frontend-design" } }],
+				stopReason: "toolUse",
+			},
+			createdAt: afterRunStart,
+		});
+		db.appendMessage({
+			clientId: "client-a",
+			sessionId: result.session.sessionId,
+			role: "toolResult",
+			payload: { role: "toolResult", toolCallId: "call-1", content: "Loaded skill frontend-design" },
+			createdAt: afterRunStart,
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "cancelled", {
+			endedAt: new Date(Date.parse(afterRunStart) + 1000).toISOString(),
+			updatedAt: new Date(Date.parse(afterRunStart) + 1000).toISOString(),
+		});
+
+		const detail = await service.getSession("client-a", "session-cancelled-after-tool-use");
+
+		expect(db.listMessages("client-a", "session-cancelled-after-tool-use")).toHaveLength(3);
+		expect(detail?.messages).toHaveLength(4);
+		expect(detail?.messages.at(-1)).toMatchObject({
+			role: "assistant",
+			synthetic: true,
+			payload: {
+				role: "assistant",
+				content: [],
+				stopReason: "aborted",
+				errorMessage: "Request was aborted.",
+			},
+		});
+	});
+
+	it("does not duplicate an existing cancelled assistant marker", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-existing-cancelled-marker",
+			title: "Existing cancelled marker",
+			message: { content: "stop me" },
+			model: {},
+			thinkingLevel: "high",
+		});
+		db.appendMessage({
+			clientId: "client-a",
+			sessionId: result.session.sessionId,
+			role: "assistant",
+			payload: {
+				role: "assistant",
+				content: [],
+				stopReason: "aborted",
+				errorMessage: "Request was aborted.",
+			},
+			createdAt: "2026-06-30T06:00:00.000Z",
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "cancelled", {
+			endedAt: "2026-06-30T06:00:00.000Z",
+			updatedAt: "2026-06-30T06:00:00.000Z",
+		});
+
+		const detail = await service.getSession("client-a", "session-existing-cancelled-marker");
+
+		expect(detail?.messages).toHaveLength(2);
+		expect(detail?.messages.filter((message) => message.payload.stopReason === "aborted")).toHaveLength(1);
 	});
 
 	it("updates an existing runtime session model snapshot when starting a new prompt run", async () => {
@@ -353,6 +534,14 @@ describe("WorkspaceRunApiService", () => {
 			model: { provider: "custom-provider:local", id: "mimo", baseUrl: "https://old.example/v1" },
 			thinkingLevel: "off",
 		});
+		const parentRun = db.createRun({
+			clientId: "client-a",
+			sessionId: "session-continuation-model-refresh",
+			runId: "run-continuation-model-refresh-parent",
+			model: { provider: "custom-provider:local", id: "mimo", baseUrl: "https://old.example/v1" },
+			thinkingLevel: "off",
+		});
+		db.updateRunStatus(parentRun.runId, "client-a", "interrupted");
 		const nextModel = { provider: "custom-provider:local", id: "mimo", baseUrl: "https://new.example/v1" };
 
 		await service.startRun("client-a", {
@@ -360,6 +549,10 @@ describe("WorkspaceRunApiService", () => {
 			title: "Continue latest model",
 			model: nextModel,
 			thinkingLevel: "low",
+			continuation: {
+				source: "interrupted_recovery",
+				parentRunId: parentRun.runId,
+			},
 		});
 
 		expect(db.getSession("client-a", "session-continuation-model-refresh")).toEqual(
@@ -383,7 +576,7 @@ describe("WorkspaceRunApiService", () => {
 			appPreviewGoal: { enabled: true, source: "pm_handoff" },
 		});
 
-		expect(goalService.getAppPreviewGoal("client-a", "session-goal")).toEqual(
+		expect(await goalService.getAppPreviewGoal("client-a", "session-goal")).toEqual(
 			expect.objectContaining({
 				clientId: "client-a",
 				sessionId: "session-goal",
@@ -393,7 +586,7 @@ describe("WorkspaceRunApiService", () => {
 				lastRunId: result.run.runId,
 			}),
 		);
-		expect(goalService.listAppPreviewGoalEvents("client-a", "session-goal")).toEqual([
+		expect(await goalService.listAppPreviewGoalEvents("client-a", "session-goal")).toEqual([
 			expect.objectContaining({
 				eventType: "goal_started",
 				reasonCode: "enabled",
@@ -413,7 +606,7 @@ describe("WorkspaceRunApiService", () => {
 				appPreviewGoal: { enabled: true, source: "pm_handoff" },
 			}),
 		).rejects.toMatchObject({ statusCode: 503 });
-		expect(failingGoalService.getAppPreviewGoal("client-b", "session-goal")).toBeUndefined();
+		await expect(failingGoalService.getAppPreviewGoal("client-b", "session-goal")).resolves.toBeUndefined();
 	});
 
 	it("rejects startRun app preview goals with a missing source before creating work", async () => {
@@ -432,7 +625,7 @@ describe("WorkspaceRunApiService", () => {
 
 		await expect(queue.claim("worker-1", 1)).resolves.toBeUndefined();
 		expect(db.listRunsForSession("client-a", "session-missing-source")).toEqual([]);
-		expect(goalService.getAppPreviewGoal("client-a", "session-missing-source")).toBeUndefined();
+		await expect(goalService.getAppPreviewGoal("client-a", "session-missing-source")).resolves.toBeUndefined();
 	});
 
 	it("rejects startRun app preview goals with an illegal source before creating work", async () => {
@@ -451,10 +644,10 @@ describe("WorkspaceRunApiService", () => {
 
 		await expect(queue.claim("worker-1", 1)).resolves.toBeUndefined();
 		expect(db.listRunsForSession("client-a", "session-illegal-source")).toEqual([]);
-		expect(goalService.getAppPreviewGoal("client-a", "session-illegal-source")).toBeUndefined();
+		await expect(goalService.getAppPreviewGoal("client-a", "session-illegal-source")).resolves.toBeUndefined();
 	});
 
-	it("exposes app preview goal helpers for manual enable and disable", () => {
+	it("exposes app preview goal helpers for manual enable and disable", async () => {
 		const goals = new AppPreviewGoalService(db);
 		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
 		db.createSession({
@@ -465,7 +658,7 @@ describe("WorkspaceRunApiService", () => {
 			thinkingLevel: "high",
 		});
 
-		const enabled = goalService.enableAppPreviewGoal("client-a", "session-manual", "manual");
+		const enabled = await goalService.enableAppPreviewGoal("client-a", "session-manual", "manual");
 
 		expect(enabled).toEqual(
 			expect.objectContaining({
@@ -476,33 +669,28 @@ describe("WorkspaceRunApiService", () => {
 				maxContinuationRuns: 5,
 			}),
 		);
-		expect(goalService.getAppPreviewGoal("client-a", "session-manual")?.status).toBe("active");
-		const startedEvents = goalService.listAppPreviewGoalEvents("client-a", "session-manual");
+		expect((await goalService.getAppPreviewGoal("client-a", "session-manual"))?.status).toBe("active");
+		const startedEvents = await goalService.listAppPreviewGoalEvents("client-a", "session-manual");
 		expect(startedEvents).toEqual([expect.objectContaining({ eventType: "goal_started", reasonCode: "enabled" })]);
 
-		const disabled = goalService.disableAppPreviewGoal("client-a", "session-manual");
+		const disabled = await goalService.disableAppPreviewGoal("client-a", "session-manual");
 
 		expect(disabled).toEqual(expect.objectContaining({ status: "disabled" }));
-		expect(goalService.getAppPreviewGoal("client-a", "session-manual")?.status).toBe("disabled");
-		expect(goalService.listAppPreviewGoalEvents("client-a", "session-manual", startedEvents[0]?.eventId)).toEqual([
-			expect.objectContaining({ eventType: "goal_disabled", reasonCode: "user_disabled" }),
-		]);
+		expect((await goalService.getAppPreviewGoal("client-a", "session-manual"))?.status).toBe("disabled");
+		expect(
+			await goalService.listAppPreviewGoalEvents("client-a", "session-manual", startedEvents[0]?.eventId),
+		).toEqual([expect.objectContaining({ eventType: "goal_disabled", reasonCode: "user_disabled" })]);
 	});
 
-	it("returns not found when manually enabling an app preview goal for a missing session", () => {
+	it("returns not found when manually enabling an app preview goal for a missing session", async () => {
 		const goals = new AppPreviewGoalService(db);
 		const goalService = new WorkspaceRunApiService(db, queue, undefined, undefined, undefined, goals);
 
-		let thrown: unknown;
-		try {
-			goalService.enableAppPreviewGoal("client-a", "missing-session", "manual");
-		} catch (error) {
-			thrown = error;
-		}
-
-		expect(thrown).toBeInstanceOf(RunApiError);
-		expect(thrown).toMatchObject({ message: "Runtime session not found", statusCode: 404 });
-		expect(goalService.getAppPreviewGoal("client-a", "missing-session")).toBeUndefined();
+		await expect(goalService.enableAppPreviewGoal("client-a", "missing-session", "manual")).rejects.toMatchObject({
+			message: "Runtime session not found",
+			statusCode: 404,
+		});
+		await expect(goalService.getAppPreviewGoal("client-a", "missing-session")).resolves.toBeUndefined();
 	});
 
 	it("updates app preview goal lastRunId for continuation run requests", async () => {
@@ -517,16 +705,20 @@ describe("WorkspaceRunApiService", () => {
 			appPreviewGoal: { enabled: true, source: "manual" },
 		});
 		await queue.claim("worker-1", 1);
-		db.updateRunStatus(first.run.runId, "client-a", "completed");
+		db.updateRunStatus(first.run.runId, "client-a", "interrupted");
 
 		const continuation = await goalService.startRun("client-a", {
 			sessionId: "session-continue-goal",
 			model: {},
 			thinkingLevel: "high",
 			appPreviewGoal: { enabled: true, source: "manual" },
+			continuation: {
+				source: "interrupted_recovery",
+				parentRunId: first.run.runId,
+			},
 		});
 
-		expect(goalService.getAppPreviewGoal("client-a", "session-continue-goal")).toEqual(
+		expect(await goalService.getAppPreviewGoal("client-a", "session-continue-goal")).toEqual(
 			expect.objectContaining({
 				source: "manual",
 				status: "active",
@@ -534,7 +726,7 @@ describe("WorkspaceRunApiService", () => {
 			}),
 		);
 		expect(
-			goalService.listAppPreviewGoalEvents("client-a", "session-continue-goal").map((event) => event.runId),
+			(await goalService.listAppPreviewGoalEvents("client-a", "session-continue-goal")).map((event) => event.runId),
 		).toEqual([first.run.runId, continuation.run.runId]);
 	});
 
@@ -568,20 +760,20 @@ describe("WorkspaceRunApiService", () => {
 			payload: { text: "b" },
 		});
 
-		expect(service.listSessions("client-a").map((session) => session.title)).toEqual(["Client A"]);
-		expect(service.getSession("client-a", "shared-session")?.messages.map((message) => message.payload)).toEqual([
-			{ content: "a" },
-		]);
-		expect(service.getSession("client-a", "shared-session")?.runs.map((run) => run.runId)).toEqual([
+		expect((await service.listSessions("client-a")).map((session) => session.title)).toEqual(["Client A"]);
+		expect(
+			(await service.getSession("client-a", "shared-session"))?.messages.map((message) => message.payload),
+		).toEqual([{ content: "a" }]);
+		expect((await service.getSession("client-a", "shared-session"))?.runs.map((run) => run.runId)).toEqual([
 			clientA.run.runId,
 		]);
-		expect(service.getSession("client-b", "shared-session")?.runs.map((run) => run.runId)).toEqual([
+		expect((await service.getSession("client-b", "shared-session"))?.runs.map((run) => run.runId)).toEqual([
 			clientB.run.runId,
 		]);
-		expect(service.listRuns("client-a").map((run) => run.runId)).toEqual([clientA.run.runId]);
-		expect(service.getRunStatus("client-a", clientB.run.runId)).toBeUndefined();
-		expect(service.listRunEvents("client-a", clientB.run.runId, 0)).toEqual([]);
-		expect(service.listRunEvents("client-a", clientA.run.runId, 0).map((event) => event.payload)).toEqual([
+		expect((await service.listRuns("client-a")).map((run) => run.runId)).toEqual([clientA.run.runId]);
+		await expect(service.getRunStatus("client-a", clientB.run.runId)).resolves.toBeUndefined();
+		await expect(service.listRunEvents("client-a", clientB.run.runId, 0)).resolves.toEqual([]);
+		expect((await service.listRunEvents("client-a", clientA.run.runId, 0)).map((event) => event.payload)).toEqual([
 			{ text: "a" },
 		]);
 		await expect(service.deleteSession("client-a", "shared-session")).rejects.toThrow("already has an active run");
@@ -593,10 +785,49 @@ describe("WorkspaceRunApiService", () => {
 
 		const deleteResult = await service.deleteSession("client-a", "shared-session", { force: true });
 		expect(deleteResult).toEqual({ deleted: true, sessionId: "shared-session" });
-		expect(service.getSession("client-a", "shared-session")).toBeUndefined();
-		expect(service.getSession("client-b", "shared-session")?.session.title).toBe("Client B");
-		expect(service.listRuns("client-a")).toEqual([]);
-		expect(service.listRuns("client-b").map((run) => run.runId)).toEqual([clientB.run.runId]);
+		await expect(service.getSession("client-a", "shared-session")).resolves.toBeUndefined();
+		expect((await service.getSession("client-b", "shared-session"))?.session.title).toBe("Client B");
+		await expect(service.listRuns("client-a")).resolves.toEqual([]);
+		expect((await service.listRuns("client-b")).map((run) => run.runId)).toEqual([clientB.run.runId]);
+	});
+
+	it("returns owned runs for event streams and lists durable run events after a sequence", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-events",
+			title: "Event stream",
+			message: { content: "stream me" },
+			model: {},
+			thinkingLevel: "high",
+		});
+		db.appendRunEvent({
+			clientId: "client-a",
+			sessionId: result.session.sessionId,
+			runId: result.run.runId,
+			type: "message.delta",
+			payload: { text: "first" },
+		});
+		db.appendRunEvent({
+			clientId: "client-a",
+			sessionId: result.session.sessionId,
+			runId: result.run.runId,
+			type: "message.delta",
+			payload: { text: "second" },
+		});
+
+		await expect(service.getRunForEvents("client-a", result.run.runId)).resolves.toEqual(
+			expect.objectContaining({
+				clientId: "client-a",
+				runId: result.run.runId,
+				sessionId: result.session.sessionId,
+			}),
+		);
+		await expect(service.listDurableRunEvents("client-a", result.run.runId, 1)).resolves.toEqual([
+			expect.objectContaining({ seq: 2, payload: { text: "second" } }),
+		]);
+		await expect(service.getRunForEvents("client-b", result.run.runId)).rejects.toMatchObject({
+			message: "Run not found.",
+			statusCode: 404,
+		});
 	});
 
 	it("deletes the client session workspace when deleting a SQLite session", async () => {
@@ -625,6 +856,21 @@ describe("WorkspaceRunApiService", () => {
 		expect(existsSync(sessionDir)).toBe(false);
 	});
 
+	it("force delete cleans an orphaned client session workspace when the runtime session is missing", async () => {
+		const deletedWorkspaces: Array<{ clientId: string; sessionId: string }> = [];
+		const deletingService = new WorkspaceRunApiService(db, queue, undefined, undefined, {
+			deleteSessionWorkspace: (clientId, sessionId) => {
+				deletedWorkspaces.push({ clientId, sessionId });
+				return true;
+			},
+		});
+
+		const result = await deletingService.deleteSession("client-a", "missing-session", { force: true });
+
+		expect(result).toEqual({ deleted: false, sessionId: "missing-session" });
+		expect(deletedWorkspaces).toEqual([{ clientId: "client-a", sessionId: "missing-session" }]);
+	});
+
 	it("cancelRun marks queued runs cancelled so the session is no longer active", async () => {
 		const result = await service.startRun("client-a", {
 			sessionId: "session-1",
@@ -645,6 +891,80 @@ describe("WorkspaceRunApiService", () => {
 				message: { content: "new work" },
 				model: {},
 				thinkingLevel: "medium",
+			}),
+		).resolves.toMatchObject({ run: { status: "queued" } });
+	});
+
+	it("rejects message-less continuation requests without continuation metadata", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-continuation-without-metadata",
+			title: "Continuation metadata required",
+			message: { content: "start" },
+			model: {},
+			thinkingLevel: "medium",
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "interrupted");
+
+		await expect(
+			service.startRun("client-a", {
+				sessionId: "session-continuation-without-metadata",
+				title: "Continuation metadata required",
+				model: {},
+				thinkingLevel: "medium",
+			}),
+		).rejects.toMatchObject({
+			statusCode: 400,
+			message: "Continuation metadata is required for message-less runs",
+		});
+	});
+
+	it("rejects interrupted recovery continuations unless the parent run is interrupted", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-cancelled-continuation",
+			title: "Cancelled continuation",
+			message: { content: "start" },
+			model: {},
+			thinkingLevel: "medium",
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "cancelled");
+
+		await expect(
+			service.startRun("client-a", {
+				sessionId: "session-cancelled-continuation",
+				title: "Cancelled continuation",
+				model: {},
+				thinkingLevel: "medium",
+				continuation: {
+					source: "interrupted_recovery",
+					parentRunId: result.run.runId,
+				},
+			}),
+		).rejects.toMatchObject({
+			statusCode: 409,
+			message: "Interrupted recovery continuation requires an interrupted parent run",
+		});
+	});
+
+	it("allows interrupted recovery continuations for interrupted parent runs", async () => {
+		const result = await service.startRun("client-a", {
+			sessionId: "session-interrupted-continuation",
+			title: "Interrupted continuation",
+			message: { content: "start" },
+			model: {},
+			thinkingLevel: "medium",
+		});
+		db.updateRunStatus(result.run.runId, "client-a", "interrupted");
+
+		await expect(
+			service.startRun("client-a", {
+				sessionId: "session-interrupted-continuation",
+				title: "Interrupted continuation",
+				model: {},
+				thinkingLevel: "medium",
+				continuation: {
+					source: "interrupted_recovery",
+					parentRunId: result.run.runId,
+				},
 			}),
 		).resolves.toMatchObject({ run: { status: "queued" } });
 	});
@@ -714,7 +1034,7 @@ describe("WorkspaceRunApiService", () => {
 		const result = await service.deleteSession("client-a", "session-1", { force: true });
 
 		expect(result).toEqual({ deleted: false, sessionId: "session-1", cancelledRuns: 1 });
-		expect(service.getSession("client-a", "session-1")?.session.sessionId).toBe("session-1");
+		expect((await service.getSession("client-a", "session-1"))?.session.sessionId).toBe("session-1");
 		expect(db.getRun("client-a", queued.run.runId)?.status).toBe("cancelling");
 		await expect(queue.isCancelRequested({ clientId: "client-a", runId: queued.run.runId })).resolves.toBe(true);
 	});
@@ -737,7 +1057,7 @@ describe("WorkspaceRunApiService", () => {
 		const result = await service.deleteSession("client-a", "session-1", { force: true });
 
 		expect(result).toEqual({ deleted: true, sessionId: "session-1", cancelledRuns: 1 });
-		expect(service.getSession("client-a", "session-1")).toBeUndefined();
+		await expect(service.getSession("client-a", "session-1")).resolves.toBeUndefined();
 	});
 
 	it("force delete removes an old cancelling session even when cancellation refreshed the update time", async () => {
@@ -761,7 +1081,7 @@ describe("WorkspaceRunApiService", () => {
 		const result = await service.deleteSession("client-a", "session-1", { force: true });
 
 		expect(result).toEqual({ deleted: true, sessionId: "session-1", cancelledRuns: 1 });
-		expect(service.getSession("client-a", "session-1")).toBeUndefined();
+		await expect(service.getSession("client-a", "session-1")).resolves.toBeUndefined();
 	});
 });
 

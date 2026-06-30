@@ -30,7 +30,7 @@
 - 通过受控任务做静态应用验证、构建和预览。
 - 发布 `/preview/<project-id>/` 静态预览地址。
 - 持久化会话、模型选择和生成项目文件。
-- 通过独立 worker、Redis 队列和 SQLite runtime DB 支持后台运行、刷新恢复、会话状态展示和取消 run。
+- 通过独立 worker、Redis 队列、Redis live run event stream 和 PostgreSQL runtime store 支持后台运行、刷新恢复、会话状态展示和取消 run。
 - 使用浏览器生成的 `PI_CLIENT_ID` 隔离不同浏览器/用户的 PI session、run 和 project API。
 - 支持 Docker 部署和数据目录挂载。
 
@@ -138,7 +138,7 @@
 - preview 改为静态预览模式，只服务 `index.html` 或 `dist/`、`build/`、`public/` 等静态产物，不再启动 Node 服务。
 - Vite watcher 已忽略 sessions、projects、settings 等运行数据路径，避免 Agent 写文件时触发 Web 应用刷新。
 - Agent 初始化时直接注入模型 API key 读取函数，避免页面刷新后恢复会话时出现 `No API key for provider`。
-- 新增后台 run 能力：PI Web 负责创建 run，独立 PI worker 从 Redis 队列消费任务，run、message 和 run events 持久化到 SQLite runtime DB。
+- 新增后台 run 能力：PI Web 负责创建 run，独立 PI worker 从 Redis 队列消费任务；session、message、run 和关键 run events 持久化到 PostgreSQL，实时 run events 通过 Redis stream 分发。
 - 会话列表已经接入 run 状态，支持 running/cancelling 等状态展示，并提供运行中会话的取消按钮。
 - 刷新页面、关闭页面或切换会话后，正在执行的 run 不依赖浏览器页面继续运行；前端重新进入会话时会从服务端恢复 run 事件。
 - PI-owned 的 session、run、project API 已按 `X-PI-Client-ID` 做浏览器级隔离；PM handoff 入口保持 URL token 方式，不要求 PM 调用携带该 header。
@@ -152,7 +152,7 @@
 - `project_file` 失败卡片渲染已调整：失败或中断时优先显示真实错误信息，不再展示模型尝试写入的完整文件正文，避免误判为“文件已成功创建”。
 - Dockerfile 和 compose 挂载路径改为 `apps/pi-coding-web/data`。
 - `.dockerignore` 已排除递归 `*.tar`、`*.tar.gz`，避免离线镜像包被再次加入 Docker build context。
-- Git ignore 已排除 `.npm-cache/`、`.worktrees/`、`apps/pi-coding-web/data/runtime/pi-runtime.sqlite*` 和 `apps/pi-coding-web/dist-worker/`，这些都是本地缓存、运行库或 worker 构建产物，不应提交。
+- Git ignore 已排除 `.npm-cache/`、`.worktrees/`、`apps/pi-coding-web/data/runtime/pi-runtime.sqlite*` 和 `apps/pi-coding-web/dist-worker/`。其中 SQLite 文件仅用于显式 `PI_RUNTIME_STORE=sqlite` 的本地 fallback，正常 PostgreSQL runtime 不再依赖它。
 - 原 `packages/web-ui/example/data/*` 运行数据从仓库结构中移除。
 - 原生成项目 `packages/web-ui/example/kanban` 从产品代码路径中移除。
 
@@ -164,7 +164,7 @@
 npm install
 ```
 
-后台队列依赖 `packages/web-workspace` 中的 `redis` npm 包。拉取包含后台 worker 的代码后，如果直接执行 `npm run build` 报 `Cannot find module 'redis'`，说明本地 `node_modules` 还没有同步新增依赖，先执行一次 `npm install`。
+后台队列和 live run events 依赖 `packages/web-workspace` 中的 `redis` npm 包；PostgreSQL runtime store 依赖 `pg` npm 包。拉取包含后台 worker 的代码后，如果直接执行 `npm run build` 报 `Cannot find module 'redis'`、`Cannot find module 'pg'` 或类似依赖缺失，说明本地 `node_modules` 还没有同步新增依赖，先执行一次 `npm install`。
 
 ### 构建关键包
 
@@ -187,7 +187,7 @@ npm run check --workspace=pi-coding-web
 
 ### 运行 PI Coding Web
 
-当前后台任务能力默认开启。只启动 Vite Web 进程只能打开页面和 API 网关，但模型生成 run 会进入队列；如果没有 Redis 和 worker，发送消息后不会真正被后台执行。因此本地开发推荐同时启动三个进程：Redis、PI Web、PI worker。
+当前后台任务能力默认开启。只启动 Vite Web 进程只能打开页面和 API 网关，但模型生成 run 会进入队列；如果没有 PostgreSQL、Redis 和 worker，发送消息后不会真正被后台执行或无法持久化。因此本地开发推荐使用 Docker 只启动 PostgreSQL/Redis 依赖服务，再用源码启动 PI Web 和 PI worker。
 
 第一次运行前复制本地配置：
 
@@ -195,13 +195,30 @@ npm run check --workspace=pi-coding-web
 copy apps\pi-coding-web\.env.example apps\pi-coding-web\.env
 ```
 
-如果本机没有 Redis，可以用 Docker 启动一个本地 Redis：
+本地源码运行时，`apps/pi-coding-web/.env` 应使用 PostgreSQL runtime store，并从宿主机连接 Docker 中的 PostgreSQL/Redis：
 
-```bash
-docker run --name pi-coding-redis -p 6379:6379 -d redis:7-alpine
+```env
+PI_RUNTIME_STORE=postgres
+PI_POSTGRES_URL=postgres://pi:pi@127.0.0.1:5432/pi_coding
+PI_REDIS_URL=redis://127.0.0.1:6379
+PI_RUN_QUEUE_NAME=pi:runs:local
 ```
 
-终端 1：启动 PI Web。
+从仓库根目录启动本地依赖服务：
+
+```powershell
+cd C:\VibeCoding\pm-coding\pi-mono-0.73.0
+docker compose -f docker\pi-coding-web\docker-compose.yaml up -d postgres redis
+```
+
+如果本机已经有旧的 `pi-coding-redis` 容器并占用了容器名，可以直接复用它，只要确认它暴露了 `6379`：
+
+```powershell
+docker start pi-coding-redis
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+终端 1：从源码启动 PI Web。
 
 ```bash
 cd apps/pi-coding-web
@@ -225,6 +242,8 @@ http://localhost:5173
 
 如果只是临时验证静态页面、不需要后台生成能力，可以在 `.env` 中将 `PI_RUNS_ENABLED=false` 后只启动 `npm run dev`。这种模式不具备刷新页面后继续执行、会话运行状态、后台取消等能力，不建议作为当前 PI 的正常开发/部署模式。
 
+注意：如果启动时看到 Node 的 `SQLite is an experimental feature` warning，不代表 runtime 正在使用 SQLite；只要 `PI_RUNTIME_STORE=postgres`，实际 session/run/message runtime store 会使用 PostgreSQL。诊断日志仍可能使用 SQLite 文件。
+
 ### Docker 构建
 
 从 `pi-mono-0.73.0` 根目录执行：
@@ -241,11 +260,12 @@ docker save -o docker/pi-coding-web/pi-coding-web-0.73.0.tar pi-coding-web:0.73.
 
 离线部署文件位于 `docker/pi-coding-web`。
 
-当前 Docker 部署不要再使用单容器 `docker run`。PI 的正常运行依赖三类进程：
+当前 Docker 部署不要再使用单容器 `docker run`。PI 的正常运行依赖四类服务：
 
-- `redis`：后台 run 队列和取消标记。
+- `postgres`：权威 runtime store，持久化 session、message、run、durable run events 和 app preview goal。
+- `redis`：后台 run 队列、取消标记和 live run event stream，用于 SSE 实时显示。
 - `pi-coding-web`：Web UI、Vite middleware、session/run API、project API 和 preview 路由。
-- `pi-worker`：真正执行 Agent run，消费 Redis 队列并写入 SQLite runtime DB。
+- `pi-worker`：真正执行 Agent run，消费 Redis 队列，发布 live run events，并写入 PostgreSQL runtime store。
 
 在线或本机构建部署：
 
@@ -276,7 +296,7 @@ docker compose up -d
 
 ```bash
 docker compose ps
-docker compose logs -f pi-coding-web pi-worker redis
+docker compose logs -f postgres redis pi-coding-web pi-worker
 docker compose exec pi-coding-web npm run logs -- --level error --limit 50
 ```
 
@@ -298,23 +318,29 @@ PI 当前的代码生成执行路径已经从“浏览器页面内直接运行 A
 
 部署形态：
 
-- `pi-coding-web`：负责 Web UI、PI session/run API、项目文件 API 和运行事件查询。
-- `pi-worker`：独立 Node 进程，执行真实 Agent run，写入 SQLite runtime DB，并通过 Redis 队列接收任务和取消信号。
-- `redis`：run 队列和取消标记，不存储会话正文；会话、消息、run、run events 存在 `PI_DB_FILE` 指向的 SQLite 文件中。
+- `pi-coding-web`：负责 Web UI、PI session/run API、项目文件 API、durable catch-up 和 SSE live event 路由。
+- `pi-worker`：独立 Node 进程，执行真实 Agent run，通过 Redis 队列接收任务和取消信号，通过 `RunEventSink` 发布 live event 并写入 durable event/checkpoint。
+- `postgres`：权威 runtime store，保存会话、消息、run、durable run events、app preview goal 等数据。
+- `redis`：run 队列、取消标记和 live run event stream，不保存会话正文。
 
 PM handoff 仍保持 URL token 方式，PM 请求不需要携带 `X-PI-Client-ID`，也不需要修改 PM API。handoff 解析完成后，PI 浏览器端会生成并持久化 `PI_CLIENT_ID`，之后 PI 自己的 session、run、project API 都会带 `X-PI-Client-ID`。这个 client id 只用于会话/任务隔离，防止同一 PI 服务上的不同浏览器互相看到或操作 run；它不是认证机制，不能替代登录、权限校验或网络访问控制。
 
-当前 run events 仍以 SQLite runtime DB 为可靠来源，用于刷新恢复、切换会话补历史和服务重启后的状态恢复。后续如果要进一步降低模型回复的前端延迟，可以把 run events API 演进为 SSE：worker 写事件时同时 publish Redis channel，SSE 直接订阅 Redis live channel 做实时显示，SQLite 继续负责批量落库和重连补历史。这个方向不改变当前 Redis 队列 + SQLite 持久化的职责边界。
+当前 run events 已经改为“PostgreSQL durable catch-up + Redis live stream”。worker 对所有 live event 发布 Redis stream；关键事件、message_end 和 checkpoint 写入 PostgreSQL。前端连接 SSE 时先从 PostgreSQL 补 durable history，再从 Redis stream 接收实时事件；断线重连时通过 `afterSeq` 继续。
 
-Docker Compose 部署现在包含 Web、worker 和 Redis 三个服务。离线部署时仍使用同一个 `pi-coding-web:0.73.0` 镜像，`pi-worker` 通过 `npm run worker --workspace=pi-coding-web` 启动。生产环境至少应设置：
+Docker Compose 部署现在包含 Postgres、Redis、Web 和 worker 四个服务。离线部署时仍使用同一个 `pi-coding-web:0.73.0` 镜像，`pi-worker` 通过 `npm run worker --workspace=pi-coding-web` 启动。生产环境至少应设置：
 
 ```env
 PI_RUNS_ENABLED=true
-PI_DB_FILE=./data/runtime/pi-runtime.sqlite
+PI_RUNTIME_STORE=postgres
+PI_POSTGRES_URL=postgres://pi:pi@postgres:5432/pi_coding
 PI_REDIS_URL=redis://redis:6379
 PI_WORKER_ID=pi-worker
 PI_WORKER_CONCURRENCY=2
 PI_RUN_QUEUE_NAME=pi:runs
+PI_RUN_EVENT_STREAM_MAXLEN=5000
+PI_RUN_EVENT_STREAM_TTL_SECONDS=3600
+PI_RUN_EVENT_CHECKPOINT_INTERVAL_MS=400
+PI_RUN_EVENT_CHECKPOINT_MIN_CHARS=256
 PI_CLIENT_ID_REQUIRED=true
 PI_LOG_ENABLED=true
 PI_LOG_STDOUT=true
@@ -330,13 +356,13 @@ PI_LOG_STDOUT=true
 apps/pi-coding-web/.env
 ```
 
-`.env.example` 已列出完整变量并按用途分组，包括：
+`.env.example` 可作为基础模板；复制为 `.env` 后，需要按当前 PostgreSQL + Redis runtime 架构补齐或覆盖相关变量。主要配置按用途分组包括：
 
 - `PI_CLIENTS_ROOT_DIR`、`PI_SETTINGS_FILE`：client/session 项目工作区根目录和服务端设置文件。
 - `PI_SKILLS_DIR`、`PI_DEFAULT_SKILLS_DIR`：服务端 skill 目录。
 - `PI_PREVIEW_BASE_URL`：对浏览器可访问的 PI 公开地址。
 - `PI_PROJECT_INSTALL_COMMAND`、`PI_PROJECT_BUILD_COMMAND`：生成项目安装和构建命令。
-- `PI_RUNS_ENABLED`、`PI_DB_FILE`、`PI_REDIS_URL`、`PI_WORKER_*`、`PI_RUN_QUEUE_NAME`：后台 worker run、SQLite runtime DB 和 Redis 队列配置。
+- `PI_RUNS_ENABLED`、`PI_RUNTIME_STORE`、`PI_POSTGRES_URL`、`PI_REDIS_URL`、`PI_WORKER_*`、`PI_RUN_QUEUE_NAME`、`PI_RUN_EVENT_*`：后台 worker run、PostgreSQL runtime store、Redis 队列和 Redis live event stream 配置。
 - `PI_CLIENT_ID_REQUIRED`：是否强制 PI-owned API 携带 `X-PI-Client-ID`。
 - `PI_LOG_*`：诊断日志、深度调试、保留周期和 SQLite 清理策略。
 - `PI_LANGFUSE_*`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`：Langfuse/OTEL 配置和密钥。
@@ -397,10 +423,10 @@ Docker 部署时应挂载 `apps/pi-coding-web/data`，否则默认日志库会�
 
 Docker 下有两类日志：
 
-- 容器 stdout：`docker compose logs -f pi-coding-web pi-worker redis`，适合看启动、退出、Redis 连接和 warn/error 摘要。
+- 容器 stdout：`docker compose logs -f postgres redis pi-coding-web pi-worker`，适合看启动、退出、PostgreSQL/Redis 连接和 warn/error 摘要。
 - PI 诊断库：`docker compose exec pi-coding-web npm run logs -- --level error --limit 50`，适合查 run、worker、模型、工具和配置诊断事件。
 
-如果 `.env` 缺失，启动诊断会记录 `system.config.env_missing`。如果 Redis 入队失败，会记录 `agent.run.enqueue.error`。如果 run 长时间停在 queued，前端轮询会记录 `agent.remote_run.queued_timeout`，通常表示 `pi-worker` 没有运行或 Redis/队列不可用。
+如果 `.env` 缺失，启动诊断会记录 `system.config.env_missing`。如果 PostgreSQL 连接失败，session/run API 会返回 runtime store 初始化错误；如果 Redis 入队失败，会记录 `agent.run.enqueue.error`。如果 run 长时间停在 queued，前端轮询会记录 `agent.remote_run.queued_timeout`，通常表示 `pi-worker` 没有运行或 Redis/队列不可用。
 
 ```text
 docs/pi-diagnostic-logging-zh.md
@@ -631,11 +657,11 @@ PM 文档是需求主依据；PI 自身提示词只补充执行方式，不应�
 
 ### 多用户与任务队列
 
-当前已经具备独立 worker、Redis 队列、SQLite runtime DB、client id 会话隔离和运行中取消能力，可以支持轻量多会话后台生成。后续如果要作为多人共享服务长期运行，建议继续增加：
+当前已经具备独立 worker、Redis 队列、PostgreSQL runtime store、Redis live run event stream、client id 会话隔离和运行中取消能力，可以支持多人共享服务的基础并发场景。后续如果要长期生产化运行，建议继续增加：
 
 - workspace lease 或 lock。
 - 构建任务队列和构建 worker 隔离。
-- run events SSE 实时通道，Redis 负责 live publish，SQLite 负责重连补历史和持久化。
+- run/project/build 级别的指标、告警和容量控制。
 - preview 生命周期管理。
 - 项目清理策略。
 - 用户、PM session 与 PI session 的映射表。
@@ -690,7 +716,7 @@ npm run check
 
 - 根目录 `npm run build` 会触发 `packages/ai` 的 `generate-models`，可能因为拉取最新模型列表导致 `packages/ai/src/models.generated.ts` 出现变更；提交前需要确认这是否是你想提交的内容。
 - 根目录 `npm run build` 不会构建 `dist-worker/`，启动 worker 前仍要执行 `npm run build:worker --workspace=pi-coding-web`。
-- 如果 `npm run build` 报 `Cannot find module 'redis'`，先执行 `npm install` 同步新增依赖。
+- 如果 `npm run build` 报 `Cannot find module 'redis'`、`Cannot find module 'pg'` 或类似依赖缺失，先执行 `npm install` 同步新增依赖。
 - `check:browser-smoke` 在部分受限沙箱环境中可能因为 esbuild spawn 被拒绝而无法完成，需要在允许子进程执行的本地环境中复跑。
 
 ## 10. 维护原则

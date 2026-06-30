@@ -1,10 +1,32 @@
 services:
+  postgres:
+    image: ${PI_POSTGRES_IMAGE:-postgres:16-alpine}
+    pull_policy: ${PI_POSTGRES_PULL_POLICY:-never}
+    container_name: pi-coding-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PI_POSTGRES_DB:-pi_coding}
+      POSTGRES_USER: ${PI_POSTGRES_USER:-pi}
+      POSTGRES_PASSWORD: ${PI_POSTGRES_PASSWORD:-pi}
+    volumes:
+      - pi-postgres-data:/var/lib/postgresql/data:Z
+    ports:
+      - "${PI_POSTGRES_HOST_BIND:-127.0.0.1}:${PI_POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
-    image: redis:7-alpine
+    image: ${PI_REDIS_IMAGE:-redis:7-alpine}
+    pull_policy: ${PI_REDIS_PULL_POLICY:-never}
     container_name: pi-coding-redis
     restart: unless-stopped
     volumes:
       - pi-redis-data:/data:Z
+    ports:
+      - "${PI_REDIS_HOST_BIND:-127.0.0.1}:${PI_REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -22,11 +44,15 @@ services:
     environment:
       NODE_ENV: production
       PI_REDIS_URL: redis://redis:6379
+      PI_RUNTIME_STORE: ${PI_RUNTIME_STORE:-postgres}
+      PI_POSTGRES_URL: "${PI_POSTGRES_URL:-postgres://pi:pi@postgres:5432/pi_coding}"
     ports:
-      - "${PI_CODING_WEB_PORT:-5173}:5173"
+      - "${PI_CODING_WEB_HOST_BIND:-0.0.0.0}:${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
       - pi-coding-web-data:/app/apps/pi-coding-web/data:z
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -54,13 +80,18 @@ services:
     environment:
       NODE_ENV: production
       PI_REDIS_URL: redis://redis:6379
+      PI_RUNTIME_STORE: ${PI_RUNTIME_STORE:-postgres}
+      PI_POSTGRES_URL: "${PI_POSTGRES_URL:-postgres://pi:pi@postgres:5432/pi_coding}"
       PI_WORKER_ID: ${PI_WORKER_ID:-pi-worker}
     volumes:
       - pi-coding-web-data:/app/apps/pi-coding-web/data:z
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
 
 volumes:
   pi-coding-web-data:
+  pi-postgres-data:
   pi-redis-data:

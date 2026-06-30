@@ -4,6 +4,8 @@ import {
 	clampGeneratedAppsPanelWidth,
 	filterGeneratedApps,
 	formatGeneratedAppUpdatedAt,
+	type GeneratedAppRecord,
+	isRuntimeSessionDeletionDeferred,
 	loadGeneratedApps,
 	loadSessionProjectApps,
 	markGeneratedAppRunCancelling,
@@ -16,6 +18,7 @@ describe("generated apps state", () => {
 
 	beforeEach(() => {
 		vi.restoreAllMocks();
+		vi.useRealTimers();
 		vi.stubGlobal("window", { localStorage: createStorage(clientId) });
 	});
 
@@ -52,11 +55,43 @@ describe("generated apps state", () => {
 		expect(projects[0].title).toBe("Personal Intro App");
 	});
 
-	it("loads runtime sessions as app panel records even without preview URLs", async () => {
-		const calls: string[] = [];
+	it("does not treat preview service running status as an active runtime run", async () => {
+		const fetchImpl: typeof fetch = async (input) => {
+			const url = String(input);
+			if (url.endsWith("/api/pi-projects")) {
+				return jsonResponse({
+					projects: [
+						{
+							projectId: "preview-only",
+							sessionId: "preview-session",
+							title: "Preview Only",
+							status: "running",
+							mode: "static",
+							previewUrl: "http://localhost:5173/preview/preview-only/",
+							fileCount: 1,
+							updatedAt: "2026-06-12T06:40:00.000Z",
+						},
+					],
+				});
+			}
+			if (url.endsWith("/api/pi-sessions")) return jsonResponse({ sessions: [] });
+			return jsonResponse({}, 404);
+		};
+
+		const projects = await loadGeneratedApps(fetchImpl, "http://localhost:5173");
+
+		expect(projects[0]).toMatchObject({
+			projectId: "preview-only",
+			status: "idle",
+		});
+		expect(projects[0].runStatus).toBeUndefined();
+	});
+
+	it("loads runtime sessions as app panel records through batch project summaries", async () => {
+		const calls: Array<{ url: string; init?: RequestInit }> = [];
 		const fetchImpl: typeof fetch = async (input, init) => {
 			const url = String(input);
-			calls.push(`${init?.method || "GET"} ${url}`);
+			calls.push({ url, init });
 			if (url.endsWith("/api/pi-projects")) {
 				return jsonResponse({
 					projects: [
@@ -95,14 +130,15 @@ describe("generated apps state", () => {
 					],
 				});
 			}
-			if (url.endsWith("/api/pi-projects/workspace/files")) {
-				const body = JSON.parse(String(init?.body || "{}")) as { sessionId: string };
+			if (url.endsWith("/api/pi-projects/batch-summary")) {
+				const body = JSON.parse(String(init?.body || "{}")) as { sessions?: Array<{ sessionId: string }> };
 				return jsonResponse({
-					projectId: body.sessionId === "session-1" ? "plain-chat-session-1" : "preview-session-2",
-					sessionId: body.sessionId,
-					title: body.sessionId === "session-1" ? "Plain Chat" : "Preview App",
-					files: body.sessionId === "session-1" ? [] : ["index.html", "style.css", "app.js", "README.md"],
-					fileCount: body.sessionId === "session-1" ? 0 : 4,
+					summaries: (body.sessions || []).map((session) => ({
+						projectId: session.sessionId === "session-1" ? "plain-chat-session-1" : "preview-session-2",
+						sessionId: session.sessionId,
+						title: session.sessionId === "session-1" ? "Plain Chat" : "Preview App",
+						fileCount: session.sessionId === "session-1" ? 0 : 4,
+					})),
 				});
 			}
 			return jsonResponse({}, 404);
@@ -125,21 +161,43 @@ describe("generated apps state", () => {
 			fileCount: 0,
 			status: "idle",
 		});
-		expect(calls).toContain("GET http://localhost:5173/api/pi-sessions");
+		const batchCall = calls.find((call) => call.url.endsWith("/api/pi-projects/batch-summary"));
+		expect(batchCall).toMatchObject({
+			url: "http://localhost:5173/api/pi-projects/batch-summary",
+			init: {
+				method: "POST",
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					"X-PI-Client-ID": clientId,
+				},
+			},
+		});
+		expect(JSON.parse(String(batchCall?.init?.body || "{}"))).toEqual({
+			sessions: [
+				{ sessionId: "session-1", title: "Plain Chat" },
+				{ sessionId: "session-2", title: "Preview App" },
+			],
+		});
+		expect(calls.map((call) => `${call.init?.method || "GET"} ${call.url}`)).toContain(
+			"GET http://localhost:5173/api/pi-sessions",
+		);
+		expect(calls.some((call) => call.url.endsWith("/api/pi-projects/workspace/files"))).toBe(false);
 	});
 
 	it("merges browser-only sessions into app panel records", async () => {
 		const fetchImpl: typeof fetch = async (input, init) => {
 			const url = String(input);
 			if (url.endsWith("/api/pi-projects")) return jsonResponse({ projects: [] });
-			if (url.endsWith("/api/pi-projects/workspace/files")) {
-				const body = JSON.parse(String(init?.body || "{}")) as { sessionId: string };
+			if (url.endsWith("/api/pi-projects/batch-summary")) {
+				const body = JSON.parse(String(init?.body || "{}")) as { sessions?: Array<{ sessionId: string }> };
 				return jsonResponse({
-					projectId: "browser-only-session",
-					sessionId: body.sessionId,
-					title: "Browser Only",
-					files: [],
-					fileCount: 0,
+					summaries: (body.sessions || []).map((session) => ({
+						projectId: "browser-only-session",
+						sessionId: session.sessionId,
+						title: "Browser Only",
+						fileCount: 0,
+					})),
 				});
 			}
 			return jsonResponse({}, 404);
@@ -169,6 +227,128 @@ describe("generated apps state", () => {
 				status: "idle",
 			}),
 		]);
+	});
+
+	it("reuses identical batch summaries inside the short TTL and bypasses cache on force refresh", async () => {
+		vi.useFakeTimers();
+		const calls: Array<{ url: string; init?: RequestInit }> = [];
+		let batchCount = 0;
+		const fetchImpl: typeof fetch = async (input, init) => {
+			const url = String(input);
+			calls.push({ url, init });
+			if (url.endsWith("/api/pi-projects")) return jsonResponse({ projects: [] });
+			if (url.endsWith("/api/pi-projects/batch-summary")) {
+				batchCount += 1;
+				const body = JSON.parse(String(init?.body || "{}")) as { sessions?: Array<{ sessionId: string }> };
+				return jsonResponse({
+					summaries: (body.sessions || []).map((session) => ({
+						projectId: `${session.sessionId}-project-${batchCount}`,
+						sessionId: session.sessionId,
+						title: "Cached Session",
+						fileCount: batchCount,
+					})),
+				});
+			}
+			return jsonResponse({}, 404);
+		};
+		const sessions = [
+			{
+				id: "session-cache",
+				title: "Cached Session",
+				createdAt: "2026-06-12T06:00:00.000Z",
+				lastModified: "2026-06-12T06:10:00.000Z",
+			},
+		];
+
+		const first = await loadSessionProjectApps(sessions, fetchImpl, "http://localhost:5173");
+		const second = await loadSessionProjectApps(sessions, fetchImpl, "http://localhost:5173");
+		const forced = await loadSessionProjectApps(sessions, fetchImpl, "http://localhost:5173", { force: true });
+		vi.advanceTimersByTime(15_001);
+		const afterTtl = await loadSessionProjectApps(sessions, fetchImpl, "http://localhost:5173");
+
+		expect(first[0].projectId).toBe("session-cache-project-1");
+		expect(second[0].projectId).toBe("session-cache-project-1");
+		expect(forced[0].projectId).toBe("session-cache-project-2");
+		expect(afterTtl[0].projectId).toBe("session-cache-project-3");
+		expect(calls.filter((call) => call.url.endsWith("/api/pi-projects/batch-summary"))).toHaveLength(3);
+	});
+
+	it("invalidates batch summary cache when a session run update token changes inside the TTL", async () => {
+		vi.useFakeTimers();
+		let batchCount = 0;
+		const fetchImpl: typeof fetch = async (input, init) => {
+			const url = String(input);
+			if (url.endsWith("/api/pi-projects")) return jsonResponse({ projects: [] });
+			if (url.endsWith("/api/pi-projects/batch-summary")) {
+				batchCount += 1;
+				const body = JSON.parse(String(init?.body || "{}")) as { sessions?: Array<{ sessionId: string }> };
+				return jsonResponse({
+					summaries: (body.sessions || []).map((session) => ({
+						projectId: `${session.sessionId}-project-${batchCount}`,
+						sessionId: session.sessionId,
+						title: "Run Token Session",
+						fileCount: batchCount,
+					})),
+				});
+			}
+			return jsonResponse({}, 404);
+		};
+		const runningSession = {
+			id: "session-run-token",
+			title: "Run Token Session",
+			createdAt: "2026-06-12T06:00:00.000Z",
+			lastModified: "2026-06-12T06:10:00.000Z",
+			runStatus: "running",
+			activeRunId: "run-1",
+			runUpdatedAt: "2026-06-12T06:11:00.000Z",
+		};
+
+		const first = await loadSessionProjectApps([runningSession], fetchImpl, "http://localhost:5173");
+		const cached = await loadSessionProjectApps([runningSession], fetchImpl, "http://localhost:5173");
+		const completed = await loadSessionProjectApps(
+			[
+				{
+					...runningSession,
+					runStatus: "completed",
+					runUpdatedAt: "2026-06-12T06:12:00.000Z",
+				},
+			],
+			fetchImpl,
+			"http://localhost:5173",
+		);
+
+		expect(first[0].fileCount).toBe(1);
+		expect(cached[0].fileCount).toBe(1);
+		expect(completed[0].fileCount).toBe(2);
+		expect(batchCount).toBe(2);
+	});
+
+	it("queues a force refresh requested while the generated apps panel is already loading", async () => {
+		vi.stubGlobal("HTMLElement", class {});
+		vi.stubGlobal("customElements", {
+			define: vi.fn(),
+			get: vi.fn(),
+		});
+		const { GeneratedAppsPanel } = await import("../src/app/GeneratedAppsPanel.js");
+		const panel = new GeneratedAppsPanel();
+		let resolveInitialLoad: (projects: []) => void = () => undefined;
+		const initialLoad = new Promise<[]>((resolve) => {
+			resolveInitialLoad = resolve;
+		});
+		const loadProjects = vi
+			.fn<(options?: { force?: boolean }) => Promise<[]>>()
+			.mockReturnValueOnce(initialLoad)
+			.mockResolvedValueOnce([]);
+		panel.loadProjects = loadProjects;
+
+		const initialRefresh = panel.refresh();
+		await Promise.resolve();
+		void panel.refresh({ force: true });
+		resolveInitialLoad([]);
+		await initialRefresh;
+
+		expect(loadProjects).toHaveBeenCalledTimes(2);
+		expect(loadProjects.mock.calls.map(([options]) => options)).toEqual([{}, { force: true }]);
 	});
 
 	it("clamps the generated apps panel width to readable desktop bounds", () => {
@@ -237,12 +417,34 @@ describe("generated apps state", () => {
 		expect(formatGeneratedAppUpdatedAt("2026-06-10T01:32:00.000Z", now)).toBe("2026/06/10 09:32");
 	});
 
-	it("uses two session execution status labels", () => {
+	it("labels generated app run states distinctly", () => {
 		expect(projectSessionStatusLabel("running")).toBe("正在执行");
 		expect(projectSessionStatusLabel("queued")).toBe("正在执行");
-		expect(projectSessionStatusLabel("cancelling")).toBe("正在执行");
+		expect(projectSessionStatusLabel("cancelling")).toBe("正在取消");
+		expect(projectSessionStatusLabel("cancelled")).toBe("已取消");
+		expect(projectSessionStatusLabel("interrupted")).toBe("已中断");
+		expect(projectSessionStatusLabel("failed")).toBe("失败");
 		expect(projectSessionStatusLabel("completed")).toBe("空闲");
 		expect(projectSessionStatusLabel(undefined)).toBe("空闲");
+	});
+
+	it("defers local session cleanup only when force delete cancelled active runs", () => {
+		expect(
+			isRuntimeSessionDeletionDeferred({
+				deleted: false,
+				sessionId: "session-active",
+				cancelledRuns: 1,
+			}),
+		).toBe(true);
+		expect(isRuntimeSessionDeletionDeferred({ deleted: false, sessionId: "session-orphan" })).toBe(false);
+		expect(
+			isRuntimeSessionDeletionDeferred({
+				deleted: true,
+				sessionId: "session-deleted",
+				cancelledRuns: 1,
+			}),
+		).toBe(false);
+		expect(isRuntimeSessionDeletionDeferred(undefined)).toBe(false);
 	});
 
 	it("marks a generated app run as cancelling without changing other cards", () => {
@@ -255,6 +457,41 @@ describe("generated apps state", () => {
 
 		expect(nextProjects[0]).toMatchObject({ projectId: "active-app", status: "running", runStatus: "cancelling" });
 		expect(nextProjects[1]).toBe(projects[1]);
+	});
+
+	it("force refreshes generated apps after stopping a run", async () => {
+		vi.stubGlobal("HTMLElement", class {});
+		vi.stubGlobal("customElements", {
+			define: vi.fn(),
+			get: vi.fn(),
+		});
+		const { GeneratedAppsPanel } = await import("../src/app/GeneratedAppsPanel.js");
+		const panel = new GeneratedAppsPanel() as GeneratedAppsPanel & {
+			projects: GeneratedAppRecord[];
+			stopRun(project: GeneratedAppRecord): Promise<void>;
+		};
+		const runningProject: GeneratedAppRecord = {
+			...createProject("active-app", "Active App"),
+			status: "running",
+			runStatus: "running",
+			activeRunId: "run-1",
+		};
+		const refreshedProject: GeneratedAppRecord = {
+			...runningProject,
+			status: "idle",
+			runStatus: "cancelled",
+		};
+		const cancelRun = vi.fn(async () => undefined);
+		const loadProjects = vi.fn(async () => [refreshedProject]);
+		panel.projects = [runningProject];
+		panel.cancelRun = cancelRun;
+		panel.loadProjects = loadProjects;
+
+		await panel.stopRun(runningProject);
+
+		expect(cancelRun).toHaveBeenCalledWith("run-1");
+		expect(loadProjects).toHaveBeenCalledWith({ force: true });
+		expect(panel.projects).toEqual([refreshedProject]);
 	});
 
 	it("rolls back generated app cancelling state when cancelling the run fails", async () => {

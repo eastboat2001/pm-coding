@@ -34,7 +34,55 @@ describe("RemoteAgentController", () => {
 
 		expect(controller.activeRunId).toBeUndefined();
 		expect(controller.lastSeq).toBe(1);
-		expect(agent.appliedEvents.at(-1)?.type).toBe("agent_end");
+		expect(agent.appliedEvents.map((event) => event.type)).toEqual(["agent_start", "message_end", "agent_end"]);
+		expect(agent.state.messages).toHaveLength(1);
+		const message = agent.state.messages[0];
+		expect(message.role).toBe("assistant");
+		if (message.role === "assistant") {
+			expect(message.stopReason).toBe("aborted");
+			expect(message.errorMessage).toBe("Request was aborted.");
+			expect(message.content).toEqual([]);
+		}
+		expect(agent.state.isStreaming).toBe(false);
+	});
+
+	it("adds a cancelled assistant marker even when agent_end arrived without an assistant message_end", async () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		await controller.applyRunEvent(createRunEventRecord(1, "r1", { type: "agent_start" }));
+		await controller.applyRunEvent(createRunEventRecord(2, "r1", { type: "agent_end", messages: [] }));
+		await controller.settleRemoteRun("cancelled");
+
+		expect(controller.activeRunId).toBeUndefined();
+		expect(agent.appliedEvents.map((event) => event.type)).toEqual(["agent_start", "agent_end", "message_end"]);
+		expect(agent.state.messages[0]).toMatchObject({
+			role: "assistant",
+			stopReason: "aborted",
+			errorMessage: "Request was aborted.",
+		});
+		expect(agent.state.isStreaming).toBe(false);
+	});
+
+	it("adds a cancelled assistant marker after a tool-use assistant turn", async () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+		const toolUseAssistant = createToolUseAssistantMessage();
+
+		controller.startRemoteRun("r1");
+		await controller.applyRunEvent(createRunEventRecord(1, "r1", { type: "agent_start" }));
+		await controller.applyRunEvent(createRunEventRecord(2, "r1", { type: "message_end", message: toolUseAssistant }));
+		await controller.settleRemoteRun("cancelled");
+
+		expect(controller.activeRunId).toBeUndefined();
+		expect(agent.state.messages).toHaveLength(2);
+		expect(agent.state.messages[0]).toBe(toolUseAssistant);
+		expect(agent.state.messages[1]).toMatchObject({
+			role: "assistant",
+			stopReason: "aborted",
+			errorMessage: "Request was aborted.",
+		});
 		expect(agent.state.isStreaming).toBe(false);
 	});
 
@@ -166,6 +214,78 @@ describe("RemoteAgentController", () => {
 		expect(agent.state.isStreaming).toBe(true);
 	});
 
+	it("hydrates an active run checkpoint seq even when no checkpoint event is available", () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		controller.hydrateCheckpoint(undefined, 9);
+
+		expect(controller.lastSeq).toBe(9);
+		expect(agent.appliedEvents).toEqual([]);
+		expect(agent.state.isStreaming).toBe(true);
+	});
+
+	it("hydrates an active run checkpoint event into streaming message state", () => {
+		const streamingAssistant = createAssistantMessage("checkpoint output");
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		controller.hydrateCheckpoint(
+			createRunEventRecord(7, "r1", { type: "message_update", message: streamingAssistant }),
+			7,
+		);
+
+		expect(controller.lastSeq).toBe(7);
+		expect(agent.appliedEvents).toEqual([]);
+		expect(agent.state.streamingMessage).toEqual(streamingAssistant);
+		expect(agent.state.isStreaming).toBe(true);
+	});
+
+	it("does not let a stale checkpoint event overwrite newer streaming state", () => {
+		const newerStreamingAssistant = createAssistantMessage("newer output");
+		const staleStreamingAssistant = createAssistantMessage("stale checkpoint output");
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		controller.hydrateRunEvents([
+			createRunEventRecord(10, "r1", { type: "message_update", message: newerStreamingAssistant }),
+		]);
+		controller.hydrateCheckpoint(
+			createRunEventRecord(7, "r1", { type: "message_update", message: staleStreamingAssistant }),
+			8,
+		);
+
+		expect(controller.lastSeq).toBe(10);
+		expect(agent.state.streamingMessage).toEqual(newerStreamingAssistant);
+		expect(agent.state.isStreaming).toBe(true);
+	});
+
+	it("requires an active remote run before hydrating a checkpoint", () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		expect(() => controller.hydrateCheckpoint(undefined, 1)).toThrow(
+			"startRemoteRun() must be called before hydrateCheckpoint().",
+		);
+	});
+
+	it("rejects checkpoint events for a different active remote run", () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+
+		expect(() =>
+			controller.hydrateCheckpoint(
+				createRunEventRecord(1, "r2", { type: "message_update", message: createAssistantMessage("wrong run") }),
+				1,
+			),
+		).toThrow("Remote run event r2 does not match active run r1.");
+	});
+
 	it("drains missed events after the applied checkpoint before terminal settle", async () => {
 		const agent = createFakeRemoteAgent();
 		const controller = new RemoteAgentController(agent as never);
@@ -242,6 +362,33 @@ function createAssistantMessage(text: string): AssistantMessage {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
+
+function createToolUseAssistantMessage(): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [
+			{
+				type: "toolCall",
+				id: "call-1",
+				name: "skill_load",
+				arguments: { name: "frontend-design" },
+			},
+		],
+		api: "openai-responses",
+		provider: "openai",
+		model: "mock",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};
 }

@@ -20,6 +20,23 @@ export {
 } from "./preview-readiness-checker.js";
 export { type RetryClassification, RetryPolicy, type RetryPolicyOptions } from "./retry-policy.js";
 export { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
+export {
+	InMemoryRunEventBus,
+	RedisRunEventBus,
+	runEventStreamKey,
+	type LiveRunEvent,
+	type RedisRunEventBusClient,
+	type RedisRunEventBusOptions,
+	type RunEventBus,
+	type RunEventIdentity,
+	type RunEventReadRequest,
+} from "./run-event-bus.js";
+export {
+	RunEventSink,
+	type RunEventSinkAgentEvent,
+	type RunEventSinkOptions,
+	type RunEventSinkStore,
+} from "./run-event-sink.js";
 export type { ClaimedRun, RunQueue, RunQueueIdentity, RunQueueItem } from "./run-queue.js";
 export { InMemoryRunQueue, RedisRunQueue } from "./run-queue.js";
 export {
@@ -36,6 +53,8 @@ export type {
 } from "./run-worker-service.js";
 export { WorkspaceRunWorkerService } from "./run-worker-service.js";
 export { RuntimeDbStore } from "./runtime-db.js";
+export { createRuntimeStore } from "./runtime-store-factory.js";
+export type { RuntimeStore } from "./runtime-store.js";
 export type { ServerDirectAgentTool } from "./server-agent-tools.js";
 export { createServerDirectProjectTools, createServerDirectSkillTools } from "./server-agent-tools.js";
 export type { SkillLoadParams, SkillResourceParams } from "./skill-tool-contract.js";
@@ -92,6 +111,7 @@ export type {
 	ResourceDiagnostic,
 	RunStatus,
 	RunStatusPatch,
+	RuntimeActiveRunRestore,
 	RuntimeMessageRecord,
 	RuntimeRunEventListResult,
 	RuntimeRunEventRecord,

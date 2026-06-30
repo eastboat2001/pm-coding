@@ -3,6 +3,7 @@ import {
 	formatSkillLoadResult,
 	prepareSkillLoadArguments,
 	prepareSkillResourceArguments,
+	skillLoadSchema,
 } from "../src/skill-tool-contract.js";
 import type { SkillLoadResult } from "../src/types.js";
 
@@ -11,6 +12,12 @@ describe("skill tool contract", () => {
 		expect(prepareSkillLoadArguments({ arguments: { skillName: "ui-polish" } })).toEqual({
 			name: "ui-polish",
 		});
+	});
+
+	it("tells models to use only listed skill names", () => {
+		const description = schemaDescription(skillLoadSchema.properties.name);
+		expect(description).toContain("Only use a name listed in <available_skills>");
+		expect(description).not.toContain("ui-polish");
 	});
 
 	it("prepares skill_resource arguments from JSON aliases", () => {
@@ -68,3 +75,8 @@ describe("skill tool contract", () => {
 		);
 	});
 });
+
+function schemaDescription(schema: object): string {
+	const description = "description" in schema ? schema.description : undefined;
+	return typeof description === "string" ? description : "";
+}

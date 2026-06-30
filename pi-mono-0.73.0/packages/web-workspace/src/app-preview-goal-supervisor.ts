@@ -3,7 +3,7 @@ import type { AppPreviewGoalService } from "./app-preview-goal-service.js";
 import type { PreviewReadinessChecker, PreviewReadinessResult } from "./preview-readiness-checker.js";
 import { RetryPolicy } from "./retry-policy.js";
 import type { RunQueue } from "./run-queue.js";
-import type { RuntimeDbStore } from "./runtime-db.js";
+import type { RuntimeStore } from "./runtime-store.js";
 import type { RunStatus, RuntimeRunEventRecord, RuntimeRunRecord } from "./types.js";
 
 const ACTIVE_RUN_STATUSES = new Set<RunStatus>(["queued", "running", "cancelling"]);
@@ -13,7 +13,7 @@ const PROVIDER_TRANSIENT_FAILURE_REASON = "provider_transient_error";
 const RETRY_POLICY = new RetryPolicy();
 
 export interface AppPreviewGoalSupervisorOptions {
-	db: RuntimeDbStore;
+	db: RuntimeStore;
 	queue: RunQueue;
 	goals: AppPreviewGoalService;
 	readiness: Pick<PreviewReadinessChecker, "check">;
@@ -21,7 +21,7 @@ export interface AppPreviewGoalSupervisorOptions {
 }
 
 export class AppPreviewGoalSupervisor {
-	private readonly db: RuntimeDbStore;
+	private readonly db: RuntimeStore;
 	private readonly queue: RunQueue;
 	private readonly goals: AppPreviewGoalService;
 	private readonly readiness: Pick<PreviewReadinessChecker, "check">;
@@ -38,12 +38,12 @@ export class AppPreviewGoalSupervisor {
 	async afterRunTerminal(run: RuntimeRunRecord): Promise<void> {
 		if (!TERMINAL_RUN_STATUSES.has(run.status)) return;
 
-		const goal = this.goals.get(run.clientId, run.sessionId);
+		const goal = await this.goals.get(run.clientId, run.sessionId);
 		if (!goal || goal.status !== "active") return;
 		if (goal.lastRunId && goal.lastRunId !== run.runId) return;
 
 		if (run.status === "cancelled") {
-			const updated = this.goals.mark({
+			const updated = await this.goals.mark({
 				clientId: run.clientId,
 				sessionId: run.sessionId,
 				status: "cancelled",
@@ -52,13 +52,13 @@ export class AppPreviewGoalSupervisor {
 				completedAt: new Date().toISOString(),
 			});
 			if (updated) {
-				this.goals.event(updated, "blocked", "run_cancelled", { terminalStatus: run.status }, run.runId);
+				await this.goals.event(updated, "blocked", "run_cancelled", { terminalStatus: run.status }, run.runId);
 			}
 			return;
 		}
 
 		if (run.status === "interrupted") {
-			const updated = this.goals.mark({
+			const updated = await this.goals.mark({
 				clientId: run.clientId,
 				sessionId: run.sessionId,
 				status: "blocked",
@@ -67,13 +67,18 @@ export class AppPreviewGoalSupervisor {
 				completedAt: new Date().toISOString(),
 			});
 			if (updated) {
-				this.goals.event(updated, "blocked", "run_interrupted", { terminalStatus: run.status }, run.runId);
+				await this.goals.event(updated, "blocked", "run_interrupted", { terminalStatus: run.status }, run.runId);
 			}
 			return;
 		}
 
-		if (isTransientProviderFailureWithoutDurableOutput(run, this.db.listRunEvents(run.clientId, run.runId, 0))) {
-			const updated = this.goals.mark({
+		if (
+			isTransientProviderFailureWithoutDurableOutput(
+				run,
+				await this.db.listRunEvents(run.clientId, run.runId, 0),
+			)
+		) {
+			const updated = await this.goals.mark({
 				clientId: run.clientId,
 				sessionId: run.sessionId,
 				status: "blocked",
@@ -82,7 +87,7 @@ export class AppPreviewGoalSupervisor {
 				completedAt: new Date().toISOString(),
 			});
 			if (updated) {
-				this.goals.event(
+				await this.goals.event(
 					updated,
 					"retry_exhausted",
 					"transient_provider_error",
@@ -93,7 +98,7 @@ export class AppPreviewGoalSupervisor {
 			return;
 		}
 
-		const session = this.db.getSession(run.clientId, run.sessionId);
+		const session = await this.db.getSession(run.clientId, run.sessionId);
 		if (!session) return;
 
 		const readiness = await this.readiness.check({
@@ -103,7 +108,7 @@ export class AppPreviewGoalSupervisor {
 		});
 
 		if (readiness.ready) {
-			const updated = this.goals.mark({
+			const updated = await this.goals.mark({
 				clientId: run.clientId,
 				sessionId: run.sessionId,
 				status: "preview_ready",
@@ -112,12 +117,12 @@ export class AppPreviewGoalSupervisor {
 				lastFailureReason: null,
 				completedAt: new Date().toISOString(),
 			});
-			if (updated) this.goals.event(updated, "preview_ready", "ready", readiness, run.runId);
+			if (updated) await this.goals.event(updated, "preview_ready", "ready", readiness, run.runId);
 			return;
 		}
 
 		if (goal.continuationRunsUsed >= goal.maxContinuationRuns) {
-			const updated = this.goals.mark({
+			const updated = await this.goals.mark({
 				clientId: run.clientId,
 				sessionId: run.sessionId,
 				status: "budget_limited",
@@ -125,14 +130,14 @@ export class AppPreviewGoalSupervisor {
 				lastFailureReason: readiness.reasonCode,
 				completedAt: new Date().toISOString(),
 			});
-			if (updated) this.goals.event(updated, "budget_limited", readiness.reasonCode, readiness, run.runId);
+			if (updated) await this.goals.event(updated, "budget_limited", readiness.reasonCode, readiness, run.runId);
 			return;
 		}
 
-		if (this.hasOtherActiveRun(run)) return;
+		if (await this.hasOtherActiveRun(run)) return;
 
 		const continuationRunId = this.createRunId();
-		const continuation = this.db.createContinuationRun({
+		const continuation = await this.db.createContinuationRun({
 			runId: continuationRunId,
 			clientId: run.clientId,
 			sessionId: run.sessionId,
@@ -145,10 +150,10 @@ export class AppPreviewGoalSupervisor {
 			await this.queue.enqueue({ clientId: continuation.clientId, runId: continuation.runId });
 		} catch (error) {
 			const message = safeErrorMessage(error);
-			this.db.updateRunStatus(continuation.runId, continuation.clientId, "failed", {
+			await this.db.updateRunStatus(continuation.runId, continuation.clientId, "failed", {
 				error: `queue enqueue failed: ${message}`,
 			});
-			const updated = this.goals.mark({
+			const updated = await this.goals.mark({
 				clientId: run.clientId,
 				sessionId: run.sessionId,
 				status: "blocked",
@@ -157,7 +162,7 @@ export class AppPreviewGoalSupervisor {
 				completedAt: new Date().toISOString(),
 			});
 			if (updated) {
-				this.goals.event(
+				await this.goals.event(
 					updated,
 					"queue_unavailable",
 					"queue_unavailable",
@@ -171,7 +176,7 @@ export class AppPreviewGoalSupervisor {
 			}
 			return;
 		}
-		const updated = this.goals.mark({
+		const updated = await this.goals.mark({
 			clientId: run.clientId,
 			sessionId: run.sessionId,
 			status: "active",
@@ -181,8 +186,8 @@ export class AppPreviewGoalSupervisor {
 		});
 		if (!updated) return;
 
-		this.goals.event(updated, "preview_check_failed", readiness.reasonCode, readiness, run.runId);
-		this.goals.event(
+		await this.goals.event(updated, "preview_check_failed", readiness.reasonCode, readiness, run.runId);
+		await this.goals.event(
 			updated,
 			"continuation_scheduled",
 			"readiness_not_ready",
@@ -191,10 +196,10 @@ export class AppPreviewGoalSupervisor {
 		);
 	}
 
-	private hasOtherActiveRun(run: RuntimeRunRecord): boolean {
-		return this.db
-			.listRunsForSession(run.clientId, run.sessionId)
-			.some((candidate) => candidate.runId !== run.runId && ACTIVE_RUN_STATUSES.has(candidate.status));
+	private async hasOtherActiveRun(run: RuntimeRunRecord): Promise<boolean> {
+		return (await this.db.listRunsForSession(run.clientId, run.sessionId)).some(
+			(candidate) => candidate.runId !== run.runId && ACTIVE_RUN_STATUSES.has(candidate.status),
+		);
 	}
 }
 

@@ -42,6 +42,7 @@ services:
       PI_REDIS_URL: redis://redis:6379
       PI_RUNTIME_STORE: ${PI_RUNTIME_STORE:-postgres}
       PI_POSTGRES_URL: "${PI_POSTGRES_URL:-postgres://pi:pi@postgres:5432/pi_coding}"
+      PI_MODEL_STREAM_IDLE_TIMEOUT_MS: ${PI_MODEL_STREAM_IDLE_TIMEOUT_MS:-120000}
     ports:
       - "${PI_CODING_WEB_HOST_BIND:-0.0.0.0}:${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
@@ -76,6 +77,7 @@ services:
       PI_REDIS_URL: redis://redis:6379
       PI_RUNTIME_STORE: ${PI_RUNTIME_STORE:-postgres}
       PI_POSTGRES_URL: "${PI_POSTGRES_URL:-postgres://pi:pi@postgres:5432/pi_coding}"
+      PI_MODEL_STREAM_IDLE_TIMEOUT_MS: ${PI_MODEL_STREAM_IDLE_TIMEOUT_MS:-120000}
       PI_WORKER_ID: ${PI_WORKER_ID:-pi-worker}
     volumes:
       - ./data/app:/app/apps/pi-coding-web/data:z

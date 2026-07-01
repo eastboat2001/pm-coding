@@ -8,12 +8,12 @@ import {
 } from "../src/runtime/run-transient-status.js";
 
 describe("run transient status", () => {
-	it("formats provider stalled status as explicit recovery monitoring instead of vague waiting", () => {
+	it("formats provider stalled status as neutral model processing feedback", () => {
 		expect(providerStallStatusText()).toBe(
-			"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.",
+			"Model is still processing. Tool calls or long context steps may pause visible output briefly.",
 		);
 		expect(providerStallStatusText((label) => `ZH:${label}`)).toBe(
-			"ZH:Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.",
+			"ZH:Model is still processing. Tool calls or long context steps may pause visible output briefly.",
 		);
 	});
 
@@ -40,8 +40,9 @@ describe("run transient status", () => {
 		).toBe("run reconnecting");
 	});
 
-	it("shows provider stalled status quickly before the backend stream idle timeout", () => {
-		expect(providerStallStatusDelayMs(60_000)).toBe(5_000);
+	it("delays provider processing status relative to the backend stream idle timeout", () => {
+		expect(providerStallStatusDelayMs(120_000)).toBe(30_000);
+		expect(providerStallStatusDelayMs(60_000)).toBe(30_000);
 		expect(providerStallStatusDelayMs(10_000)).toBe(5_000);
 		expect(providerStallStatusDelayMs(2_000)).toBe(1_000);
 	});

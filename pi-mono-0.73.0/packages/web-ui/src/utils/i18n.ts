@@ -35,7 +35,7 @@ declare module "@mariozechner/mini-lit" {
 		"Network restored. Syncing run status...": string;
 		"Run connection interrupted. Restoring updates...": string;
 		"Run updates reconnected. Syncing status...": string;
-		"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.": string;
+		"Model is still processing. Tool calls or long context steps may pause visible output briefly.": string;
 		"Type your message...": string;
 		"API Keys Configuration": string;
 		"Configure API keys for LLM providers. Keys are stored locally in your browser.": string;
@@ -382,8 +382,8 @@ export const translations = {
 		"Network restored. Syncing run status...": "Network restored. Syncing run status...",
 		"Run connection interrupted. Restoring updates...": "Run connection interrupted. Restoring updates...",
 		"Run updates reconnected. Syncing status...": "Run updates reconnected. Syncing status...",
-		"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.":
-			"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.",
+		"Model is still processing. Tool calls or long context steps may pause visible output briefly.":
+			"Model is still processing. Tool calls or long context steps may pause visible output briefly.",
 		"Type your message...": "Type your message...",
 		"API Keys Configuration": "API Keys Configuration",
 		"Configure API keys for LLM providers. Keys are stored locally in your browser.":
@@ -759,8 +759,8 @@ export const translations = {
 		"Network restored. Syncing run status...": "Network restored. Syncing run status...",
 		"Run connection interrupted. Restoring updates...": "Run connection interrupted. Restoring updates...",
 		"Run updates reconnected. Syncing status...": "Run updates reconnected. Syncing status...",
-		"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.":
-			"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.",
+		"Model is still processing. Tool calls or long context steps may pause visible output briefly.":
+			"Model is still processing. Tool calls or long context steps may pause visible output briefly.",
 		"Type your message...": "Geben Sie Ihre Nachricht ein...",
 		"API Keys Configuration": "API-Schlüssel-Konfiguration",
 		"Configure API keys for LLM providers. Keys are stored locally in your browser.":
@@ -1156,8 +1156,8 @@ mutableTranslations.zh = {
 	"Network restored. Syncing run status...": "网络已恢复，正在同步运行状态...",
 	"Run connection interrupted. Restoring updates...": "运行连接已中断，正在恢复更新...",
 	"Run updates reconnected. Syncing status...": "运行更新已恢复，正在同步状态...",
-	"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.":
-		"模型响应暂无更新，正在监测服务商恢复；如果流式响应超时，将自动恢复预览。",
+	"Model is still processing. Tool calls or long context steps may pause visible output briefly.":
+		"模型仍在处理。工具调用或长上下文步骤可能会让可见输出短暂停顿。",
 	"Type your message...": "输入消息...",
 	"API Keys Configuration": "API Key 配置",
 	"Configure API keys for LLM providers. Keys are stored locally in your browser.":
@@ -1530,8 +1530,8 @@ mutableTranslations.ms = {
 	"Network restored. Syncing run status...": "Network restored. Syncing run status...",
 	"Run connection interrupted. Restoring updates...": "Run connection interrupted. Restoring updates...",
 	"Run updates reconnected. Syncing status...": "Run updates reconnected. Syncing status...",
-	"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.":
-		"Model response has not updated. Monitoring provider recovery; automatic preview recovery will start if the stream times out.",
+	"Model is still processing. Tool calls or long context steps may pause visible output briefly.":
+		"Model is still processing. Tool calls or long context steps may pause visible output briefly.",
 	"Type your message...": "Taip mesej anda...",
 	"API Keys Configuration": "Konfigurasi API Key",
 	"Configure API keys for LLM providers. Keys are stored locally in your browser.":

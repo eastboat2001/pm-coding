@@ -10,8 +10,6 @@ services:
       POSTGRES_PASSWORD: ${PI_POSTGRES_PASSWORD:-pi}
     volumes:
       - pi-postgres-data:/var/lib/postgresql/data:Z
-    ports:
-      - "${PI_POSTGRES_HOST_BIND:-127.0.0.1}:${PI_POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
@@ -25,8 +23,6 @@ services:
     restart: unless-stopped
     volumes:
       - pi-redis-data:/data:Z
-    ports:
-      - "${PI_REDIS_HOST_BIND:-127.0.0.1}:${PI_REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -49,7 +45,7 @@ services:
     ports:
       - "${PI_CODING_WEB_HOST_BIND:-0.0.0.0}:${PI_CODING_WEB_PORT:-5173}:5173"
     volumes:
-      - pi-coding-web-data:/app/apps/pi-coding-web/data:z
+      - ./data/app:/app/apps/pi-coding-web/data:z
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,10 +54,8 @@ services:
     healthcheck:
       test:
         [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:5173/api/pi-storage/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:5173/api/pi-storage/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
         ]
       interval: 30s
       timeout: 5s
@@ -84,7 +78,7 @@ services:
       PI_POSTGRES_URL: "${PI_POSTGRES_URL:-postgres://pi:pi@postgres:5432/pi_coding}"
       PI_WORKER_ID: ${PI_WORKER_ID:-pi-worker}
     volumes:
-      - pi-coding-web-data:/app/apps/pi-coding-web/data:z
+      - ./data/app:/app/apps/pi-coding-web/data:z
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,6 +86,5 @@ services:
         condition: service_healthy
 
 volumes:
-  pi-coding-web-data:
   pi-postgres-data:
   pi-redis-data:

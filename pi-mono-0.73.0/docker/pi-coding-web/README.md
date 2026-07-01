@@ -22,11 +22,22 @@ Redis is still required for the run queue and live event streams:
 PI_REDIS_URL=redis://redis:6379
 ```
 
-Generated project files, skills, settings, and diagnostic logs are stored in the `pi-coding-web-data` named volume mounted at:
+Generated project files, skills, settings, and diagnostic logs are stored in the deployment directory:
 
 ```text
-/app/apps/pi-coding-web/data
+docker/pi-coding-web/data/app
 ```
+
+That host directory is bind-mounted into the web and worker containers at `/app/apps/pi-coding-web/data` with the shared Podman/SELinux label `:z`.
+
+PostgreSQL and Redis data use Podman named volumes:
+
+```text
+<compose-project>_pi-postgres-data
+<compose-project>_pi-redis-data
+```
+
+They intentionally do not bind-mount to `docker/pi-coding-web/data/postgres` or `docker/pi-coding-web/data/redis`. The official PostgreSQL and Redis images chown their data directories on startup; rootless Podman deployments on intranet filesystems often reject that chown when the target is a bind mount. Named volumes avoid that failure.
 
 Diagnostic logs still use a small local SQLite file:
 
@@ -48,6 +59,15 @@ docker/pi-coding-web/
 ```
 
 `docker-compose.build.yaml` is only needed on a source/build machine. The intranet server should not build images.
+
+After the first `docker compose up`, Compose/Podman creates this local data layout automatically:
+
+```text
+docker/pi-coding-web/data/
+  app/
+```
+
+PostgreSQL and Redis storage is created as Podman named volumes instead of visible local directories.
 
 ## Build the Offline Image Bundle
 
@@ -177,22 +197,36 @@ Open:
 http://<server-ip>:5173
 ```
 
+## Upload Skills
+
+Custom skills should be placed under the visible app data directory:
+
+```text
+docker/pi-coding-web/data/app/skills/
+```
+
+For example:
+
+```bash
+mkdir -p data/app/skills
+cp -r ./your-skill-folder data/app/skills/your-skill-folder
+docker compose restart pi-coding-web pi-worker
+```
+
+Do not put custom skills under `data/app/default-skills`; that directory is for bundled/default skills.
+
 ## Ports and Security
 
 Defaults:
 
 - Web: `0.0.0.0:5173 -> 5173`, accessible from the LAN.
-- PostgreSQL: `127.0.0.1:5432 -> 5432`, accessible only from the server host.
-- Redis: `127.0.0.1:6379 -> 6379`, accessible only from the server host.
+- PostgreSQL: not published to the host.
+- Redis: not published to the host.
 
 The web and worker containers use the internal Compose network to reach PostgreSQL and Redis, so PostgreSQL and Redis do not need LAN exposure.
 
-Only change these if you explicitly need host access:
+If you explicitly need host access for debugging, temporarily add `ports` entries to `docker-compose.yaml` and choose unused host ports. Do not bind PostgreSQL or Redis to common host ports if the server already has services on `5432` or `6379`.
 
-```env
-PI_POSTGRES_HOST_BIND=127.0.0.1
-PI_REDIS_HOST_BIND=127.0.0.1
-```
 
 ## Fresh Reset
 
@@ -200,16 +234,11 @@ You said old data is test data and does not need migration. For a clean server r
 
 ```bash
 docker compose down -v --remove-orphans
+rm -rf data/app data/postgres data/redis
 docker compose up -d --no-build
 ```
 
-`-v` deletes the named volumes:
-
-- `pi-coding-web-data`
-- `pi-postgres-data`
-- `pi-redis-data`
-
-Do not use `-v` on a production server if you need to keep sessions, generated apps, settings, logs, or PostgreSQL data.
+This deletes the visible app data and the PostgreSQL/Redis named volumes. Do not run it on a production server if you need to keep sessions, generated apps, settings, logs, or PostgreSQL data.
 
 ## Upgrade with a New Offline Bundle
 
@@ -232,13 +261,13 @@ docker compose up -d --no-build --force-recreate pi-coding-web pi-worker
 docker compose ps
 ```
 
-PostgreSQL and Redis volumes are preserved unless you run `docker compose down -v`.
+PostgreSQL and Redis data are preserved in the Podman named volumes unless you run `docker compose down -v` or remove those volumes explicitly.
 
 ## Quick Health Checks
 
 ```bash
 docker compose ps
-curl -fsS http://127.0.0.1:5173/api/pi-storage/status
+curl -fsS http://127.0.0.1:${PI_CODING_WEB_PORT:-5173}/api/pi-storage/status
 docker compose exec postgres sh -lc 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 docker compose exec redis redis-cli ping
 ```
@@ -273,4 +302,41 @@ If preview links point to localhost from another machine, set:
 
 ```env
 PI_PREVIEW_BASE_URL=http://<server-ip>:5173
+```
+
+If Podman reports host port conflicts like these:
+
+```text
+rootlessport listen tcp 127.0.0.1:5432: bind: address already in use
+rootlessport listen tcp 127.0.0.1:6379: bind: address already in use
+```
+
+remove any PostgreSQL/Redis `ports` entries from `docker-compose.yaml`, remove the failed containers, and start again:
+
+```bash
+podman rm -f pi-coding-postgres pi-coding-redis pi-coding-web pi-worker 2>/dev/null || true
+podman compose up -d --no-build
+```
+
+If Redis or PostgreSQL logs show bind-mount chown errors:
+
+```text
+chown: .: Operation not permitted
+chown: /var/lib/postgresql/data: Operation not permitted
+```
+
+use the hybrid storage layout from this repository: keep `./data/app:/app/apps/pi-coding-web/data:z` for visible app files and skills, but use named volumes for PostgreSQL and Redis:
+
+```yaml
+postgres:
+  volumes:
+    - pi-postgres-data:/var/lib/postgresql/data:Z
+
+redis:
+  volumes:
+    - pi-redis-data:/data:Z
+
+volumes:
+  pi-postgres-data:
+  pi-redis-data:
 ```

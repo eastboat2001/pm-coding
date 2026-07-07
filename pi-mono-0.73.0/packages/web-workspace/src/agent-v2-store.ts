@@ -1,6 +1,8 @@
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { createAgentV2RunSnapshot, transitionAgentV2RunSnapshot } from "./agent-v2-state-machine.js";
 import type {
+	AgentV2DocumentContent,
+	AgentV2DocumentKind,
 	AgentV2Error,
 	AgentV2Phase,
 	AgentV2RunInput,
@@ -92,6 +94,32 @@ export interface UpsertAgentV2ArtifactInput extends JsonObject {
 	updatedAt?: string;
 }
 
+export interface AgentV2DocumentRecord extends JsonObject {
+	clientId: string;
+	runId: string;
+	documentId: string;
+	kind: AgentV2DocumentKind;
+	version: string;
+	contentMarkdown: string;
+	contentJson: AgentV2DocumentContent;
+	sourceTaskId?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface UpsertAgentV2DocumentInput extends JsonObject {
+	clientId: string;
+	runId: string;
+	documentId: string;
+	kind: AgentV2DocumentKind;
+	version: string;
+	contentMarkdown: string;
+	contentJson: AgentV2DocumentContent;
+	sourceTaskId?: string;
+	createdAt?: string;
+	updatedAt?: string;
+}
+
 export interface AgentV2RunRow {
 	client_id: string;
 	run_id: string;
@@ -143,6 +171,19 @@ export interface AgentV2ArtifactRow {
 	updated_at: TimestampValue;
 }
 
+export interface AgentV2DocumentRow {
+	client_id: string;
+	run_id: string;
+	document_id: string;
+	kind: AgentV2DocumentKind;
+	version: string;
+	content_markdown: string;
+	content_json: unknown;
+	source_task_id: string | null;
+	created_at: TimestampValue;
+	updated_at: TimestampValue;
+}
+
 export interface AgentV2DiagnosticRow {
 	client_id: string;
 	run_id: string;
@@ -165,6 +206,8 @@ export const AGENT_V2_TASK_COLUMNS =
 	"client_id, run_id, task_id, parent_task_id, kind, title, status, depends_on_json, acceptance_criteria_json, input_json, output_json, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_ARTIFACT_COLUMNS =
 	"client_id, run_id, artifact_id, kind, path, media_type, checksum, version, source_task_id, validation_status, metadata_json, created_at, updated_at";
+export const AGENT_V2_DOCUMENT_COLUMNS =
+	"client_id, run_id, document_id, kind, version, content_markdown, content_json, source_task_id, created_at, updated_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS =
 	"client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
 
@@ -251,6 +294,24 @@ export function buildAgentV2Artifact(input: UpsertAgentV2ArtifactInput): AgentV2
 	};
 }
 
+export function buildAgentV2Document(input: UpsertAgentV2DocumentInput): AgentV2DocumentRecord {
+	const createdAt = input.createdAt ?? new Date().toISOString();
+	const updatedAt = input.updatedAt ?? createdAt;
+
+	return {
+		clientId: input.clientId,
+		runId: input.runId,
+		documentId: input.documentId,
+		kind: input.kind,
+		version: input.version,
+		contentMarkdown: input.contentMarkdown,
+		contentJson: input.contentJson,
+		...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
+		createdAt,
+		updatedAt,
+	};
+}
+
 export function toAgentV2RunRecord(row: AgentV2RunRow): AgentV2RunSnapshot {
 	return {
 		clientId: row.client_id,
@@ -301,6 +362,21 @@ export function toAgentV2ArtifactRecord(row: AgentV2ArtifactRow): AgentV2Artifac
 		...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
 		validationStatus: row.validation_status,
 		metadataJson: parseJsonObject(row.metadata_json),
+		createdAt: toTimestamp(row.created_at),
+		updatedAt: toTimestamp(row.updated_at),
+	};
+}
+
+export function toAgentV2DocumentRecord(row: AgentV2DocumentRow): AgentV2DocumentRecord {
+	return {
+		clientId: row.client_id,
+		runId: row.run_id,
+		documentId: row.document_id,
+		kind: row.kind,
+		version: row.version,
+		contentMarkdown: row.content_markdown,
+		contentJson: parseAgentV2DocumentContent(row.content_json, row.kind),
+		...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
 		createdAt: toTimestamp(row.created_at),
 		updatedAt: toTimestamp(row.updated_at),
 	};
@@ -359,6 +435,11 @@ function parseAgentV2Error(value: unknown): AgentV2Error | undefined {
 	};
 	if (isObject(parsed.data)) error.data = parsed.data;
 	return error;
+}
+
+function parseAgentV2DocumentContent(value: unknown, kind: AgentV2DocumentKind): AgentV2DocumentContent {
+	const parsed = parseJsonObject(value);
+	return { ...parsed, kind } as AgentV2DocumentContent;
 }
 
 function toNumber(value: number | string): number {

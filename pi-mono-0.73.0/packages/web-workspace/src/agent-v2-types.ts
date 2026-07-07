@@ -179,6 +179,12 @@ export interface AgentV2TaskGraph {
 	metadata?: AgentV2DocumentMetadata;
 }
 
+export type AgentV2DocumentContent =
+	| AgentV2CapabilityDecision
+	| AgentV2SpecDocument
+	| AgentV2PlanDocument
+	| AgentV2TaskGraph;
+
 export interface AgentV2RunSnapshot {
 	clientId: string;
 	runId: string;

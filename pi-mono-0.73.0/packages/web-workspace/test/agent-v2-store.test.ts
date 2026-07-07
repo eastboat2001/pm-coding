@@ -271,6 +271,32 @@ describe("agent v2 runtime stores", () => {
 		expect(store.listAgentV2Diagnostics("client-a", "run-v2-a")).toEqual([diagnostic]);
 	});
 
+	it("stores and lists v2 planning documents by run", () => {
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			input: { prompt: "build a dashboard" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+
+		const document = store.upsertAgentV2Document({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			documentId: "spec",
+			kind: "spec",
+			version: "v1",
+			contentMarkdown: "# Spec\n",
+			contentJson: { objective: "Build dashboard" },
+			sourceTaskId: "spec",
+			createdAt: "2026-07-07T00:01:00.000Z",
+			updatedAt: "2026-07-07T00:01:00.000Z",
+		});
+
+		expect(store.getAgentV2Document("client-a", "run-v2-a", "spec")).toEqual(document);
+		expect(store.listAgentV2Documents("client-a", "run-v2-a")).toEqual([document]);
+	});
+
 	it("creates the expected SQLite agent v2 tables", () => {
 		const db = new DatabaseSync(join(dir, "runtime.sqlite"));
 		try {
@@ -287,6 +313,7 @@ describe("agent v2 runtime stores", () => {
 			expect(tables).toEqual([
 				"agent_v2_artifacts",
 				"agent_v2_diagnostics",
+				"agent_v2_documents",
 				"agent_v2_runs",
 				"agent_v2_schema_metadata",
 				"agent_v2_tasks",
@@ -386,6 +413,38 @@ describe("agent v2 runtime stores", () => {
 			created_at: "2026-07-07T00:00:00.000Z",
 			updated_at: "2026-07-07T00:00:00.000Z",
 		};
+		const documentRow = {
+			client_id: "client-a",
+			run_id: "run-v2-a",
+			document_id: "spec",
+			kind: "spec",
+			version: "v1",
+			content_markdown: "# Spec\n",
+			content_json: {
+				kind: "spec",
+				title: "Spec",
+				objective: "Build dashboard",
+				summary: "Summary",
+				scope: [],
+				goals: [],
+				nonGoals: [],
+				assumptions: [],
+				requirements: [],
+				capabilityBoundaries: [],
+				acceptanceCriteria: [],
+				platformContract: {
+					runtime: "web",
+					framework: "vite",
+					deliveryMode: "static_app",
+					entrypoints: ["src/main.ts"],
+					deliverables: ["dist"],
+					constraints: [],
+				},
+			},
+			source_task_id: "spec",
+			created_at: "2026-07-07T00:01:00.000Z",
+			updated_at: "2026-07-07T00:01:00.000Z",
+		};
 		const queryable = new RecordingQueryable().on((query) => {
 			const sql = normalizeSql(query.sql);
 			if (/^CREATE /i.test(sql)) return { rowCount: 0 };
@@ -393,6 +452,9 @@ describe("agent v2 runtime stores", () => {
 			if (/FROM agent_v2_tasks/i.test(sql)) return { rows: [taskRow] };
 			if (/FROM agent_v2_artifacts/i.test(sql)) {
 				return { rows: [artifactRow] };
+			}
+			if (/FROM agent_v2_documents/i.test(sql)) {
+				return { rows: [documentRow] };
 			}
 			return undefined;
 		});
@@ -402,6 +464,8 @@ describe("agent v2 runtime stores", () => {
 		const run = await store.getAgentV2Run("client-a", "run-v2-a");
 		const tasks = await store.listAgentV2Tasks("client-a", "run-v2-a");
 		const artifacts = await store.listAgentV2Artifacts("client-a", "run-v2-a");
+		const documents = await store.listAgentV2Documents("client-a", "run-v2-a");
+		const document = await store.getAgentV2Document("client-a", "run-v2-a", "spec");
 
 		const statements = queryable.queries.map((query) => normalizeSql(query.sql));
 		for (const table of [
@@ -409,6 +473,7 @@ describe("agent v2 runtime stores", () => {
 			"agent_v2_runs",
 			"agent_v2_tasks",
 			"agent_v2_artifacts",
+			"agent_v2_documents",
 			"agent_v2_validations",
 			"agent_v2_diagnostics",
 		]) {
@@ -445,6 +510,9 @@ describe("agent v2 runtime stores", () => {
 		const artifactTableStatement = statements.find((statement) =>
 			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_artifacts"),
 		);
+		const documentTableStatement = statements.find((statement) =>
+			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_documents"),
+		);
 		const taskTableStatement = statements.find((statement) =>
 			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_tasks"),
 		);
@@ -459,15 +527,26 @@ describe("agent v2 runtime stores", () => {
 		expect(artifactTableStatement).not.toContain("uri TEXT NOT NULL");
 		expect(artifactTableStatement).not.toContain("title TEXT NOT NULL");
 		expect(artifactTableStatement).not.toContain("description TEXT");
+		expect(documentTableStatement).toContain("document_id TEXT NOT NULL");
+		expect(documentTableStatement).toContain("kind TEXT NOT NULL");
+		expect(documentTableStatement).toContain("version TEXT NOT NULL");
+		expect(documentTableStatement).toContain("content_markdown TEXT NOT NULL");
+		expect(documentTableStatement).toContain("content_json JSONB NOT NULL");
+		expect(documentTableStatement).toContain("source_task_id TEXT");
 		expect(run?.runId).toBe("run-v2-a");
 		expect(tasks[0]?.taskId).toBe("task-1");
 		expect(tasks[0]?.acceptanceCriteria).toEqual(["Task graph nodes include acceptance criteria"]);
 		expect(artifacts[0]?.artifactId).toBe("artifact-1");
+		expect(documents[0]?.documentId).toBe("spec");
+		expect(documents[0]?.contentJson.kind).toBe("spec");
+		expect(document?.sourceTaskId).toBe("spec");
 		expect(queryable.statementsMatching(/FROM runs/i)).toHaveLength(0);
 		expect(queryable.statementsMatching(/FROM tasks/i)).toHaveLength(0);
 		expect(queryable.statementsMatching(/FROM artifacts/i)).toHaveLength(0);
+		expect(queryable.statementsMatching(/FROM documents/i)).toHaveLength(0);
 		expect(queryable.statementsMatching(/FROM agent_v2_runs/i)).toHaveLength(1);
 		expect(queryable.statementsMatching(/FROM agent_v2_tasks/i)).toHaveLength(1);
 		expect(queryable.statementsMatching(/FROM agent_v2_artifacts/i)).toHaveLength(1);
+		expect(queryable.statementsMatching(/FROM agent_v2_documents/i)).toHaveLength(2);
 	});
 });

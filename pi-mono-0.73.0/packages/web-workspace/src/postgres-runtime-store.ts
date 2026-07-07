@@ -3,24 +3,30 @@ import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
+	AGENT_V2_DOCUMENT_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
 	type AgentV2ArtifactRecord,
 	type AgentV2ArtifactRow,
 	type AgentV2DiagnosticRow,
+	type AgentV2DocumentRecord,
+	type AgentV2DocumentRow,
 	type AgentV2RunRow,
 	type AgentV2TaskRow,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
+	buildAgentV2Document,
 	buildAgentV2Run,
 	buildAgentV2Task,
 	type CreateAgentV2RunInput,
 	toAgentV2ArtifactRecord,
 	toAgentV2DiagnosticRecord,
+	toAgentV2DocumentRecord,
 	toAgentV2RunRecord,
 	toAgentV2TaskRecord,
 	type UpdateAgentV2RunInput,
 	type UpsertAgentV2ArtifactInput,
+	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
 } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
@@ -169,6 +175,7 @@ const LEGACY_RESET_TABLES = [
 const AGENT_V2_RESET_TABLES = [
 	"agent_v2_diagnostics",
 	"agent_v2_validations",
+	"agent_v2_documents",
 	"agent_v2_artifacts",
 	"agent_v2_tasks",
 	"agent_v2_runs",
@@ -464,6 +471,29 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		await this.query(
 			this.queryable,
 			"CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)",
+		);
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS agent_v2_documents (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				document_id TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				version TEXT NOT NULL,
+				content_markdown TEXT NOT NULL,
+				content_json JSONB NOT NULL,
+				source_task_id TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, document_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			)
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC)",
 		);
 		await this.query(
 			this.queryable,
@@ -1336,6 +1366,73 @@ export class PostgresRuntimeStore implements RuntimeStore {
 			[clientId, runId],
 		);
 		return rows.map(toAgentV2ArtifactRecord);
+	}
+
+	async upsertAgentV2Document(input: UpsertAgentV2DocumentInput): Promise<AgentV2DocumentRecord> {
+		const document = buildAgentV2Document(input);
+		const row = await this.queryOne<AgentV2DocumentRow>(
+			this.queryable,
+			`INSERT INTO agent_v2_documents (
+				client_id,
+				run_id,
+				document_id,
+				kind,
+				version,
+				content_markdown,
+				content_json,
+				source_task_id,
+				created_at,
+				updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT(client_id, run_id, document_id) DO UPDATE SET
+				kind = excluded.kind,
+				version = excluded.version,
+				content_markdown = excluded.content_markdown,
+				content_json = excluded.content_json,
+				source_task_id = excluded.source_task_id,
+				updated_at = excluded.updated_at
+			RETURNING ${AGENT_V2_DOCUMENT_COLUMNS}`,
+			[
+				document.clientId,
+				document.runId,
+				document.documentId,
+				document.kind,
+				document.version,
+				document.contentMarkdown,
+				document.contentJson,
+				document.sourceTaskId ?? null,
+				document.createdAt,
+				document.updatedAt,
+			],
+		);
+		return requiredRecord(row ? toAgentV2DocumentRecord(row) : undefined, "agent v2 document");
+	}
+
+	async listAgentV2Documents(clientId: string, runId: string): Promise<AgentV2DocumentRecord[]> {
+		const rows = await this.queryRows<AgentV2DocumentRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_DOCUMENT_COLUMNS}
+			FROM agent_v2_documents
+			WHERE client_id = $1 AND run_id = $2
+			ORDER BY created_at ASC, document_id ASC`,
+			[clientId, runId],
+		);
+		return rows.map(toAgentV2DocumentRecord);
+	}
+
+	async getAgentV2Document(
+		clientId: string,
+		runId: string,
+		documentId: string,
+	): Promise<AgentV2DocumentRecord | undefined> {
+		const row = await this.queryOne<AgentV2DocumentRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_DOCUMENT_COLUMNS}
+			FROM agent_v2_documents
+			WHERE client_id = $1 AND run_id = $2 AND document_id = $3`,
+			[clientId, runId, documentId],
+		);
+		return row ? toAgentV2DocumentRecord(row) : undefined;
 	}
 
 	async appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): Promise<AgentV2DiagnosticEvent> {

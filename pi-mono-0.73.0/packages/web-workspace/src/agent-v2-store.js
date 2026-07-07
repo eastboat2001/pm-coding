@@ -3,6 +3,7 @@ import { createAgentV2RunSnapshot, transitionAgentV2RunSnapshot } from "./agent-
 export const AGENT_V2_RUN_COLUMNS = "client_id, run_id, status, phase, attempt, input_json, model_json, worker_id, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_TASK_COLUMNS = "client_id, run_id, task_id, parent_task_id, kind, title, status, depends_on_json, acceptance_criteria_json, input_json, output_json, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_ARTIFACT_COLUMNS = "client_id, run_id, artifact_id, kind, path, media_type, checksum, version, source_task_id, validation_status, metadata_json, created_at, updated_at";
+export const AGENT_V2_DOCUMENT_COLUMNS = "client_id, run_id, document_id, kind, version, content_markdown, content_json, source_task_id, created_at, updated_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS = "client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
 export function buildAgentV2Run(input) {
     return createAgentV2RunSnapshot(input);
@@ -78,6 +79,22 @@ export function buildAgentV2Artifact(input) {
         updatedAt,
     };
 }
+export function buildAgentV2Document(input) {
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    const updatedAt = input.updatedAt ?? createdAt;
+    return {
+        clientId: input.clientId,
+        runId: input.runId,
+        documentId: input.documentId,
+        kind: input.kind,
+        version: input.version,
+        contentMarkdown: input.contentMarkdown,
+        contentJson: input.contentJson,
+        ...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
+        createdAt,
+        updatedAt,
+    };
+}
 export function toAgentV2RunRecord(row) {
     return {
         clientId: row.client_id,
@@ -126,6 +143,20 @@ export function toAgentV2ArtifactRecord(row) {
         ...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
         validationStatus: row.validation_status,
         metadataJson: parseJsonObject(row.metadata_json),
+        createdAt: toTimestamp(row.created_at),
+        updatedAt: toTimestamp(row.updated_at),
+    };
+}
+export function toAgentV2DocumentRecord(row) {
+    return {
+        clientId: row.client_id,
+        runId: row.run_id,
+        documentId: row.document_id,
+        kind: row.kind,
+        version: row.version,
+        contentMarkdown: row.content_markdown,
+        contentJson: parseAgentV2DocumentContent(row.content_json, row.kind),
+        ...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
         createdAt: toTimestamp(row.created_at),
         updatedAt: toTimestamp(row.updated_at),
     };
@@ -179,6 +210,10 @@ function parseAgentV2Error(value) {
     if (isObject(parsed.data))
         error.data = parsed.data;
     return error;
+}
+function parseAgentV2DocumentContent(value, kind) {
+    const parsed = parseJsonObject(value);
+    return { ...parsed, kind };
 }
 function toNumber(value) {
     return typeof value === "number" ? value : Number(value);

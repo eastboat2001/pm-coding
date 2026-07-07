@@ -109,7 +109,7 @@ export function toWorkspaceDiagnosticEvent(event: AgentV2DiagnosticEvent): Works
 	return {
 		level: event.severity,
 		category: "agent",
-		eventType: `agent_v2.${event.category}.${event.code}`,
+		eventType: event.code,
 		traceId: event.traceId,
 		data,
 	};

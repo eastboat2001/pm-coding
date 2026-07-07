@@ -86,10 +86,11 @@ describe("agent v2 diagnostics", () => {
 		expect(toWorkspaceDiagnosticEvent(validation)).toMatchObject({
 			level: "info",
 			category: "agent",
-			eventType: "agent_v2.validation.schema_check_failed",
+			eventType: validation.code,
 			data: {
 				runId: "run-1",
 				agentV2Category: "agent_v2.validation",
+				code: "schema_check_failed",
 				message: "Schema check failed",
 				payload: "ok",
 			},
@@ -99,10 +100,11 @@ describe("agent v2 diagnostics", () => {
 		expect(exportedRepair).toMatchObject({
 			level: "warn",
 			category: "agent",
-			eventType: "agent_v2.repair.patch_applied",
+			eventType: repair.code,
 			data: {
 				runId: "run-1",
 				agentV2Category: "agent_v2.repair",
+				code: "patch_applied",
 				message: "Patch applied",
 				apiKey: "[redacted]",
 			},

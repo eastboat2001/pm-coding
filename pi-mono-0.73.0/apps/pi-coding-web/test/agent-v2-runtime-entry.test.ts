@@ -5,6 +5,7 @@ import { loadStorageConfig } from "../../../packages/web-workspace/src/config.js
 import type { WorkerAgentInput } from "../../../packages/web-workspace/src/index.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { selectApplicationGenerationRuntime } from "../src/agent-v2/runtime-entry.js";
+import { STATIC_PREVIEW_CONTRACT } from "../src/runtime/platform-contract.js";
 import { createRunAgent } from "../src/worker/main.js";
 
 describe("application generation runtime entry", () => {
@@ -20,7 +21,9 @@ describe("application generation runtime entry", () => {
 		expect(selectApplicationGenerationRuntime({})).toMatchObject({
 			version: "v2",
 			v1Disabled: true,
+			platformContract: STATIC_PREVIEW_CONTRACT,
 		});
+		expect(selectApplicationGenerationRuntime({}).buildPlanningBootstrap).toEqual(expect.any(Function));
 	});
 
 	it("rejects v1 as a product runtime", () => {

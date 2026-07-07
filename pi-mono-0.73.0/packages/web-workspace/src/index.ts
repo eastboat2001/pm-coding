@@ -14,6 +14,11 @@ export {
 	renderAgentV2DocumentMarkdown,
 } from "./agent-v2-documents.js";
 export {
+	buildAgentV2PlanningBootstrap,
+	type AgentV2PlanningBootstrap,
+	persistAgentV2PlanningBootstrap,
+} from "./agent-v2-planning-bootstrap.js";
+export {
 	type AgentV2ResetDiagnosticsAdapter,
 	type AgentV2ResetOptions,
 	type AgentV2ResetResult,

@@ -114,6 +114,7 @@ export class RunEventSink {
 		if (event.type === "message_update") return this.shouldCheckpointMessageUpdate(run, event, createdAt);
 		if (event.type === "message_end") return true;
 		if (event.type.startsWith("tool_execution_")) return true;
+		if (event.type.startsWith("agent_v2.")) return true;
 		return DURABLE_RUN_EVENT_TYPES.has(event.type);
 	}
 

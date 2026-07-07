@@ -15,6 +15,16 @@ export type AgentV2RunStatus = (typeof AGENT_V2_RUN_STATUSES)[number];
 export const AGENT_V2_PHASES = ["intake", "planning", "execution", "validation", "repair", "finalizing"] as const;
 export type AgentV2Phase = (typeof AGENT_V2_PHASES)[number];
 
+export const AGENT_V2_RUN_EVENT_TYPES = [
+	"agent_v2.run_created",
+	"agent_v2.phase_changed",
+	"agent_v2.task_updated",
+	"agent_v2.artifact_indexed",
+	"agent_v2.validation_recorded",
+	"agent_v2.diagnostic_recorded",
+] as const;
+export type AgentV2RunEventType = (typeof AGENT_V2_RUN_EVENT_TYPES)[number];
+
 export const AGENT_V2_TASK_STATUSES = ["pending", "ready", "running", "blocked", "succeeded", "failed", "cancelled"] as const;
 export type AgentV2TaskStatus = (typeof AGENT_V2_TASK_STATUSES)[number];
 

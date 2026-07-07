@@ -2,6 +2,8 @@ export { AppPreviewGoalService, budgetForSource, } from "./app-preview-goal-serv
 export { AppPreviewGoalSupervisor } from "./app-preview-goal-supervisor.js";
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
 export { loadStorageConfig } from "./config.js";
+export { APPLICATION_GENERATION_RUNTIME_V2, AGENT_V2_PHASES, AGENT_V2_RUN_EVENT_TYPES, AGENT_V2_RUN_STATUSES, AGENT_V2_SCHEMA_VERSION, AGENT_V2_TASK_STATUSES, } from "./agent-v2-types.js";
+export { appendAgentV2RunEvent, } from "./agent-v2-run-events.js";
 export { assertAgentV2ResetConfirmation, resetAgentV2RuntimeData, } from "./agent-v2-reset.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";

@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { appendAgentV2RunEvent } from "../src/agent-v2-run-events.js";
 import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
+import { InMemoryRunEventBus } from "../src/run-event-bus.js";
+import { RunEventSink } from "../src/run-event-sink.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
 type RecordedQuery = {
@@ -100,6 +103,74 @@ describe("agent v2 runtime stores", () => {
 		});
 
 		expect(store.getAgentV2Run("client-a", "same-id")).toBeUndefined();
+	});
+
+	it("projects agent v2 transport events into legacy run_events for replay without changing v2 reads", async () => {
+		store.createSession({
+			clientId: "client-a",
+			sessionId: "session-transport",
+			title: "Transport session",
+			model: { provider: "test", id: "legacy" },
+			thinkingLevel: "medium",
+		});
+		const legacyRun = store.createRun({
+			clientId: "client-a",
+			sessionId: "session-transport",
+			runId: "run-v2-transport",
+			model: { provider: "test", id: "legacy" },
+			thinkingLevel: "medium",
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-transport",
+			input: { prompt: "build a transport projection" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+		const sink = new RunEventSink({
+			store,
+			bus: new InMemoryRunEventBus(),
+			checkpointIntervalMs: 1_000,
+			checkpointMinChars: 100,
+		});
+
+		await appendAgentV2RunEvent(sink, legacyRun, {
+			type: "agent_v2.run_created",
+			status: "queued",
+			phase: "intake",
+			attempt: 1,
+			at: "2026-07-07T00:00:00.000Z",
+		});
+		await appendAgentV2RunEvent(sink, legacyRun, {
+			type: "agent_v2.validation_recorded",
+			validationId: "validation-1",
+			status: "passed",
+			summary: "Transport replay projection recorded",
+			at: "2026-07-07T00:01:00.000Z",
+		});
+
+		const events = store.listRunEvents("client-a", "run-v2-transport", 0);
+		expect(events.map((event) => event.type)).toEqual([
+			"agent_v2.run_created",
+			"agent_v2.validation_recorded",
+		]);
+		expect(events[0]?.payload).toEqual({
+			type: "agent_v2.run_created",
+			status: "queued",
+			phase: "intake",
+			attempt: 1,
+			at: "2026-07-07T00:00:00.000Z",
+		});
+		expect(events[1]?.payload).toEqual({
+			type: "agent_v2.validation_recorded",
+			validationId: "validation-1",
+			status: "passed",
+			summary: "Transport replay projection recorded",
+			at: "2026-07-07T00:01:00.000Z",
+		});
+		expect(store.getAgentV2Run("client-a", "run-v2-transport")?.runId).toBe("run-v2-transport");
+		expect(store.listAppPreviewGoalEvents("client-a", "session-transport", 0)).toEqual([]);
 	});
 
 	it("updates v2 runs with status, phase, timestamps, worker, and error patches", () => {

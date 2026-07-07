@@ -10,6 +10,7 @@ export { loadStorageConfig } from "./config.js";
 export {
 	APPLICATION_GENERATION_RUNTIME_V2,
 	AGENT_V2_PHASES,
+	AGENT_V2_RUN_EVENT_TYPES,
 	AGENT_V2_RUN_STATUSES,
 	AGENT_V2_SCHEMA_VERSION,
 	AGENT_V2_TASK_STATUSES,
@@ -18,6 +19,7 @@ export {
 	type AgentV2Error,
 	type AgentV2Phase,
 	type AgentV2RunInput,
+	type AgentV2RunEventType,
 	type AgentV2RunSnapshot,
 	type AgentV2RunSnapshotInput,
 	type AgentV2RunStatus,
@@ -25,6 +27,16 @@ export {
 	type AgentV2TaskNode,
 	type AgentV2TaskStatus,
 } from "./agent-v2-types.js";
+export {
+	appendAgentV2RunEvent,
+	type AgentV2ArtifactIndexedTransportEvent,
+	type AgentV2DiagnosticRecordedTransportEvent,
+	type AgentV2PhaseChangedTransportEvent,
+	type AgentV2RunCreatedTransportEvent,
+	type AgentV2RunTransportEvent,
+	type AgentV2TaskUpdatedTransportEvent,
+	type AgentV2ValidationRecordedTransportEvent,
+} from "./agent-v2-run-events.js";
 export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,

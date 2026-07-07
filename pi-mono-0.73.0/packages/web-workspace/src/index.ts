@@ -30,6 +30,7 @@ export {
 	getReadyAgentV2TaskIds,
 	transitionAgentV2RunSnapshot,
 } from "./agent-v2-state-machine.js";
+export { STATIC_APP_V2_PLATFORM_CONTRACT, routeAgentV2Capabilities } from "./agent-v2-capability-router.js";
 export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
@@ -60,8 +61,11 @@ export {
 	AGENT_V2_RUN_STATUSES,
 	AGENT_V2_SCHEMA_VERSION,
 	AGENT_V2_TASK_STATUSES,
+	type AgentV2CapabilityDecision,
+	type AgentV2CapabilityDeliveryMode,
 	type AgentV2Error,
 	type AgentV2Phase,
+	type AgentV2PlatformContract,
 	type AgentV2RunEventType,
 	type AgentV2RunInput,
 	type AgentV2RunSnapshot,

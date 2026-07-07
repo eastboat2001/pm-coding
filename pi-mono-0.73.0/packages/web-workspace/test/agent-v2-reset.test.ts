@@ -234,6 +234,7 @@ function seedAgentV2RuntimeData(dbFile: string, store: RuntimeDbStore, options: 
 		title: "Implement reset",
 		status: "running",
 		dependsOn: [],
+		acceptanceCriteria: [],
 		input: { files: ["src/reset.ts"] },
 		output: {},
 		createdAt: "2026-07-07T00:11:00.000Z",

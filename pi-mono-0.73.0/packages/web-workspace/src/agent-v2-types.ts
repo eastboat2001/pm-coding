@@ -51,6 +51,12 @@ export const AGENT_V2_TASK_STATUSES = [
 export type AgentV2TaskStatus = (typeof AGENT_V2_TASK_STATUSES)[number];
 
 export type AgentV2DocumentKind = "capability_decision" | "spec" | "plan" | "tasks";
+export type AgentV2CapabilityDeliveryMode =
+	| "static_app"
+	| "build_static_frontend"
+	| "static_simulation"
+	| "needs_clarification"
+	| "unsupported";
 
 export type AgentV2TaskKind =
 	| "capability"
@@ -92,8 +98,18 @@ export interface AgentV2TaskNode {
 export interface AgentV2CapabilityDecision {
 	kind: "capability_decision";
 	selectedCapability: string;
+	deliveryMode: AgentV2CapabilityDeliveryMode;
 	summary: string;
 	rationale: string;
+	requiresSimulation: boolean;
+	requiresClarification: boolean;
+	unsupportedCapabilities: string[];
+	userVisibleContract: string;
+	evidence: Array<{
+		capability: string;
+		matchedText: string;
+		reason: string;
+	}>;
 	constraints: string[];
 	alternatives: Array<{
 		capability: string;
@@ -108,6 +124,9 @@ export interface AgentV2PlatformContract {
 	entrypoints: string[];
 	deliverables: string[];
 	constraints: string[];
+	supportedDeliveryModes?: AgentV2CapabilityDeliveryMode[];
+	unsupportedCapabilities?: string[];
+	userVisibleContract?: string;
 	metadata?: AgentV2DocumentMetadata;
 }
 

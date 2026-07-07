@@ -11,7 +11,22 @@ export type ApplicationGenerationRuntimeSelection = typeof APPLICATION_GENERATIO
 export const AGENT_V2_RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
 export type AgentV2RunStatus = (typeof AGENT_V2_RUN_STATUSES)[number];
 
-export const AGENT_V2_PHASES = ["intake", "planning", "execution", "validation", "repair", "finalizing"] as const;
+export const AGENT_V2_PHASES = [
+	"intake",
+	"capability_routing",
+	"spec_draft",
+	"spec_review",
+	"plan_draft",
+	"task_generation",
+	"implementation",
+	"validation",
+	"repair",
+	"preview",
+	"delivery",
+	"blocked",
+	"failed",
+	"cancelled",
+] as const;
 export type AgentV2Phase = (typeof AGENT_V2_PHASES)[number];
 
 export const AGENT_V2_RUN_EVENT_TYPES = [
@@ -35,9 +50,20 @@ export const AGENT_V2_TASK_STATUSES = [
 ] as const;
 export type AgentV2TaskStatus = (typeof AGENT_V2_TASK_STATUSES)[number];
 
-export type AgentV2TaskKind = "requirements" | "design" | "implementation" | "validation" | "repair" | "artifact";
+export type AgentV2DocumentKind = "capability_decision" | "spec" | "plan" | "tasks";
+
+export type AgentV2TaskKind =
+	| "capability"
+	| "spec"
+	| "plan"
+	| "implementation"
+	| "validation"
+	| "repair"
+	| "artifact"
+	| "delivery";
 
 export type AgentV2RunInput = Record<string, unknown>;
+export type AgentV2DocumentMetadata = Record<string, unknown>;
 
 export interface AgentV2Error {
 	code: string;
@@ -60,6 +86,68 @@ export interface AgentV2TaskNode {
 	startedAt?: string;
 	endedAt?: string;
 	error?: AgentV2Error;
+}
+
+export interface AgentV2CapabilityDecision {
+	kind: "capability_decision";
+	selectedCapability: string;
+	summary: string;
+	rationale: string;
+	constraints: string[];
+	alternatives: Array<{
+		capability: string;
+		reason: string;
+	}>;
+	metadata?: AgentV2DocumentMetadata;
+}
+
+export interface AgentV2PlatformContract {
+	runtime: string;
+	framework: string;
+	entrypoints: string[];
+	deliverables: string[];
+	constraints: string[];
+	metadata?: AgentV2DocumentMetadata;
+}
+
+export interface AgentV2SpecDocument {
+	kind: "spec";
+	title: string;
+	summary: string;
+	goals: string[];
+	nonGoals: string[];
+	requirements: string[];
+	acceptanceCriteria: string[];
+	platformContract: AgentV2PlatformContract;
+	metadata?: AgentV2DocumentMetadata;
+}
+
+export interface AgentV2PlanDocument {
+	kind: "plan";
+	title: string;
+	summary: string;
+	steps: Array<{
+		stepId: string;
+		title: string;
+		description: string;
+		dependsOn: string[];
+		deliverables: string[];
+	}>;
+	risks: Array<{
+		risk: string;
+		mitigation: string;
+	}>;
+	metadata?: AgentV2DocumentMetadata;
+}
+
+export interface AgentV2TaskGraph {
+	kind: "tasks";
+	tasks: AgentV2TaskNode[];
+	edges: Array<{
+		fromTaskId: string;
+		toTaskId: string;
+	}>;
+	metadata?: AgentV2DocumentMetadata;
 }
 
 export interface AgentV2RunSnapshot {

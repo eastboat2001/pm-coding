@@ -17,6 +17,7 @@ const RUN_TRANSITIONS: Record<AgentV2RunStatus, readonly AgentV2RunStatus[]> = {
 };
 
 const TERMINAL_RUN_STATUSES = new Set<AgentV2RunStatus>(["succeeded", "failed", "cancelled"]);
+const TERMINAL_AGENT_V2_PHASES = new Set<AgentV2Phase>(["delivery", "blocked", "failed", "cancelled"]);
 
 export function assertAgentV2RunTransition(from: AgentV2RunStatus, to: AgentV2RunStatus): void {
 	if (!RUN_TRANSITIONS[from].includes(to)) {
@@ -26,7 +27,10 @@ export function assertAgentV2RunTransition(from: AgentV2RunStatus, to: AgentV2Ru
 
 export function advanceAgentV2Phase(phase: AgentV2Phase): AgentV2Phase {
 	const index = AGENT_V2_PHASES.indexOf(phase);
-	return index === -1 || index === AGENT_V2_PHASES.length - 1 ? phase : AGENT_V2_PHASES[index + 1]!;
+	if (index === -1 || TERMINAL_AGENT_V2_PHASES.has(phase)) {
+		return phase;
+	}
+	return AGENT_V2_PHASES[index + 1] ?? phase;
 }
 
 export function createAgentV2RunSnapshot(input: AgentV2RunSnapshotInput): AgentV2RunSnapshot {

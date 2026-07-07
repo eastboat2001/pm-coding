@@ -24,7 +24,12 @@ import {
 	type UpsertAgentV2TaskInput,
 } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
-import type { CreateRunWithMessageInput, RuntimeStore } from "./runtime-store.js";
+import type {
+	CreateRunWithMessageInput,
+	ResetAgentV2RuntimeDataOptions,
+	ResetAgentV2RuntimeDataResult,
+	RuntimeStore,
+} from "./runtime-store.js";
 import type {
 	AppendAppPreviewGoalEventInput,
 	AppendMessageInput,
@@ -153,6 +158,15 @@ interface SessionRunContext {
 
 const ACTIVE_RUN_STATUSES: readonly RunStatus[] = ["queued", "running", "cancelling"];
 const TERMINAL_RUN_STATUSES = new Set<RunStatus>(["cancelled", "completed", "failed", "interrupted"]);
+const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"] as const;
+const AGENT_V2_RESET_TABLES = [
+	"agent_v2_diagnostics",
+	"agent_v2_validations",
+	"agent_v2_artifacts",
+	"agent_v2_tasks",
+	"agent_v2_runs",
+	"agent_v2_schema_metadata",
+] as const;
 
 const SESSION_COLUMNS =
 	"session_id, client_id, title, model_json, thinking_level, created_at, updated_at, last_run_status, last_run_id";
@@ -1359,6 +1373,33 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		return rows.map(toAgentV2DiagnosticRecord);
 	}
 
+	async resetAgentV2RuntimeData(options: ResetAgentV2RuntimeDataOptions = {}): Promise<ResetAgentV2RuntimeDataResult> {
+		await this.ensureSchema();
+		await this.ensureAgentV2Schema();
+
+		const appliedAt = options.now?.() ?? now();
+		return this.withTransaction(async (tx) => {
+			const legacyRowsDeletedBase = await this.deleteAllRows(tx, LEGACY_RESET_TABLES);
+			const agentV2RowsDeleted = await this.deleteAllRows(tx, AGENT_V2_RESET_TABLES);
+			const legacyRowsDeleted = {
+				...legacyRowsDeletedBase,
+				clients: options.includeClients === true ? await this.deleteTableRows(tx, "clients") : 0,
+			};
+			await this.query(
+				tx,
+				`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
+				VALUES ($1, $2)`,
+				[AGENT_V2_SCHEMA_VERSION, appliedAt],
+			);
+
+			return {
+				legacyRowsDeleted,
+				agentV2RowsDeleted,
+				schemaVersion: AGENT_V2_SCHEMA_VERSION,
+			};
+		});
+	}
+
 	async deleteSession(clientId: string, sessionId: string): Promise<boolean> {
 		return this.withTransaction(async (tx) => {
 			await this.query(tx, "DELETE FROM app_preview_goal_events WHERE client_id = $1 AND session_id = $2", [
@@ -1480,6 +1521,22 @@ export class PostgresRuntimeStore implements RuntimeStore {
 			ON CONFLICT(client_id) DO UPDATE SET updated_at = excluded.updated_at`,
 			[clientId, timestamp],
 		);
+	}
+
+	private async deleteAllRows<TableName extends string>(
+		queryable: Queryable,
+		tables: readonly TableName[],
+	): Promise<Record<TableName, number>> {
+		const counts = {} as Record<TableName, number>;
+		for (const table of tables) {
+			counts[table] = await this.deleteTableRows(queryable, table);
+		}
+		return counts;
+	}
+
+	private async deleteTableRows(queryable: Queryable, table: string): Promise<number> {
+		const result = await this.query(queryable, `DELETE FROM ${table}`);
+		return Number(result.rowCount ?? 0);
 	}
 
 	private async withTransaction<T>(callback: (queryable: Queryable) => Promise<T>): Promise<T> {

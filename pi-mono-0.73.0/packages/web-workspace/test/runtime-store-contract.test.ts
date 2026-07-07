@@ -131,6 +131,13 @@ describe("runtime store contract", () => {
 			async listAgentV2Diagnostics() {
 				return [];
 			},
+			async resetAgentV2RuntimeData() {
+				return {
+					legacyRowsDeleted: {},
+					agentV2RowsDeleted: {},
+					schemaVersion: 1,
+				};
+			},
 			async deleteSession() {
 				return false;
 			},

@@ -28,7 +28,12 @@ import {
 } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
 import { isObject } from "./json.js";
-import type { CreateRunWithMessageInput, RuntimeStore } from "./runtime-store.js";
+import type {
+	CreateRunWithMessageInput,
+	ResetAgentV2RuntimeDataOptions,
+	ResetAgentV2RuntimeDataResult,
+	RuntimeStore,
+} from "./runtime-store.js";
 import type {
 	AppendAppPreviewGoalEventInput,
 	AppendMessageInput,
@@ -55,6 +60,15 @@ import type {
 export type { CreateRunWithMessageInput } from "./runtime-store.js";
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
+const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"] as const;
+const AGENT_V2_RESET_TABLES = [
+	"agent_v2_diagnostics",
+	"agent_v2_validations",
+	"agent_v2_artifacts",
+	"agent_v2_tasks",
+	"agent_v2_runs",
+	"agent_v2_schema_metadata",
+] as const;
 
 type SessionRow = {
 	session_id: string;
@@ -1219,6 +1233,32 @@ export class RuntimeDbStore implements RuntimeStore {
 		return rows.map(toAgentV2DiagnosticRecord);
 	}
 
+	resetAgentV2RuntimeData(options: ResetAgentV2RuntimeDataOptions = {}): ResetAgentV2RuntimeDataResult {
+		this.ensureSchema();
+		this.ensureAgentV2Schema();
+
+		const db = this.open();
+		const appliedAt = options.now?.() ?? now();
+		return this.writeTransaction(db, () => {
+			const legacyRowsDeletedBase = deleteAllRows(db, LEGACY_RESET_TABLES);
+			const agentV2RowsDeleted = deleteAllRows(db, AGENT_V2_RESET_TABLES);
+			const legacyRowsDeleted = {
+				...legacyRowsDeletedBase,
+				clients: options.includeClients === true ? deleteAllRows(db, ["clients"]).clients : 0,
+			};
+			db.prepare("INSERT INTO agent_v2_schema_metadata (schema_version, applied_at) VALUES (?, ?)").run(
+				AGENT_V2_SCHEMA_VERSION,
+				appliedAt,
+			);
+
+			return {
+				legacyRowsDeleted,
+				agentV2RowsDeleted,
+				schemaVersion: AGENT_V2_SCHEMA_VERSION,
+			};
+		});
+	}
+
 	deleteSession(clientId: string, sessionId: string): boolean {
 		const db = this.open();
 		return this.writeTransaction(db, () => {
@@ -1439,6 +1479,15 @@ function parseAppPreviewGoalEventPayload(value: string): JsonObject {
 function requiredRecord<T>(record: T | undefined, label: string): T {
 	if (!record) throw new Error(`Runtime ${label} not found`);
 	return record;
+}
+
+function deleteAllRows<TableName extends string>(db: DatabaseSync, tables: readonly TableName[]): Record<TableName, number> {
+	const counts = {} as Record<TableName, number>;
+	for (const table of tables) {
+		const result = db.prepare(`DELETE FROM ${table}`).run();
+		counts[table] = Number(result.changes);
+	}
+	return counts;
 }
 
 function now(): string {

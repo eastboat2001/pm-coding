@@ -3,6 +3,15 @@ import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_RUN_CO
 import { AGENT_V2_SCHEMA_VERSION } from "./agent-v2-types.js";
 const ACTIVE_RUN_STATUSES = ["queued", "running", "cancelling"];
 const TERMINAL_RUN_STATUSES = new Set(["cancelled", "completed", "failed", "interrupted"]);
+const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"];
+const AGENT_V2_RESET_TABLES = [
+    "agent_v2_diagnostics",
+    "agent_v2_validations",
+    "agent_v2_artifacts",
+    "agent_v2_tasks",
+    "agent_v2_runs",
+    "agent_v2_schema_metadata",
+];
 const SESSION_COLUMNS = "session_id, client_id, title, model_json, thinking_level, created_at, updated_at, last_run_status, last_run_id";
 const MESSAGE_COLUMNS = "id, session_id, client_id, role, payload_json, created_at";
 const RUN_COLUMNS = "run_id, session_id, client_id, status, worker_id, model_json, thinking_level, started_at, updated_at, ended_at, error";
@@ -916,6 +925,26 @@ export class PostgresRuntimeStore {
 			ORDER BY created_at ASC, diagnostic_id ASC`, [clientId, runId]);
         return rows.map(toAgentV2DiagnosticRecord);
     }
+    async resetAgentV2RuntimeData(options = {}) {
+        await this.ensureSchema();
+        await this.ensureAgentV2Schema();
+        const appliedAt = options.now?.() ?? now();
+        return this.withTransaction(async (tx) => {
+            const legacyRowsDeletedBase = await this.deleteAllRows(tx, LEGACY_RESET_TABLES);
+            const agentV2RowsDeleted = await this.deleteAllRows(tx, AGENT_V2_RESET_TABLES);
+            const legacyRowsDeleted = {
+                ...legacyRowsDeletedBase,
+                clients: options.includeClients === true ? await this.deleteTableRows(tx, "clients") : 0,
+            };
+            await this.query(tx, `INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
+				VALUES ($1, $2)`, [AGENT_V2_SCHEMA_VERSION, appliedAt]);
+            return {
+                legacyRowsDeleted,
+                agentV2RowsDeleted,
+                schemaVersion: AGENT_V2_SCHEMA_VERSION,
+            };
+        });
+    }
     async deleteSession(clientId, sessionId) {
         return this.withTransaction(async (tx) => {
             await this.query(tx, "DELETE FROM app_preview_goal_events WHERE client_id = $1 AND session_id = $2", [
@@ -981,6 +1010,17 @@ export class PostgresRuntimeStore {
         await this.query(queryable, `INSERT INTO clients (client_id, created_at, updated_at)
 			VALUES ($1, $2, $2)
 			ON CONFLICT(client_id) DO UPDATE SET updated_at = excluded.updated_at`, [clientId, timestamp]);
+    }
+    async deleteAllRows(queryable, tables) {
+        const counts = {};
+        for (const table of tables) {
+            counts[table] = await this.deleteTableRows(queryable, table);
+        }
+        return counts;
+    }
+    async deleteTableRows(queryable, table) {
+        const result = await this.query(queryable, `DELETE FROM ${table}`);
+        return Number(result.rowCount ?? 0);
     }
     async withTransaction(callback) {
         const client = await this.connect();

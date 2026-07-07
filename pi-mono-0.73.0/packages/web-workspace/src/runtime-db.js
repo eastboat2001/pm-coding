@@ -5,6 +5,15 @@ import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_RUN_CO
 import { AGENT_V2_SCHEMA_VERSION } from "./agent-v2-types.js";
 import { isObject } from "./json.js";
 const TERMINAL_RUN_STATUSES = new Set(["cancelled", "completed", "failed", "interrupted"]);
+const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"];
+const AGENT_V2_RESET_TABLES = [
+    "agent_v2_diagnostics",
+    "agent_v2_validations",
+    "agent_v2_artifacts",
+    "agent_v2_tasks",
+    "agent_v2_runs",
+    "agent_v2_schema_metadata",
+];
 export class RuntimeDbStore {
     dbFile;
     database;
@@ -796,6 +805,26 @@ export class RuntimeDbStore {
             .all(clientId, runId);
         return rows.map(toAgentV2DiagnosticRecord);
     }
+    resetAgentV2RuntimeData(options = {}) {
+        this.ensureSchema();
+        this.ensureAgentV2Schema();
+        const db = this.open();
+        const appliedAt = options.now?.() ?? now();
+        return this.writeTransaction(db, () => {
+            const legacyRowsDeletedBase = deleteAllRows(db, LEGACY_RESET_TABLES);
+            const agentV2RowsDeleted = deleteAllRows(db, AGENT_V2_RESET_TABLES);
+            const legacyRowsDeleted = {
+                ...legacyRowsDeletedBase,
+                clients: options.includeClients === true ? deleteAllRows(db, ["clients"]).clients : 0,
+            };
+            db.prepare("INSERT INTO agent_v2_schema_metadata (schema_version, applied_at) VALUES (?, ?)").run(AGENT_V2_SCHEMA_VERSION, appliedAt);
+            return {
+                legacyRowsDeleted,
+                agentV2RowsDeleted,
+                schemaVersion: AGENT_V2_SCHEMA_VERSION,
+            };
+        });
+    }
     deleteSession(clientId, sessionId) {
         const db = this.open();
         return this.writeTransaction(db, () => {
@@ -980,6 +1009,14 @@ function requiredRecord(record, label) {
     if (!record)
         throw new Error(`Runtime ${label} not found`);
     return record;
+}
+function deleteAllRows(db, tables) {
+    const counts = {};
+    for (const table of tables) {
+        const result = db.prepare(`DELETE FROM ${table}`).run();
+        counts[table] = Number(result.changes);
+    }
+    return counts;
 }
 function now() {
     return new Date().toISOString();

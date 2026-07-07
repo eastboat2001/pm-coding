@@ -61,6 +61,13 @@ export {
 	createAgentV2DiagnosticEvent,
 	toWorkspaceDiagnosticEvent,
 } from "./agent-v2-diagnostics.js";
+export {
+	assertAgentV2ResetConfirmation,
+	resetAgentV2RuntimeData,
+	type AgentV2ResetDiagnosticsAdapter,
+	type AgentV2ResetOptions,
+	type AgentV2ResetResult,
+} from "./agent-v2-reset.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export type { LangfuseDiagnosticEvent, LangfuseExporterStatus } from "./langfuse-exporter.js";

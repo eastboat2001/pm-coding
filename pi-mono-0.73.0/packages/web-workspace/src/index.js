@@ -2,6 +2,7 @@ export { AppPreviewGoalService, budgetForSource, } from "./app-preview-goal-serv
 export { AppPreviewGoalSupervisor } from "./app-preview-goal-supervisor.js";
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
 export { loadStorageConfig } from "./config.js";
+export { assertAgentV2ResetConfirmation, resetAgentV2RuntimeData, } from "./agent-v2-reset.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export { LangfuseDiagnosticExporter } from "./langfuse-exporter.js";

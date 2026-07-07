@@ -56,6 +56,17 @@ export interface CreateRunWithMessageInput extends JsonObject {
 	createdAt?: string;
 }
 
+export interface ResetAgentV2RuntimeDataOptions {
+	includeClients?: boolean;
+	now?: () => string;
+}
+
+export interface ResetAgentV2RuntimeDataResult {
+	legacyRowsDeleted: Record<string, number>;
+	agentV2RowsDeleted: Record<string, number>;
+	schemaVersion: number;
+}
+
 export type MaybePromise<T> = T | Promise<T>;
 export type MaybeAsyncIterable<T> = Iterable<T> | AsyncIterable<T>;
 
@@ -120,5 +131,6 @@ export interface RuntimeStore {
 	listAgentV2Artifacts(clientId: string, runId: string): MaybePromise<AgentV2ArtifactRecord[]>;
 	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): MaybePromise<AgentV2DiagnosticEvent>;
 	listAgentV2Diagnostics(clientId: string, runId: string): MaybePromise<AgentV2DiagnosticEvent[]>;
+	resetAgentV2RuntimeData(options?: ResetAgentV2RuntimeDataOptions): MaybePromise<ResetAgentV2RuntimeDataResult>;
 	deleteSession(clientId: string, sessionId: string): MaybePromise<boolean>;
 }

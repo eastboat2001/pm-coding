@@ -227,7 +227,9 @@ function pathIsInside(root: string, target: string): boolean {
 }
 
 function relativeCheckedPath(root: string, file: string): string {
-	const relative = normalize(file).slice(normalize(root).length).replace(/^[/\\]+/, "");
+	const relative = normalize(file)
+		.slice(normalize(root).length)
+		.replace(/^[/\\]+/, "");
 	return relative || file;
 }
 

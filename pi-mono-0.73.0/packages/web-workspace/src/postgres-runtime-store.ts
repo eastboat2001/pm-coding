@@ -5,20 +5,20 @@ import {
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
-	applyAgentV2RunUpdate,
-	buildAgentV2Artifact,
-	buildAgentV2Run,
-	buildAgentV2Task,
-	toAgentV2ArtifactRecord,
-	toAgentV2DiagnosticRecord,
-	toAgentV2RunRecord,
-	toAgentV2TaskRecord,
 	type AgentV2ArtifactRecord,
 	type AgentV2ArtifactRow,
 	type AgentV2DiagnosticRow,
 	type AgentV2RunRow,
 	type AgentV2TaskRow,
+	applyAgentV2RunUpdate,
+	buildAgentV2Artifact,
+	buildAgentV2Run,
+	buildAgentV2Task,
 	type CreateAgentV2RunInput,
+	toAgentV2ArtifactRecord,
+	toAgentV2DiagnosticRecord,
+	toAgentV2RunRecord,
+	toAgentV2TaskRecord,
 	type UpdateAgentV2RunInput,
 	type UpsertAgentV2ArtifactInput,
 	type UpsertAgentV2TaskInput,
@@ -158,7 +158,14 @@ interface SessionRunContext {
 
 const ACTIVE_RUN_STATUSES: readonly RunStatus[] = ["queued", "running", "cancelling"];
 const TERMINAL_RUN_STATUSES = new Set<RunStatus>(["cancelled", "completed", "failed", "interrupted"]);
-const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"] as const;
+const LEGACY_RESET_TABLES = [
+	"app_preview_goal_events",
+	"app_preview_goals",
+	"run_events",
+	"messages",
+	"runs",
+	"sessions",
+] as const;
 const AGENT_V2_RESET_TABLES = [
 	"agent_v2_diagnostics",
 	"agent_v2_validations",

@@ -38,6 +38,7 @@ import {
 	WorkspaceSkillService,
 	workspaceContext,
 } from "@mariozechner/pi-web-workspace";
+import { selectApplicationGenerationRuntime } from "../agent-v2/runtime-entry.js";
 import type { DiagnosticClient, DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
 import { createLoggedStreamFn } from "../diagnostics/model-stream-logger.js";
 import {
@@ -64,7 +65,6 @@ import {
 	specArtifactDiagnosticData,
 } from "../runtime/spec-artifact.js";
 import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
-import { selectApplicationGenerationRuntime } from "../agent-v2/runtime-entry.js";
 import { readServerProviderApiKey } from "./provider-keys.js";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);

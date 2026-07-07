@@ -145,10 +145,7 @@ describe("agent v2 runtime stores", () => {
 
 		expect(store.getRun("client-a", "run-v2-transport")?.runId).toBe("run-v2-transport");
 		const events = store.listRunEvents("client-a", "run-v2-transport", 0);
-		expect(events.map((event) => event.type)).toEqual([
-			"agent_v2.run_created",
-			"agent_v2.validation_recorded",
-		]);
+		expect(events.map((event) => event.type)).toEqual(["agent_v2.run_created", "agent_v2.validation_recorded"]);
 		expect(events[0]?.payload).toEqual({
 			type: "agent_v2.run_created",
 			status: "queued",
@@ -276,7 +273,11 @@ describe("agent v2 runtime stores", () => {
 		const db = new DatabaseSync(join(dir, "runtime.sqlite"));
 		try {
 			const tables = (
-				db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_v2_%' ORDER BY name ASC").all() as {
+				db
+					.prepare(
+						"SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_v2_%' ORDER BY name ASC",
+					)
+					.all() as {
 					name: string;
 				}[]
 			).map((row) => row.name);
@@ -290,9 +291,9 @@ describe("agent v2 runtime stores", () => {
 				"agent_v2_validations",
 			]);
 
-			const artifactColumns = (
-				db.prepare("PRAGMA table_info(agent_v2_artifacts)").all() as { name: string }[]
-			).map((row) => row.name);
+			const artifactColumns = (db.prepare("PRAGMA table_info(agent_v2_artifacts)").all() as { name: string }[]).map(
+				(row) => row.name,
+			);
 			expect(artifactColumns).toEqual([
 				"client_id",
 				"run_id",
@@ -391,7 +392,9 @@ describe("agent v2 runtime stores", () => {
 		}
 		expect(
 			statements.some((statement) =>
-				statement.includes("CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at)"),
+				statement.includes(
+					"CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at)",
+				),
 			),
 		).toBe(true);
 		expect(

@@ -1,8 +1,8 @@
 import type {
 	MaybePromise,
+	RuntimeStore,
 	ResetAgentV2RuntimeDataOptions as RuntimeStoreResetOptions,
 	ResetAgentV2RuntimeDataResult as RuntimeStoreResetResult,
-	RuntimeStore,
 } from "./runtime-store.js";
 
 export interface AgentV2ResetOptions extends RuntimeStoreResetOptions {

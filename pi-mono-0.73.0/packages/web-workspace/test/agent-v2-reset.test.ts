@@ -3,12 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AGENT_V2_SCHEMA_VERSION } from "../src/agent-v2-types.js";
 import {
+	type AgentV2ResetDiagnosticsAdapter,
 	assertAgentV2ResetConfirmation,
 	resetAgentV2RuntimeData,
-	type AgentV2ResetDiagnosticsAdapter,
 } from "../src/agent-v2-reset.js";
+import { AGENT_V2_SCHEMA_VERSION } from "../src/agent-v2-types.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
 const CONFIRMATION_TOKEN = "application-generation-agent-v2";
@@ -217,11 +217,7 @@ function seedLegacyRuntimeData(store: RuntimeDbStore): void {
 	});
 }
 
-function seedAgentV2RuntimeData(
-	dbFile: string,
-	store: RuntimeDbStore,
-	options: { runId?: string } = {},
-): void {
+function seedAgentV2RuntimeData(dbFile: string, store: RuntimeDbStore, options: { runId?: string } = {}): void {
 	const runId = options.runId ?? "agent-v2-run-1";
 	store.createAgentV2Run({
 		clientId: "client-a",
@@ -315,9 +311,11 @@ function readAgentV2SchemaMetadata(dbFile: string): Array<{ schemaVersion: numbe
 	const db = new DatabaseSync(dbFile);
 	try {
 		return (
-			db.prepare(
-				"SELECT schema_version AS schemaVersion, applied_at AS appliedAt FROM agent_v2_schema_metadata ORDER BY schema_version ASC",
-			).all() as Array<{ schemaVersion: number; appliedAt: string }>
+			db
+				.prepare(
+					"SELECT schema_version AS schemaVersion, applied_at AS appliedAt FROM agent_v2_schema_metadata ORDER BY schema_version ASC",
+				)
+				.all() as Array<{ schemaVersion: number; appliedAt: string }>
 		).map((row) => ({
 			schemaVersion: Number(row.schemaVersion),
 			appliedAt: row.appliedAt,

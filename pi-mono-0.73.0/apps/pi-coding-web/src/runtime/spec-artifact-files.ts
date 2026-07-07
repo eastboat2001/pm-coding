@@ -49,7 +49,10 @@ function renderPlanMarkdown(spec: SpecArtifact): string {
 		"",
 		renderListSection("Source Documents", spec.sourceDocuments),
 		renderListSection("Plan", spec.implementationPlan),
-		renderListSection("Validation", spec.qualityGates.map((gate) => `Run ${gate}.`)),
+		renderListSection(
+			"Validation",
+			spec.qualityGates.map((gate) => `Run ${gate}.`),
+		),
 		"",
 	].join("\n");
 }
@@ -61,12 +64,9 @@ function renderTasksMarkdown(spec: SpecArtifact): string {
 
 function renderRequirementSection(requirements: SpecRequirement[]): string {
 	if (requirements.length === 0) return renderListSection("Requirements", []);
-	return [
-		"## Requirements",
-		"",
-		...requirements.map((item) => `- ${item.id} [${item.kind}] ${item.text}`),
-		"",
-	].join("\n");
+	return ["## Requirements", "", ...requirements.map((item) => `- ${item.id} [${item.kind}] ${item.text}`), ""].join(
+		"\n",
+	);
 }
 
 function renderListSection(title: string, values: string[]): string {

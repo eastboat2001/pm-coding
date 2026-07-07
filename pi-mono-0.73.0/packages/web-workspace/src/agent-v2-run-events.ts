@@ -1,6 +1,11 @@
+import {
+	AGENT_V2_RUN_EVENT_TYPES,
+	type AgentV2Phase,
+	type AgentV2RunEventType,
+	type AgentV2RunStatus,
+} from "./agent-v2-types.js";
 import type { RunEventSink } from "./run-event-sink.js";
 import type { RuntimeRunRecord } from "./types.js";
-import { AGENT_V2_RUN_EVENT_TYPES, type AgentV2Phase, type AgentV2RunEventType, type AgentV2RunStatus } from "./agent-v2-types.js";
 
 type AgentV2TransportEventBase = {
 	type: AgentV2RunEventType;

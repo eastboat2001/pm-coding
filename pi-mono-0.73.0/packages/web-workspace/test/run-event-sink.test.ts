@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendAgentV2RunEvent, type AgentV2RunTransportEvent } from "../src/agent-v2-run-events.js";
+import { type AgentV2RunTransportEvent, appendAgentV2RunEvent } from "../src/agent-v2-run-events.js";
 import type { LiveRunEvent, RunEventBus } from "../src/run-event-bus.js";
 import { RunEventSink, type RunEventSinkAgentEvent, type RunEventSinkStore } from "../src/run-event-sink.js";
 import type { AppendMessageInput, AppendRunEventInput, RuntimeRunRecord } from "../src/types.js";

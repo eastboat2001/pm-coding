@@ -1,5 +1,5 @@
-import { isObject } from "./json.js";
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import { createAgentV2RunSnapshot, transitionAgentV2RunSnapshot } from "./agent-v2-state-machine.js";
 import type {
 	AgentV2Error,
 	AgentV2Phase,
@@ -10,7 +10,7 @@ import type {
 	AgentV2TaskNode,
 	AgentV2TaskStatus,
 } from "./agent-v2-types.js";
-import { createAgentV2RunSnapshot, transitionAgentV2RunSnapshot } from "./agent-v2-state-machine.js";
+import { isObject } from "./json.js";
 import type { JsonObject } from "./types.js";
 
 type TimestampValue = string | Date;

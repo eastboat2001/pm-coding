@@ -8,10 +8,13 @@ export { AppPreviewGoalSupervisor, type AppPreviewGoalSupervisorOptions } from "
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
 export { loadStorageConfig } from "./config.js";
 export {
+	APPLICATION_GENERATION_RUNTIME_V2,
 	AGENT_V2_PHASES,
 	AGENT_V2_RUN_STATUSES,
 	AGENT_V2_SCHEMA_VERSION,
 	AGENT_V2_TASK_STATUSES,
+	type ApplicationGenerationRuntimeSelection,
+	type ApplicationGenerationRuntimeVersion,
 	type AgentV2Error,
 	type AgentV2Phase,
 	type AgentV2RunInput,

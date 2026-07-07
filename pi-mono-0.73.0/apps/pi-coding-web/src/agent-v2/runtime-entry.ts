@@ -1,9 +1,6 @@
-import type {
-	ApplicationGenerationRuntimeSelection,
-	SelectApplicationGenerationRuntimeInput,
-} from "./types.js";
+import type { ApplicationGenerationRuntimeSelection, ApplicationGenerationRuntimeVersion } from "./types.js";
 
-const V2_APPLICATION_GENERATION_RUNTIME: ApplicationGenerationRuntimeSelection = {
+const APPLICATION_GENERATION_RUNTIME_V2: ApplicationGenerationRuntimeSelection = {
 	version: "v2",
 	v1Disabled: true,
 	reason:
@@ -11,11 +8,14 @@ const V2_APPLICATION_GENERATION_RUNTIME: ApplicationGenerationRuntimeSelection =
 };
 
 export function selectApplicationGenerationRuntime(
-	input: SelectApplicationGenerationRuntimeInput,
+	input: {
+		requestedVersion?: ApplicationGenerationRuntimeVersion | "v1" | (string & {});
+		allowDebugV1?: boolean;
+	},
 ): ApplicationGenerationRuntimeSelection {
 	if (input.requestedVersion === "v1" && !input.allowDebugV1) {
 		throw new Error("Application Generation Agent v1 is retired and cannot be selected");
 	}
 
-	return V2_APPLICATION_GENERATION_RUNTIME;
+	return { ...APPLICATION_GENERATION_RUNTIME_V2 };
 }

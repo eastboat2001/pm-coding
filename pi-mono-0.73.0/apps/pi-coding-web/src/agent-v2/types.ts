@@ -1,12 +1,4 @@
-export type ApplicationGenerationRuntimeVersion = "v2";
-
-export interface ApplicationGenerationRuntimeSelection {
-	version: ApplicationGenerationRuntimeVersion;
-	v1Disabled: true;
-	reason: string;
-}
-
-export interface SelectApplicationGenerationRuntimeInput {
-	requestedVersion?: string;
-	allowDebugV1?: boolean;
-}
+export type {
+	ApplicationGenerationRuntimeSelection,
+	ApplicationGenerationRuntimeVersion,
+} from "../../../../packages/web-workspace/src/agent-v2-types.js";

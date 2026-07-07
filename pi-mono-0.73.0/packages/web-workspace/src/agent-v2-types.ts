@@ -1,5 +1,14 @@
 export const AGENT_V2_SCHEMA_VERSION = 1 as const;
 
+export const APPLICATION_GENERATION_RUNTIME_V2 = Object.freeze({
+	version: "v2",
+	v1Disabled: true,
+	reason:
+		"Application Generation Agent v2 is the replacement default; v1 is not a compatibility target.",
+} as const);
+export type ApplicationGenerationRuntimeVersion = (typeof APPLICATION_GENERATION_RUNTIME_V2)["version"];
+export type ApplicationGenerationRuntimeSelection = typeof APPLICATION_GENERATION_RUNTIME_V2;
+
 export const AGENT_V2_RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
 export type AgentV2RunStatus = (typeof AGENT_V2_RUN_STATUSES)[number];
 
@@ -64,4 +73,3 @@ export interface AgentV2RunSnapshotInput {
 	endedAt?: string;
 	error?: AgentV2Error;
 }
-

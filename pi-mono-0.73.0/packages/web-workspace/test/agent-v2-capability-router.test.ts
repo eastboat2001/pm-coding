@@ -25,6 +25,30 @@ describe("Agent v2 capability router", () => {
 		expect(decision.userVisibleContract).toContain("static simulation");
 	});
 
+	it("routes upload, scheduled job, and integration requests to explicit static simulation", () => {
+		const decision = routeAgentV2Capabilities({
+			objective: "Build an app where users upload files, run cron jobs, and receive webhook events from third-party integrations.",
+		});
+
+		expect(decision.deliveryMode).toBe("static_simulation");
+		expect(decision.requiresSimulation).toBe(true);
+		expect(decision.unsupportedCapabilities).toEqual(
+			expect.arrayContaining(["file_upload_runtime", "scheduled_jobs", "external_integration_runtime"]),
+		);
+	});
+
+	it("does not require clarification when a generic app request includes unsupported runtime needs", () => {
+		const decision = routeAgentV2Capabilities({
+			objective: "Build an app with PostgreSQL, login auth, API routes, and user roles.",
+		});
+
+		expect(decision.deliveryMode).toBe("static_simulation");
+		expect(decision.requiresClarification).toBe(false);
+		expect(decision.unsupportedCapabilities).toEqual(
+			expect.arrayContaining(["database_runtime", "server_auth", "backend_server"]),
+		);
+	});
+
 	it("requires clarification for empty or underspecified objectives", () => {
 		const decision = routeAgentV2Capabilities({ objective: "make an app" });
 

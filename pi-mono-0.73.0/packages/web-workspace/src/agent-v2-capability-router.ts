@@ -4,7 +4,14 @@ import type {
 	AgentV2PlatformContract,
 } from "./agent-v2-types.js";
 
-const DEFAULT_UNSUPPORTED_CAPABILITIES = ["database_runtime", "server_auth", "backend_server"] as const;
+const DEFAULT_UNSUPPORTED_CAPABILITIES = [
+	"database_runtime",
+	"server_auth",
+	"backend_server",
+	"file_upload_runtime",
+	"scheduled_jobs",
+	"external_integration_runtime",
+] as const;
 
 const CLARIFICATION_PATTERNS = [
 	/\b(make|build|create)\s+(an?\s+)?app\b/i,
@@ -27,6 +34,14 @@ const FRONTEND_BUILD_PATTERNS = [/\breact\b/i, /\bvue\b/i, /\bfrontend\b/i, /\bc
 const DATABASE_PATTERNS = [/\bpostgres(?:ql)?\b/i, /\bdatabase\b/i, /\bsql\b/i, /\bprisma\b/i, /\borm\b/i] as const;
 const AUTH_PATTERNS = [/\bauth\b/i, /\blogin\b/i, /\bsign[ -]?in\b/i, /\buser roles?\b/i, /\bpermissions?\b/i] as const;
 const BACKEND_PATTERNS = [/\bapi routes?\b/i, /\bbackend\b/i, /\bserver\b/i, /\bendpoint\b/i] as const;
+const FILE_UPLOAD_PATTERNS = [/\bupload files?\b/i, /\bfile uploads?\b/i, /\battachments?\b/i] as const;
+const SCHEDULED_JOB_PATTERNS = [/\bcron jobs?\b/i, /\bscheduled jobs?\b/i, /\bschedulers?\b/i, /\bbackground jobs?\b/i] as const;
+const EXTERNAL_INTEGRATION_PATTERNS = [
+	/\bwebhooks?\b/i,
+	/\bthird-party integrations?\b/i,
+	/\bexternal integrations?\b/i,
+	/\bintegrations?\b/i,
+] as const;
 
 type Evidence = AgentV2CapabilityDecision["evidence"][number];
 
@@ -62,14 +77,12 @@ export function routeAgentV2Capabilities(input: {
 	const objective = input.objective.trim();
 	const platform = input.platform ?? STATIC_APP_V2_PLATFORM_CONTRACT;
 
-	if (!objective || matchesAny(objective, CLARIFICATION_PATTERNS)) {
+	if (!objective) {
 		return buildDecision({
 			deliveryMode: "needs_clarification",
 			objective,
 			platform,
-			evidence: objective
-				? [{ capability: "clarification", matchedText: objective, reason: "Objective is too underspecified to route safely." }]
-				: [{ capability: "clarification", matchedText: "", reason: "Objective is empty." }],
+			evidence: [{ capability: "clarification", matchedText: "", reason: "Objective is empty." }],
 			summary: "Need a more specific product objective before routing.",
 			rationale: "The request does not identify enough product scope, domain, or interaction detail to select a safe delivery mode.",
 			requiresClarification: true,
@@ -112,6 +125,49 @@ export function routeAgentV2Capabilities(input: {
 		evidence,
 		unsupportedCapabilities,
 	);
+	collectUnsupportedEvidence(
+		objective,
+		FILE_UPLOAD_PATTERNS,
+		"file_upload_runtime",
+		"Requires a file upload runtime and persistence flow that the static platform contract does not provide.",
+		evidence,
+		unsupportedCapabilities,
+	);
+	collectUnsupportedEvidence(
+		objective,
+		SCHEDULED_JOB_PATTERNS,
+		"scheduled_jobs",
+		"Requires scheduled or background job execution beyond a static frontend bundle.",
+		evidence,
+		unsupportedCapabilities,
+	);
+	collectUnsupportedEvidence(
+		objective,
+		EXTERNAL_INTEGRATION_PATTERNS,
+		"external_integration_runtime",
+		"Requires webhook handling or third-party integration runtime behavior outside the static platform contract.",
+		evidence,
+		unsupportedCapabilities,
+	);
+
+	if (matchesAny(objective, CLARIFICATION_PATTERNS) && evidence.length === 0) {
+		return buildDecision({
+			deliveryMode: "needs_clarification",
+			objective,
+			platform,
+			evidence: [{ capability: "clarification", matchedText: objective, reason: "Objective is too underspecified to route safely." }],
+			summary: "Need a more specific product objective before routing.",
+			rationale: "The request does not identify enough product scope, domain, or interaction detail to select a safe delivery mode.",
+			requiresClarification: true,
+			requiresSimulation: false,
+			unsupportedCapabilities: [],
+			constraints: ["Clarify the target product, audience, and core workflow before implementation."],
+			alternatives: [
+				{ capability: "static_app", reason: "Could be appropriate once the UI surface is described." },
+				{ capability: "static_simulation", reason: "Needed only if the clarified scope depends on server-side behavior." },
+			],
+		});
+	}
 
 	if (unsupportedCapabilities.size > 0) {
 		const unsupportedList = [...unsupportedCapabilities];

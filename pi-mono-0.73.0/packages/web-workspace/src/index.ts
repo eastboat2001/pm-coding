@@ -1,3 +1,4 @@
+export { routeAgentV2Capabilities, STATIC_APP_V2_PLATFORM_CONTRACT } from "./agent-v2-capability-router.js";
 export {
 	AGENT_V2_DIAGNOSTIC_CATEGORIES,
 	type AgentV2DiagnosticCategory,
@@ -6,6 +7,12 @@ export {
 	createAgentV2DiagnosticEvent,
 	toWorkspaceDiagnosticEvent,
 } from "./agent-v2-diagnostics.js";
+export {
+	buildAgentV2PlanDocument,
+	buildAgentV2SpecDocument,
+	buildAgentV2TaskGraph,
+	renderAgentV2DocumentMarkdown,
+} from "./agent-v2-documents.js";
 export {
 	type AgentV2ResetDiagnosticsAdapter,
 	type AgentV2ResetOptions,
@@ -30,13 +37,6 @@ export {
 	getReadyAgentV2TaskIds,
 	transitionAgentV2RunSnapshot,
 } from "./agent-v2-state-machine.js";
-export { STATIC_APP_V2_PLATFORM_CONTRACT, routeAgentV2Capabilities } from "./agent-v2-capability-router.js";
-export {
-	buildAgentV2PlanDocument,
-	buildAgentV2SpecDocument,
-	buildAgentV2TaskGraph,
-	renderAgentV2DocumentMarkdown,
-} from "./agent-v2-documents.js";
 export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,

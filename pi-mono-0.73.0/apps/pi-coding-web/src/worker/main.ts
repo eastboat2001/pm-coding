@@ -64,6 +64,7 @@ import {
 	specArtifactDiagnosticData,
 } from "../runtime/spec-artifact.js";
 import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
+import { selectApplicationGenerationRuntime } from "../agent-v2/runtime-entry.js";
 import { readServerProviderApiKey } from "./provider-keys.js";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
@@ -456,6 +457,9 @@ type CreateRunAgentOptions = {
 };
 
 export function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentOptions): WorkerAgent {
+	selectApplicationGenerationRuntime({
+		requestedVersion: process.env.PI_APP_AGENT_VERSION,
+	});
 	const messages = toInitialAgentMessages(input.messages);
 	const runMessages = toAgentMessages(input.messages);
 	const defaultSkillNames = options.defaultSkills.map((skill) => skill.name);

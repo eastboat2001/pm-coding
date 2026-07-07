@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { routeAgentV2Capabilities } from "../src/agent-v2-capability-router.js";
+import type { AgentV2PlatformContract } from "../src/agent-v2-types.js";
 
 describe("Agent v2 capability router", () => {
+	it("preserves a custom platform contract on the routed decision", () => {
+		const platform: AgentV2PlatformContract = {
+			runtime: "static_browser_app",
+			framework: "solid-js",
+			deliveryMode: "build_static_frontend",
+			entrypoints: ["index.html", "src/entry-client.tsx"],
+			deliverables: ["solid frontend bundle", "preview-ready assets"],
+			constraints: ["No backend runtime is available."],
+			supportedDeliveryModes: ["build_static_frontend", "static_simulation"],
+			unsupportedCapabilities: ["backend_server"],
+			userVisibleContract: "Ship a Solid frontend bundle with static-only behavior.",
+			metadata: { contractId: "solid-static" },
+		};
+
+		const decision = routeAgentV2Capabilities({
+			objective: "Build a React analytics frontend with reusable charts.",
+			platform,
+		});
+
+		expect(decision.deliveryMode).toBe("build_static_frontend");
+		expect(decision.platformContract).toEqual(platform);
+	});
+
 	it("accepts normal static app requests without simulation", () => {
 		const decision = routeAgentV2Capabilities({
 			objective: "Build a responsive portfolio website with projects and contact form mock data.",
@@ -27,7 +51,8 @@ describe("Agent v2 capability router", () => {
 
 	it("routes upload, scheduled job, and integration requests to explicit static simulation", () => {
 		const decision = routeAgentV2Capabilities({
-			objective: "Build an app where users upload files, run cron jobs, and receive webhook events from third-party integrations.",
+			objective:
+				"Build an app where users upload files, run cron jobs, and receive webhook events from third-party integrations.",
 		});
 
 		expect(decision.deliveryMode).toBe("static_simulation");

@@ -76,6 +76,11 @@ export function buildAgentV2PlanDocument(input: PlanDocumentInput): AgentV2PlanD
 		kind: "plan",
 		title: `Plan: ${input.spec.objective}`,
 		summary: `Implement ${input.spec.objective} as a deterministic ${input.decision.deliveryMode} workflow.`,
+		technicalApproach: buildTechnicalApproach(input.spec, input.decision),
+		fileStructure: buildFileStructure(input.spec, input.decision),
+		dataModel: buildDataModel(input.spec, input.decision),
+		interactionFlow: buildInteractionFlow(input.spec, input.decision),
+		validationStrategy: buildValidationStrategy(input.spec, input.decision),
 		steps: [
 			{
 				stepId: "capability" as const,
@@ -87,14 +92,16 @@ export function buildAgentV2PlanDocument(input: PlanDocumentInput): AgentV2PlanD
 			{
 				stepId: "spec" as const,
 				title: "Finalize spec",
-				description: "Materialize the implementation scope, assumptions, boundaries, and acceptance criteria from the objective.",
+				description:
+					"Materialize the implementation scope, assumptions, boundaries, and acceptance criteria from the objective.",
 				dependsOn: ["capability"],
 				deliverables: ["Spec document", "Acceptance criteria"],
 			},
 			{
 				stepId: "plan" as const,
 				title: "Sequence the work",
-				description: "Break the approved spec into deterministic execution phases for implementation and validation.",
+				description:
+					"Break the approved spec into deterministic execution phases for implementation and validation.",
 				dependsOn: ["spec"],
 				deliverables: ["Plan document", "Ordered execution steps"],
 			},
@@ -131,14 +138,15 @@ export function buildAgentV2PlanDocument(input: PlanDocumentInput): AgentV2PlanD
 
 export function buildAgentV2TaskGraph(input: TaskGraphInput): AgentV2TaskGraph {
 	const now = input.now ?? defaultNow;
-	const tasks = input.plan.steps.map((step, index) =>
+	const tasks = input.plan.steps.map((step) =>
 		buildTaskNode({
 			taskId: step.stepId,
 			kind: toTaskKind(step.stepId),
 			title: step.title,
 			dependsOn: step.dependsOn,
-			acceptanceCriteria:
-				step.stepId === "validate" ? input.spec.acceptanceCriteria : [`Complete step ${index + 1}: ${step.title}.`],
+			acceptanceCriteria: buildTaskAcceptanceCriteria(step.stepId, input.spec, input.plan, input.decision),
+			input: buildTaskInput(step.stepId, input.spec, input.plan, input.decision),
+			output: buildTaskOutputTemplate(step.stepId, input.decision),
 			createdAt: now(),
 		}),
 	);
@@ -146,7 +154,9 @@ export function buildAgentV2TaskGraph(input: TaskGraphInput): AgentV2TaskGraph {
 	return {
 		kind: "tasks",
 		tasks,
-		edges: tasks.flatMap((task) => task.dependsOn.map((dependency) => ({ fromTaskId: dependency, toTaskId: task.taskId }))),
+		edges: tasks.flatMap((task) =>
+			task.dependsOn.map((dependency) => ({ fromTaskId: dependency, toTaskId: task.taskId })),
+		),
 		metadata: {
 			runId: input.runId,
 			createdAt: now(),
@@ -164,27 +174,67 @@ export function renderAgentV2DocumentMarkdown(
 		case "capability_decision":
 			return [
 				"# Capability Decision",
+				"",
 				`- Delivery mode: ${document.deliveryMode}`,
 				`- Summary: ${document.summary}`,
-				`- Contract: ${document.userVisibleContract}`,
+				`- Requires simulation: ${document.requiresSimulation ? "yes" : "no"}`,
+				"",
+				"## Rationale",
+				document.rationale,
+				"",
+				"## User Contract",
+				document.userVisibleContract,
+				"",
+				"## Unsupported Capabilities",
+				...renderList(document.unsupportedCapabilities.length > 0 ? document.unsupportedCapabilities : ["None"]),
+				"",
+				"## Evidence",
+				...renderList(
+					document.evidence.map((entry) => `${entry.capability}: ${entry.matchedText} (${entry.reason})`),
+				),
+				"",
+				"## Alternatives",
+				...renderList(document.alternatives.map((entry) => `${entry.capability}: ${entry.reason}`)),
 			].join("\n");
 		case "spec":
 			return [
 				`# ${document.title}`,
 				"",
+				`Summary: ${document.summary}`,
+				"",
 				`Objective: ${document.objective}`,
 				"",
+				"## Goals",
+				...renderList(document.goals),
+				"",
 				"## Scope",
-				...document.scope.map((item) => `- ${item}`),
+				...renderList(document.scope),
 				"",
 				"## Non-Goals",
-				...document.nonGoals.map((item) => `- ${item}`),
+				...renderList(document.nonGoals),
 				"",
 				"## Assumptions",
-				...document.assumptions.map((item) => `- ${item}`),
+				...renderList(document.assumptions),
+				"",
+				"## Requirements",
+				...renderList(document.requirements),
+				"",
+				"## Capability Boundaries",
+				...renderList(document.capabilityBoundaries),
+				"",
+				"## Platform Contract",
+				...renderKeyValueList({
+					runtime: document.platformContract.runtime,
+					framework: document.platformContract.framework,
+					deliveryMode: document.platformContract.deliveryMode,
+					entrypoints: document.platformContract.entrypoints,
+					deliverables: document.platformContract.deliverables,
+					supportedDeliveryModes: document.platformContract.supportedDeliveryModes ?? [],
+					constraints: document.platformContract.constraints,
+				}),
 				"",
 				"## Acceptance Criteria",
-				...document.acceptanceCriteria.map((item) => `- ${item}`),
+				...renderList(document.acceptanceCriteria),
 			].join("\n");
 		case "plan":
 			return [
@@ -192,38 +242,64 @@ export function renderAgentV2DocumentMarkdown(
 				"",
 				`Summary: ${document.summary}`,
 				"",
+				"## Technical Approach",
+				...renderList(document.technicalApproach),
+				"",
+				"## File Structure",
+				...renderList(document.fileStructure),
+				"",
+				"## Data Model",
+				...renderList(document.dataModel),
+				"",
+				"## Interaction Flow",
+				...renderList(document.interactionFlow),
+				"",
+				"## Validation Strategy",
+				...renderList(document.validationStrategy),
+				"",
 				"## Steps",
-				...document.steps.map((step) => `- ${step.stepId}: ${step.title}`),
+				...document.steps.map(
+					(step) =>
+						`- ${step.stepId}: ${step.title} | dependsOn=${step.dependsOn.join(", ") || "none"} | deliverables=${step.deliverables.join(
+							", ",
+						)}`,
+				),
 				"",
 				"## Risks",
-				...document.risks.map((risk) => `- ${risk}`),
+				...renderList(document.risks),
 			].join("\n");
 		case "tasks":
 			return [
 				"# Task Graph",
 				"",
-				...document.tasks.map((task) => `- ${task.taskId} -> [${task.dependsOn.join(", ")}]`),
+				...document.tasks.flatMap((task) => [
+					`## ${task.taskId}`,
+					`- Kind: ${task.kind}`,
+					`- Status: ${task.status}`,
+					`- Dependencies: ${task.dependsOn.join(", ") || "none"}`,
+					"- Acceptance Criteria",
+					...renderList(task.acceptanceCriteria),
+					"- Output Slots",
+					...renderKeyValueList(task.output),
+					"",
+				]),
 			].join("\n");
 	}
 }
 
 function buildPlatformContract(decision: AgentV2CapabilityDecision): AgentV2PlatformContract {
-	const runtime = typeof decision.metadata?.platformRuntime === "string" ? decision.metadata.platformRuntime : "static_browser_app";
-	const framework = typeof decision.metadata?.platformFramework === "string" ? decision.metadata.platformFramework : "vite";
 	return {
-		runtime,
-		framework,
+		...decision.platformContract,
 		deliveryMode: decision.deliveryMode,
-		entrypoints: ["index.html", "src/main.ts", "src/main.tsx"],
-		deliverables: decision.requiresSimulation
-			? ["static frontend app", "simulated backend flows", "preview-ready assets"]
-			: ["static frontend app", "preview-ready assets"],
 		constraints: [...decision.constraints],
 		unsupportedCapabilities: [...decision.unsupportedCapabilities],
 		userVisibleContract: decision.userVisibleContract,
-		metadata: {
-			source: "agent-v2-documents",
-		},
+		entrypoints: [...decision.platformContract.entrypoints],
+		deliverables: [...decision.platformContract.deliverables],
+		...(decision.platformContract.supportedDeliveryModes
+			? { supportedDeliveryModes: [...decision.platformContract.supportedDeliveryModes] }
+			: {}),
+		metadata: decision.platformContract.metadata ? { ...decision.platformContract.metadata } : undefined,
 	};
 }
 
@@ -269,10 +345,7 @@ function buildRequirements(objective: string, decision: AgentV2CapabilityDecisio
 }
 
 function buildCapabilityBoundaries(decision: AgentV2CapabilityDecision): string[] {
-	const boundaries = [
-		decision.userVisibleContract,
-		`Delivery mode is fixed to ${decision.deliveryMode}.`,
-	];
+	const boundaries = [decision.userVisibleContract, `Delivery mode is fixed to ${decision.deliveryMode}.`];
 	if (decision.requiresSimulation) {
 		boundaries.push("Unsupported backend requirements must remain a static simulation, never a hidden downgrade.");
 	}
@@ -306,12 +379,136 @@ function buildRisks(decision: AgentV2CapabilityDecision): string[] {
 	return risks;
 }
 
+function buildTechnicalApproach(spec: AgentV2SpecDocument, decision: AgentV2CapabilityDecision): string[] {
+	return [
+		`Use a deterministic ${decision.deliveryMode} builder flow rooted in the ${spec.platformContract.framework} platform contract.`,
+		"Keep spec, plan, and task graph generation pure so identical inputs always produce identical documents.",
+		decision.requiresSimulation
+			? "Represent backend-only behavior as an explicit static simulation with user-visible notes."
+			: "Keep the implementation inside the static frontend boundary without introducing hidden backend behavior.",
+	];
+}
+
+function buildFileStructure(spec: AgentV2SpecDocument, decision: AgentV2CapabilityDecision): string[] {
+	return [
+		...spec.platformContract.entrypoints,
+		"src/features",
+		decision.requiresSimulation ? "src/mocks" : "src/data",
+		"public/assets",
+	];
+}
+
+function buildDataModel(spec: AgentV2SpecDocument, decision: AgentV2CapabilityDecision): string[] {
+	return [
+		`capability decision model: deliveryMode=${decision.deliveryMode}, unsupportedCapabilities=${decision.unsupportedCapabilities.join(", ") || "none"}.`,
+		`spec document model: objective, scope, requirements, acceptanceCriteria, and platformContract for ${spec.objective}`,
+		"plan document model: technicalApproach, fileStructure, dataModel, interactionFlow, validationStrategy, risks, and ordered steps.",
+		"task node model: taskId, status, dependencies, acceptanceCriteria, artifactIds, changedFiles, validationIds, failureReason, and repairActions.",
+	];
+}
+
+function buildInteractionFlow(spec: AgentV2SpecDocument, decision: AgentV2CapabilityDecision): string[] {
+	return [
+		`capability -> spec -> plan -> implement -> validate -> deliver for ${spec.objective}`,
+		`Implement uses delivery mode ${decision.deliveryMode} before validate checks each acceptance criterion.`,
+		"Deliver packages artifacts and constraints after validate records structured evidence.",
+	];
+}
+
+function buildValidationStrategy(spec: AgentV2SpecDocument, decision: AgentV2CapabilityDecision): string[] {
+	return [
+		"Re-check every acceptance criteria item during validate and carry the evidence into task outputs.",
+		`Verify the platform contract entrypoints remain aligned with ${decision.deliveryMode}.`,
+		decision.requiresSimulation
+			? "Confirm simulation copy clearly states mocked backend behavior and its limits."
+			: "Confirm delivery stays within the static frontend contract without backend promises.",
+		`Use the spec acceptance criteria as the validation baseline for ${spec.objective}`,
+	];
+}
+
+function buildTaskAcceptanceCriteria(
+	stepId: AgentV2PlanStepId,
+	spec: AgentV2SpecDocument,
+	plan: AgentV2PlanDocument,
+	decision: AgentV2CapabilityDecision,
+): string[] {
+	switch (stepId) {
+		case "capability":
+			return [
+				`Capture the routed delivery mode ${decision.deliveryMode} and preserve the selected platform contract.`,
+				"Record unsupported capabilities, alternatives, and the user-visible contract for downstream execution.",
+			];
+		case "spec":
+			return [
+				"Spec includes objective, scope, non-goals, assumptions, requirements, capability boundaries, and platform contract.",
+				"Spec acceptance criteria stay deterministic for identical objective and decision inputs.",
+			];
+		case "plan":
+			return [
+				"Plan includes technical approach, file structure, data model, interaction flow, validation strategy, risks, and ordered steps.",
+				"Plan ordering remains dependency-safe for capability -> spec -> plan -> implement -> validate -> deliver.",
+			];
+		case "implement":
+			return [
+				`Implementation work stays aligned to the objective: ${spec.objective}`,
+				`Implementation work maps to the selected platform contract entrypoints: ${spec.platformContract.entrypoints.join(", ")}`,
+				decision.requiresSimulation
+					? "Implementation notes call out explicit static simulation behavior for unsupported backend needs."
+					: "Implementation stays inside the static frontend contract without hidden backend requirements.",
+			];
+		case "validate":
+			return [
+				...spec.acceptanceCriteria,
+				"Validation output records evidence ids, failures, and repair actions for later execution.",
+			];
+		case "deliver":
+			return [
+				`Delivery packages preview-ready outputs for the ${decision.deliveryMode} contract.`,
+				`Delivery notes restate key risks from the plan: ${plan.risks.join(" ")}`,
+			];
+	}
+}
+
+function buildTaskInput(
+	stepId: AgentV2PlanStepId,
+	spec: AgentV2SpecDocument,
+	plan: AgentV2PlanDocument,
+	decision: AgentV2CapabilityDecision,
+): Record<string, unknown> {
+	return {
+		stepId,
+		objective: spec.objective,
+		deliveryMode: decision.deliveryMode,
+		dependencies: plan.steps.find((step) => step.stepId === stepId)?.dependsOn ?? [],
+		platformEntrypoints: [...spec.platformContract.entrypoints],
+	};
+}
+
+function buildTaskOutputTemplate(
+	stepId: AgentV2PlanStepId,
+	decision: AgentV2CapabilityDecision,
+): Record<string, unknown> {
+	return {
+		stepId,
+		documentIds: [],
+		artifactIds: [],
+		changedFiles: [],
+		validationIds: [],
+		diagnosticIds: [],
+		failureReason: null,
+		repairActions: [],
+		simulationNotes: decision.requiresSimulation ? [decision.userVisibleContract] : [],
+	};
+}
+
 function buildTaskNode(input: {
 	taskId: string;
 	kind: AgentV2TaskKind;
 	title: string;
 	dependsOn: string[];
 	acceptanceCriteria: string[];
+	input: Record<string, unknown>;
+	output: Record<string, unknown>;
 	createdAt: string;
 }): AgentV2TaskNode {
 	return {
@@ -321,11 +518,32 @@ function buildTaskNode(input: {
 		status: input.dependsOn.length === 0 ? "ready" : "pending",
 		dependsOn: [...input.dependsOn],
 		acceptanceCriteria: [...input.acceptanceCriteria],
-		input: {},
-		output: {},
+		input: { ...input.input },
+		output: { ...input.output },
 		createdAt: input.createdAt,
 		updatedAt: input.createdAt,
 	};
+}
+
+function renderList(items: string[]): string[] {
+	return items.map((item) => `- ${item}`);
+}
+
+function renderKeyValueList(values: Record<string, unknown>): string[] {
+	return Object.entries(values).map(([key, value]) => `- ${key}: ${formatValue(value)}`);
+}
+
+function formatValue(value: unknown): string {
+	if (Array.isArray(value)) {
+		return value.length > 0 ? value.map((item) => String(item)).join(", ") : "[]";
+	}
+	if (value && typeof value === "object") {
+		return JSON.stringify(value);
+	}
+	if (value === null) {
+		return "null";
+	}
+	return String(value);
 }
 
 function toTaskKind(stepId: AgentV2PlanStepId): AgentV2TaskKind {

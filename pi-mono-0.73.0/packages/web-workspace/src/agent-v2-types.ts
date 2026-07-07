@@ -116,6 +116,7 @@ export interface AgentV2CapabilityDecision {
 		capability: string;
 		reason: string;
 	}>;
+	platformContract: AgentV2PlatformContract;
 	metadata?: AgentV2DocumentMetadata;
 }
 
@@ -152,6 +153,11 @@ export interface AgentV2PlanDocument {
 	kind: "plan";
 	title: string;
 	summary: string;
+	technicalApproach: string[];
+	fileStructure: string[];
+	dataModel: string[];
+	interactionFlow: string[];
+	validationStrategy: string[];
 	steps: Array<{
 		stepId: AgentV2PlanStepId;
 		title: string;

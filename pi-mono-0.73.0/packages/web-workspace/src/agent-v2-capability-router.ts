@@ -35,7 +35,12 @@ const DATABASE_PATTERNS = [/\bpostgres(?:ql)?\b/i, /\bdatabase\b/i, /\bsql\b/i, 
 const AUTH_PATTERNS = [/\bauth\b/i, /\blogin\b/i, /\bsign[ -]?in\b/i, /\buser roles?\b/i, /\bpermissions?\b/i] as const;
 const BACKEND_PATTERNS = [/\bapi routes?\b/i, /\bbackend\b/i, /\bserver\b/i, /\bendpoint\b/i] as const;
 const FILE_UPLOAD_PATTERNS = [/\bupload files?\b/i, /\bfile uploads?\b/i, /\battachments?\b/i] as const;
-const SCHEDULED_JOB_PATTERNS = [/\bcron jobs?\b/i, /\bscheduled jobs?\b/i, /\bschedulers?\b/i, /\bbackground jobs?\b/i] as const;
+const SCHEDULED_JOB_PATTERNS = [
+	/\bcron jobs?\b/i,
+	/\bscheduled jobs?\b/i,
+	/\bschedulers?\b/i,
+	/\bbackground jobs?\b/i,
+] as const;
 const EXTERNAL_INTEGRATION_PATTERNS = [
 	/\bwebhooks?\b/i,
 	/\bthird-party integrations?\b/i,
@@ -85,14 +90,18 @@ export function routeAgentV2Capabilities(input: {
 			platform,
 			evidence: [{ capability: "clarification", matchedText: "", reason: "Objective is empty." }],
 			summary: "Need a more specific product objective before routing.",
-			rationale: "The request does not identify enough product scope, domain, or interaction detail to select a safe delivery mode.",
+			rationale:
+				"The request does not identify enough product scope, domain, or interaction detail to select a safe delivery mode.",
 			requiresClarification: true,
 			requiresSimulation: false,
 			unsupportedCapabilities: [],
 			constraints: ["Clarify the target product, audience, and core workflow before implementation."],
 			alternatives: [
 				{ capability: "static_app", reason: "Could be appropriate once the UI surface is described." },
-				{ capability: "static_simulation", reason: "Needed only if the clarified scope depends on server-side behavior." },
+				{
+					capability: "static_simulation",
+					reason: "Needed only if the clarified scope depends on server-side behavior.",
+				},
 			],
 		});
 	}
@@ -100,8 +109,20 @@ export function routeAgentV2Capabilities(input: {
 	const evidence: Evidence[] = [];
 	const unsupportedCapabilities = new Set<string>();
 
-	collectEvidence(objective, STATIC_APP_PATTERNS, "static_app", "Signals a frontend-first static app request.", evidence);
-	collectEvidence(objective, FRONTEND_BUILD_PATTERNS, "build_static_frontend", "Specifies frontend implementation details.", evidence);
+	collectEvidence(
+		objective,
+		STATIC_APP_PATTERNS,
+		"static_app",
+		"Signals a frontend-first static app request.",
+		evidence,
+	);
+	collectEvidence(
+		objective,
+		FRONTEND_BUILD_PATTERNS,
+		"build_static_frontend",
+		"Specifies frontend implementation details.",
+		evidence,
+	);
 	collectUnsupportedEvidence(
 		objective,
 		DATABASE_PATTERNS,
@@ -156,16 +177,26 @@ export function routeAgentV2Capabilities(input: {
 			deliveryMode: "needs_clarification",
 			objective,
 			platform,
-			evidence: [{ capability: "clarification", matchedText: objective, reason: "Objective is too underspecified to route safely." }],
+			evidence: [
+				{
+					capability: "clarification",
+					matchedText: objective,
+					reason: "Objective is too underspecified to route safely.",
+				},
+			],
 			summary: "Need a more specific product objective before routing.",
-			rationale: "The request does not identify enough product scope, domain, or interaction detail to select a safe delivery mode.",
+			rationale:
+				"The request does not identify enough product scope, domain, or interaction detail to select a safe delivery mode.",
 			requiresClarification: true,
 			requiresSimulation: false,
 			unsupportedCapabilities: [],
 			constraints: ["Clarify the target product, audience, and core workflow before implementation."],
 			alternatives: [
 				{ capability: "static_app", reason: "Could be appropriate once the UI surface is described." },
-				{ capability: "static_simulation", reason: "Needed only if the clarified scope depends on server-side behavior." },
+				{
+					capability: "static_simulation",
+					reason: "Needed only if the clarified scope depends on server-side behavior.",
+				},
 			],
 		});
 	}
@@ -188,13 +219,21 @@ export function routeAgentV2Capabilities(input: {
 				"Call out simulated backend behavior in user-facing copy and implementation notes.",
 			],
 			alternatives: [
-				{ capability: "static_app", reason: "Only valid if backend dependencies are removed or replaced with mock data." },
-				{ capability: "unsupported", reason: "Use this when a true server runtime is mandatory and simulation is not acceptable." },
+				{
+					capability: "static_app",
+					reason: "Only valid if backend dependencies are removed or replaced with mock data.",
+				},
+				{
+					capability: "unsupported",
+					reason: "Use this when a true server runtime is mandatory and simulation is not acceptable.",
+				},
 			],
 		});
 	}
 
-	const deliveryMode: AgentV2CapabilityDeliveryMode = evidence.some((entry) => entry.capability === "build_static_frontend")
+	const deliveryMode: AgentV2CapabilityDeliveryMode = evidence.some(
+		(entry) => entry.capability === "build_static_frontend",
+	)
 		? "build_static_frontend"
 		: "static_app";
 
@@ -204,13 +243,17 @@ export function routeAgentV2Capabilities(input: {
 		platform,
 		evidence,
 		summary: "Objective fits the static frontend platform contract.",
-		rationale: "The request can be satisfied with frontend-only delivery and does not require unsupported server runtime capabilities.",
+		rationale:
+			"The request can be satisfied with frontend-only delivery and does not require unsupported server runtime capabilities.",
 		requiresClarification: false,
 		requiresSimulation: false,
 		unsupportedCapabilities: [],
 		constraints: [...platform.constraints],
 		alternatives: [
-			{ capability: "static_simulation", reason: "Use this only when server-side workflows must be represented with mock behavior." },
+			{
+				capability: "static_simulation",
+				reason: "Use this only when server-side workflows must be represented with mock behavior.",
+			},
 		],
 	});
 }
@@ -231,8 +274,8 @@ function buildDecision(input: {
 	const contractText =
 		input.deliveryMode === "static_simulation"
 			? "Deliver as a static simulation with explicit mock backend behavior."
-			: input.platform.userVisibleContract ??
-				"This workspace delivers a static frontend app and cannot provide live backend runtime behavior.";
+			: (input.platform.userVisibleContract ??
+				"This workspace delivers a static frontend app and cannot provide live backend runtime behavior.");
 
 	return {
 		kind: "capability_decision",
@@ -247,6 +290,10 @@ function buildDecision(input: {
 		evidence: input.evidence,
 		constraints: input.constraints,
 		alternatives: input.alternatives,
+		platformContract: {
+			...input.platform,
+			deliveryMode: input.deliveryMode,
+		},
 		metadata: {
 			objective: input.objective,
 			platformRuntime: input.platform.runtime,

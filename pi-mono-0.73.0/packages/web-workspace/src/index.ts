@@ -29,6 +29,14 @@ export {
 	getReadyAgentV2TaskIds,
 	transitionAgentV2RunSnapshot,
 } from "./agent-v2-state-machine.js";
+export {
+	AGENT_V2_DIAGNOSTIC_CATEGORIES,
+	type AgentV2DiagnosticCategory,
+	type AgentV2DiagnosticEvent,
+	type AgentV2DiagnosticSeverity,
+	createAgentV2DiagnosticEvent,
+	toWorkspaceDiagnosticEvent,
+} from "./agent-v2-diagnostics.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export type { LangfuseDiagnosticEvent, LangfuseExporterStatus } from "./langfuse-exporter.js";

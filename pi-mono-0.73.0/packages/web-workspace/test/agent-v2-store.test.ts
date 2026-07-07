@@ -2,8 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { appendAgentV2RunEvent } from "../src/agent-v2-run-events.js";
+import type { AgentV2DocumentContent } from "../src/agent-v2-types.js";
 import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
 import { InMemoryRunEventBus } from "../src/run-event-bus.js";
 import { RunEventSink } from "../src/run-event-sink.js";
@@ -45,6 +46,31 @@ class RecordingQueryable implements Queryable {
 
 function normalizeSql(sql: string): string {
 	return sql.replaceAll(/\s+/g, " ").trim();
+}
+
+function createSpecContent(overrides: Partial<Extract<AgentV2DocumentContent, { kind: "spec" }>> = {}) {
+	return {
+		kind: "spec" as const,
+		title: "Spec",
+		objective: "Build dashboard",
+		summary: "Summary",
+		scope: [],
+		goals: [],
+		nonGoals: [],
+		assumptions: [],
+		requirements: [],
+		capabilityBoundaries: [],
+		acceptanceCriteria: [],
+		platformContract: {
+			runtime: "web",
+			framework: "vite",
+			deliveryMode: "static_app" as const,
+			entrypoints: ["src/main.ts"],
+			deliverables: ["dist"],
+			constraints: [],
+		},
+		...overrides,
+	};
 }
 
 describe("agent v2 runtime stores", () => {
@@ -287,7 +313,7 @@ describe("agent v2 runtime stores", () => {
 			kind: "spec",
 			version: "v1",
 			contentMarkdown: "# Spec\n",
-			contentJson: { objective: "Build dashboard" },
+			contentJson: createSpecContent(),
 			sourceTaskId: "spec",
 			createdAt: "2026-07-07T00:01:00.000Z",
 			updatedAt: "2026-07-07T00:01:00.000Z",
@@ -295,7 +321,8 @@ describe("agent v2 runtime stores", () => {
 
 		expect(store.getAgentV2Document("client-a", "run-v2-a", "spec")).toEqual(document);
 		expect(store.listAgentV2Documents("client-a", "run-v2-a")).toEqual([document]);
-		expect(document.contentJson).toEqual({ kind: "spec", objective: "Build dashboard" });
+		expect(document.contentJson).toEqual(createSpecContent());
+		expectTypeOf(document.contentJson).toMatchTypeOf<AgentV2DocumentContent>();
 	});
 
 	it("rejects v2 documents when content kind conflicts with the column kind", () => {
@@ -315,12 +342,48 @@ describe("agent v2 runtime stores", () => {
 				kind: "spec",
 				version: "v1",
 				contentMarkdown: "# Spec\n",
-				contentJson: { kind: "plan", objective: "Build dashboard" },
+				contentJson: {
+					kind: "plan",
+					title: "Plan",
+					summary: "Summary",
+					technicalApproach: [],
+					fileStructure: [],
+					dataModel: [],
+					interactionFlow: [],
+					validationStrategy: [],
+					steps: [],
+					risks: [],
+				},
 				sourceTaskId: "spec",
 				createdAt: "2026-07-07T00:01:00.000Z",
 				updatedAt: "2026-07-07T00:01:00.000Z",
 			}),
 		).toThrowError("Agent v2 document kind mismatch: input.kind=\"spec\" contentJson.kind=\"plan\"");
+	});
+
+	it("rejects v2 documents when content kind is present but not a string", () => {
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			input: { prompt: "build a dashboard" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+
+		expect(() =>
+			store.upsertAgentV2Document({
+				clientId: "client-a",
+				runId: "run-v2-a",
+				documentId: "spec",
+				kind: "spec",
+				version: "v1",
+				contentMarkdown: "# Spec\n",
+				contentJson: { ...createSpecContent(), kind: 123 } as never,
+				sourceTaskId: "spec",
+				createdAt: "2026-07-07T00:01:00.000Z",
+				updatedAt: "2026-07-07T00:01:00.000Z",
+			}),
+		).toThrowError('Agent v2 document kind must be a string when present: input.kind="spec" contentJson.kind=123');
 	});
 
 	it("preserves stored document content kind instead of masking inconsistent payloads on read", async () => {
@@ -391,14 +454,14 @@ describe("agent v2 runtime stores", () => {
 			kind: "spec",
 			version: "v1",
 			contentMarkdown: "# Spec\n",
-			contentJson: { title: "Spec", objective: "Build dashboard" },
+			contentJson: createSpecContent(),
 			sourceTaskId: "spec",
 			createdAt: "2026-07-07T00:01:00.000Z",
 			updatedAt: "2026-07-07T00:01:00.000Z",
 		});
 
-		expect(insertedValues?.[6]).toEqual({ kind: "spec", title: "Spec", objective: "Build dashboard" });
-		expect(document.contentJson).toEqual({ kind: "spec", title: "Spec", objective: "Build dashboard" });
+		expect(insertedValues?.[6]).toEqual(createSpecContent());
+		expect(document.contentJson).toEqual(createSpecContent());
 	});
 
 	it("creates the expected SQLite agent v2 tables", () => {
@@ -524,27 +587,7 @@ describe("agent v2 runtime stores", () => {
 			kind: "spec",
 			version: "v1",
 			content_markdown: "# Spec\n",
-			content_json: {
-				kind: "spec",
-				title: "Spec",
-				objective: "Build dashboard",
-				summary: "Summary",
-				scope: [],
-				goals: [],
-				nonGoals: [],
-				assumptions: [],
-				requirements: [],
-				capabilityBoundaries: [],
-				acceptanceCriteria: [],
-				platformContract: {
-					runtime: "web",
-					framework: "vite",
-					deliveryMode: "static_app",
-					entrypoints: ["src/main.ts"],
-					deliverables: ["dist"],
-					constraints: [],
-				},
-			},
+			content_json: createSpecContent(),
 			source_task_id: "spec",
 			created_at: "2026-07-07T00:01:00.000Z",
 			updated_at: "2026-07-07T00:01:00.000Z",

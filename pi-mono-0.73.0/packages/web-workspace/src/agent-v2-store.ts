@@ -1,6 +1,7 @@
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { createAgentV2RunSnapshot, transitionAgentV2RunSnapshot } from "./agent-v2-state-machine.js";
 import type {
+	AgentV2DocumentContent,
 	AgentV2DocumentKind,
 	AgentV2Error,
 	AgentV2Phase,
@@ -100,7 +101,7 @@ export interface AgentV2DocumentRecord extends JsonObject {
 	kind: AgentV2DocumentKind;
 	version: string;
 	contentMarkdown: string;
-	contentJson: JsonObject;
+	contentJson: AgentV2DocumentContent;
 	sourceTaskId?: string;
 	createdAt: string;
 	updatedAt: string;
@@ -113,7 +114,7 @@ export interface UpsertAgentV2DocumentInput extends JsonObject {
 	kind: AgentV2DocumentKind;
 	version: string;
 	contentMarkdown: string;
-	contentJson: JsonObject;
+	contentJson: AgentV2DocumentContent;
 	sourceTaskId?: string;
 	createdAt?: string;
 	updatedAt?: string;
@@ -375,7 +376,7 @@ export function toAgentV2DocumentRecord(row: AgentV2DocumentRow): AgentV2Documen
 		kind: row.kind,
 		version: row.version,
 		contentMarkdown: row.content_markdown,
-		contentJson: parseAgentV2DocumentContent(row.content_json),
+		contentJson: parseAgentV2DocumentContent(row.content_json, row.kind),
 		...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
 		createdAt: toTimestamp(row.created_at),
 		updatedAt: toTimestamp(row.updated_at),
@@ -437,16 +438,36 @@ function parseAgentV2Error(value: unknown): AgentV2Error | undefined {
 	return error;
 }
 
-function normalizeAgentV2DocumentContent(kind: AgentV2DocumentKind, contentJson: JsonObject): JsonObject {
+function normalizeAgentV2DocumentContent(
+	kind: AgentV2DocumentKind,
+	contentJson: AgentV2DocumentContent,
+): AgentV2DocumentContent {
 	const contentKind = contentJson.kind;
+	if (contentKind !== undefined && typeof contentKind !== "string") {
+		throw new Error(
+			`Agent v2 document kind must be a string when present: input.kind="${kind}" contentJson.kind=${String(contentKind)}`,
+		);
+	}
 	if (typeof contentKind === "string" && contentKind !== kind) {
 		throw new Error(`Agent v2 document kind mismatch: input.kind="${kind}" contentJson.kind="${contentKind}"`);
 	}
-	return { ...contentJson, kind };
+	return { ...contentJson, kind } as AgentV2DocumentContent;
 }
 
-function parseAgentV2DocumentContent(value: unknown): JsonObject {
-	return parseJsonObject(value);
+function parseAgentV2DocumentContent(value: unknown, fallbackKind: AgentV2DocumentKind): AgentV2DocumentContent {
+	const parsed = parseJsonObject(value);
+	const parsedKind = parsed.kind;
+	if (isAgentV2DocumentKind(parsedKind)) return parsed as unknown as AgentV2DocumentContent;
+	return { ...parsed, kind: fallbackKind } as AgentV2DocumentContent;
+}
+
+function isAgentV2DocumentKind(value: unknown): value is AgentV2DocumentKind {
+	return (
+		value === "capability_decision" ||
+		value === "spec" ||
+		value === "plan" ||
+		value === "tasks"
+	);
 }
 
 function toNumber(value: number | string): number {

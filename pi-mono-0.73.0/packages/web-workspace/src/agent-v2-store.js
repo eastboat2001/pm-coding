@@ -156,7 +156,7 @@ export function toAgentV2DocumentRecord(row) {
         kind: row.kind,
         version: row.version,
         contentMarkdown: row.content_markdown,
-        contentJson: parseAgentV2DocumentContent(row.content_json),
+        contentJson: parseAgentV2DocumentContent(row.content_json, row.kind),
         ...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
         createdAt: toTimestamp(row.created_at),
         updatedAt: toTimestamp(row.updated_at),
@@ -214,13 +214,23 @@ function parseAgentV2Error(value) {
 }
 function normalizeAgentV2DocumentContent(kind, contentJson) {
     const contentKind = contentJson.kind;
+    if (contentKind !== undefined && typeof contentKind !== "string") {
+        throw new Error(`Agent v2 document kind must be a string when present: input.kind="${kind}" contentJson.kind=${String(contentKind)}`);
+    }
     if (typeof contentKind === "string" && contentKind !== kind) {
         throw new Error(`Agent v2 document kind mismatch: input.kind="${kind}" contentJson.kind="${contentKind}"`);
     }
     return { ...contentJson, kind };
 }
-function parseAgentV2DocumentContent(value) {
-    return parseJsonObject(value);
+function parseAgentV2DocumentContent(value, fallbackKind) {
+    const parsed = parseJsonObject(value);
+    const parsedKind = parsed.kind;
+    if (isAgentV2DocumentKind(parsedKind))
+        return parsed;
+    return { ...parsed, kind: fallbackKind };
+}
+function isAgentV2DocumentKind(value) {
+    return value === "capability_decision" || value === "spec" || value === "plan" || value === "tasks";
 }
 function toNumber(value) {
     return typeof value === "number" ? value : Number(value);

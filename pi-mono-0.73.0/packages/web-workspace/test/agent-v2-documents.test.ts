@@ -128,7 +128,10 @@ describe("Agent v2 document builders", () => {
 		});
 		expect(spec.platformContract.entrypoints).toEqual(CUSTOM_PLATFORM.entrypoints);
 		expect(spec.platformContract.deliverables).toEqual(CUSTOM_PLATFORM.deliverables);
+		expect(spec.platformContract.constraints).toEqual(CUSTOM_PLATFORM.constraints);
 		expect(spec.platformContract.supportedDeliveryModes).toEqual(CUSTOM_PLATFORM.supportedDeliveryModes);
+		expect(spec.platformContract.unsupportedCapabilities).toEqual(CUSTOM_PLATFORM.unsupportedCapabilities);
+		expect(spec.platformContract.userVisibleContract).toBe(CUSTOM_PLATFORM.userVisibleContract);
 		expect(spec.platformContract.metadata).toEqual(CUSTOM_PLATFORM.metadata);
 	});
 

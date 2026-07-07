@@ -289,15 +289,20 @@ export function renderAgentV2DocumentMarkdown(
 
 function buildPlatformContract(decision: AgentV2CapabilityDecision): AgentV2PlatformContract {
 	return {
-		...decision.platformContract,
+		runtime: decision.platformContract.runtime,
+		framework: decision.platformContract.framework,
 		deliveryMode: decision.deliveryMode,
-		constraints: [...decision.constraints],
-		unsupportedCapabilities: [...decision.unsupportedCapabilities],
-		userVisibleContract: decision.userVisibleContract,
 		entrypoints: [...decision.platformContract.entrypoints],
 		deliverables: [...decision.platformContract.deliverables],
+		constraints: [...decision.platformContract.constraints],
 		...(decision.platformContract.supportedDeliveryModes
 			? { supportedDeliveryModes: [...decision.platformContract.supportedDeliveryModes] }
+			: {}),
+		...(decision.platformContract.unsupportedCapabilities
+			? { unsupportedCapabilities: [...decision.platformContract.unsupportedCapabilities] }
+			: {}),
+		...(decision.platformContract.userVisibleContract
+			? { userVisibleContract: decision.platformContract.userVisibleContract }
 			: {}),
 		metadata: decision.platformContract.metadata ? { ...decision.platformContract.metadata } : undefined,
 	};

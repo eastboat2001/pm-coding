@@ -6,7 +6,7 @@ import {
 	getReadyAgentV2TaskIds,
 	transitionAgentV2RunSnapshot,
 } from "../src/agent-v2-state-machine.js";
-import type { AgentV2RunSnapshot, AgentV2TaskNode } from "../src/agent-v2-types.js";
+import type { AgentV2TaskNode } from "../src/agent-v2-types.js";
 
 const createdAt = "2026-07-07T00:00:00.000Z";
 
@@ -62,6 +62,14 @@ describe("Agent v2 state machine", () => {
 	it("does not allow terminal runs to restart", () => {
 		expect(() => assertAgentV2RunTransition("failed", "running")).toThrow("failed -> running");
 		expect(() => assertAgentV2RunTransition("succeeded", "running")).toThrow("succeeded -> running");
+	});
+
+	it.each([
+		["queued", "succeeded"],
+		["running", "queued"],
+		["cancelled", "running"],
+	] as const)("rejects illegal run transition %s -> %s", (from, to) => {
+		expect(() => assertAgentV2RunTransition(from, to)).toThrow(`Invalid Agent v2 run transition: ${from} -> ${to}`);
 	});
 
 	it("progresses phases in order", () => {

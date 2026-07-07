@@ -295,6 +295,110 @@ describe("agent v2 runtime stores", () => {
 
 		expect(store.getAgentV2Document("client-a", "run-v2-a", "spec")).toEqual(document);
 		expect(store.listAgentV2Documents("client-a", "run-v2-a")).toEqual([document]);
+		expect(document.contentJson).toEqual({ kind: "spec", objective: "Build dashboard" });
+	});
+
+	it("rejects v2 documents when content kind conflicts with the column kind", () => {
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			input: { prompt: "build a dashboard" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+
+		expect(() =>
+			store.upsertAgentV2Document({
+				clientId: "client-a",
+				runId: "run-v2-a",
+				documentId: "spec",
+				kind: "spec",
+				version: "v1",
+				contentMarkdown: "# Spec\n",
+				contentJson: { kind: "plan", objective: "Build dashboard" },
+				sourceTaskId: "spec",
+				createdAt: "2026-07-07T00:01:00.000Z",
+				updatedAt: "2026-07-07T00:01:00.000Z",
+			}),
+		).toThrowError("Agent v2 document kind mismatch: input.kind=\"spec\" contentJson.kind=\"plan\"");
+	});
+
+	it("preserves stored document content kind instead of masking inconsistent payloads on read", async () => {
+		const documentRow = {
+			client_id: "client-a",
+			run_id: "run-v2-a",
+			document_id: "spec",
+			kind: "spec",
+			version: "v1",
+			content_markdown: "# Spec\n",
+			content_json: { kind: "plan", title: "Unexpected plan payload" },
+			source_task_id: "spec",
+			created_at: "2026-07-07T00:01:00.000Z",
+			updated_at: "2026-07-07T00:01:00.000Z",
+		};
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (/^CREATE /i.test(sql)) return { rowCount: 0 };
+			if (/FROM agent_v2_documents/i.test(sql)) {
+				return { rows: [documentRow] };
+			}
+			return undefined;
+		});
+		const postgresStore = new PostgresRuntimeStore({ queryable });
+
+		await postgresStore.ensureAgentV2Schema();
+
+		const document = await postgresStore.getAgentV2Document("client-a", "run-v2-a", "spec");
+
+		expect(document?.kind).toBe("spec");
+		expect(document?.contentJson).toEqual({ kind: "plan", title: "Unexpected plan payload" });
+	});
+
+	it("normalizes document content kind before writing to PostgreSQL", async () => {
+		let insertedValues: readonly unknown[] | undefined;
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (/^CREATE /i.test(sql)) return { rowCount: 0 };
+			if (/INSERT INTO agent_v2_documents/i.test(sql)) {
+				insertedValues = query.values;
+				return {
+					rows: [
+						{
+							client_id: query.values[0],
+							run_id: query.values[1],
+							document_id: query.values[2],
+							kind: query.values[3],
+							version: query.values[4],
+							content_markdown: query.values[5],
+							content_json: query.values[6],
+							source_task_id: query.values[7],
+							created_at: query.values[8],
+							updated_at: query.values[9],
+						},
+					],
+				};
+			}
+			return undefined;
+		});
+		const postgresStore = new PostgresRuntimeStore({ queryable });
+
+		await postgresStore.ensureAgentV2Schema();
+
+		const document = await postgresStore.upsertAgentV2Document({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			documentId: "spec",
+			kind: "spec",
+			version: "v1",
+			contentMarkdown: "# Spec\n",
+			contentJson: { title: "Spec", objective: "Build dashboard" },
+			sourceTaskId: "spec",
+			createdAt: "2026-07-07T00:01:00.000Z",
+			updatedAt: "2026-07-07T00:01:00.000Z",
+		});
+
+		expect(insertedValues?.[6]).toEqual({ kind: "spec", title: "Spec", objective: "Build dashboard" });
+		expect(document.contentJson).toEqual({ kind: "spec", title: "Spec", objective: "Build dashboard" });
 	});
 
 	it("creates the expected SQLite agent v2 tables", () => {

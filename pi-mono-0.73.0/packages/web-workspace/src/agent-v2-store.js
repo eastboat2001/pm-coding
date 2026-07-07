@@ -82,6 +82,7 @@ export function buildAgentV2Artifact(input) {
 export function buildAgentV2Document(input) {
     const createdAt = input.createdAt ?? new Date().toISOString();
     const updatedAt = input.updatedAt ?? createdAt;
+    const contentJson = normalizeAgentV2DocumentContent(input.kind, input.contentJson);
     return {
         clientId: input.clientId,
         runId: input.runId,
@@ -89,7 +90,7 @@ export function buildAgentV2Document(input) {
         kind: input.kind,
         version: input.version,
         contentMarkdown: input.contentMarkdown,
-        contentJson: input.contentJson,
+        contentJson,
         ...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
         createdAt,
         updatedAt,
@@ -155,7 +156,7 @@ export function toAgentV2DocumentRecord(row) {
         kind: row.kind,
         version: row.version,
         contentMarkdown: row.content_markdown,
-        contentJson: parseAgentV2DocumentContent(row.content_json, row.kind),
+        contentJson: parseAgentV2DocumentContent(row.content_json),
         ...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
         createdAt: toTimestamp(row.created_at),
         updatedAt: toTimestamp(row.updated_at),
@@ -211,9 +212,15 @@ function parseAgentV2Error(value) {
         error.data = parsed.data;
     return error;
 }
-function parseAgentV2DocumentContent(value, kind) {
-    const parsed = parseJsonObject(value);
-    return { ...parsed, kind };
+function normalizeAgentV2DocumentContent(kind, contentJson) {
+    const contentKind = contentJson.kind;
+    if (typeof contentKind === "string" && contentKind !== kind) {
+        throw new Error(`Agent v2 document kind mismatch: input.kind="${kind}" contentJson.kind="${contentKind}"`);
+    }
+    return { ...contentJson, kind };
+}
+function parseAgentV2DocumentContent(value) {
+    return parseJsonObject(value);
 }
 function toNumber(value) {
     return typeof value === "number" ? value : Number(value);

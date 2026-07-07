@@ -1,7 +1,6 @@
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { createAgentV2RunSnapshot, transitionAgentV2RunSnapshot } from "./agent-v2-state-machine.js";
 import type {
-	AgentV2DocumentContent,
 	AgentV2DocumentKind,
 	AgentV2Error,
 	AgentV2Phase,
@@ -101,7 +100,7 @@ export interface AgentV2DocumentRecord extends JsonObject {
 	kind: AgentV2DocumentKind;
 	version: string;
 	contentMarkdown: string;
-	contentJson: AgentV2DocumentContent;
+	contentJson: JsonObject;
 	sourceTaskId?: string;
 	createdAt: string;
 	updatedAt: string;
@@ -114,7 +113,7 @@ export interface UpsertAgentV2DocumentInput extends JsonObject {
 	kind: AgentV2DocumentKind;
 	version: string;
 	contentMarkdown: string;
-	contentJson: AgentV2DocumentContent;
+	contentJson: JsonObject;
 	sourceTaskId?: string;
 	createdAt?: string;
 	updatedAt?: string;
@@ -297,6 +296,7 @@ export function buildAgentV2Artifact(input: UpsertAgentV2ArtifactInput): AgentV2
 export function buildAgentV2Document(input: UpsertAgentV2DocumentInput): AgentV2DocumentRecord {
 	const createdAt = input.createdAt ?? new Date().toISOString();
 	const updatedAt = input.updatedAt ?? createdAt;
+	const contentJson = normalizeAgentV2DocumentContent(input.kind, input.contentJson);
 
 	return {
 		clientId: input.clientId,
@@ -305,7 +305,7 @@ export function buildAgentV2Document(input: UpsertAgentV2DocumentInput): AgentV2
 		kind: input.kind,
 		version: input.version,
 		contentMarkdown: input.contentMarkdown,
-		contentJson: input.contentJson,
+		contentJson,
 		...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
 		createdAt,
 		updatedAt,
@@ -375,7 +375,7 @@ export function toAgentV2DocumentRecord(row: AgentV2DocumentRow): AgentV2Documen
 		kind: row.kind,
 		version: row.version,
 		contentMarkdown: row.content_markdown,
-		contentJson: parseAgentV2DocumentContent(row.content_json, row.kind),
+		contentJson: parseAgentV2DocumentContent(row.content_json),
 		...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
 		createdAt: toTimestamp(row.created_at),
 		updatedAt: toTimestamp(row.updated_at),
@@ -437,9 +437,16 @@ function parseAgentV2Error(value: unknown): AgentV2Error | undefined {
 	return error;
 }
 
-function parseAgentV2DocumentContent(value: unknown, kind: AgentV2DocumentKind): AgentV2DocumentContent {
-	const parsed = parseJsonObject(value);
-	return { ...parsed, kind } as AgentV2DocumentContent;
+function normalizeAgentV2DocumentContent(kind: AgentV2DocumentKind, contentJson: JsonObject): JsonObject {
+	const contentKind = contentJson.kind;
+	if (typeof contentKind === "string" && contentKind !== kind) {
+		throw new Error(`Agent v2 document kind mismatch: input.kind="${kind}" contentJson.kind="${contentKind}"`);
+	}
+	return { ...contentJson, kind };
+}
+
+function parseAgentV2DocumentContent(value: unknown): JsonObject {
+	return parseJsonObject(value);
 }
 
 function toNumber(value: number | string): number {

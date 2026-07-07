@@ -315,6 +315,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				title TEXT NOT NULL,
 				status TEXT NOT NULL,
 				depends_on_json TEXT NOT NULL,
+				acceptance_criteria_json TEXT NOT NULL DEFAULT '[]',
 				input_json TEXT NOT NULL,
 				output_json TEXT NOT NULL,
 				created_at TEXT NOT NULL,
@@ -380,7 +381,8 @@ export class RuntimeDbStore implements RuntimeStore {
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
 			);
 			CREATE INDEX IF NOT EXISTS idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at ASC);
-		`);
+			`);
+		ensureSqliteColumn(db, "agent_v2_tasks", "acceptance_criteria_json", "TEXT NOT NULL DEFAULT '[]'");
 		db.prepare(
 			`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
 			VALUES (?, ?)
@@ -1065,6 +1067,7 @@ export class RuntimeDbStore implements RuntimeStore {
 					title,
 					status,
 					depends_on_json,
+					acceptance_criteria_json,
 					input_json,
 					output_json,
 					created_at,
@@ -1072,13 +1075,14 @@ export class RuntimeDbStore implements RuntimeStore {
 					started_at,
 					ended_at,
 					error_json
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(client_id, run_id, task_id) DO UPDATE SET
 					parent_task_id = excluded.parent_task_id,
 					kind = excluded.kind,
 					title = excluded.title,
 					status = excluded.status,
 					depends_on_json = excluded.depends_on_json,
+					acceptance_criteria_json = excluded.acceptance_criteria_json,
 					input_json = excluded.input_json,
 					output_json = excluded.output_json,
 					updated_at = excluded.updated_at,
@@ -1095,6 +1099,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				task.title,
 				task.status,
 				stringifyAgentV2Json(task.dependsOn),
+				stringifyAgentV2Json(task.acceptanceCriteria),
 				stringifyAgentV2Json(task.input),
 				stringifyAgentV2Json(task.output),
 				task.createdAt,
@@ -1498,6 +1503,12 @@ function deleteAllRows<TableName extends string>(
 		counts[table] = Number(result.changes);
 	}
 	return counts;
+}
+
+function ensureSqliteColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+	const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+	if (columns.some((entry) => entry.name === column)) return;
+	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function now(): string {

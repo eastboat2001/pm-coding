@@ -190,6 +190,7 @@ export class PostgresRuntimeStore {
 				title TEXT NOT NULL,
 				status TEXT NOT NULL,
 				depends_on_json JSONB NOT NULL,
+				acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 				input_json JSONB NOT NULL,
 				output_json JSONB NOT NULL,
 				created_at TEXT NOT NULL,
@@ -201,6 +202,7 @@ export class PostgresRuntimeStore {
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
 			)
 		`);
+        await this.query(this.queryable, "ALTER TABLE agent_v2_tasks ADD COLUMN IF NOT EXISTS acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb");
         await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC)");
         await this.query(this.queryable, `
 			CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
@@ -788,6 +790,7 @@ export class PostgresRuntimeStore {
 				title,
 				status,
 				depends_on_json,
+				acceptance_criteria_json,
 				input_json,
 				output_json,
 				created_at,
@@ -795,13 +798,14 @@ export class PostgresRuntimeStore {
 				started_at,
 				ended_at,
 				error_json
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 			ON CONFLICT(client_id, run_id, task_id) DO UPDATE SET
 				parent_task_id = excluded.parent_task_id,
 				kind = excluded.kind,
 				title = excluded.title,
 				status = excluded.status,
 				depends_on_json = excluded.depends_on_json,
+				acceptance_criteria_json = excluded.acceptance_criteria_json,
 				input_json = excluded.input_json,
 				output_json = excluded.output_json,
 				updated_at = excluded.updated_at,
@@ -817,6 +821,7 @@ export class PostgresRuntimeStore {
             task.title,
             task.status,
             task.dependsOn,
+            task.acceptanceCriteria,
             task.input,
             task.output,
             task.createdAt,

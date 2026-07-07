@@ -17,6 +17,7 @@ function task(taskId: string, status: AgentV2TaskNode["status"], dependsOn: stri
 		title: taskId,
 		status,
 		dependsOn,
+		acceptanceCriteria: [],
 		input: {},
 		output: {},
 		createdAt,

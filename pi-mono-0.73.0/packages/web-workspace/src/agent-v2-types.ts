@@ -79,6 +79,7 @@ export interface AgentV2TaskNode {
 	title: string;
 	status: AgentV2TaskStatus;
 	dependsOn: string[];
+	acceptanceCriteria: string[];
 	input: Record<string, unknown>;
 	output: Record<string, unknown>;
 	createdAt: string;

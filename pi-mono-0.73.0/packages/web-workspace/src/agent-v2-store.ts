@@ -50,6 +50,7 @@ export interface UpsertAgentV2TaskInput extends JsonObject {
 	title: string;
 	status: AgentV2TaskStatus;
 	dependsOn: string[];
+	acceptanceCriteria: string[];
 	input: Record<string, unknown>;
 	output: Record<string, unknown>;
 	createdAt?: string;
@@ -116,6 +117,7 @@ export interface AgentV2TaskRow {
 	title: string;
 	status: AgentV2TaskStatus;
 	depends_on_json: unknown;
+	acceptance_criteria_json: unknown;
 	input_json: unknown;
 	output_json: unknown;
 	created_at: TimestampValue;
@@ -160,7 +162,7 @@ export interface AgentV2DiagnosticRow {
 export const AGENT_V2_RUN_COLUMNS =
 	"client_id, run_id, status, phase, attempt, input_json, model_json, worker_id, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_TASK_COLUMNS =
-	"client_id, run_id, task_id, parent_task_id, kind, title, status, depends_on_json, input_json, output_json, created_at, updated_at, started_at, ended_at, error_json";
+	"client_id, run_id, task_id, parent_task_id, kind, title, status, depends_on_json, acceptance_criteria_json, input_json, output_json, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_ARTIFACT_COLUMNS =
 	"client_id, run_id, artifact_id, kind, path, media_type, checksum, version, source_task_id, validation_status, metadata_json, created_at, updated_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS =
@@ -217,6 +219,7 @@ export function buildAgentV2Task(input: UpsertAgentV2TaskInput): AgentV2TaskNode
 		title: input.title,
 		status: input.status,
 		dependsOn: input.dependsOn,
+		acceptanceCriteria: input.acceptanceCriteria ?? [],
 		input: input.input,
 		output: input.output,
 		createdAt,
@@ -274,6 +277,7 @@ export function toAgentV2TaskRecord(row: AgentV2TaskRow): AgentV2TaskNode {
 		title: row.title,
 		status: row.status,
 		dependsOn: parseStringArray(row.depends_on_json),
+		acceptanceCriteria: parseStringArray(row.acceptance_criteria_json),
 		input: parseJsonObject(row.input_json),
 		output: parseJsonObject(row.output_json),
 		createdAt: toTimestamp(row.created_at),

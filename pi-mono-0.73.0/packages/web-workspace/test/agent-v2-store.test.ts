@@ -177,7 +177,7 @@ describe("agent v2 runtime stores", () => {
 			clientId: "client-a",
 			runId: "run-v2-a",
 			status: "running",
-			phase: "execution",
+			phase: "implementation",
 			workerId: "worker-1",
 			startedAt: "2026-07-07T00:01:00.000Z",
 			updatedAt: "2026-07-07T00:01:00.000Z",
@@ -197,7 +197,7 @@ describe("agent v2 runtime stores", () => {
 		});
 
 		expect(running.status).toBe("running");
-		expect(running.phase).toBe("execution");
+		expect(running.phase).toBe("implementation");
 		expect(running.workerId).toBe("worker-1");
 		expect(running.startedAt).toBe("2026-07-07T00:01:00.000Z");
 		expect(failed.status).toBe("failed");
@@ -224,6 +224,7 @@ describe("agent v2 runtime stores", () => {
 			title: "Implement the page",
 			status: "running",
 			dependsOn: ["task-1"],
+			acceptanceCriteria: ["Render the page", "Persist generated files metadata"],
 			input: { files: ["src/app.ts"] },
 			output: { changed: 1 },
 			createdAt: "2026-07-07T00:01:00.000Z",
@@ -252,7 +253,7 @@ describe("agent v2 runtime stores", () => {
 			severity: "warn",
 			category: "task_graph",
 			code: "dependency_wait",
-			phase: "execution",
+			phase: "implementation",
 			taskId: "task-2",
 			message: "Waiting on prerequisite task",
 			data: { blockedBy: ["task-1"] },
@@ -260,6 +261,7 @@ describe("agent v2 runtime stores", () => {
 		});
 
 		expect(task.taskId).toBe("task-2");
+		expect(task.acceptanceCriteria).toEqual(["Render the page", "Persist generated files metadata"]);
 		expect(store.listAgentV2Tasks("client-a", "run-v2-a")).toEqual([task]);
 		expect(artifact.artifactId).toBe("artifact-1");
 		expect(artifact.sourceTaskId).toBe("task-2");
@@ -309,6 +311,27 @@ describe("agent v2 runtime stores", () => {
 				"created_at",
 				"updated_at",
 			]);
+			const taskColumns = (db.prepare("PRAGMA table_info(agent_v2_tasks)").all() as { name: string }[]).map(
+				(row) => row.name,
+			);
+			expect(taskColumns).toEqual([
+				"client_id",
+				"run_id",
+				"task_id",
+				"parent_task_id",
+				"kind",
+				"title",
+				"status",
+				"depends_on_json",
+				"acceptance_criteria_json",
+				"input_json",
+				"output_json",
+				"created_at",
+				"updated_at",
+				"started_at",
+				"ended_at",
+				"error_json",
+			]);
 		} finally {
 			db.close();
 		}
@@ -335,10 +358,11 @@ describe("agent v2 runtime stores", () => {
 			run_id: "run-v2-a",
 			task_id: "task-1",
 			parent_task_id: null,
-			kind: "requirements",
+			kind: "spec",
 			title: "Read the brief",
 			status: "ready",
 			depends_on_json: [],
+			acceptance_criteria_json: ["Task graph nodes include acceptance criteria"],
 			input_json: {},
 			output_json: {},
 			created_at: "2026-07-07T00:00:00.000Z",
@@ -407,6 +431,13 @@ describe("agent v2 runtime stores", () => {
 		expect(
 			statements.some((statement) =>
 				statement.includes(
+					"ALTER TABLE agent_v2_tasks ADD COLUMN IF NOT EXISTS acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb",
+				),
+			),
+		).toBe(true);
+		expect(
+			statements.some((statement) =>
+				statement.includes(
 					"CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)",
 				),
 			),
@@ -414,6 +445,10 @@ describe("agent v2 runtime stores", () => {
 		const artifactTableStatement = statements.find((statement) =>
 			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_artifacts"),
 		);
+		const taskTableStatement = statements.find((statement) =>
+			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_tasks"),
+		);
+		expect(taskTableStatement).toContain("acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb");
 		expect(artifactTableStatement).toContain("path TEXT NOT NULL");
 		expect(artifactTableStatement).toContain("media_type TEXT NOT NULL");
 		expect(artifactTableStatement).toContain("checksum TEXT NOT NULL");
@@ -426,6 +461,7 @@ describe("agent v2 runtime stores", () => {
 		expect(artifactTableStatement).not.toContain("description TEXT");
 		expect(run?.runId).toBe("run-v2-a");
 		expect(tasks[0]?.taskId).toBe("task-1");
+		expect(tasks[0]?.acceptanceCriteria).toEqual(["Task graph nodes include acceptance criteria"]);
 		expect(artifacts[0]?.artifactId).toBe("artifact-1");
 		expect(queryable.statementsMatching(/FROM runs/i)).toHaveLength(0);
 		expect(queryable.statementsMatching(/FROM tasks/i)).toHaveLength(0);

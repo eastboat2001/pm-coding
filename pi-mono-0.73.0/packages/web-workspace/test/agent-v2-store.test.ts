@@ -105,7 +105,7 @@ describe("agent v2 runtime stores", () => {
 		expect(store.getAgentV2Run("client-a", "same-id")).toBeUndefined();
 	});
 
-	it("projects agent v2 transport events into legacy run_events for replay without changing v2 reads", async () => {
+	it("keeps v2 reads undefined when only legacy runs and run_events exist for replay", async () => {
 		store.createSession({
 			clientId: "client-a",
 			sessionId: "session-transport",
@@ -119,13 +119,6 @@ describe("agent v2 runtime stores", () => {
 			runId: "run-v2-transport",
 			model: { provider: "test", id: "legacy" },
 			thinkingLevel: "medium",
-			createdAt: "2026-07-07T00:00:00.000Z",
-		});
-		store.createAgentV2Run({
-			clientId: "client-a",
-			runId: "run-v2-transport",
-			input: { prompt: "build a transport projection" },
-			model: { provider: "test", model: "local" },
 			createdAt: "2026-07-07T00:00:00.000Z",
 		});
 		const sink = new RunEventSink({
@@ -150,6 +143,7 @@ describe("agent v2 runtime stores", () => {
 			at: "2026-07-07T00:01:00.000Z",
 		});
 
+		expect(store.getRun("client-a", "run-v2-transport")?.runId).toBe("run-v2-transport");
 		const events = store.listRunEvents("client-a", "run-v2-transport", 0);
 		expect(events.map((event) => event.type)).toEqual([
 			"agent_v2.run_created",
@@ -169,7 +163,7 @@ describe("agent v2 runtime stores", () => {
 			summary: "Transport replay projection recorded",
 			at: "2026-07-07T00:01:00.000Z",
 		});
-		expect(store.getAgentV2Run("client-a", "run-v2-transport")?.runId).toBe("run-v2-transport");
+		expect(store.getAgentV2Run("client-a", "run-v2-transport")).toBeUndefined();
 		expect(store.listAppPreviewGoalEvents("client-a", "session-transport", 0)).toEqual([]);
 	});
 

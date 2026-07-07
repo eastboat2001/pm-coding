@@ -32,6 +32,12 @@ export {
 } from "./agent-v2-state-machine.js";
 export { STATIC_APP_V2_PLATFORM_CONTRACT, routeAgentV2Capabilities } from "./agent-v2-capability-router.js";
 export {
+	buildAgentV2PlanDocument,
+	buildAgentV2SpecDocument,
+	buildAgentV2TaskGraph,
+	renderAgentV2DocumentMarkdown,
+} from "./agent-v2-documents.js";
+export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
@@ -65,12 +71,15 @@ export {
 	type AgentV2CapabilityDeliveryMode,
 	type AgentV2Error,
 	type AgentV2Phase,
+	type AgentV2PlanDocument,
 	type AgentV2PlatformContract,
 	type AgentV2RunEventType,
 	type AgentV2RunInput,
 	type AgentV2RunSnapshot,
 	type AgentV2RunSnapshotInput,
 	type AgentV2RunStatus,
+	type AgentV2SpecDocument,
+	type AgentV2TaskGraph,
 	type AgentV2TaskKind,
 	type AgentV2TaskNode,
 	type AgentV2TaskStatus,

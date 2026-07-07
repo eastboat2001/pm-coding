@@ -48,6 +48,7 @@ type Evidence = AgentV2CapabilityDecision["evidence"][number];
 export const STATIC_APP_V2_PLATFORM_CONTRACT: AgentV2PlatformContract = Object.freeze({
 	runtime: "static_browser_app",
 	framework: "vite",
+	deliveryMode: "static_app",
 	entrypoints: ["index.html", "src/main.ts", "src/main.tsx"],
 	deliverables: ["static frontend app", "mock-data interactions", "preview-ready assets"],
 	constraints: [

@@ -67,6 +67,7 @@ export type AgentV2TaskKind =
 	| "repair"
 	| "artifact"
 	| "delivery";
+export type AgentV2PlanStepId = "capability" | "spec" | "plan" | "implement" | "validate" | "deliver";
 
 export type AgentV2RunInput = Record<string, unknown>;
 export type AgentV2DocumentMetadata = Record<string, unknown>;
@@ -121,6 +122,7 @@ export interface AgentV2CapabilityDecision {
 export interface AgentV2PlatformContract {
 	runtime: string;
 	framework: string;
+	deliveryMode: AgentV2CapabilityDeliveryMode;
 	entrypoints: string[];
 	deliverables: string[];
 	constraints: string[];
@@ -133,10 +135,14 @@ export interface AgentV2PlatformContract {
 export interface AgentV2SpecDocument {
 	kind: "spec";
 	title: string;
+	objective: string;
 	summary: string;
+	scope: string[];
 	goals: string[];
 	nonGoals: string[];
+	assumptions: string[];
 	requirements: string[];
+	capabilityBoundaries: string[];
 	acceptanceCriteria: string[];
 	platformContract: AgentV2PlatformContract;
 	metadata?: AgentV2DocumentMetadata;
@@ -147,16 +153,13 @@ export interface AgentV2PlanDocument {
 	title: string;
 	summary: string;
 	steps: Array<{
-		stepId: string;
+		stepId: AgentV2PlanStepId;
 		title: string;
 		description: string;
 		dependsOn: string[];
 		deliverables: string[];
 	}>;
-	risks: Array<{
-		risk: string;
-		mitigation: string;
-	}>;
+	risks: string[];
 	metadata?: AgentV2DocumentMetadata;
 }
 

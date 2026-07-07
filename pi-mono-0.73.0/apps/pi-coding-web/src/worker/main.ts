@@ -70,6 +70,11 @@ import { readServerProviderApiKey } from "./provider-keys.js";
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 
+export async function ensureRuntimeSchemas(runtimeDb: Pick<RuntimeStore, "ensureSchema" | "ensureAgentV2Schema">): Promise<void> {
+	await runtimeDb.ensureSchema();
+	await runtimeDb.ensureAgentV2Schema();
+}
+
 async function main(): Promise<void> {
 	const config = loadStorageConfig(process.cwd());
 	const diagnostics = new WorkspaceDiagnosticLogService(config);
@@ -102,7 +107,7 @@ async function main(): Promise<void> {
 	let runEventBus: RedisRunEventBus | undefined;
 	try {
 		runtimeDb = createRuntimeStore(config);
-		await runtimeDb.ensureSchema();
+		await ensureRuntimeSchemas(runtimeDb);
 
 		const queue = new RedisRunQueue({
 			redisUrl: config.redisUrl,

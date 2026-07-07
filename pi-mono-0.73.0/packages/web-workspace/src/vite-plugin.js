@@ -93,6 +93,7 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             mkdirSync(config.defaultSkillsDir, { recursive: true });
             diagnostics.ensureDirs();
             await runtimeDb.ensureSchema();
+            await runtimeDb.ensureAgentV2Schema();
             writeStartupDiagnosticsOnce();
             storageDirsReady = true;
         })().catch((error) => {

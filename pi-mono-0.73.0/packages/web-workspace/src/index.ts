@@ -7,6 +7,28 @@ export {
 export { AppPreviewGoalSupervisor, type AppPreviewGoalSupervisorOptions } from "./app-preview-goal-supervisor.js";
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
 export { loadStorageConfig } from "./config.js";
+export {
+	AGENT_V2_PHASES,
+	AGENT_V2_RUN_STATUSES,
+	AGENT_V2_SCHEMA_VERSION,
+	AGENT_V2_TASK_STATUSES,
+	type AgentV2Error,
+	type AgentV2Phase,
+	type AgentV2RunInput,
+	type AgentV2RunSnapshot,
+	type AgentV2RunSnapshotInput,
+	type AgentV2RunStatus,
+	type AgentV2TaskKind,
+	type AgentV2TaskNode,
+	type AgentV2TaskStatus,
+} from "./agent-v2-types.js";
+export {
+	advanceAgentV2Phase,
+	assertAgentV2RunTransition,
+	createAgentV2RunSnapshot,
+	getReadyAgentV2TaskIds,
+	transitionAgentV2RunSnapshot,
+} from "./agent-v2-state-machine.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export type { LangfuseDiagnosticEvent, LangfuseExporterStatus } from "./langfuse-exporter.js";

@@ -310,11 +310,13 @@ export class RuntimeDbStore implements RuntimeStore {
 				client_id TEXT NOT NULL,
 				run_id TEXT NOT NULL,
 				artifact_id TEXT NOT NULL,
-				task_id TEXT,
 				kind TEXT NOT NULL,
-				uri TEXT NOT NULL,
-				title TEXT NOT NULL,
-				description TEXT,
+				path TEXT NOT NULL,
+				media_type TEXT NOT NULL,
+				checksum TEXT NOT NULL,
+				version TEXT NOT NULL,
+				source_task_id TEXT,
+				validation_status TEXT NOT NULL,
 				metadata_json TEXT NOT NULL,
 				created_at TEXT NOT NULL,
 				updated_at TEXT NOT NULL,
@@ -1094,7 +1096,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				WHERE client_id = ? AND run_id = ?
 				ORDER BY created_at ASC, task_id ASC`,
 			)
-			.all(clientId, runId) as AgentV2TaskRow[];
+			.all(clientId, runId) as unknown as AgentV2TaskRow[];
 		return rows.map(toAgentV2TaskRecord);
 	}
 
@@ -1106,21 +1108,25 @@ export class RuntimeDbStore implements RuntimeStore {
 					client_id,
 					run_id,
 					artifact_id,
-					task_id,
 					kind,
-					uri,
-					title,
-					description,
+					path,
+					media_type,
+					checksum,
+					version,
+					source_task_id,
+					validation_status,
 					metadata_json,
 					created_at,
 					updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(client_id, run_id, artifact_id) DO UPDATE SET
-					task_id = excluded.task_id,
 					kind = excluded.kind,
-					uri = excluded.uri,
-					title = excluded.title,
-					description = excluded.description,
+					path = excluded.path,
+					media_type = excluded.media_type,
+					checksum = excluded.checksum,
+					version = excluded.version,
+					source_task_id = excluded.source_task_id,
+					validation_status = excluded.validation_status,
 					metadata_json = excluded.metadata_json,
 					updated_at = excluded.updated_at`,
 			)
@@ -1128,12 +1134,14 @@ export class RuntimeDbStore implements RuntimeStore {
 				artifact.clientId,
 				artifact.runId,
 				artifact.artifactId,
-				artifact.taskId ?? null,
 				artifact.kind,
-				artifact.uri,
-				artifact.title,
-				artifact.description ?? null,
-				stringifyAgentV2Json(artifact.metadata),
+				artifact.path,
+				artifact.mediaType,
+				artifact.checksum,
+				artifact.version,
+				artifact.sourceTaskId ?? null,
+				artifact.validationStatus,
+				stringifyAgentV2Json(artifact.metadataJson),
 				artifact.createdAt,
 				artifact.updatedAt,
 			);
@@ -1153,7 +1161,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				WHERE client_id = ? AND run_id = ?
 				ORDER BY created_at ASC, artifact_id ASC`,
 			)
-			.all(clientId, runId) as AgentV2ArtifactRow[];
+			.all(clientId, runId) as unknown as AgentV2ArtifactRow[];
 		return rows.map(toAgentV2ArtifactRecord);
 	}
 
@@ -1207,7 +1215,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				WHERE client_id = ? AND run_id = ?
 				ORDER BY created_at ASC, diagnostic_id ASC`,
 			)
-			.all(clientId, runId) as AgentV2DiagnosticRow[];
+			.all(clientId, runId) as unknown as AgentV2DiagnosticRow[];
 		return rows.map(toAgentV2DiagnosticRecord);
 	}
 

@@ -63,12 +63,14 @@ export interface AgentV2ArtifactRecord extends JsonObject {
 	clientId: string;
 	runId: string;
 	artifactId: string;
-	taskId?: string;
 	kind: string;
-	uri: string;
-	title: string;
-	description?: string;
-	metadata: Record<string, unknown>;
+	path: string;
+	mediaType: string;
+	checksum: string;
+	version: string;
+	sourceTaskId?: string;
+	validationStatus: string;
+	metadataJson: Record<string, unknown>;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -77,12 +79,14 @@ export interface UpsertAgentV2ArtifactInput extends JsonObject {
 	clientId: string;
 	runId: string;
 	artifactId: string;
-	taskId?: string;
 	kind: string;
-	uri: string;
-	title: string;
-	description?: string;
-	metadata?: Record<string, unknown>;
+	path: string;
+	mediaType: string;
+	checksum: string;
+	version: string;
+	sourceTaskId?: string;
+	validationStatus: string;
+	metadataJson?: Record<string, unknown>;
 	createdAt?: string;
 	updatedAt?: string;
 }
@@ -125,11 +129,13 @@ export interface AgentV2ArtifactRow {
 	client_id: string;
 	run_id: string;
 	artifact_id: string;
-	task_id: string | null;
 	kind: string;
-	uri: string;
-	title: string;
-	description: string | null;
+	path: string;
+	media_type: string;
+	checksum: string;
+	version: string;
+	source_task_id: string | null;
+	validation_status: string;
 	metadata_json: unknown;
 	created_at: TimestampValue;
 	updated_at: TimestampValue;
@@ -156,7 +162,7 @@ export const AGENT_V2_RUN_COLUMNS =
 export const AGENT_V2_TASK_COLUMNS =
 	"client_id, run_id, task_id, parent_task_id, kind, title, status, depends_on_json, input_json, output_json, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_ARTIFACT_COLUMNS =
-	"client_id, run_id, artifact_id, task_id, kind, uri, title, description, metadata_json, created_at, updated_at";
+	"client_id, run_id, artifact_id, kind, path, media_type, checksum, version, source_task_id, validation_status, metadata_json, created_at, updated_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS =
 	"client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
 
@@ -229,12 +235,14 @@ export function buildAgentV2Artifact(input: UpsertAgentV2ArtifactInput): AgentV2
 		clientId: input.clientId,
 		runId: input.runId,
 		artifactId: input.artifactId,
-		...(input.taskId ? { taskId: input.taskId } : {}),
 		kind: input.kind,
-		uri: input.uri,
-		title: input.title,
-		...(input.description ? { description: input.description } : {}),
-		metadata: input.metadata ?? {},
+		path: input.path,
+		mediaType: input.mediaType,
+		checksum: input.checksum,
+		version: input.version,
+		...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
+		validationStatus: input.validationStatus,
+		metadataJson: input.metadataJson ?? {},
 		createdAt,
 		updatedAt,
 	};
@@ -281,12 +289,14 @@ export function toAgentV2ArtifactRecord(row: AgentV2ArtifactRow): AgentV2Artifac
 		clientId: row.client_id,
 		runId: row.run_id,
 		artifactId: row.artifact_id,
-		...(row.task_id ? { taskId: row.task_id } : {}),
 		kind: row.kind,
-		uri: row.uri,
-		title: row.title,
-		...(row.description ? { description: row.description } : {}),
-		metadata: parseJsonObject(row.metadata_json),
+		path: row.path,
+		mediaType: row.media_type,
+		checksum: row.checksum,
+		version: row.version,
+		...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
+		validationStatus: row.validation_status,
+		metadataJson: parseJsonObject(row.metadata_json),
 		createdAt: toTimestamp(row.created_at),
 		updatedAt: toTimestamp(row.updated_at),
 	};

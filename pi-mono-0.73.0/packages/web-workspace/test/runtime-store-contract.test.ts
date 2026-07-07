@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ArtifactRecord } from "../src/agent-v2-store.js";
-import { RuntimeDbStore } from "../src/runtime-db.ts";
+import type { AgentV2RunSnapshot, AgentV2TaskNode } from "../src/agent-v2-types.js";
+import { RuntimeDbStore } from "../src/runtime-db.js";
 import type { RuntimeStore } from "../src/runtime-store.js";
 import type {
 	AppPreviewGoalEventRecord,
 	AppPreviewGoalRecord,
-	AgentV2RunSnapshot,
-	AgentV2TaskNode,
 	RuntimeMessageRecord,
 	RuntimeRunEventRecord,
 	RuntimeRunRecord,

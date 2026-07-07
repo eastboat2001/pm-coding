@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { RuntimeDbStore } from "../src/runtime-db.ts";
-import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.ts";
+import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
+import { RuntimeDbStore } from "../src/runtime-db.js";
 
 type RecordedQuery = {
 	sql: string;
@@ -172,12 +172,14 @@ describe("agent v2 runtime stores", () => {
 			clientId: "client-a",
 			runId: "run-v2-a",
 			artifactId: "artifact-1",
-			taskId: "task-2",
 			kind: "file",
-			uri: "file:///workspace/src/app.ts",
-			title: "Updated app file",
-			description: "Implements the runtime store",
-			metadata: { language: "ts" },
+			path: "src/app.ts",
+			mediaType: "text/typescript",
+			checksum: "sha256:artifact-1",
+			version: "v1",
+			sourceTaskId: "task-2",
+			validationStatus: "accepted",
+			metadataJson: { language: "ts" },
 			createdAt: "2026-07-07T00:03:00.000Z",
 			updatedAt: "2026-07-07T00:03:00.000Z",
 		});
@@ -198,6 +200,8 @@ describe("agent v2 runtime stores", () => {
 		expect(task.taskId).toBe("task-2");
 		expect(store.listAgentV2Tasks("client-a", "run-v2-a")).toEqual([task]);
 		expect(artifact.artifactId).toBe("artifact-1");
+		expect(artifact.sourceTaskId).toBe("task-2");
+		expect(artifact.metadataJson).toEqual({ language: "ts" });
 		expect(store.listAgentV2Artifacts("client-a", "run-v2-a")).toEqual([artifact]);
 		expect(diagnostic.diagnosticId).toBe("diag-1");
 		expect(store.listAgentV2Diagnostics("client-a", "run-v2-a")).toEqual([diagnostic]);
@@ -219,6 +223,25 @@ describe("agent v2 runtime stores", () => {
 				"agent_v2_schema_metadata",
 				"agent_v2_tasks",
 				"agent_v2_validations",
+			]);
+
+			const artifactColumns = (
+				db.prepare("PRAGMA table_info(agent_v2_artifacts)").all() as { name: string }[]
+			).map((row) => row.name);
+			expect(artifactColumns).toEqual([
+				"client_id",
+				"run_id",
+				"artifact_id",
+				"kind",
+				"path",
+				"media_type",
+				"checksum",
+				"version",
+				"source_task_id",
+				"validation_status",
+				"metadata_json",
+				"created_at",
+				"updated_at",
 			]);
 		} finally {
 			db.close();
@@ -262,11 +285,13 @@ describe("agent v2 runtime stores", () => {
 			client_id: "client-a",
 			run_id: "run-v2-a",
 			artifact_id: "artifact-1",
-			task_id: null,
 			kind: "file",
-			uri: "file:///workspace/brief.md",
-			title: "Brief copy",
-			description: null,
+			path: "brief.md",
+			media_type: "text/markdown",
+			checksum: "sha256:artifact-1",
+			version: "v1",
+			source_task_id: null,
+			validation_status: "accepted",
 			metadata_json: {},
 			created_at: "2026-07-07T00:00:00.000Z",
 			updated_at: "2026-07-07T00:00:00.000Z",
@@ -318,6 +343,19 @@ describe("agent v2 runtime stores", () => {
 				),
 			),
 		).toBe(true);
+		const artifactTableStatement = statements.find((statement) =>
+			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_artifacts"),
+		);
+		expect(artifactTableStatement).toContain("path TEXT NOT NULL");
+		expect(artifactTableStatement).toContain("media_type TEXT NOT NULL");
+		expect(artifactTableStatement).toContain("checksum TEXT NOT NULL");
+		expect(artifactTableStatement).toContain("version TEXT NOT NULL");
+		expect(artifactTableStatement).toContain("source_task_id TEXT");
+		expect(artifactTableStatement).toContain("validation_status TEXT NOT NULL");
+		expect(artifactTableStatement).not.toMatch(/(^|[ (])task_id TEXT([, )]|$)/);
+		expect(artifactTableStatement).not.toContain("uri TEXT NOT NULL");
+		expect(artifactTableStatement).not.toContain("title TEXT NOT NULL");
+		expect(artifactTableStatement).not.toContain("description TEXT");
 		expect(run?.runId).toBe("run-v2-a");
 		expect(tasks[0]?.taskId).toBe("task-1");
 		expect(artifacts[0]?.artifactId).toBe("artifact-1");

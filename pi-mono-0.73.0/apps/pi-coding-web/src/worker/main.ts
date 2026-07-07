@@ -70,7 +70,9 @@ import { readServerProviderApiKey } from "./provider-keys.js";
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 
-export async function ensureRuntimeSchemas(runtimeDb: Pick<RuntimeStore, "ensureSchema" | "ensureAgentV2Schema">): Promise<void> {
+export async function ensureRuntimeSchemas(
+	runtimeDb: Pick<RuntimeStore, "ensureSchema" | "ensureAgentV2Schema">,
+): Promise<void> {
 	await runtimeDb.ensureSchema();
 	await runtimeDb.ensureAgentV2Schema();
 }

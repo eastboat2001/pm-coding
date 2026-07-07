@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Connect } from "vite";
 import { afterEach, describe, expect, it } from "vitest";
-import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 import type { StorageConfig } from "../src/types.js";
+import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 
 describe("configured storage plugin schema init", () => {
 	let root: string | undefined;
@@ -83,9 +83,13 @@ function createMiddleware(config: StorageConfig, calls: string[]): Middleware {
 async function dispatch(middleware: Middleware, url: string): Promise<FakeResponse> {
 	const response = new FakeResponse();
 	await Promise.resolve(
-		middleware(new FakeRequest(url) as unknown as Connect.IncomingMessage, response as unknown as ServerResponse, () => {
-			throw new Error("next should not be called for API routes");
-		}),
+		middleware(
+			new FakeRequest(url) as unknown as Connect.IncomingMessage,
+			response as unknown as ServerResponse,
+			() => {
+				throw new Error("next should not be called for API routes");
+			},
+		),
 	);
 	return response;
 }

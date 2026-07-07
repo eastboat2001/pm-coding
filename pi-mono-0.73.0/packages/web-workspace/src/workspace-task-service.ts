@@ -3,6 +3,8 @@ import { join, relative } from "node:path";
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonFile } from "./json.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
+import { assessStaticPreviewQuality } from "./static-preview-quality-gate.js";
+import { runStaticPreviewSmokeGate } from "./static-preview-smoke-gate.js";
 import type {
 	JsonObject,
 	PreviewRequestLike,
@@ -65,7 +67,7 @@ export class WorkspaceTaskService {
 		const staticRoot = findStaticServeRoot(projectDir, staticServeRootCandidates(hasPackageJson));
 		const base = {
 			task: body.task,
-			status: body.task === "inspect" ? "ready" : staticRoot ? "passed" : "failed",
+			status: body.task === "inspect" ? "ready" : "pending",
 			projectId,
 			sessionId,
 			title,
@@ -89,7 +91,20 @@ export class WorkspaceTaskService {
 					: "Static preview requires an index.html in the project root, dist, build, or public. Package scripts, npm install, npm run build, and Node services are not started.",
 			);
 		}
-		return this.recordTaskResult({ ...base, valid: errors.length === 0, errors });
+		if (staticRoot) {
+			const quality = assessStaticPreviewQuality({ serveRoot: staticRoot });
+			errors.push(...quality.errors.map((error) => `Static preview quality gate: ${error}`));
+			if (quality.errors.length === 0) {
+				const smoke = await runStaticPreviewSmokeGate({ serveRoot: staticRoot });
+				errors.push(...smoke.errors.map((error) => `Static preview smoke gate: ${error}`));
+			}
+		}
+		return this.recordTaskResult({
+			...base,
+			status: errors.length === 0 ? "passed" : "failed",
+			valid: errors.length === 0,
+			errors,
+		});
 	}
 
 	private async buildStaticProject(

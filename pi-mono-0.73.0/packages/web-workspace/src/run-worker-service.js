@@ -5,6 +5,8 @@ const DEFAULT_CANCEL_POLL_INTERVAL_MS = 500;
 const DEFAULT_CLAIM_TIMEOUT_MS = 0;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_IDLE_SLEEP_MS = 100;
+const DEFAULT_MAX_AGENT_TOOL_EXECUTIONS = 240;
+const DEFAULT_MAX_AGENT_TURNS = 80;
 const DEFAULT_MAX_SESSION_HISTORY_MESSAGES = 2000;
 const DEFAULT_MAX_SESSION_HISTORY_PAYLOAD_BYTES = 64 * 1024 * 1024;
 const QUEUE_ERROR_DIAGNOSTIC_THROTTLE_MS = 5000;
@@ -25,6 +27,8 @@ export class WorkspaceRunWorkerService {
     retryController;
     workerId;
     heartbeatIntervalMs;
+    maxAgentTurns;
+    maxAgentToolExecutions;
     maxSessionHistoryMessages;
     maxSessionHistoryPayloadBytes;
     createAgent;
@@ -42,13 +46,14 @@ export class WorkspaceRunWorkerService {
         this.cancelPollIntervalMs = options.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS;
         this.claimTimeoutMs = options.claimTimeoutMs ?? DEFAULT_CLAIM_TIMEOUT_MS;
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+        this.maxAgentTurns = options.maxAgentTurns ?? DEFAULT_MAX_AGENT_TURNS;
+        this.maxAgentToolExecutions = options.maxAgentToolExecutions ?? DEFAULT_MAX_AGENT_TOOL_EXECUTIONS;
         this.maxSessionHistoryMessages = options.maxSessionHistoryMessages ?? DEFAULT_MAX_SESSION_HISTORY_MESSAGES;
         this.maxSessionHistoryPayloadBytes =
             options.maxSessionHistoryPayloadBytes ?? DEFAULT_MAX_SESSION_HISTORY_PAYLOAD_BYTES;
         this.diagnostics = options.diagnostics;
         this.goalSupervisor = options.goalSupervisor;
-        this.runEventSink =
-            options.runEventSink ?? new RunEventSink({ store: this.db, bus: new InMemoryRunEventBus() });
+        this.runEventSink = options.runEventSink ?? new RunEventSink({ store: this.db, bus: new InMemoryRunEventBus() });
         const onRetryEvent = options.retry?.onRetryEvent;
         this.retryController = new RunRetryController({
             ...options.retry,
@@ -100,6 +105,7 @@ export class WorkspaceRunWorkerService {
         const runIdentity = { clientId: claimed.clientId, runId: claimed.runId };
         let run = await this.db.getRun(claimed.clientId, claimed.runId);
         let cancelRequested = false;
+        let runGuard;
         try {
             if (!run) {
                 this.writeDiscardedClaimDiagnostic(claimed, "missing_runtime_run");
@@ -122,6 +128,7 @@ export class WorkspaceRunWorkerService {
             this.activeAbortControllers.add(abortController);
             this.activeRuns.set(activeRunKey(activeRun), activeRun);
             let activeAgent;
+            runGuard = this.createRunGuard(activeRun, abortController, () => activeAgent);
             const cancelPoll = setInterval(() => {
                 void this.pollCancellation(activeRun, activeAgent, abortController, () => {
                     cancelRequested = true;
@@ -208,6 +215,7 @@ export class WorkspaceRunWorkerService {
                             this.activeAgents.add(agent);
                             unsubscribe = agent.subscribe((event) => {
                                 attemptEvents.push(event);
+                                runGuard?.observe(event);
                                 if (shouldFlushAttemptEvents(event) ||
                                     (persistedEventCount > 0 && !isAssistantFailureMarkerEvent(event))) {
                                     queueFlushAttemptEvents();
@@ -268,6 +276,11 @@ export class WorkspaceRunWorkerService {
                 else if (cancelRequested || (await this.safeIsCancelRequested(activeRun))) {
                     await this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "cancelled");
                 }
+                else if (runGuard.failure) {
+                    await this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "failed", {
+                        error: runGuard.failure.message,
+                    });
+                }
                 else {
                     await this.db.updateRunStatus(activeRun.runId, activeRun.clientId, "completed");
                 }
@@ -290,6 +303,11 @@ export class WorkspaceRunWorkerService {
                 }
                 else if (this.stopping || isQueueClosedError(error)) {
                     await this.db.updateRunStatus(run.runId, run.clientId, "interrupted");
+                }
+                else if (runGuard?.failure) {
+                    await this.db.updateRunStatus(run.runId, run.clientId, "failed", {
+                        error: runGuard.failure.message,
+                    });
                 }
                 else {
                     await this.db.updateRunStatus(run.runId, run.clientId, "failed", { error: errorMessage(error) });
@@ -489,6 +507,68 @@ export class WorkspaceRunWorkerService {
             },
         ]);
         throw new Error(`Session history is too large to load safely: ${stats.messageCount} messages, ${stats.totalPayloadBytes} payload bytes.`);
+    }
+    createRunGuard(run, abortController, activeAgent) {
+        let turns = 0;
+        let toolExecutions = 0;
+        let failure;
+        const fail = (nextFailure) => {
+            if (failure)
+                return;
+            failure = nextFailure;
+            this.writeDiagnosticEvents([
+                {
+                    level: "error",
+                    category: "agent",
+                    eventType: "worker.run_guard_limit_exceeded",
+                    sessionId: run.sessionId,
+                    traceId: run.sessionId,
+                    data: {
+                        clientId: run.clientId,
+                        sessionId: run.sessionId,
+                        runId: run.runId,
+                        workerId: this.workerId,
+                        limit: nextFailure.limit,
+                        max: nextFailure.max,
+                        observed: nextFailure.observed,
+                        message: nextFailure.message,
+                    },
+                },
+            ]);
+            activeAgent()?.abort();
+            abortController.abort();
+        };
+        return {
+            get failure() {
+                return failure;
+            },
+            observe: (event) => {
+                if (failure)
+                    return;
+                if (event.type === "turn_end") {
+                    turns += 1;
+                    if (this.maxAgentTurns > 0 && turns > this.maxAgentTurns) {
+                        fail({
+                            limit: "max_agent_turns",
+                            max: this.maxAgentTurns,
+                            observed: turns,
+                            message: `Run guard exceeded max agent turns (${turns} > ${this.maxAgentTurns}).`,
+                        });
+                    }
+                }
+                if (event.type === "tool_execution_start") {
+                    toolExecutions += 1;
+                    if (this.maxAgentToolExecutions > 0 && toolExecutions > this.maxAgentToolExecutions) {
+                        fail({
+                            limit: "max_agent_tool_executions",
+                            max: this.maxAgentToolExecutions,
+                            observed: toolExecutions,
+                            message: `Run guard exceeded max agent tool executions (${toolExecutions} > ${this.maxAgentToolExecutions}).`,
+                        });
+                    }
+                }
+            },
+        };
     }
     writeWorkerLifecycleDiagnostic(eventType, level, data) {
         this.writeDiagnosticEvents([

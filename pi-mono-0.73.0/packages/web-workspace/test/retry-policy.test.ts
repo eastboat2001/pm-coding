@@ -103,16 +103,24 @@ describe("RetryPolicy", () => {
 		});
 	});
 
-	it("caps attempts at five and calculates deterministic exponential delay without jitter", () => {
-		const policy = new RetryPolicy({ maxAttempts: 5, baseDelayMs: 1000, maxDelayMs: 10000, jitterRatio: 0 });
+	it("uses the configured attempt count and calculates deterministic exponential delay without jitter", () => {
+		const policy = new RetryPolicy({ maxAttempts: 8, baseDelayMs: 1000, maxDelayMs: 60000, jitterRatio: 0 });
 
 		expect(policy.shouldRetry(0)).toBe(false);
 		expect(policy.shouldRetry(1)).toBe(true);
-		expect(policy.shouldRetry(5)).toBe(true);
-		expect(policy.shouldRetry(6)).toBe(false);
+		expect(policy.shouldRetry(8)).toBe(true);
+		expect(policy.shouldRetry(9)).toBe(false);
 		expect(policy.delayMs(1)).toBe(1000);
 		expect(policy.delayMs(2)).toBe(2000);
-		expect(policy.delayMs(5)).toBe(10000);
+		expect(policy.delayMs(7)).toBe(60000);
+	});
+
+	it("caps configured attempts at a defensive upper bound", () => {
+		const policy = new RetryPolicy({ maxAttempts: 99, baseDelayMs: 1000, maxDelayMs: 60000, jitterRatio: 0 });
+
+		expect(policy.maxAttempts).toBe(12);
+		expect(policy.shouldRetry(12)).toBe(true);
+		expect(policy.shouldRetry(13)).toBe(false);
 	});
 
 	it("limits retryable controller execution to the policy max attempts", async () => {

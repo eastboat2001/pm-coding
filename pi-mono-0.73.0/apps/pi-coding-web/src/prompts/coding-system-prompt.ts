@@ -1,3 +1,11 @@
+import type { CapabilityPlan } from "../runtime/capability-planner.js";
+import type { PlatformContract } from "../runtime/platform-contract.js";
+import {
+	formatSpecArtifactForPrompt,
+	formatSpecExecutionContractForPrompt,
+	type SpecArtifact,
+} from "../runtime/spec-artifact.js";
+
 export type CodingSkillPromptInfo = {
 	name: string;
 	description: string;
@@ -9,6 +17,12 @@ export type CodingSkillPromptInfo = {
 		defaultPrompt?: string;
 	};
 };
+
+export interface CodingSystemPromptOptions {
+	platformContract?: PlatformContract;
+	capabilityPlan?: CapabilityPlan;
+	specArtifact?: SpecArtifact;
+}
 
 const BASE_SYSTEM_PROMPT = `You are a helpful AI coding assistant that creates directly previewable static projects in a configured server workspace.
 
@@ -25,7 +39,7 @@ Platform delivery contract:
 4. Do not create a backend, database, long-running service, or dev server.
 5. project_task never accepts raw shell commands. Only build_static may run the server-configured install/build commands for a static frontend project; preview itself only serves static output.
 6. If requirements mention backend APIs, auth, databases, uploads, scheduled jobs, or integrations, implement a realistic static frontend simulation with local state, sample data, mock responses, and clear UI states.
-7. If prior history shows [project_file content omitted: ...], or if you need to inspect, edit, or rewrite an existing file and do not have its full current content in the latest context, call project_file get for that filename before editing or rewriting it.
+7. If prior history shows a project_file tool call with contentOmitted=true, a tool result saying "Project file content omitted from compacted history", or if you need to inspect, edit, or rewrite an existing file and do not have its full current content in the latest context, call project_file get for that filename before editing or rewriting it. Treat compaction metadata as runtime metadata, never as file content. Prefer project_file update for small targeted edits, and avoid rewriting an entire large file unless the requested change truly requires a full replacement.
 8. User attachments are saved into the current session project workspace. Ordinary document and image attachments are also included in the message context, so read them directly from the latest user message. Use project_file get for attachment paths such as attachments/*.md or docs/*.md only when a prompt explicitly lists those project workspace paths, for example in PM handoff instructions.
 9. Prefer dependency-free static files. If the PM requirements make a build-based static frontend useful, create the project files, call project_task build_static, then validate and preview the generated static output.
 10. Use relative URLs for assets, navigation, forms, and mock API paths, such as ./style.css and ./page.html. Do not hardcode http://localhost or root-absolute paths like /api/items.
@@ -36,9 +50,16 @@ Platform delivery contract:
 
 After the tool returns, summarize the result briefly in the latest user request language and include the Preview URL.`;
 
-export function buildCodingSystemPrompt(skills: CodingSkillPromptInfo[] = []): string {
+export function buildCodingSystemPrompt(
+	skills: CodingSkillPromptInfo[] = [],
+	options: CodingSystemPromptOptions = {},
+): string {
+	const capabilitySection = formatCapabilitySection(options);
+	const specSection = options.specArtifact ? formatSpecArtifactForPrompt(options.specArtifact) : "";
+	const specExecutionSection = options.specArtifact ? formatSpecExecutionContractForPrompt(options.specArtifact) : "";
 	const skillsSection = formatSkillsForPrompt(skills);
-	return skillsSection ? `${BASE_SYSTEM_PROMPT}${skillsSection}` : BASE_SYSTEM_PROMPT;
+	const prompt = `${BASE_SYSTEM_PROMPT}${capabilitySection}${specSection}${specExecutionSection}`;
+	return skillsSection ? `${prompt}${skillsSection}` : prompt;
 }
 
 export const DEFAULT_SYSTEM_PROMPT = buildCodingSystemPrompt();
@@ -57,21 +78,33 @@ function formatSkillsForPrompt(skills: CodingSkillPromptInfo[]): string {
 			[
 				"  <skill>",
 				`    <name>${escapeXml(skill.name)}</name>`,
-				skill.interface?.displayName
-					? `    <display_name>${escapeXml(skill.interface.displayName)}</display_name>`
-					: "",
-				`    <description>${escapeXml(skill.description)}</description>`,
-				skill.interface?.shortDescription
-					? `    <short_description>${escapeXml(skill.interface.shortDescription)}</short_description>`
-					: "",
-				skill.interface?.defaultPrompt
-					? `    <default_prompt>${escapeXml(skill.interface.defaultPrompt)}</default_prompt>`
-					: "",
+				`    <description>${escapeXml(skill.interface?.shortDescription ?? skill.description)}</description>`,
 				`    <location>${escapeXml(skill.location)}</location>`,
 				"  </skill>",
 			].filter(Boolean),
 		),
 		"</available_skills>",
+	].join("\n");
+}
+
+function formatCapabilitySection(options: CodingSystemPromptOptions): string {
+	if (!options.platformContract || !options.capabilityPlan) return "";
+	const plan = options.capabilityPlan;
+	const unsupported = plan.unsupportedCapabilities.length > 0 ? plan.unsupportedCapabilities.join(", ") : "none";
+	const requested = plan.requestedCapabilities.length > 0 ? plan.requestedCapabilities.join(", ") : "none";
+	return [
+		"",
+		"",
+		"Per-run capability routing decision:",
+		"<capability_plan>",
+		`adapter: ${options.platformContract.adapterId}`,
+		`delivery_mode: ${plan.deliveryMode}`,
+		`requested_capabilities: ${requested}`,
+		`unsupported_capabilities: ${unsupported}`,
+		`requires_static_simulation: ${plan.requiresSimulation ? "true" : "false"}`,
+		`user_visible_contract: ${plan.userVisibleContract}`,
+		"Do not claim that PI created a real backend, database, or server auth runtime.",
+		"</capability_plan>",
 	].join("\n");
 }
 
@@ -89,7 +122,7 @@ export const PI_CODING_HANDOFF_INSTRUCTIONS_EN = `Platform execution requirement
 2. PI currently delivers static preview applications only. Implement the smallest complete static app that satisfies the PM documents at the interaction and UI level.
 3. Treat PM technology-stack notes about backend services, databases, queues, auth providers, APIs, or deployment as target-system context, not as PI implementation requirements. Simulate those capabilities in the static frontend with sample data, local state, mock responses, and visible loading/empty/error/success states.
 4. You must use project_file to generate complete project files. Do not only output documentation or isolated code snippets.
-5. If prior history shows [project_file content omitted: ...], or if you need to inspect, edit, or rewrite an existing file and do not have its full current content in the latest context, call project_file get for that filename before editing or rewriting it.
+5. If prior history shows a project_file tool call with contentOmitted=true, a tool result saying "Project file content omitted from compacted history", or if you need to inspect, edit, or rewrite an existing file and do not have its full current content in the latest context, call project_file get for that filename before editing or rewriting it. Treat compaction metadata as runtime metadata, never as file content. Prefer project_file update for small targeted edits, and avoid rewriting an entire large file unless the requested change truly requires a full replacement.
 6. Use project_task for controlled project tasks only: inspect, validate, build_static, preview, and logs. You cannot run raw shell commands, npm run dev, arbitrary package scripts, or Node services. build_static is the only task that may run the server-configured install/build commands.
 7. Prefer dependency-free HTML/CSS/JavaScript that works directly from index.html. If a build-based static frontend is useful, create the full project files, call project_task build_static, then validate and preview the generated static output.
 8. Generated apps must use relative asset, navigation, form, and mock API URLs such as ./style.css and ./page.html. Do not hardcode http://localhost, app.listen output URLs, or root-absolute paths like /api/items.

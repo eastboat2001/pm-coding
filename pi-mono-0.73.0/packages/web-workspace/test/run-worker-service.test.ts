@@ -181,6 +181,48 @@ describe("WorkspaceRunWorkerService", () => {
 		await expect(queue.claim("w1", 1)).resolves.toBeUndefined();
 	});
 
+	it("fails and aborts runaway runs when the agent exceeds the turn budget", async () => {
+		const run = createRunFixture(db);
+		const diagnostics = new RecordingDiagnostics();
+		const agent = new RunawayTurnAgent(5);
+		await queue.enqueue({ clientId: run.clientId, runId: run.runId });
+
+		const worker = new WorkspaceRunWorkerService({
+			db,
+			queue,
+			workerId: "w1",
+			diagnostics,
+			maxAgentTurns: 2,
+			createAgent: () => agent,
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(agent.abortCalls).toBe(1);
+		expect(db.getRun(run.clientId, run.runId)).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				error: expect.stringContaining("max agent turns"),
+			}),
+		);
+		expect(diagnostics.events).toContainEqual(
+			expect.objectContaining({
+				level: "error",
+				category: "agent",
+				eventType: "worker.run_guard_limit_exceeded",
+				sessionId: run.sessionId,
+				traceId: run.sessionId,
+				data: expect.objectContaining({
+					clientId: run.clientId,
+					runId: run.runId,
+					limit: "max_agent_turns",
+					max: 2,
+				}),
+			}),
+		);
+		await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
+	});
+
 	it("records queue claim diagnostics when a worker claims a run", async () => {
 		const run = createRunFixture(db);
 		const diagnostics = new RecordingDiagnostics();
@@ -356,7 +398,7 @@ describe("WorkspaceRunWorkerService", () => {
 				payload: expect.objectContaining({
 					type: "agent_retry_scheduled",
 					attempt: 1,
-					maxAttempts: 5,
+					maxAttempts: 8,
 					reasonCode: "transient_provider_error",
 				}),
 			}),
@@ -415,7 +457,7 @@ describe("WorkspaceRunWorkerService", () => {
 				event: expect.objectContaining({
 					type: "agent_retry_scheduled",
 					attempt: 1,
-					maxAttempts: 5,
+					maxAttempts: 8,
 					reasonCode: "transient_provider_error",
 				}),
 			}),
@@ -1395,6 +1437,32 @@ class BlockingAgent extends ScriptedAgent {
 
 	waitForPrompt(): Promise<void> {
 		return this.promptDeferred.promise;
+	}
+}
+
+class RunawayTurnAgent extends ScriptedAgent {
+	abortCalls = 0;
+	private aborted = false;
+
+	constructor(private readonly turnCount: number) {
+		super();
+	}
+
+	override async prompt(_message: RuntimeMessageRecord): Promise<void> {
+		this.promptCalls += 1;
+		this.emit({ type: "agent_start" });
+		for (let i = 0; i < this.turnCount && !this.aborted; i++) {
+			const assistant = assistantMessage();
+			this.emit({ type: "turn_start" });
+			this.emit({ type: "message_end", message: assistant });
+			this.emit({ type: "turn_end", message: assistant, toolResults: [] });
+		}
+		this.emit({ type: "agent_end", messages: [] });
+	}
+
+	override abort(): void {
+		this.abortCalls += 1;
+		this.aborted = true;
 	}
 }
 

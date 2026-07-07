@@ -22,14 +22,14 @@ export { type RetryClassification, RetryPolicy, type RetryPolicyOptions } from "
 export { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 export {
 	InMemoryRunEventBus,
-	RedisRunEventBus,
-	runEventStreamKey,
 	type LiveRunEvent,
+	RedisRunEventBus,
 	type RedisRunEventBusClient,
 	type RedisRunEventBusOptions,
 	type RunEventBus,
 	type RunEventIdentity,
 	type RunEventReadRequest,
+	runEventStreamKey,
 } from "./run-event-bus.js";
 export {
 	RunEventSink,
@@ -53,8 +53,8 @@ export type {
 } from "./run-worker-service.js";
 export { WorkspaceRunWorkerService } from "./run-worker-service.js";
 export { RuntimeDbStore } from "./runtime-db.js";
-export { createRuntimeStore } from "./runtime-store-factory.js";
 export type { RuntimeStore } from "./runtime-store.js";
+export { createRuntimeStore } from "./runtime-store-factory.js";
 export type { ServerDirectAgentTool } from "./server-agent-tools.js";
 export { createServerDirectProjectTools, createServerDirectSkillTools } from "./server-agent-tools.js";
 export type { SkillLoadParams, SkillResourceParams } from "./skill-tool-contract.js";
@@ -137,6 +137,7 @@ export type {
 	WorkerAgentInput,
 } from "./types.js";
 export { configuredStoragePlugin } from "./vite-plugin.js";
+export { workspaceContext } from "./workspace-paths.js";
 export { isUnsafeProjectCommand, WorkspaceCommandService } from "./workspace-command-service.js";
 export { WorkspaceFileService } from "./workspace-file-service.js";
 export { WorkspacePreviewService } from "./workspace-preview-service.js";

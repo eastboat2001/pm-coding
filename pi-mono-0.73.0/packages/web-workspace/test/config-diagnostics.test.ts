@@ -21,6 +21,14 @@ const CONFIG_ENV_KEYS = [
 	"PI_RUN_EVENT_CHECKPOINT_INTERVAL_MS",
 	"PI_RUN_EVENT_CHECKPOINT_MIN_CHARS",
 	"PI_WORKER_ID",
+	"PI_RUN_MAX_AGENT_TURNS",
+	"PI_RUN_MAX_AGENT_TOOL_EXECUTIONS",
+	"PI_RUN_RETRY_MAX_ATTEMPTS",
+	"PI_RUN_RETRY_BASE_DELAY_MS",
+	"PI_RUN_RETRY_MAX_DELAY_MS",
+	"PI_RUN_RETRY_JITTER_RATIO",
+	"PI_MODEL_MAX_OUTPUT_TOKENS",
+	"PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS",
 ] as const;
 
 function withIsolatedConfigEnv<T>(run: () => T): T {
@@ -54,6 +62,14 @@ describe("storage config diagnostics", () => {
 			expect(config.logStdoutEnabled).toBe(true);
 			expect(config.clientsRootDir).toBe(resolve(root, "data/clients"));
 			expect(config.runtimeDbFile).toBe(resolve(root, "data/runtime/pi-runtime.sqlite"));
+			expect(config.runMaxAgentTurns).toBe(80);
+			expect(config.runMaxAgentToolExecutions).toBe(240);
+			expect(config.runRetryMaxAttempts).toBe(8);
+			expect(config.runRetryBaseDelayMs).toBe(2000);
+			expect(config.runRetryMaxDelayMs).toBe(60000);
+			expect(config.runRetryJitterRatio).toBe(0.2);
+			expect(config.modelMaxOutputTokens).toBe(12000);
+			expect(config.contextProviderPayloadBudgetChars).toBe(90000);
 
 			const events = createStartupDiagnosticEvents(config);
 
@@ -68,6 +84,14 @@ describe("storage config diagnostics", () => {
 						runsEnabled: true,
 						redisUrl: "redis://127.0.0.1:6379",
 						runQueueName: "pi:runs",
+						runMaxAgentTurns: 80,
+						runMaxAgentToolExecutions: 240,
+						runRetryMaxAttempts: 8,
+						runRetryBaseDelayMs: 2000,
+						runRetryMaxDelayMs: 60000,
+						runRetryJitterRatio: 0.2,
+						modelMaxOutputTokens: 12000,
+						contextProviderPayloadBudgetChars: 90000,
 					}),
 				}),
 				expect.objectContaining({
@@ -92,6 +116,58 @@ describe("storage config diagnostics", () => {
 			process.env.PI_WORKER_ID = "worker-custom";
 			expect(loadStorageConfig(root).workerId).toBe("worker-custom");
 		});
+	});
+
+	it("loads run and model pressure caps and allows disabling caps", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-config-model-caps-"));
+		try {
+			withIsolatedConfigEnv(() => {
+				writeFileSync(
+					join(dir, ".env"),
+					[
+						"PI_RUN_MAX_AGENT_TURNS=12",
+						"PI_RUN_MAX_AGENT_TOOL_EXECUTIONS=0",
+						"PI_MODEL_MAX_OUTPUT_TOKENS=0",
+						"PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS=85000",
+					].join("\n"),
+				);
+
+				const config = loadStorageConfig(dir);
+
+				expect(config.runMaxAgentTurns).toBe(12);
+				expect(config.runMaxAgentToolExecutions).toBe(0);
+				expect(config.modelMaxOutputTokens).toBe(0);
+				expect(config.contextProviderPayloadBudgetChars).toBe(85000);
+			});
+		} finally {
+			rmSync(dir, { force: true, recursive: true });
+		}
+	});
+
+	it("loads run retry policy configuration", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-config-run-retry-"));
+		try {
+			withIsolatedConfigEnv(() => {
+				writeFileSync(
+					join(dir, ".env"),
+					[
+						"PI_RUN_RETRY_MAX_ATTEMPTS=10",
+						"PI_RUN_RETRY_BASE_DELAY_MS=1500",
+						"PI_RUN_RETRY_MAX_DELAY_MS=90000",
+						"PI_RUN_RETRY_JITTER_RATIO=0.35",
+					].join("\n"),
+				);
+
+				const config = loadStorageConfig(dir);
+
+				expect(config.runRetryMaxAttempts).toBe(10);
+				expect(config.runRetryBaseDelayMs).toBe(1500);
+				expect(config.runRetryMaxDelayMs).toBe(90000);
+				expect(config.runRetryJitterRatio).toBe(0.35);
+			});
+		} finally {
+			rmSync(dir, { force: true, recursive: true });
+		}
 	});
 
 	it("loads postgres runtime and run event stream configuration", () => {

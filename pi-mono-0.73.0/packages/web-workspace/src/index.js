@@ -18,6 +18,7 @@ export { createRuntimeStore } from "./runtime-store-factory.js";
 export { createServerDirectProjectTools, createServerDirectSkillTools } from "./server-agent-tools.js";
 export { formatSkillLoadResult, prepareSkillLoadArguments, prepareSkillResourceArguments, skillLoadSchema, skillResourceSchema, } from "./skill-tool-contract.js";
 export { configuredStoragePlugin } from "./vite-plugin.js";
+export { workspaceContext } from "./workspace-paths.js";
 export { isUnsafeProjectCommand, WorkspaceCommandService } from "./workspace-command-service.js";
 export { WorkspaceFileService } from "./workspace-file-service.js";
 export { WorkspacePreviewService } from "./workspace-preview-service.js";

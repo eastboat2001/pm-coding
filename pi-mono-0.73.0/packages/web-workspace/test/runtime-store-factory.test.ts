@@ -179,7 +179,9 @@ function createPluginHarness(options: { ensureSchema: () => void | Promise<void>
 		} as unknown as TestServices["runEventBus"],
 	};
 	const plugin = createConfiguredStoragePluginForTest(services);
-	const configureServer = plugin.configureServer as (server: { middlewares: { use(handler: Middleware): void } }) => void;
+	const configureServer = plugin.configureServer as (server: {
+		middlewares: { use(handler: Middleware): void };
+	}) => void;
 
 	configureServer({
 		middlewares: {
@@ -257,6 +259,12 @@ function createTestConfig(): StorageConfig {
 		runsEnabled: true,
 		workerId: "test-worker",
 		workerConcurrency: 1,
+		runMaxAgentTurns: 80,
+		runMaxAgentToolExecutions: 240,
+		runRetryMaxAttempts: 8,
+		runRetryBaseDelayMs: 2000,
+		runRetryMaxDelayMs: 60000,
+		runRetryJitterRatio: 0.2,
 		runQueueName: "test-runs",
 		runEventRetentionDays: 30,
 		runEventStreamMaxLen: 100,
@@ -284,6 +292,8 @@ function createTestConfig(): StorageConfig {
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 1_000,
 		modelStreamIdleTimeoutMs: 60_000,
+		modelMaxOutputTokens: 12_000,
+		contextProviderPayloadBudgetChars: 90_000,
 		logRetentionDays: 30,
 		logMaxEvents: 1_000,
 		logCleanupIntervalMs: 3_600_000,
@@ -307,13 +317,9 @@ function dispatch(middleware: Middleware, url: string) {
 	const response = new FakeResponse();
 	let nextCalled = false;
 	const done = Promise.resolve(
-		middleware(
-			createRequest(url),
-			response as unknown as ServerResponse,
-			() => {
-				nextCalled = true;
-			},
-		),
+		middleware(createRequest(url), response as unknown as ServerResponse, () => {
+			nextCalled = true;
+		}),
 	);
 	return { done, nextCalled: () => nextCalled, response };
 }

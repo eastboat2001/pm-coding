@@ -23,10 +23,13 @@ import type {
 } from "./types.js";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running", "cancelling"]);
+const STALLED_ACTIVE_RUN_STATUS_AGE_MS = 2 * 60 * 1000;
 const STALE_ACTIVE_RUN_DELETE_AGE_MS = 30 * 60 * 1000;
+const STALLED_ACTIVE_RUN_ERROR = "Stalled active run recovered by runtime status reconciliation";
 
 export interface RunApiDiagnostics {
 	writeEvents(input: { events: DiagnosticLogEventInput[] }): unknown;
+	deleteSessionEvents?(clientId: string, sessionId: string): Promise<unknown> | unknown;
 }
 
 export interface RunProjectFileSeeder {
@@ -41,6 +44,14 @@ export interface RunSessionWorkspaceCleaner {
 	deleteSessionWorkspace(clientId: string, sessionId: string): Promise<unknown> | unknown;
 }
 
+export interface RunSessionLiveEventCleaner {
+	deleteSessionEvents(clientId: string, sessionId: string, runIds: readonly string[]): Promise<unknown> | unknown;
+}
+
+export interface RunApiOptions {
+	stalledActiveRunAgeMs?: number;
+}
+
 export class RunApiError extends Error {
 	constructor(
 		message: string,
@@ -52,6 +63,8 @@ export class RunApiError extends Error {
 }
 
 export class WorkspaceRunApiService {
+	private readonly stalledActiveRunAgeMs: number;
+
 	constructor(
 		private readonly db: RuntimeStore,
 		private readonly queue: RunQueue,
@@ -59,7 +72,14 @@ export class WorkspaceRunApiService {
 		private readonly projectFiles?: RunProjectFileSeeder,
 		private readonly sessionWorkspaces?: RunSessionWorkspaceCleaner,
 		private readonly appPreviewGoals?: AppPreviewGoalService,
-	) {}
+		private readonly liveEvents?: RunSessionLiveEventCleaner,
+		options: RunApiOptions = {},
+	) {
+		this.stalledActiveRunAgeMs = normalizePositiveNumber(
+			options.stalledActiveRunAgeMs,
+			STALLED_ACTIVE_RUN_STATUS_AGE_MS,
+		);
+	}
 
 	async startRun(clientId: string, request: StartRunRequest): Promise<StartRunResult> {
 		const appPreviewGoalSource = request.appPreviewGoal?.enabled
@@ -203,15 +223,16 @@ export class WorkspaceRunApiService {
 	}
 
 	async listSessions(clientId: string): Promise<RuntimeSessionRecord[]> {
-		await this.markStaleActiveRunsForClient(clientId);
+		await this.markStalledActiveRunsForClient(clientId);
 		return await this.db.listSessions(clientId);
 	}
 
 	async getSession(clientId: string, sessionId: string): Promise<RuntimeSessionDetail | undefined> {
-		const session = await this.db.getSession(clientId, sessionId);
+		let session = await this.db.getSession(clientId, sessionId);
 		if (!session) return undefined;
 		const storedMessages = await this.db.listMessages(clientId, sessionId);
-		const runs = await this.db.listRunsForSession(clientId, sessionId);
+		const runs = await this.reconcileStalledActiveRuns(await this.db.listRunsForSession(clientId, sessionId));
+		session = (await this.db.getSession(clientId, sessionId)) ?? session;
 		const messages = withSyntheticCancelledRunMarker(storedMessages, runs);
 		const activeRun = runs.find((run) => ACTIVE_RUN_STATUSES.has(run.status));
 		if (!activeRun) {
@@ -253,34 +274,39 @@ export class WorkspaceRunApiService {
 			throw new RunApiError(`Session ${sessionId} already has an active run`, 409);
 		}
 		if (activeRuns.length > 0 && options.force) {
-			if (activeRuns.every(isStaleActiveRun)) {
+			if (activeRuns.every((run) => isStaleActiveRun(run, STALE_ACTIVE_RUN_DELETE_AGE_MS))) {
 				for (const run of activeRuns) {
 					await this.markStaleActiveRunTerminal(run);
 				}
+				const runIds = await this.sessionRunIds(clientId, sessionId);
 				const deleted = await this.db.deleteSession(clientId, sessionId);
 				if (deleted || options.force) await this.sessionWorkspaces?.deleteSessionWorkspace(clientId, sessionId);
+				if (deleted || options.force) await this.cleanupDeletedSession(clientId, sessionId, runIds);
 				return { deleted, sessionId, cancelledRuns: activeRuns.length };
 			}
 			await Promise.all(activeRuns.map((run) => this.cancelActiveRun(run)));
 			return { deleted: false, sessionId, cancelledRuns: activeRuns.length };
 		}
+		const runIds = await this.sessionRunIds(clientId, sessionId);
 		const deleted = await this.db.deleteSession(clientId, sessionId);
 		if (deleted || options.force) await this.sessionWorkspaces?.deleteSessionWorkspace(clientId, sessionId);
+		if (deleted || options.force) await this.cleanupDeletedSession(clientId, sessionId, runIds);
 		return { deleted, sessionId };
 	}
 
 	async listRuns(clientId: string): Promise<RuntimeRunRecord[]> {
-		return await this.db.listRuns(clientId);
+		return await this.reconcileStalledActiveRuns(await this.db.listRuns(clientId));
 	}
 
 	async getRunStatus(clientId: string, runId: string): Promise<RuntimeRunRecord | undefined> {
-		return await this.db.getRun(clientId, runId);
+		const run = await this.db.getRun(clientId, runId);
+		return run ? await this.reconcileStalledActiveRun(run) : undefined;
 	}
 
 	async getRunForEvents(clientId: string, runId: string): Promise<RuntimeRunRecord> {
 		const run = await this.db.getRun(clientId, runId);
 		if (!run) throw new RunApiError("Run not found.", 404);
-		return run;
+		return await this.reconcileStalledActiveRun(run);
 	}
 
 	async cancelRun(clientId: string, runId: string): Promise<RuntimeRunRecord> {
@@ -303,23 +329,41 @@ export class WorkspaceRunApiService {
 		return await this.db.updateRunStatus(runId, clientId, "cancelling");
 	}
 
-	private async markStaleActiveRunTerminal(run: RuntimeRunRecord): Promise<RuntimeRunRecord> {
+	private async markStaleActiveRunTerminal(
+		run: RuntimeRunRecord,
+		error = "Deleted stale active run",
+	): Promise<RuntimeRunRecord> {
 		const status = run.status === "queued" ? "cancelled" : "interrupted";
-		return await this.db.updateRunStatus(run.runId, run.clientId, status, {
-			error: "Deleted stale active run",
+		const updated = await this.db.updateRunStatus(run.runId, run.clientId, status, {
+			error,
 		});
+		await this.applyAppPreviewGoalTerminalStatus(updated);
+		this.writeDiagnosticEvents([
+			{
+				level: "warn",
+				category: "agent",
+				eventType: "agent.run.stale_active_terminal",
+				sessionId: run.sessionId,
+				traceId: run.sessionId,
+				data: {
+					clientId: run.clientId,
+					sessionId: run.sessionId,
+					runId: run.runId,
+					previousStatus: run.status,
+					status: updated.status,
+					error,
+				},
+			},
+		]);
+		return updated;
 	}
 
 	async listRunEvents(clientId: string, runId: string, afterSeq: number): Promise<RuntimeRunEventRecord[]> {
-		return await this.db.listRunEvents(clientId, runId, afterSeq);
+		return compactRunEventsForClient(await this.db.listRunEvents(clientId, runId, afterSeq));
 	}
 
-	async listDurableRunEvents(
-		clientId: string,
-		runId: string,
-		afterSeq: number,
-	): Promise<RuntimeRunEventRecord[]> {
-		return await this.db.listRunEvents(clientId, runId, afterSeq);
+	async listDurableRunEvents(clientId: string, runId: string, afterSeq: number): Promise<RuntimeRunEventRecord[]> {
+		return compactRunEventsForClient(await this.db.listRunEvents(clientId, runId, afterSeq));
 	}
 
 	async getAppPreviewGoal(clientId: string, sessionId: string): Promise<AppPreviewGoalRecord | undefined> {
@@ -349,19 +393,87 @@ export class WorkspaceRunApiService {
 	}
 
 	private async activeRuns(clientId: string, sessionId: string): Promise<RuntimeRunRecord[]> {
-		return (await this.db.listRunsForSession(clientId, sessionId)).filter((run) => ACTIVE_RUN_STATUSES.has(run.status));
+		return (await this.db.listRunsForSession(clientId, sessionId)).filter((run) =>
+			ACTIVE_RUN_STATUSES.has(run.status),
+		);
+	}
+
+	private async sessionRunIds(clientId: string, sessionId: string): Promise<string[]> {
+		return (await this.db.listRunsForSession(clientId, sessionId)).map((run) => run.runId);
 	}
 
 	private async hasActiveRun(clientId: string, sessionId: string): Promise<boolean> {
 		return (await this.activeRuns(clientId, sessionId)).length > 0;
 	}
 
-	private async markStaleActiveRunsForClient(clientId: string): Promise<void> {
+	private async markStalledActiveRunsForClient(clientId: string): Promise<void> {
 		for (const session of await this.db.listSessions(clientId)) {
 			for (const run of await this.activeRuns(clientId, session.sessionId)) {
-				if (isStaleActiveRun(run)) {
-					await this.markStaleActiveRunTerminal(run);
+				if (isStaleActiveRun(run, this.stalledActiveRunAgeMs)) {
+					await this.markStaleActiveRunTerminal(run, STALLED_ACTIVE_RUN_ERROR);
 				}
+			}
+		}
+	}
+
+	private async reconcileStalledActiveRuns(runs: RuntimeRunRecord[]): Promise<RuntimeRunRecord[]> {
+		const reconciled: RuntimeRunRecord[] = [];
+		for (const run of runs) {
+			reconciled.push(await this.reconcileStalledActiveRun(run));
+		}
+		return reconciled;
+	}
+
+	private async reconcileStalledActiveRun(run: RuntimeRunRecord): Promise<RuntimeRunRecord> {
+		if (!ACTIVE_RUN_STATUSES.has(run.status)) return run;
+		if (!isStaleActiveRun(run, this.stalledActiveRunAgeMs)) return run;
+		return await this.markStaleActiveRunTerminal(run, STALLED_ACTIVE_RUN_ERROR);
+	}
+
+	private async applyAppPreviewGoalTerminalStatus(run: RuntimeRunRecord): Promise<void> {
+		if (!this.appPreviewGoals) return;
+		const goal = await this.appPreviewGoals.get(run.clientId, run.sessionId);
+		if (!goal || goal.status !== "active") return;
+		if (goal.lastRunId && goal.lastRunId !== run.runId) return;
+
+		if (run.status === "cancelled") {
+			const updated = await this.appPreviewGoals.mark({
+				clientId: run.clientId,
+				sessionId: run.sessionId,
+				status: "cancelled",
+				lastRunId: run.runId,
+				lastFailureReason: "run_cancelled",
+				completedAt: new Date().toISOString(),
+			});
+			if (updated) {
+				await this.appPreviewGoals.event(
+					updated,
+					"blocked",
+					"run_cancelled",
+					{ terminalStatus: run.status },
+					run.runId,
+				);
+			}
+			return;
+		}
+
+		if (run.status === "interrupted") {
+			const updated = await this.appPreviewGoals.mark({
+				clientId: run.clientId,
+				sessionId: run.sessionId,
+				status: "blocked",
+				lastRunId: run.runId,
+				lastFailureReason: "run_interrupted",
+				completedAt: new Date().toISOString(),
+			});
+			if (updated) {
+				await this.appPreviewGoals.event(
+					updated,
+					"blocked",
+					"run_interrupted",
+					{ terminalStatus: run.status },
+					run.runId,
+				);
 			}
 		}
 	}
@@ -403,6 +515,36 @@ export class WorkspaceRunApiService {
 			runId,
 			source,
 		});
+	}
+
+	private async cleanupDeletedSession(clientId: string, sessionId: string, runIds: readonly string[]): Promise<void> {
+		const failures: Array<{ target: string; message: string }> = [];
+		try {
+			await this.diagnostics?.deleteSessionEvents?.(clientId, sessionId);
+		} catch (error) {
+			failures.push({ target: "diagnostics", message: errorMessage(error) });
+		}
+		try {
+			await this.liveEvents?.deleteSessionEvents(clientId, sessionId, runIds);
+		} catch (error) {
+			failures.push({ target: "liveEvents", message: errorMessage(error) });
+		}
+		if (failures.length === 0) return;
+		this.writeDiagnosticEvents([
+			{
+				level: "warn",
+				category: "storage",
+				eventType: "runtime.session_delete.cleanup_failed",
+				sessionId,
+				traceId: sessionId,
+				data: {
+					clientId,
+					sessionId,
+					runIds,
+					failures,
+				},
+			},
+		]);
 	}
 }
 
@@ -451,6 +593,29 @@ function isCancelledAssistantMessage(message: RuntimeMessageRecord): boolean {
 	return payload.stopReason === "aborted" || payload.errorMessage === "Request was aborted.";
 }
 
+export function compactRunEventsForClient(events: RuntimeRunEventRecord[]): RuntimeRunEventRecord[] {
+	const compacted: RuntimeRunEventRecord[] = [];
+	let pendingMessageUpdate: RuntimeRunEventRecord | undefined;
+	for (const event of events) {
+		if (event.type === "message_update") {
+			pendingMessageUpdate = event;
+			continue;
+		}
+		if (event.type === "message_end") {
+			pendingMessageUpdate = undefined;
+			compacted.push(event);
+			continue;
+		}
+		if (pendingMessageUpdate) {
+			compacted.push(pendingMessageUpdate);
+			pendingMessageUpdate = undefined;
+		}
+		compacted.push(event);
+	}
+	if (pendingMessageUpdate) compacted.push(pendingMessageUpdate);
+	return compacted;
+}
+
 function createSyntheticCancelledRunMessage(
 	run: RuntimeRunRecord,
 	messages: RuntimeMessageRecord[],
@@ -493,6 +658,10 @@ function normalizeOptionalString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function normalizePositiveNumber(value: unknown, fallback: number): number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 function normalizeAppPreviewGoalSourceForStartRun(value: unknown): AppPreviewGoalSource {
 	if (value === "manual" || value === "pm_handoff") return value;
 	throw new RunApiError('App preview goal source must be "manual" or "pm_handoff"', 400);
@@ -512,14 +681,14 @@ function normalizeProjectFiles(value: unknown): StartRunProjectFile[] {
 	});
 }
 
-function isStaleActiveRun(run: RuntimeRunRecord): boolean {
-	if (run.status === "cancelling" && run.startedAt && isStaleTimestamp(run.startedAt)) return true;
-	return isStaleTimestamp(run.updatedAt);
+function isStaleActiveRun(run: RuntimeRunRecord, ageMs: number): boolean {
+	if (run.status === "cancelling" && run.startedAt && isStaleTimestamp(run.startedAt, ageMs)) return true;
+	return isStaleTimestamp(run.updatedAt, ageMs);
 }
 
-function isStaleTimestamp(value: string): boolean {
+function isStaleTimestamp(value: string, ageMs: number): boolean {
 	const timestampMs = Date.parse(value);
-	return Number.isFinite(timestampMs) && Date.now() - timestampMs >= STALE_ACTIVE_RUN_DELETE_AGE_MS;
+	return Number.isFinite(timestampMs) && Date.now() - timestampMs >= ageMs;
 }
 
 function timestampValue(value: string | undefined): number {

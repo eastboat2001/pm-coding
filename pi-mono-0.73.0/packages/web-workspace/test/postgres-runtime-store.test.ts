@@ -17,7 +17,10 @@ class RecordingQueryable implements Queryable {
 		return this;
 	}
 
-	async query(sql: string, values: readonly unknown[] = []): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
+	async query(
+		sql: string,
+		values: readonly unknown[] = [],
+	): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
 		const query = { sql, values };
 		this.queries.push(query);
 		if (/^(BEGIN|COMMIT|ROLLBACK)$/i.test(normalizeSql(sql))) {
@@ -79,20 +82,22 @@ describe("PostgresRuntimeStore", () => {
 		]) {
 			expect(statements.some((statement) => statement.includes(`CREATE TABLE IF NOT EXISTS ${table}`))).toBe(true);
 		}
-		expect(statements.some((statement) => statement.includes("CREATE INDEX IF NOT EXISTS idx_sessions_client_updated"))).toBe(
-			true,
-		);
-		expect(statements.some((statement) => statement.includes("CREATE INDEX IF NOT EXISTS idx_run_events_run_seq"))).toBe(
-			true,
-		);
+		expect(
+			statements.some((statement) => statement.includes("CREATE INDEX IF NOT EXISTS idx_sessions_client_updated")),
+		).toBe(true);
+		expect(
+			statements.some((statement) => statement.includes("CREATE INDEX IF NOT EXISTS idx_run_events_run_seq")),
+		).toBe(true);
 		expect(
 			statements.some((statement) =>
-				statement.includes("CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_per_session ON runs(client_id, session_id)"),
+				statement.includes(
+					"CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_per_session ON runs(client_id, session_id)",
+				),
 			),
 		).toBe(true);
-		expect(statements.some((statement) => statement.includes("WHERE status IN ('queued', 'running', 'cancelling')"))).toBe(
-			true,
-		);
+		expect(
+			statements.some((statement) => statement.includes("WHERE status IN ('queued', 'running', 'cancelling')")),
+		).toBe(true);
 	});
 
 	it("rejects createRun when the session already has an active run before inserting", async () => {
@@ -239,9 +244,11 @@ describe("PostgresRuntimeStore", () => {
 				return undefined;
 			})
 			.on((query) => {
-				if (/^UPDATE sessions SET updated_at = \$1, last_run_status = \$2, last_run_id = \$3, model_json = \$4, thinking_level = \$5/i.test(
-					normalizeSql(query.sql),
-				)) {
+				if (
+					/^UPDATE sessions SET updated_at = \$1, last_run_status = \$2, last_run_id = \$3, model_json = \$4, thinking_level = \$5/i.test(
+						normalizeSql(query.sql),
+					)
+				) {
 					return {
 						rows: [
 							{
@@ -377,7 +384,8 @@ describe("PostgresRuntimeStore", () => {
 		expect(statements[0]).toBe("BEGIN");
 		expect(statements.at(-1)).toBe("COMMIT");
 		const runSelectIndex = statements.findIndex(
-			(statement) => statement.startsWith("SELECT") && statement.includes("FROM runs WHERE client_id = $1 AND run_id = $2"),
+			(statement) =>
+				statement.startsWith("SELECT") && statement.includes("FROM runs WHERE client_id = $1 AND run_id = $2"),
 		);
 		const runUpdateIndex = statements.findIndex((statement) => statement.startsWith("UPDATE runs SET status = $3"));
 		const sessionUpdateIndex = statements.findIndex((statement) =>
@@ -396,7 +404,13 @@ describe("PostgresRuntimeStore", () => {
 			null,
 			null,
 		]);
-		expect(queryable.queries[sessionUpdateIndex]?.values).toEqual([updatedAt, "running", "run-1", "client-a", "session-1"]);
+		expect(queryable.queries[sessionUpdateIndex]?.values).toEqual([
+			updatedAt,
+			"running",
+			"run-1",
+			"client-a",
+			"session-1",
+		]);
 	});
 
 	it("appends a message and touches the session updated timestamp inside one transaction", async () => {
@@ -444,7 +458,10 @@ describe("PostgresRuntimeStore", () => {
 		expect(statements[0]).toBe("BEGIN");
 		expect(statements.at(-1)).toBe("COMMIT");
 		const messageInsertIndex = statementIndex(queryable, /^INSERT INTO messages/i);
-		const sessionUpdateIndex = statementIndex(queryable, /^UPDATE sessions SET updated_at = \$1 WHERE client_id = \$2 AND session_id = \$3$/i);
+		const sessionUpdateIndex = statementIndex(
+			queryable,
+			/^UPDATE sessions SET updated_at = \$1 WHERE client_id = \$2 AND session_id = \$3$/i,
+		);
 		expect(messageInsertIndex).toBeGreaterThan(0);
 		expect(sessionUpdateIndex).toBeGreaterThan(messageInsertIndex);
 		expect(sessionUpdateIndex).toBeLessThan(statements.length - 1);
@@ -553,7 +570,11 @@ describe("PostgresRuntimeStore", () => {
 			if (/^UPDATE sessions SET updated_at = \$1, last_run_status = \$2, last_run_id = \$3/i.test(sql)) {
 				return { rowCount: 1 };
 			}
-			if (/^SELECT .* FROM run_events WHERE client_id = \$1 AND run_id = \$2 AND seq > \$3 ORDER BY seq ASC$/i.test(sql)) {
+			if (
+				/^SELECT .* FROM run_events WHERE client_id = \$1 AND run_id = \$2 AND seq > \$3 ORDER BY seq ASC$/i.test(
+					sql,
+				)
+			) {
 				return {
 					rows: [
 						{
@@ -625,11 +646,10 @@ describe("PostgresRuntimeStore", () => {
 			{ delta: "one" },
 			createdAt,
 		]);
-		expect(queryable.statementsMatching(/FROM run_events WHERE client_id = \$1 AND run_id = \$2 AND seq > \$3/i)[0]?.values).toEqual([
-			"client-a",
-			"run-1",
-			2,
-		]);
+		expect(
+			queryable.statementsMatching(/FROM run_events WHERE client_id = \$1 AND run_id = \$2 AND seq > \$3/i)[0]
+				?.values,
+		).toEqual(["client-a", "run-1", 2]);
 		const statements = queryable.queries.map((query) => normalizeSql(query.sql));
 		expect(statements[0]).toBe("BEGIN");
 		const runLockIndex = statementIndex(
@@ -637,8 +657,14 @@ describe("PostgresRuntimeStore", () => {
 			/^SELECT .* FROM runs WHERE client_id = \$1 AND run_id = \$2 FOR UPDATE$/i,
 		);
 		const seqReadIndex = statementIndex(queryable, /SELECT COALESCE\(MAX\(seq\), 0\) \+ 1 AS seq FROM run_events/i);
-		const runTouchIndex = statementIndex(queryable, /^UPDATE runs SET updated_at = \$3 WHERE client_id = \$1 AND run_id = \$2$/i);
-		const sessionTouchIndex = statementIndex(queryable, /^UPDATE sessions SET updated_at = \$1, last_run_status = \$2, last_run_id = \$3/i);
+		const runTouchIndex = statementIndex(
+			queryable,
+			/^UPDATE runs SET updated_at = \$3 WHERE client_id = \$1 AND run_id = \$2$/i,
+		);
+		const sessionTouchIndex = statementIndex(
+			queryable,
+			/^UPDATE sessions SET updated_at = \$1, last_run_status = \$2, last_run_id = \$3/i,
+		);
 		const commitIndex = statementIndex(queryable, /^COMMIT$/i);
 		expect(runLockIndex).toBeGreaterThan(0);
 		expect(seqReadIndex).toBeGreaterThan(runLockIndex);
@@ -707,7 +733,9 @@ describe("PostgresRuntimeStore", () => {
 		});
 
 		expect(appended.seq).toBe(27);
-		expect(queryable.statementsMatching(/SELECT COALESCE\(MAX\(seq\), 0\) \+ 1 AS seq FROM run_events/i)).toHaveLength(0);
+		expect(
+			queryable.statementsMatching(/SELECT COALESCE\(MAX\(seq\), 0\) \+ 1 AS seq FROM run_events/i),
+		).toHaveLength(0);
 		expect(queryable.statementsMatching(/INSERT INTO run_events/i)[0]?.values).toEqual([
 			"run-1",
 			"session-1",
@@ -822,7 +850,11 @@ describe("PostgresRuntimeStore", () => {
 					],
 				};
 			}
-			if (/^SELECT .* FROM run_events WHERE client_id = \$1 AND run_id = \$2 AND seq > \$3 ORDER BY seq ASC$/i.test(sql)) {
+			if (
+				/^SELECT .* FROM run_events WHERE client_id = \$1 AND run_id = \$2 AND seq > \$3 ORDER BY seq ASC$/i.test(
+					sql,
+				)
+			) {
 				return {
 					rows: [
 						{
@@ -860,7 +892,11 @@ describe("PostgresRuntimeStore", () => {
 					],
 				};
 			}
-			if (/^SELECT .* FROM app_preview_goal_events WHERE client_id = \$1 AND session_id = \$2 AND id > \$3 ORDER BY id ASC$/i.test(sql)) {
+			if (
+				/^SELECT .* FROM app_preview_goal_events WHERE client_id = \$1 AND session_id = \$2 AND id > \$3 ORDER BY id ASC$/i.test(
+					sql,
+				)
+			) {
 				return {
 					rows: [
 						{

@@ -27,6 +27,16 @@ export class InMemoryRunEventBus {
         const events = this.eventsByStream.get(runEventStreamKey(request)) ?? [];
         return events.filter((event) => event.seq > request.afterSeq);
     }
+    async deleteSessionEvents(clientId, sessionId, runIds) {
+        this.assertOpen();
+        let deleted = 0;
+        for (const runId of runIds) {
+            const key = runEventStreamKey({ clientId, sessionId, runId });
+            if (this.eventsByStream.delete(key))
+                deleted += 1;
+        }
+        return deleted;
+    }
     async close() {
         this.closed = true;
         this.eventsByStream.clear();
@@ -45,11 +55,14 @@ export class RedisRunEventBus {
     maxLen;
     readWaiters = [];
     redisUrl;
+    ttlRefreshIntervalMs;
+    ttlRefreshedAtByStream = new Map();
     ttlSeconds;
     constructor(options) {
         this.redisUrl = options.redisUrl;
         this.maxLen = options.maxLen ?? DEFAULT_EVENT_STREAM_MAX_LEN;
         this.ttlSeconds = options.ttlSeconds ?? DEFAULT_EVENT_STREAM_TTL_SECONDS;
+        this.ttlRefreshIntervalMs = Math.max(1_000, Math.floor(this.ttlSeconds * 500));
         this.createRedisClient =
             options.createClient ??
                 ((clientOptions) => createClient({ url: clientOptions.url }));
@@ -65,7 +78,7 @@ export class RedisRunEventBus {
                 threshold: this.maxLen,
             },
         });
-        await client.expire(key, this.ttlSeconds);
+        await this.refreshTtlIfDue(client, key);
     }
     async read(request) {
         this.assertOpen();
@@ -117,6 +130,17 @@ export class RedisRunEventBus {
             }
         }
     }
+    async deleteSessionEvents(clientId, sessionId, runIds) {
+        this.assertOpen();
+        if (runIds.length === 0)
+            return 0;
+        const client = await this.connectedClient();
+        let deleted = 0;
+        for (const runId of runIds) {
+            deleted += await Promise.resolve(client.del(runEventStreamKey({ clientId, sessionId, runId })));
+        }
+        return deleted;
+    }
     async close() {
         this.closed = true;
         await Promise.all([...this.activeBlockingClients].map(async (client) => {
@@ -126,6 +150,7 @@ export class RedisRunEventBus {
         await this.waitForActiveReads();
         const clients = [...new Set([this.client, ...this.activeBlockingClients])];
         this.activeBlockingClients.clear();
+        this.ttlRefreshedAtByStream.clear();
         this.client = undefined;
         await Promise.all(clients.map((client) => this.closeClient(client)));
     }
@@ -147,6 +172,15 @@ export class RedisRunEventBus {
             await this.client.connect();
         }
         return this.client;
+    }
+    async refreshTtlIfDue(client, key) {
+        const now = Date.now();
+        const refreshedAt = this.ttlRefreshedAtByStream.get(key);
+        if (refreshedAt !== undefined && now - refreshedAt < this.ttlRefreshIntervalMs) {
+            return;
+        }
+        await client.expire(key, this.ttlSeconds);
+        this.ttlRefreshedAtByStream.set(key, now);
     }
     waitForActiveReads() {
         if (this.activeReads === 0)

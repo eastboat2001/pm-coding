@@ -38,6 +38,12 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		runsEnabled: envBooleanValue(env("PI_RUNS_ENABLED")) ?? true,
 		workerId: stringValue(env("PI_WORKER_ID")) || "pi-worker",
 		workerConcurrency: positiveIntegerValue(env("PI_WORKER_CONCURRENCY"), 2),
+		runMaxAgentTurns: nonNegativeIntegerValue(env("PI_RUN_MAX_AGENT_TURNS"), 80),
+		runMaxAgentToolExecutions: nonNegativeIntegerValue(env("PI_RUN_MAX_AGENT_TOOL_EXECUTIONS"), 240),
+		runRetryMaxAttempts: positiveIntegerValue(env("PI_RUN_RETRY_MAX_ATTEMPTS"), 8),
+		runRetryBaseDelayMs: positiveIntegerValue(env("PI_RUN_RETRY_BASE_DELAY_MS"), 2000),
+		runRetryMaxDelayMs: positiveIntegerValue(env("PI_RUN_RETRY_MAX_DELAY_MS"), 60000),
+		runRetryJitterRatio: boundedNumberValue(env("PI_RUN_RETRY_JITTER_RATIO"), 0.2, 0, 1),
 		runQueueName: stringValue(env("PI_RUN_QUEUE_NAME")) || "pi:runs",
 		runEventRetentionDays: nonNegativeIntegerValue(env("PI_RUN_EVENT_RETENTION_DAYS"), 30),
 		runEventStreamMaxLen: positiveIntegerValue(env("PI_RUN_EVENT_STREAM_MAXLEN"), 5000),
@@ -65,6 +71,8 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		modelOutputSnapshotLoggingEnabled: envBooleanValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED")) ?? false,
 		modelOutputSnapshotMaxChars: positiveIntegerValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS"), 20000),
 		modelStreamIdleTimeoutMs: positiveIntegerValue(env("PI_MODEL_STREAM_IDLE_TIMEOUT_MS"), 60000),
+		modelMaxOutputTokens: nonNegativeIntegerValue(env("PI_MODEL_MAX_OUTPUT_TOKENS"), 12000),
+		contextProviderPayloadBudgetChars: positiveIntegerValue(env("PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS"), 90000),
 		logRetentionDays: nonNegativeIntegerValue(env("PI_LOG_RETENTION_DAYS"), 30),
 		logMaxEvents: nonNegativeIntegerValue(env("PI_LOG_MAX_EVENTS"), 50000),
 		logCleanupIntervalMs: nonNegativeIntegerValue(env("PI_LOG_CLEANUP_INTERVAL_MS"), 3600000),
@@ -178,10 +186,22 @@ function nonNegativeIntegerValue(envValue: string | undefined, defaultValue: num
 	return defaultValue;
 }
 
+function boundedNumberValue(envValue: string | undefined, defaultValue: number, min: number, max: number): number {
+	const envNumber = numberFromString(envValue);
+	if (envNumber !== undefined) return Math.min(Math.max(envNumber, min), max);
+	return defaultValue;
+}
+
 function integerFromString(value: string | undefined): number | undefined {
 	if (value === undefined) return undefined;
 	const parsed = Number(value.trim());
 	return Number.isFinite(parsed) ? Math.round(parsed) : undefined;
+}
+
+function numberFromString(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	const parsed = Number(value.trim());
+	return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function envBooleanValue(value: string | undefined): boolean | undefined {

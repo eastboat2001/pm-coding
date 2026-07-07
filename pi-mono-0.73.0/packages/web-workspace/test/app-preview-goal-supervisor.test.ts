@@ -138,6 +138,54 @@ describe("AppPreviewGoalSupervisor", () => {
 		expect(events.map((event) => event.eventType)).toContain("continuation_scheduled");
 	});
 
+	it("blocks guard-limit failures without checking readiness or scheduling continuation", async () => {
+		let readinessChecks = 0;
+		supervisor = new AppPreviewGoalSupervisor({
+			db,
+			queue,
+			goals,
+			readiness: {
+				check: async () => {
+					readinessChecks += 1;
+					return {
+						ready: true,
+						reasonCode: "ready",
+						previewUrl: "http://localhost:5173/preview/project-client-a-session-1/",
+					};
+				},
+			},
+			createRunId: () => "continuation-1",
+		});
+		const terminalRun = createTerminalRun("run-1", "failed", "Run guard exceeded max agent turns (81 > 80).");
+		await goals.enable({
+			clientId: "client-a",
+			sessionId: "session-1",
+			source: "pm_handoff",
+			runId: "run-1",
+		});
+
+		await supervisor.afterRunTerminal(terminalRun);
+
+		const goal = await goals.get("client-a", "session-1");
+		const claimed = await queue.claim("worker-1", 1);
+		const events = await goals.events("client-a", "session-1", 0);
+		expect(readinessChecks).toBe(0);
+		expect(goal?.status).toBe("blocked");
+		expect(goal?.continuationRunsUsed).toBe(0);
+		expect(goal?.lastRunId).toBe("run-1");
+		expect(goal?.lastFailureReason).toBe("max_agent_turns");
+		expect(goal?.completedAt).toBeDefined();
+		expect(db.getRun("client-a", "continuation-1")).toBeUndefined();
+		expect(claimed).toBeUndefined();
+		expect(events.at(-1)?.eventType).toBe("blocked");
+		expect(events.at(-1)?.reasonCode).toBe("max_agent_turns");
+		expect(events.at(-1)?.payload).toMatchObject({
+			terminalStatus: "failed",
+			errorMessage: "Run guard exceeded max agent turns (81 > 80).",
+			guardLimit: "agent_turns",
+		});
+	});
+
 	it("blocks without spending continuation budget after a transient provider failure with no durable output", async () => {
 		let readinessChecks = 0;
 		supervisor = new AppPreviewGoalSupervisor({
@@ -183,6 +231,70 @@ describe("AppPreviewGoalSupervisor", () => {
 		expect(events.at(-1)?.eventType).toBe("retry_exhausted");
 		expect(events.at(-1)?.reasonCode).toBe("transient_provider_error");
 		expect(events.at(-1)?.runId).toBe("run-1");
+	});
+
+	it("schedules a continuation after a non-replayable transient provider failure with durable output even when preview is ready", async () => {
+		let readinessChecks = 0;
+		supervisor = new AppPreviewGoalSupervisor({
+			db,
+			queue,
+			goals,
+			readiness: {
+				check: async () => {
+					readinessChecks += 1;
+					return {
+						ready: true,
+						reasonCode: "ready",
+						previewUrl: "http://localhost:5173/preview/project-client-a-session-1/",
+					};
+				},
+			},
+			createRunId: () => "continuation-1",
+		});
+		const terminalRun = createTerminalRun(
+			"run-1",
+			"failed",
+			"Agent attempt failed after non-replayable side effects: 429 Too many requests",
+		);
+		db.appendRunEvent({
+			clientId: "client-a",
+			sessionId: "session-1",
+			runId: "run-1",
+			type: "tool_execution_end",
+			payload: {
+				type: "tool_execution_end",
+				toolName: "project_file",
+				isError: false,
+			},
+		});
+		await goals.enable({
+			clientId: "client-a",
+			sessionId: "session-1",
+			source: "pm_handoff",
+			runId: "run-1",
+		});
+
+		await supervisor.afterRunTerminal(terminalRun);
+
+		const goal = await goals.get("client-a", "session-1");
+		const continuation = db.getRun("client-a", "continuation-1");
+		const claimed = await queue.claim("worker-1", 1);
+		const events = await goals.events("client-a", "session-1", 0);
+		expect(readinessChecks).toBe(0);
+		expect(goal?.status).toBe("active");
+		expect(goal?.continuationRunsUsed).toBe(1);
+		expect(goal?.lastRunId).toBe("continuation-1");
+		expect(goal?.lastFailureReason).toBe("provider_transient_error");
+		expect(continuation?.status).toBe("queued");
+		expect(continuation?.model).toEqual(terminalRun.model);
+		expect(continuation?.thinkingLevel).toBe(terminalRun.thinkingLevel);
+		expect(claimed).toEqual({ clientId: "client-a", runId: "continuation-1" });
+		expect(events.at(-1)?.eventType).toBe("continuation_scheduled");
+		expect(events.at(-1)?.reasonCode).toBe("transient_provider_error");
+		expect(events.at(-1)?.payload).toMatchObject({
+			runId: "continuation-1",
+			errorMessage: "Agent attempt failed after non-replayable side effects: 429 Too many requests",
+		});
 	});
 
 	it("marks the goal cancelled without scheduling a continuation when the terminal run was cancelled", async () => {

@@ -2,7 +2,11 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 import type { RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
 import { describe, expect, it } from "vitest";
-import { drainRemoteRunEvents, RemoteAgentController } from "../src/runtime/remote-agent-controller.js";
+import {
+	drainRemoteRunEvents,
+	RemoteAgentController,
+	tryDrainRemoteRunEvents,
+} from "../src/runtime/remote-agent-controller.js";
 
 describe("RemoteAgentController", () => {
 	it("replays remote run events into the agent and finishes on terminal status", async () => {
@@ -306,6 +310,33 @@ describe("RemoteAgentController", () => {
 		expect(controller.activeRunId).toBeUndefined();
 		expect(controller.lastSeq).toBe(3);
 		expect(agent.state.messages).toEqual([assistantMessage]);
+	});
+
+	it("reports missed event drain failures without preventing terminal settle", async () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		await controller.applyRunEvent(createRunEventRecord(1, "r1", { type: "agent_start" }));
+		const result = await tryDrainRemoteRunEvents("r1", controller, async () => {
+			throw new Error("event API unavailable");
+		});
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toBeInstanceOf(Error);
+			expect(result.afterSeq).toBe(1);
+		}
+		await controller.settleRemoteRun("failed", "Connection error.");
+
+		expect(controller.activeRunId).toBeUndefined();
+		expect(controller.lastSeq).toBe(1);
+		expect(agent.state.isStreaming).toBe(false);
+		expect(agent.state.messages[0]).toMatchObject({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "Connection error.",
+		});
 	});
 });
 

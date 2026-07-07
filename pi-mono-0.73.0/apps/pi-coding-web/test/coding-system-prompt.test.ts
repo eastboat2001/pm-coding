@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { planCapabilities } from "../src/runtime/capability-planner.js";
+import { STATIC_PREVIEW_CONTRACT } from "../src/runtime/platform-contract.js";
+import { buildSpecArtifact } from "../src/runtime/spec-artifact.js";
 import {
 	buildCodingSystemPrompt,
 	DEFAULT_SYSTEM_PROMPT,
@@ -6,7 +9,7 @@ import {
 } from "../src/prompts/coding-system-prompt.js";
 
 describe("coding system prompt", () => {
-	it("tells the model to read omitted project file content before editing existing files", () => {
+	it("tells the model to read compacted project file content before editing existing files", () => {
 		const prompts = [
 			["default", DEFAULT_SYSTEM_PROMPT],
 			["handoff", PI_CODING_HANDOFF_INSTRUCTIONS_EN],
@@ -14,15 +17,30 @@ describe("coding system prompt", () => {
 
 		for (const [name, prompt] of prompts) {
 			expect(prompt, name).toContain("project_file get");
-			expect(prompt, name).toContain("project_file content omitted");
+			expect(prompt, name).toContain("contentOmitted");
+			expect(prompt, name).toContain("Project file content omitted from compacted history");
+			expect(prompt, name).not.toContain("project_file content omitted");
+			expect(prompt, name).not.toContain("project_file get result omitted");
 		}
 	});
 
-	it("includes OpenAI-style skill interface metadata when present", () => {
+	it("discourages repeated full-file rewrites for small edits", () => {
+		const prompts = [
+			["default", DEFAULT_SYSTEM_PROMPT],
+			["handoff", PI_CODING_HANDOFF_INSTRUCTIONS_EN],
+		] as const;
+
+		for (const [name, prompt] of prompts) {
+			expect(prompt, name).toContain("Prefer project_file update");
+			expect(prompt, name).toContain("avoid rewriting an entire large file");
+		}
+	});
+
+	it("keeps available skill entries compact while preserving routing metadata", () => {
 		const prompt = buildCodingSystemPrompt([
 			{
 				name: "page-style",
-				description: "Create static pages with a distinctive visual system.",
+				description: "Create static pages with a distinctive visual system that includes a long routing description.",
 				location: "skill://page-style/SKILL.md",
 				interface: {
 					displayName: "Page Style",
@@ -32,9 +50,13 @@ describe("coding system prompt", () => {
 			},
 		]);
 
-		expect(prompt).toContain("<display_name>Page Style</display_name>");
-		expect(prompt).toContain("<short_description>Distinctive static page design</short_description>");
-		expect(prompt).toContain("<default_prompt>Use $page-style to design a static landing page.</default_prompt>");
+		expect(prompt).toContain("<name>page-style</name>");
+		expect(prompt).toContain("<description>Distinctive static page design</description>");
+		expect(prompt).toContain("<location>skill://page-style/SKILL.md</location>");
+		expect(prompt).not.toContain("<display_name>");
+		expect(prompt).not.toContain("<short_description>");
+		expect(prompt).not.toContain("<default_prompt>");
+		expect(prompt).not.toContain("long routing description");
 	});
 
 	it("keeps assistant and generated UI language aligned with the user request", () => {
@@ -54,5 +76,101 @@ describe("coding system prompt", () => {
 		expect(DEFAULT_SYSTEM_PROMPT).toContain("only when a prompt explicitly lists");
 		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("attachments/original");
 		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("Do not call project_file get with an ordinary attachment filename");
+	});
+
+	it("injects a per-run capability plan when the platform cannot satisfy full-stack requirements", () => {
+		const capabilityPlan = planCapabilities({
+			messages: [
+				{
+					role: "user",
+					content: "Build a full-stack app with backend APIs, database persistence, and auth.",
+					timestamp: 1,
+				},
+			],
+			platform: STATIC_PREVIEW_CONTRACT,
+			source: "test",
+		});
+		const prompt = buildCodingSystemPrompt([], {
+			platformContract: STATIC_PREVIEW_CONTRACT,
+			capabilityPlan,
+		});
+
+		expect(prompt).toContain("<capability_plan>");
+		expect(prompt).toContain("adapter: static-preview");
+		expect(prompt).toContain("delivery_mode: static_simulation");
+		expect(prompt).toContain("unsupported_capabilities: backend_server, database_runtime, server_auth");
+		expect(prompt).toContain("Do not claim that PI created a real backend, database, or server auth runtime.");
+	});
+
+	it("injects a per-run spec artifact as the implementation acceptance source", () => {
+		const messages = [
+			{
+				role: "user",
+				content: "Build a full-stack dashboard with backend APIs, database persistence, auth, KPI cards, and charts.",
+				timestamp: 1,
+			},
+		];
+		const capabilityPlan = planCapabilities({
+			messages,
+			platform: STATIC_PREVIEW_CONTRACT,
+			source: "test",
+		});
+		const specArtifact = buildSpecArtifact({
+			messages,
+			capabilityPlan,
+			platform: STATIC_PREVIEW_CONTRACT,
+		});
+		const prompt = buildCodingSystemPrompt([], {
+			platformContract: STATIC_PREVIEW_CONTRACT,
+			capabilityPlan,
+			specArtifact,
+		});
+
+		expect(prompt).toContain("<spec_artifact>");
+		expect(prompt).toContain("objective: Build a full-stack dashboard");
+		expect(prompt).toContain("acceptance_criteria:");
+		expect(prompt).toContain("First preview must render meaningful first-screen data");
+		expect(prompt).toContain("project_task validate");
+	});
+
+	it("requires reading persisted spec kit files before implementation edits", () => {
+		const messages = [
+			{
+				role: "user",
+				content: "Build the QDM dashboard from the attached PM handoff.",
+				timestamp: 1,
+				attachments: [
+					{
+						type: "document",
+						projectFilePath: "docs/Requirements Document.md",
+						extractedText: "Build KPI cards and charts.",
+					},
+				],
+			},
+		];
+		const capabilityPlan = planCapabilities({
+			messages,
+			platform: STATIC_PREVIEW_CONTRACT,
+			source: "test",
+		});
+		const specArtifact = buildSpecArtifact({
+			messages,
+			capabilityPlan,
+			platform: STATIC_PREVIEW_CONTRACT,
+		});
+
+		const prompt = buildCodingSystemPrompt([], {
+			platformContract: STATIC_PREVIEW_CONTRACT,
+			capabilityPlan,
+			specArtifact,
+		});
+
+		expect(prompt).toContain("<spec_execution_contract>");
+		expect(prompt).toContain("Before creating or editing implementation files");
+		expect(prompt).toContain("project_file get");
+		expect(prompt).toContain("docs/spec.md");
+		expect(prompt).toContain("docs/plan.md");
+		expect(prompt).toContain("docs/tasks.md");
+		expect(prompt).toContain("docs/Requirements Document.md");
 	});
 });

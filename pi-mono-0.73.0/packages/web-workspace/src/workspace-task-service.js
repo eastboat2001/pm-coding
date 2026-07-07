@@ -2,6 +2,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { isObject, readJsonFile } from "./json.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
+import { assessStaticPreviewQuality } from "./static-preview-quality-gate.js";
+import { runStaticPreviewSmokeGate } from "./static-preview-smoke-gate.js";
 import { appendProjectLog, isUnsafeProjectCommand, runCommand, truncateProjectLogs, } from "./workspace-command-service.js";
 import { listProjectSourceFiles, workspaceContext } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
@@ -40,7 +42,7 @@ export class WorkspaceTaskService {
         const staticRoot = findStaticServeRoot(projectDir, staticServeRootCandidates(hasPackageJson));
         const base = {
             task: body.task,
-            status: body.task === "inspect" ? "ready" : staticRoot ? "passed" : "failed",
+            status: body.task === "inspect" ? "ready" : "pending",
             projectId,
             sessionId,
             title,
@@ -62,7 +64,20 @@ export class WorkspaceTaskService {
                 ? `Static preview found a build source entry at ${buildSourceEntry}. Run project_task build_static before project_task preview so PI can serve browser-ready dist/build output.`
                 : "Static preview requires an index.html in the project root, dist, build, or public. Package scripts, npm install, npm run build, and Node services are not started.");
         }
-        return this.recordTaskResult({ ...base, valid: errors.length === 0, errors });
+        if (staticRoot) {
+            const quality = assessStaticPreviewQuality({ serveRoot: staticRoot });
+            errors.push(...quality.errors.map((error) => `Static preview quality gate: ${error}`));
+            if (quality.errors.length === 0) {
+                const smoke = await runStaticPreviewSmokeGate({ serveRoot: staticRoot });
+                errors.push(...smoke.errors.map((error) => `Static preview smoke gate: ${error}`));
+            }
+        }
+        return this.recordTaskResult({
+            ...base,
+            status: errors.length === 0 ? "passed" : "failed",
+            valid: errors.length === 0,
+            errors,
+        });
     }
     async buildStaticProject(options, signal) {
         const logs = [];

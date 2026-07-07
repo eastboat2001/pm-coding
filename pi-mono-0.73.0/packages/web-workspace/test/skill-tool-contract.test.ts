@@ -4,6 +4,7 @@ import {
 	prepareSkillLoadArguments,
 	prepareSkillResourceArguments,
 	skillLoadSchema,
+	skillResourceSchema,
 } from "../src/skill-tool-contract.js";
 import type { SkillLoadResult } from "../src/types.js";
 
@@ -32,6 +33,14 @@ describe("skill tool contract", () => {
 			name: "ui-polish",
 			path: "references/rules.md",
 		});
+	});
+
+	it("tells models to read only exact resource paths returned by skill_load", () => {
+		const description = schemaDescription(skillResourceSchema.properties.path);
+
+		expect(description).toContain("exactly match one of the resource paths returned by skill_load");
+		expect(description).toContain("Do not invent");
+		expect(description).not.toContain("such as references/rules.md");
 	});
 
 	it("rejects missing skill tool arguments with stable messages", () => {
@@ -63,7 +72,7 @@ describe("skill tool contract", () => {
 				"Short description: Make the interface production ready.",
 				'Location: C:\\Skills\\ui<&"polish',
 				"Default prompt: Audit visible screens.",
-				"References are relative to this skill. Use skill_resource to read listed relative resources when needed.",
+				"Use skill_resource only for exact paths listed under Available skill resources below. Do not infer or invent unlisted references paths.",
 				'<skill name="ui&lt;&amp;&quot;polish" location="C:\\Skills\\ui&lt;&amp;&quot;polish">',
 				"# Skill\nUse careful spacing.",
 				"</skill>",

@@ -117,7 +117,11 @@ export class RunEventSink {
 		return DURABLE_RUN_EVENT_TYPES.has(event.type);
 	}
 
-	private shouldCheckpointMessageUpdate(run: RuntimeRunRecord, event: RunEventSinkAgentEvent, createdAt: string): boolean {
+	private shouldCheckpointMessageUpdate(
+		run: RuntimeRunRecord,
+		event: RunEventSinkAgentEvent,
+		createdAt: string,
+	): boolean {
 		const key = runKey(run);
 		const currentTextLength = messageTextLength(isJsonObject(event.message) ? event.message : undefined);
 		const currentCreatedAtMs = timestampMs(createdAt);

@@ -12,9 +12,7 @@ const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000;
 export function providerStallStatusText(
 	translate: (label: ProviderStallStatusLabel) => string = (label) => label,
 ): string {
-	return translate(
-		"Model is still processing. Tool calls or long context steps may pause visible output briefly.",
-	);
+	return translate("Model is still processing. Tool calls or long context steps may pause visible output briefly.");
 }
 
 export function selectRunTransientStatusText(statuses: RunTransientStatusTexts): string {

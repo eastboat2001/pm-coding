@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	InMemoryRunEventBus,
-	RedisRunEventBus,
-	runEventStreamKey,
-	type LiveRunEvent,
-} from "../src/run-event-bus.js";
+import { InMemoryRunEventBus, type LiveRunEvent, RedisRunEventBus, runEventStreamKey } from "../src/run-event-bus.js";
 
 const identity = {
 	clientId: "client-a",
@@ -39,6 +34,18 @@ describe("InMemoryRunEventBus", () => {
 		await expect(bus.read({ ...identity, afterSeq: 1 })).resolves.toEqual([event(2), event(3)]);
 		await expect(bus.read({ ...identity, afterSeq: 3 })).resolves.toEqual([]);
 	});
+
+	it("deletes all in-memory streams for a session run list", async () => {
+		const bus = new InMemoryRunEventBus();
+		await bus.publish(event(1));
+		await bus.publish({ ...event(2), runId: "run-b" });
+		await bus.publish({ ...event(3), sessionId: "session-b", runId: "run-c" });
+
+		await expect(bus.deleteSessionEvents("client-a", "session-a", ["run-a", "run-b"])).resolves.toBe(2);
+
+		await expect(bus.read({ ...identity, afterSeq: 0 })).resolves.toEqual([]);
+		await expect(bus.read({ ...identity, sessionId: "session-b", runId: "run-c", afterSeq: 0 })).resolves.toHaveLength(1);
+	});
 });
 
 describe("RedisRunEventBus", () => {
@@ -61,6 +68,22 @@ describe("RedisRunEventBus", () => {
 				options: { TRIM: { strategy: "MAXLEN", strategyModifier: "~", threshold: 10 } },
 			},
 		]);
+		expect(client.expireCalls).toEqual([{ key: "pi:runs:client-a:session-a:run-a:events", seconds: 60 }]);
+	});
+
+	it("does not refresh the same Redis stream TTL on every published event", async () => {
+		const client = new FakeRedisClient();
+		const bus = new RedisRunEventBus({
+			redisUrl: "redis://example",
+			maxLen: 10,
+			ttlSeconds: 60,
+			createClient: () => client,
+		});
+
+		await bus.publish(event(4));
+		await bus.publish(event(5));
+
+		expect(client.xAddCalls).toHaveLength(2);
 		expect(client.expireCalls).toEqual([{ key: "pi:runs:client-a:session-a:run-a:events", seconds: 60 }]);
 	});
 
@@ -155,6 +178,21 @@ describe("RedisRunEventBus", () => {
 		await expect(first).resolves.toEqual([]);
 		await expect(second).resolves.toEqual([event(2)]);
 	});
+
+	it("deletes Redis streams for all provided session run ids", async () => {
+		const client = new FakeRedisClient();
+		const bus = new RedisRunEventBus({
+			redisUrl: "redis://example",
+			createClient: () => client,
+		});
+
+		await expect(bus.deleteSessionEvents("client-a", "session-a", ["run-a", "run-b"])).resolves.toBe(2);
+
+		expect(client.delCalls).toEqual([
+			"pi:runs:client-a:session-a:run-a:events",
+			"pi:runs:client-a:session-a:run-b:events",
+		]);
+	});
 });
 
 interface FakeRedisState {
@@ -167,6 +205,7 @@ interface FakeRedisState {
 	}>;
 	readonly xReadCalls: Array<{ streams: unknown; options: unknown }>;
 	readonly xReadResults: unknown[];
+	readonly delCalls: string[];
 }
 
 class FakeRedisClient {
@@ -180,6 +219,7 @@ class FakeRedisClient {
 			xAddCalls: [],
 			xReadCalls: [],
 			xReadResults: [],
+			delCalls: [],
 		},
 	) {}
 
@@ -202,6 +242,10 @@ class FakeRedisClient {
 
 	get xReadResults(): unknown[] {
 		return this.state.xReadResults;
+	}
+
+	get delCalls(): string[] {
+		return this.state.delCalls;
 	}
 
 	async connect(): Promise<void> {
@@ -237,6 +281,11 @@ class FakeRedisClient {
 		this.xReadCalls.push({ streams, options });
 		const result = this.xReadResults.shift() ?? null;
 		return Promise.race([Promise.resolve(result), this.disconnectPromise()]);
+	}
+
+	async del(key: string): Promise<number> {
+		this.delCalls.push(key);
+		return 1;
 	}
 
 	private disconnectPromise(): Promise<never> {

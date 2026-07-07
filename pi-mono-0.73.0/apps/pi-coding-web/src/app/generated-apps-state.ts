@@ -176,7 +176,11 @@ async function loadBatchSessionProjectSummaries(
 		runStatus: session.runStatus || "",
 		activeRunId: session.activeRunId || "",
 	}));
-	const cacheKey = JSON.stringify({ origin, clientId: clientHeaders["X-PI-Client-ID"] || "", sessions: cacheSessions });
+	const cacheKey = JSON.stringify({
+		origin,
+		clientId: clientHeaders["X-PI-Client-ID"] || "",
+		sessions: cacheSessions,
+	});
 	const now = Date.now();
 	const cached = summaryCache.get(cacheKey);
 	if (!options.force && cached && cached.expiresAt > now) return cached.summaries;
@@ -189,7 +193,9 @@ async function loadBatchSessionProjectSummaries(
 	});
 	const result = (await response.json().catch(() => ({}))) as BatchProjectSummaryResponse & { error?: unknown };
 	if (!response.ok)
-		throw new Error(result.error ? String(result.error) : `Project batch summary API failed with HTTP ${response.status}`);
+		throw new Error(
+			result.error ? String(result.error) : `Project batch summary API failed with HTTP ${response.status}`,
+		);
 	const summaries = Array.isArray(result.summaries)
 		? result.summaries.flatMap((summary) => {
 				const record = toSessionProjectSummary(summary);

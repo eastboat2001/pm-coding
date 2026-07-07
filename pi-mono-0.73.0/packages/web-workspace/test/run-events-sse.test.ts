@@ -6,8 +6,8 @@ import { join } from "node:path";
 import type { Connect } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RUNS_API_PREFIX } from "../src/constants.js";
-import type { RunEventBus, RunEventReadRequest } from "../src/run-event-bus.js";
 import { RunApiError } from "../src/run-api-service.js";
+import type { RunEventBus, RunEventReadRequest } from "../src/run-event-bus.js";
 import type { RuntimeRunEventRecord, RuntimeRunRecord, StorageConfig } from "../src/types.js";
 import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 
@@ -23,10 +23,7 @@ afterEach(() => {
 describe("runtime run SSE events", () => {
 	it("sends durable catch-up events before live bus events", async () => {
 		const run = runRecord();
-		const bus = new ScriptedRunEventBus([
-			{ events: [runEvent(3)] },
-			{ waitForAbort: true },
-		]);
+		const bus = new ScriptedRunEventBus([{ events: [runEvent(3)] }, { waitForAbort: true }]);
 		const harness = createSseHarness({
 			runApi: {
 				getRunForEvents: vi.fn().mockResolvedValue(run),
@@ -48,6 +45,8 @@ describe("runtime run SSE events", () => {
 			blockMs: 15000,
 		});
 		expect(request.response.headers.get("Content-Type")).toBe("text/event-stream; charset=utf-8");
+		expect(request.response.headers.get("X-Accel-Buffering")).toBe("no");
+		expect(request.response.headers.get("Cache-Control")).toContain("no-transform");
 
 		request.close();
 		await request.done;
@@ -55,10 +54,7 @@ describe("runtime run SSE events", () => {
 
 	it("deduplicates live events at or before the last sent durable sequence", async () => {
 		const run = runRecord();
-		const bus = new ScriptedRunEventBus([
-			{ events: [runEvent(3), runEvent(4)] },
-			{ waitForAbort: true },
-		]);
+		const bus = new ScriptedRunEventBus([{ events: [runEvent(3), runEvent(4)] }, { waitForAbort: true }]);
 		const harness = createSseHarness({
 			runApi: {
 				getRunForEvents: vi.fn().mockResolvedValue(run),
@@ -73,6 +69,47 @@ describe("runtime run SSE events", () => {
 
 		expect(sseDataEvents(request.response.body).map((event) => event.seq)).toEqual([3, 4]);
 		expect(bus.readCalls[0]?.afterSeq).toBe(3);
+
+		request.close();
+		await request.done;
+	});
+
+	it("compacts superseded live message updates before sending SSE events", async () => {
+		const run = runRecord();
+		const bus = new ScriptedRunEventBus([
+			{
+				events: [
+					runEvent(1, {
+						type: "message_update",
+						payload: { type: "message_update", message: { role: "assistant", content: "partial" } },
+					}),
+					runEvent(2, {
+						type: "message_update",
+						payload: { type: "message_update", message: { role: "assistant", content: "final" } },
+					}),
+					runEvent(3, {
+						type: "message_end",
+						payload: { type: "message_end", message: { role: "assistant", content: "final" } },
+					}),
+					runEvent(4, { type: "tool_execution_start", payload: { type: "tool_execution_start" } }),
+				],
+			},
+			{ waitForAbort: true },
+		]);
+		const harness = createSseHarness({
+			runApi: {
+				getRunForEvents: vi.fn().mockResolvedValue(run),
+				listDurableRunEvents: vi.fn().mockResolvedValue([]),
+			},
+			runEventBus: bus,
+		});
+
+		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=0`);
+
+		await waitUntil(() => bus.readCalls.length >= 2);
+
+		expect(sseDataEvents(request.response.body).map((event) => event.seq)).toEqual([3, 4]);
+		expect(bus.readCalls[1]?.afterSeq).toBe(4);
 
 		request.close();
 		await request.done;
@@ -171,10 +208,7 @@ type Middleware = (
 	next: Connect.NextFunction,
 ) => void | Promise<void>;
 
-function createSseHarness(options: {
-	runApi: Partial<TestServices["runApi"]>;
-	runEventBus: RunEventBus;
-}) {
+function createSseHarness(options: { runApi: Partial<TestServices["runApi"]>; runEventBus: RunEventBus }) {
 	let middleware: Middleware | undefined;
 	const services = {
 		config: createTestConfig(),
@@ -198,7 +232,9 @@ function createSseHarness(options: {
 		runEventBus: options.runEventBus,
 	} satisfies TestServices;
 	const plugin = createConfiguredStoragePluginForTest(services);
-	const configureServer = plugin.configureServer as (server: { middlewares: { use(handler: Middleware): void } }) => void;
+	const configureServer = plugin.configureServer as (server: {
+		middlewares: { use(handler: Middleware): void };
+	}) => void;
 
 	configureServer({
 		middlewares: {
@@ -217,13 +253,9 @@ function dispatch(middleware: Middleware, url: string) {
 	const response = new FakeResponse();
 	let nextCalled = false;
 	const done = Promise.resolve(
-		middleware(
-			request as unknown as Connect.IncomingMessage,
-			response as unknown as ServerResponse,
-			() => {
-				nextCalled = true;
-			},
-		),
+		middleware(request as unknown as Connect.IncomingMessage, response as unknown as ServerResponse, () => {
+			nextCalled = true;
+		}),
 	);
 	return {
 		close() {
@@ -273,10 +305,7 @@ class FakeResponse {
 	}
 }
 
-type BusReadStep =
-	| { events: RuntimeRunEventRecord[] }
-	| { error: Error }
-	| { waitForAbort: true };
+type BusReadStep = { events: RuntimeRunEventRecord[] } | { error: Error } | { waitForAbort: true };
 
 class ScriptedRunEventBus implements RunEventBus {
 	readonly readCalls: RunEventReadRequest[] = [];
@@ -337,6 +366,12 @@ function createTestConfig(): StorageConfig {
 		runsEnabled: true,
 		workerId: "test-worker",
 		workerConcurrency: 1,
+		runMaxAgentTurns: 80,
+		runMaxAgentToolExecutions: 240,
+		runRetryMaxAttempts: 8,
+		runRetryBaseDelayMs: 2000,
+		runRetryMaxDelayMs: 60000,
+		runRetryJitterRatio: 0.2,
 		runQueueName: "test-runs",
 		runEventRetentionDays: 30,
 		runEventStreamMaxLen: 100,
@@ -364,6 +399,8 @@ function createTestConfig(): StorageConfig {
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 1_000,
 		modelStreamIdleTimeoutMs: 60_000,
+		modelMaxOutputTokens: 12_000,
+		contextProviderPayloadBudgetChars: 90_000,
 		logRetentionDays: 30,
 		logMaxEvents: 1_000,
 		logCleanupIntervalMs: 3_600_000,

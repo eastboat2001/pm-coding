@@ -8,8 +8,8 @@ import { API_PREFIX, LOGS_API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, RUNS_
 import { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
+import { RunApiError, WorkspaceRunApiService, compactRunEventsForClient } from "./run-api-service.js";
 import { RedisRunEventBus } from "./run-event-bus.js";
-import { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunQueue } from "./run-queue.js";
 import { createRuntimeStore } from "./runtime-store-factory.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
@@ -19,6 +19,7 @@ import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
+const LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS = 250;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 export function configuredStoragePlugin(envFile) {
     const rootDir = process.cwd();
@@ -60,7 +61,7 @@ export function configuredStoragePlugin(envFile) {
         deleteSessionWorkspace(clientId, sessionId) {
             return deleteSessionWorkspace(config.clientsRootDir, sessionId, clientId);
         },
-    }, appPreviewGoals);
+    }, appPreviewGoals, runEventBus);
     return createConfiguredStoragePlugin({
         config,
         diagnostics,
@@ -221,11 +222,19 @@ export function createStartupDiagnosticEvents(config) {
                 clientsRootDir: config.clientsRootDir,
                 workerId: config.workerId,
                 workerConcurrency: config.workerConcurrency,
+                runMaxAgentTurns: config.runMaxAgentTurns,
+                runMaxAgentToolExecutions: config.runMaxAgentToolExecutions,
+                runRetryMaxAttempts: config.runRetryMaxAttempts,
+                runRetryBaseDelayMs: config.runRetryBaseDelayMs,
+                runRetryMaxDelayMs: config.runRetryMaxDelayMs,
+                runRetryJitterRatio: config.runRetryJitterRatio,
                 clientIdRequired: config.clientIdRequired,
                 loggingEnabled: config.loggingEnabled,
                 logStdoutEnabled: config.logStdoutEnabled,
                 logsDbFile: config.logsDbFile,
                 modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
+                modelMaxOutputTokens: config.modelMaxOutputTokens,
+                contextProviderPayloadBudgetChars: config.contextProviderPayloadBudgetChars,
             },
         },
     ];
@@ -374,6 +383,10 @@ async function handleStorageApi(method, route, req, res, config, sessions) {
             workerConcurrency: config.workerConcurrency,
             runQueueName: config.runQueueName,
             runEventRetentionDays: config.runEventRetentionDays,
+            runRetryMaxAttempts: config.runRetryMaxAttempts,
+            runRetryBaseDelayMs: config.runRetryBaseDelayMs,
+            runRetryMaxDelayMs: config.runRetryMaxDelayMs,
+            runRetryJitterRatio: config.runRetryJitterRatio,
             clientIdRequired: config.clientIdRequired,
             logsDbFile: config.logsDbFile,
             loggingEnabled: config.loggingEnabled,
@@ -385,6 +398,8 @@ async function handleStorageApi(method, route, req, res, config, sessions) {
             modelOutputSnapshotLoggingEnabled: config.modelOutputSnapshotLoggingEnabled,
             modelOutputSnapshotMaxChars: config.modelOutputSnapshotMaxChars,
             modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
+            modelMaxOutputTokens: config.modelMaxOutputTokens,
+            contextProviderPayloadBudgetChars: config.contextProviderPayloadBudgetChars,
             logRetentionDays: config.logRetentionDays,
             logMaxEvents: config.logMaxEvents,
             logCleanupIntervalMs: config.logCleanupIntervalMs,
@@ -639,10 +654,13 @@ function wantsEventStream(req, url) {
         : typeof accept === "string" && accept.includes("text/event-stream");
 }
 async function streamRunEvents(res, req, runApi, runEventBus, clientId, runId, afterSeq) {
-    let lastSeq = afterSeq;
+    let readSeq = afterSeq;
+    let sentSeq = afterSeq;
     let closed = false;
     let heartbeatAt = Date.now();
     let streamStarted = false;
+    let pendingLiveMessageUpdate;
+    let lastLiveMessageUpdateSentAt = 0;
     const abortController = new AbortController();
     const closeStream = () => {
         if (closed)
@@ -663,37 +681,43 @@ async function streamRunEvents(res, req, runApi, runEventBus, clientId, runId, a
             return;
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.setHeader("Cache-Control", "no-cache, no-store, no-transform, must-revalidate");
         res.setHeader("Connection", "keep-alive");
+        res.setHeader("X-Accel-Buffering", "no");
         res.flushHeaders?.();
         streamStarted = true;
         res.write(": connected\n\n");
         for (const event of durableEvents) {
-            if (!writeRunEventIfFresh(res, event, lastSeq))
+            readSeq = Math.max(readSeq, event.seq);
+            if (!writeRunEventIfFresh(res, event, sentSeq))
                 continue;
-            lastSeq = event.seq;
+            sentSeq = event.seq;
         }
         while (!closed && !res.destroyed) {
-            const events = await runEventBus.read({
+            const rawEvents = await runEventBus.read({
                 clientId,
                 sessionId: run.sessionId,
                 runId,
-                afterSeq: lastSeq,
+                afterSeq: readSeq,
                 blockMs: 15000,
                 signal: abortController.signal,
             });
+            for (const event of rawEvents) {
+                readSeq = Math.max(readSeq, event.seq);
+            }
+            const events = compactRunEventsForClient(rawEvents);
             if (closed || res.destroyed)
                 break;
             if (events.length === 0) {
+                flushPendingLiveMessageUpdate(true);
                 heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
                 await waitForRunEventReadBackoff(abortController.signal, EMPTY_RUN_EVENT_READ_BACKOFF_MS);
                 continue;
             }
             for (const event of events) {
-                if (!writeRunEventIfFresh(res, event, lastSeq))
-                    continue;
-                lastSeq = event.seq;
+                writeLiveRunEvent(event);
             }
+            flushPendingLiveMessageUpdate(false);
             heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
         }
     }
@@ -712,6 +736,38 @@ async function streamRunEvents(res, req, runApi, runEventBus, clientId, runId, a
         if (typeof responseWithOn.off === "function") {
             responseWithOn.off("close", closeStream);
         }
+    }
+    function writeRunEvent(event) {
+        if (!writeRunEventIfFresh(res, event, sentSeq))
+            return false;
+        sentSeq = event.seq;
+        return true;
+    }
+    function flushPendingLiveMessageUpdate(force) {
+        if (!pendingLiveMessageUpdate)
+            return;
+        const now = Date.now();
+        if (!force && now - lastLiveMessageUpdateSentAt < LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS)
+            return;
+        const event = pendingLiveMessageUpdate;
+        pendingLiveMessageUpdate = undefined;
+        if (writeRunEvent(event)) {
+            lastLiveMessageUpdateSentAt = now;
+        }
+    }
+    function writeLiveRunEvent(event) {
+        if (event.type === "message_update") {
+            pendingLiveMessageUpdate = event;
+            flushPendingLiveMessageUpdate(false);
+            return;
+        }
+        if (event.type === "message_end") {
+            pendingLiveMessageUpdate = undefined;
+            writeRunEvent(event);
+            return;
+        }
+        flushPendingLiveMessageUpdate(true);
+        writeRunEvent(event);
     }
 }
 function writeRunEventIfFresh(res, event, lastSeq) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { RunEventSink, type RunEventSinkAgentEvent, type RunEventSinkStore } from "../src/run-event-sink.js";
 import type { LiveRunEvent, RunEventBus } from "../src/run-event-bus.js";
+import { RunEventSink, type RunEventSinkAgentEvent, type RunEventSinkStore } from "../src/run-event-sink.js";
 import type { AppendMessageInput, AppendRunEventInput, RuntimeRunRecord } from "../src/types.js";
 
 const run: RuntimeRunRecord = {
@@ -50,7 +50,12 @@ describe("RunEventSink", () => {
 
 	it("persists message_end and appends non-user messages once per run", async () => {
 		const store = new RecordingStore();
-		const sink = new RunEventSink({ store, bus: new RecordingBus(), checkpointIntervalMs: 1_000, checkpointMinChars: 100 });
+		const sink = new RunEventSink({
+			store,
+			bus: new RecordingBus(),
+			checkpointIntervalMs: 1_000,
+			checkpointMinChars: 100,
+		});
 		const assistantEnd = messageEnd({ role: "assistant", content: "done" });
 
 		await sink.persistAgentEvent(run, assistantEnd);
@@ -72,10 +77,18 @@ describe("RunEventSink", () => {
 
 	it("does not append user, user-with-attachments, or assistant failure marker message_end events as messages", async () => {
 		const store = new RecordingStore();
-		const sink = new RunEventSink({ store, bus: new RecordingBus(), checkpointIntervalMs: 1_000, checkpointMinChars: 100 });
+		const sink = new RunEventSink({
+			store,
+			bus: new RecordingBus(),
+			checkpointIntervalMs: 1_000,
+			checkpointMinChars: 100,
+		});
 
 		await sink.persistAgentEvent(run, messageEnd({ role: "user", content: "hello" }));
-		await sink.persistAgentEvent(run, messageEnd({ role: "user-with-attachments", content: "hello", attachments: [] }));
+		await sink.persistAgentEvent(
+			run,
+			messageEnd({ role: "user-with-attachments", content: "hello", attachments: [] }),
+		);
 		await sink.persistAgentEvent(run, messageEnd({ role: "assistant", content: "failed", errorMessage: "503" }));
 		await sink.persistAgentEvent(run, messageEnd({ role: "assistant", content: "failed", stopReason: "error" }));
 
@@ -90,7 +103,12 @@ describe("RunEventSink", () => {
 
 	it("dedupes matching assistant message_end payloads per run without leaking across runs", async () => {
 		const store = new RecordingStore();
-		const sink = new RunEventSink({ store, bus: new RecordingBus(), checkpointIntervalMs: 1_000, checkpointMinChars: 100 });
+		const sink = new RunEventSink({
+			store,
+			bus: new RecordingBus(),
+			checkpointIntervalMs: 1_000,
+			checkpointMinChars: 100,
+		});
 		const samePayload = messageEnd({ role: "assistant", payload: { content: "done" } });
 
 		await sink.persistAgentEvent(run, samePayload);

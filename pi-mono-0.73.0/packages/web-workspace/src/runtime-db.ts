@@ -610,21 +610,15 @@ export class RuntimeDbStore implements RuntimeStore {
 			if (run.sessionId !== input.sessionId) throw new Error("Run event session does not match run session");
 			const seq =
 				input.seq ??
-				(db
-					.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_events WHERE client_id = ? AND run_id = ?")
-					.get(input.clientId, input.runId) as SeqRow).seq;
+				(
+					db
+						.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_events WHERE client_id = ? AND run_id = ?")
+						.get(input.clientId, input.runId) as SeqRow
+				).seq;
 			db.prepare(
 				`INSERT INTO run_events (run_id, session_id, client_id, seq, event_type, payload_json, created_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				input.runId,
-				run.sessionId,
-				input.clientId,
-				seq,
-				input.type,
-				JSON.stringify(input.payload),
-				createdAt,
-			);
+			).run(input.runId, run.sessionId, input.clientId, seq, input.type, JSON.stringify(input.payload), createdAt);
 			db.prepare("UPDATE runs SET updated_at = ? WHERE client_id = ? AND run_id = ?").run(
 				createdAt,
 				input.clientId,

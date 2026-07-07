@@ -161,10 +161,7 @@ export class WorkspaceDiagnosticExportService {
 			const runId = safeFilenamePart(run.runId);
 			add(
 				jsonEntry(`runtime/run-events/${runId}.summary.json`, "runtime-run-events-summary", async () =>
-					summarizeRunEvents(
-						run.runId,
-						await this.runtimeDb.iterateRunEvents(context.clientId, run.runId, 0),
-					),
+					summarizeRunEvents(run.runId, await this.runtimeDb.iterateRunEvents(context.clientId, run.runId, 0)),
 				),
 			);
 			add(
@@ -335,7 +332,10 @@ async function buildDiagnosticOverview(input: {
 	};
 }
 
-async function collectMessages(runtimeDb: RuntimeStore, context: DiagnosticExportContext): Promise<RuntimeMessageRecord[]> {
+async function collectMessages(
+	runtimeDb: RuntimeStore,
+	context: DiagnosticExportContext,
+): Promise<RuntimeMessageRecord[]> {
 	if (!context.session) return [];
 	return await arrayFromMaybeAsync(await runtimeDb.iterateMessages(context.clientId, context.sessionId));
 }
@@ -806,7 +806,10 @@ function ndjsonEntry<T>(
 	};
 }
 
-async function summarizeRunEvents(runId: string, events: MaybeAsyncIterable<RuntimeRunEventRecord>): Promise<JsonObject> {
+async function summarizeRunEvents(
+	runId: string,
+	events: MaybeAsyncIterable<RuntimeRunEventRecord>,
+): Promise<JsonObject> {
 	let totalEvents = 0;
 	let payloadBytes = 0;
 	let largestPayloadBytes = 0;

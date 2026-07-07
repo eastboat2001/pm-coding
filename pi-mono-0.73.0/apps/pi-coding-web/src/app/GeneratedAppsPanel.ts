@@ -21,8 +21,9 @@ export class GeneratedAppsPanel extends LitElement {
 		project: GeneratedAppRecord,
 		title: string,
 	) => Promise<unknown> | unknown = (project, title) => renameGeneratedApp(project.projectId, title);
-	@property({ attribute: false }) loadProjects: (options?: { force?: boolean }) => Promise<GeneratedAppRecord[]> = (options) =>
-		loadGeneratedApps(undefined, undefined, options);
+	@property({ attribute: false }) loadProjects: (options?: { force?: boolean }) => Promise<GeneratedAppRecord[]> = (
+		options,
+	) => loadGeneratedApps(undefined, undefined, options);
 	@property({ type: String }) selectedSessionStatus: "running" | "idle" = "idle";
 
 	@state() private projects: GeneratedAppRecord[] = [];

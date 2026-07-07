@@ -1,4 +1,11 @@
 import type {
+	AgentV2DiagnosticEvent,
+} from "./agent-v2-diagnostics.js";
+import type {
+	AgentV2RunSnapshot,
+	AgentV2TaskNode,
+} from "./agent-v2-types.js";
+import type {
 	AppendAppPreviewGoalEventInput,
 	AppendMessageInput,
 	AppendRunEventInput,
@@ -18,6 +25,13 @@ import type {
 	UpdateAppPreviewGoalInput,
 	UpsertAppPreviewGoalInput,
 } from "./types.js";
+import type {
+	AgentV2ArtifactRecord,
+	CreateAgentV2RunInput as CreateAgentV2RunInputFromStore,
+	UpdateAgentV2RunInput as UpdateAgentV2RunInputFromStore,
+	UpsertAgentV2ArtifactInput as UpsertAgentV2ArtifactInputFromStore,
+	UpsertAgentV2TaskInput as UpsertAgentV2TaskInputFromStore,
+} from "./agent-v2-store.js";
 
 export interface ActiveRunRestore extends JsonObject {
 	run: RuntimeRunRecord;
@@ -47,6 +61,7 @@ export type MaybeAsyncIterable<T> = Iterable<T> | AsyncIterable<T>;
 
 export interface RuntimeStore {
 	ensureSchema(): MaybePromise<void>;
+	ensureAgentV2Schema(): MaybePromise<void>;
 	close(): MaybePromise<void>;
 	upsertClient(clientId: string): MaybePromise<void>;
 	createSession(input: CreateSessionInput): MaybePromise<RuntimeSessionRecord>;
@@ -96,5 +111,14 @@ export interface RuntimeStore {
 		sessionId: string,
 		afterEventId: number,
 	): MaybePromise<AppPreviewGoalEventRecord[]>;
+	createAgentV2Run(input: CreateAgentV2RunInputFromStore): MaybePromise<AgentV2RunSnapshot>;
+	getAgentV2Run(clientId: string, runId: string): MaybePromise<AgentV2RunSnapshot | undefined>;
+	updateAgentV2Run(input: UpdateAgentV2RunInputFromStore): MaybePromise<AgentV2RunSnapshot>;
+	upsertAgentV2Task(input: UpsertAgentV2TaskInputFromStore): MaybePromise<AgentV2TaskNode>;
+	listAgentV2Tasks(clientId: string, runId: string): MaybePromise<AgentV2TaskNode[]>;
+	upsertAgentV2Artifact(input: UpsertAgentV2ArtifactInputFromStore): MaybePromise<AgentV2ArtifactRecord>;
+	listAgentV2Artifacts(clientId: string, runId: string): MaybePromise<AgentV2ArtifactRecord[]>;
+	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): MaybePromise<AgentV2DiagnosticEvent>;
+	listAgentV2Diagnostics(clientId: string, runId: string): MaybePromise<AgentV2DiagnosticEvent[]>;
 	deleteSession(clientId: string, sessionId: string): MaybePromise<boolean>;
 }

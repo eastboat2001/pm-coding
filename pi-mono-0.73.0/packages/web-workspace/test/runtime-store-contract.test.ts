@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { RuntimeDbStore } from "../src/runtime-db.js";
+import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
+import type { AgentV2ArtifactRecord } from "../src/agent-v2-store.js";
+import { RuntimeDbStore } from "../src/runtime-db.ts";
 import type { RuntimeStore } from "../src/runtime-store.js";
 import type {
 	AppPreviewGoalEventRecord,
 	AppPreviewGoalRecord,
+	AgentV2RunSnapshot,
+	AgentV2TaskNode,
 	RuntimeMessageRecord,
 	RuntimeRunEventRecord,
 	RuntimeRunRecord,
@@ -21,6 +25,7 @@ describe("runtime store contract", () => {
 	it("lets async stores satisfy RuntimeStore", () => {
 		const store: RuntimeStore = {
 			async ensureSchema() {},
+			async ensureAgentV2Schema() {},
 			async close() {},
 			async upsertClient() {},
 			async createSession() {
@@ -98,6 +103,33 @@ describe("runtime store contract", () => {
 				return {} as AppPreviewGoalEventRecord;
 			},
 			async listAppPreviewGoalEvents() {
+				return [];
+			},
+			async createAgentV2Run() {
+				return {} as AgentV2RunSnapshot;
+			},
+			async getAgentV2Run() {
+				return undefined;
+			},
+			async updateAgentV2Run() {
+				return {} as AgentV2RunSnapshot;
+			},
+			async upsertAgentV2Task() {
+				return {} as AgentV2TaskNode;
+			},
+			async listAgentV2Tasks() {
+				return [];
+			},
+			async upsertAgentV2Artifact() {
+				return {} as AgentV2ArtifactRecord;
+			},
+			async listAgentV2Artifacts() {
+				return [];
+			},
+			async appendAgentV2Diagnostic() {
+				return {} as AgentV2DiagnosticEvent;
+			},
+			async listAgentV2Diagnostics() {
 				return [];
 			},
 			async deleteSession() {

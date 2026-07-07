@@ -165,14 +165,19 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	async ensureSchema(): Promise<void> {
-		await this.query(this.queryable, `
+		await this.query(
+			this.queryable,
+			`
 			CREATE TABLE IF NOT EXISTS clients (
 				client_id TEXT PRIMARY KEY,
 				created_at TEXT NOT NULL,
 				updated_at TEXT NOT NULL
 			)
-		`);
-		await this.query(this.queryable, `
+		`,
+		);
+		await this.query(
+			this.queryable,
+			`
 			CREATE TABLE IF NOT EXISTS sessions (
 				session_id TEXT NOT NULL,
 				client_id TEXT NOT NULL,
@@ -186,12 +191,15 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				PRIMARY KEY (client_id, session_id),
 				FOREIGN KEY (client_id) REFERENCES clients(client_id)
 			)
-		`);
+		`,
+		);
 		await this.query(
 			this.queryable,
 			"CREATE INDEX IF NOT EXISTS idx_sessions_client_updated ON sessions(client_id, updated_at DESC)",
 		);
-		await this.query(this.queryable, `
+		await this.query(
+			this.queryable,
+			`
 			CREATE TABLE IF NOT EXISTS messages (
 				id BIGSERIAL PRIMARY KEY,
 				session_id TEXT NOT NULL,
@@ -201,9 +209,15 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				created_at TEXT NOT NULL,
 				FOREIGN KEY (client_id, session_id) REFERENCES sessions(client_id, session_id)
 			)
-		`);
-		await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(client_id, session_id, id)");
-		await this.query(this.queryable, `
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(client_id, session_id, id)",
+		);
+		await this.query(
+			this.queryable,
+			`
 			CREATE TABLE IF NOT EXISTS runs (
 				run_id TEXT NOT NULL,
 				session_id TEXT NOT NULL,
@@ -219,19 +233,28 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				PRIMARY KEY (client_id, run_id),
 				FOREIGN KEY (client_id, session_id) REFERENCES sessions(client_id, session_id)
 			)
-		`);
-		await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(client_id, session_id, updated_at DESC)");
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(client_id, session_id, updated_at DESC)",
+		);
 		await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status, updated_at)");
-		await this.query(this.queryable, `
+		await this.query(
+			this.queryable,
+			`
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_per_session
 			ON runs(client_id, session_id)
 			WHERE status IN ('queued', 'running', 'cancelling')
-		`);
+		`,
+		);
 		await this.query(
 			this.queryable,
 			"CREATE INDEX IF NOT EXISTS idx_runs_worker_running ON runs(worker_id, updated_at) WHERE status = 'running'",
 		);
-		await this.query(this.queryable, `
+		await this.query(
+			this.queryable,
+			`
 			CREATE TABLE IF NOT EXISTS run_events (
 				id BIGSERIAL PRIMARY KEY,
 				run_id TEXT NOT NULL,
@@ -245,9 +268,15 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				FOREIGN KEY (client_id, session_id) REFERENCES sessions(client_id, session_id),
 				FOREIGN KEY (client_id, run_id) REFERENCES runs(client_id, run_id)
 			)
-		`);
-		await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_run_events_run_seq ON run_events(client_id, run_id, seq)");
-		await this.query(this.queryable, `
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_run_events_run_seq ON run_events(client_id, run_id, seq)",
+		);
+		await this.query(
+			this.queryable,
+			`
 			CREATE TABLE IF NOT EXISTS app_preview_goals (
 				goal_id TEXT NOT NULL,
 				client_id TEXT NOT NULL,
@@ -266,9 +295,15 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				PRIMARY KEY (client_id, session_id),
 				FOREIGN KEY (client_id, session_id) REFERENCES sessions(client_id, session_id)
 			)
-		`);
-		await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_app_preview_goals_status ON app_preview_goals(status, updated_at)");
-		await this.query(this.queryable, `
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_app_preview_goals_status ON app_preview_goals(status, updated_at)",
+		);
+		await this.query(
+			this.queryable,
+			`
 			CREATE TABLE IF NOT EXISTS app_preview_goal_events (
 				id BIGSERIAL PRIMARY KEY,
 				goal_id TEXT NOT NULL,
@@ -281,7 +316,8 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				created_at TEXT NOT NULL,
 				FOREIGN KEY (client_id, session_id) REFERENCES sessions(client_id, session_id)
 			)
-		`);
+		`,
+		);
 		await this.query(
 			this.queryable,
 			"CREATE INDEX IF NOT EXISTS idx_app_preview_goal_events_goal ON app_preview_goal_events(client_id, session_id, id)",
@@ -548,7 +584,15 @@ export class PostgresRuntimeStore implements RuntimeStore {
 							updated_at
 						) VALUES ($1, $2, $3, $4, $5, $6, $7)
 						RETURNING ${SESSION_COLUMNS}`,
-						[input.sessionId, input.clientId, input.title, input.model, input.thinkingLevel, createdAt, createdAt],
+						[
+							input.sessionId,
+							input.clientId,
+							input.title,
+							input.model,
+							input.thinkingLevel,
+							createdAt,
+							createdAt,
+						],
 					);
 			const baseSession = existingSession
 				? toSessionRecord(existingSession)
@@ -625,7 +669,8 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		return this.withTransaction(async (tx) => {
 			const current = toRunRecord(requiredRecord(await this.selectRun(tx, clientId, runId, true), "run"));
 			const workerId = status === "running" ? (patch.workerId ?? current.workerId) : current.workerId;
-			const startedAt = status === "running" ? (patch.startedAt ?? current.startedAt ?? updatedAt) : current.startedAt;
+			const startedAt =
+				status === "running" ? (patch.startedAt ?? current.startedAt ?? updatedAt) : current.startedAt;
 			const endedAt = TERMINAL_RUN_STATUSES.has(status) ? (patch.endedAt ?? updatedAt) : current.endedAt;
 			const error = TERMINAL_RUN_STATUSES.has(status) ? (patch.error ?? current.error) : current.error;
 			const row = await this.queryOne<RunRow>(
@@ -643,23 +688,23 @@ export class PostgresRuntimeStore implements RuntimeStore {
 
 	async appendRunEvent(input: AppendRunEventInput): Promise<RuntimeRunEventRecord> {
 		const createdAt = input.createdAt ?? now();
-			return this.withTransaction(async (tx) => {
-				const run = requiredRecord(await this.selectRun(tx, input.clientId, input.runId, true), "run");
-				if (run.session_id !== input.sessionId) throw new Error("Run event session does not match run session");
-				const seq =
-					input.seq ??
-					toNumber(
-						(
-							await this.queryOne<SeqRow>(
-								tx,
-								"SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_events WHERE client_id = $1 AND run_id = $2",
-								[input.clientId, input.runId],
-							)
-						)?.seq,
-					);
-				const row = await this.queryOne<RunEventRow>(
-					tx,
-					`INSERT INTO run_events (run_id, session_id, client_id, seq, event_type, payload_json, created_at)
+		return this.withTransaction(async (tx) => {
+			const run = requiredRecord(await this.selectRun(tx, input.clientId, input.runId, true), "run");
+			if (run.session_id !== input.sessionId) throw new Error("Run event session does not match run session");
+			const seq =
+				input.seq ??
+				toNumber(
+					(
+						await this.queryOne<SeqRow>(
+							tx,
+							"SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_events WHERE client_id = $1 AND run_id = $2",
+							[input.clientId, input.runId],
+						)
+					)?.seq,
+				);
+			const row = await this.queryOne<RunEventRow>(
+				tx,
+				`INSERT INTO run_events (run_id, session_id, client_id, seq, event_type, payload_json, created_at)
 				VALUES ($1, $2, $3, $4, $5, $6, $7)
 				RETURNING ${RUN_EVENT_COLUMNS}`,
 				[input.runId, run.session_id, input.clientId, seq, input.type, input.payload, createdAt],
@@ -686,11 +731,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		return rows.map(toRunEventRecord);
 	}
 
-	async *iterateRunEvents(
-		clientId: string,
-		runId: string,
-		afterSeq: number,
-	): AsyncIterable<RuntimeRunEventRecord> {
+	async *iterateRunEvents(clientId: string, runId: string, afterSeq: number): AsyncIterable<RuntimeRunEventRecord> {
 		for (const row of await this.listRunEvents(clientId, runId, afterSeq)) yield row;
 	}
 

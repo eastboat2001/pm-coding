@@ -1,7 +1,8 @@
-const PROJECT_FILE_OMITTED_CONTENT_PATTERN = /^\[project_file content omitted: \d+ chars, \d+ lines from .+\]$/;
+const PROJECT_FILE_OMITTED_CONTENT_PATTERN =
+	/\[project_file (?:content|get result) omitted: \d+ chars, \d+ lines from [^\]]+\]|Project file content omitted from compacted history for [^:]+: \d+ chars, \d+ lines\./;
 
 export function isProjectFileOmittedContent(value: string): boolean {
-	return PROJECT_FILE_OMITTED_CONTENT_PATTERN.test(value.trim());
+	return PROJECT_FILE_OMITTED_CONTENT_PATTERN.test(value);
 }
 
 export function assertWritableProjectFileContent(value: string, filename: string): void {

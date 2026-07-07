@@ -32,4 +32,49 @@ describe("WorkspaceDiagnosticLogService", () => {
 		expect(journal.journal_mode.toLowerCase()).toBe("wal");
 		expect(timeout.timeout).toBeGreaterThanOrEqual(5000);
 	});
+
+	it("deletes diagnostic events for a single client session", () => {
+		diagnostics.writeEvents({
+			events: [
+				{
+					clientId: "client-a",
+					sessionId: "session-1",
+					level: "info",
+					category: "agent",
+					eventType: "agent.turn_end",
+					data: { text: "delete me" },
+				},
+				{
+					clientId: "client-a",
+					sessionId: "session-2",
+					level: "info",
+					category: "agent",
+					eventType: "agent.turn_end",
+					data: { text: "keep same client different session" },
+				},
+				{
+					sessionId: "session-1",
+					level: "info",
+					category: "agent",
+					eventType: "agent.turn_end",
+					data: { text: "delete legacy event without client id" },
+				},
+				{
+					clientId: "client-b",
+					sessionId: "session-1",
+					level: "info",
+					category: "agent",
+					eventType: "agent.turn_end",
+					data: { text: "keep different client" },
+				},
+			],
+		});
+
+		expect(diagnostics.deleteSessionEvents("client-a", "session-1")).toBe(2);
+
+		expect(diagnostics.queryEvents({ clientId: "client-a", sessionId: "session-1" }).events).toEqual([]);
+		expect(diagnostics.queryEvents({ sessionId: "session-1" }).events).toHaveLength(1);
+		expect(diagnostics.queryEvents({ clientId: "client-a", sessionId: "session-2" }).events).toHaveLength(1);
+		expect(diagnostics.queryEvents({ clientId: "client-b", sessionId: "session-1" }).events).toHaveLength(1);
+	});
 });

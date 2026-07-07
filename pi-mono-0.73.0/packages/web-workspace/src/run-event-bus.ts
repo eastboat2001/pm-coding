@@ -23,6 +23,7 @@ export interface RunEventReadRequest extends RunEventIdentity {
 export interface RunEventBus {
 	publish(event: LiveRunEvent): Promise<void>;
 	read(request: RunEventReadRequest): Promise<RuntimeRunEventRecord[]>;
+	deleteSessionEvents?(clientId: string, sessionId: string, runIds: readonly string[]): Promise<number>;
 	close(): Promise<void>;
 }
 
@@ -55,6 +56,16 @@ export class InMemoryRunEventBus implements RunEventBus {
 		return events.filter((event) => event.seq > request.afterSeq);
 	}
 
+	async deleteSessionEvents(clientId: string, sessionId: string, runIds: readonly string[]): Promise<number> {
+		this.assertOpen();
+		let deleted = 0;
+		for (const runId of runIds) {
+			const key = runEventStreamKey({ clientId, sessionId, runId });
+			if (this.eventsByStream.delete(key)) deleted += 1;
+		}
+		return deleted;
+	}
+
 	async close(): Promise<void> {
 		this.closed = true;
 		this.eventsByStream.clear();
@@ -77,6 +88,7 @@ export interface RedisRunEventBusClient {
 	connect(): Promise<unknown>;
 	disconnect(): Promise<unknown> | unknown;
 	duplicate(): RedisRunEventBusClient;
+	del(key: string): Promise<number> | number;
 	expire(key: string, seconds: number): Promise<unknown>;
 	quit(): Promise<unknown> | unknown;
 	xAdd(key: string, id: string, message: Record<string, string>, options?: unknown): Promise<unknown>;
@@ -92,12 +104,15 @@ export class RedisRunEventBus implements RunEventBus {
 	private readonly maxLen: number;
 	private readonly readWaiters: Array<() => void> = [];
 	private readonly redisUrl: string;
+	private readonly ttlRefreshIntervalMs: number;
+	private readonly ttlRefreshedAtByStream = new Map<string, number>();
 	private readonly ttlSeconds: number;
 
 	constructor(options: RedisRunEventBusOptions) {
 		this.redisUrl = options.redisUrl;
 		this.maxLen = options.maxLen ?? DEFAULT_EVENT_STREAM_MAX_LEN;
 		this.ttlSeconds = options.ttlSeconds ?? DEFAULT_EVENT_STREAM_TTL_SECONDS;
+		this.ttlRefreshIntervalMs = Math.max(1_000, Math.floor(this.ttlSeconds * 500));
 		this.createRedisClient =
 			options.createClient ??
 			((clientOptions) => createClient({ url: clientOptions.url }) as RedisRunEventBusClient);
@@ -119,7 +134,7 @@ export class RedisRunEventBus implements RunEventBus {
 				},
 			},
 		);
-		await client.expire(key, this.ttlSeconds);
+		await this.refreshTtlIfDue(client, key);
 	}
 
 	async read(request: RunEventReadRequest): Promise<RuntimeRunEventRecord[]> {
@@ -178,6 +193,17 @@ export class RedisRunEventBus implements RunEventBus {
 		}
 	}
 
+	async deleteSessionEvents(clientId: string, sessionId: string, runIds: readonly string[]): Promise<number> {
+		this.assertOpen();
+		if (runIds.length === 0) return 0;
+		const client = await this.connectedClient();
+		let deleted = 0;
+		for (const runId of runIds) {
+			deleted += await Promise.resolve(client.del(runEventStreamKey({ clientId, sessionId, runId })));
+		}
+		return deleted;
+	}
+
 	async close(): Promise<void> {
 		this.closed = true;
 		await Promise.all(
@@ -188,6 +214,7 @@ export class RedisRunEventBus implements RunEventBus {
 		await this.waitForActiveReads();
 		const clients = [...new Set([this.client, ...this.activeBlockingClients])];
 		this.activeBlockingClients.clear();
+		this.ttlRefreshedAtByStream.clear();
 		this.client = undefined;
 
 		await Promise.all(clients.map((client) => this.closeClient(client)));
@@ -214,6 +241,16 @@ export class RedisRunEventBus implements RunEventBus {
 		}
 
 		return this.client;
+	}
+
+	private async refreshTtlIfDue(client: RedisRunEventBusClient, key: string): Promise<void> {
+		const now = Date.now();
+		const refreshedAt = this.ttlRefreshedAtByStream.get(key);
+		if (refreshedAt !== undefined && now - refreshedAt < this.ttlRefreshIntervalMs) {
+			return;
+		}
+		await client.expire(key, this.ttlSeconds);
+		this.ttlRefreshedAtByStream.set(key, now);
 	}
 
 	private waitForActiveReads(): Promise<void> {

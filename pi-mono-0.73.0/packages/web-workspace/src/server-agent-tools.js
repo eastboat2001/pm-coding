@@ -11,17 +11,23 @@ const contentSchema = Type.String({
 });
 const projectFileSchema = Type.Union([
     Type.Object({
-        command: Type.Literal("create", { description: "Create or overwrite a file." }),
+        command: Type.Literal("create", {
+            description: "Create or overwrite a file.",
+        }),
         filename: filenameSchema,
         content: contentSchema,
     }, { additionalProperties: false }),
     Type.Object({
-        command: Type.Literal("rewrite", { description: "Replace a file with full new content." }),
+        command: Type.Literal("rewrite", {
+            description: "Replace a file with full new content.",
+        }),
         filename: filenameSchema,
         content: contentSchema,
     }, { additionalProperties: false }),
     Type.Object({
-        command: Type.Literal("update", { description: "Replace exact text inside an existing file." }),
+        command: Type.Literal("update", {
+            description: "Replace exact text inside an existing file.",
+        }),
         filename: filenameSchema,
         old_str: Type.String({ description: "Exact text to replace." }),
         new_str: Type.String({ description: "Replacement text." }),
@@ -53,14 +59,21 @@ const projectTaskSchema = Type.Object({
 });
 export function createServerDirectSkillTools(config, diagnostics) {
     const skills = new WorkspaceSkillService(config, diagnostics);
-    return [createSkillLoadTool(skills), createSkillResourceTool(skills)];
+    const loadCache = new Map();
+    const resourceCache = new Map();
+    return [createSkillLoadTool(skills, loadCache), createSkillResourceTool(skills, resourceCache)];
 }
-export function createServerDirectProjectTools(config, context, diagnostics) {
+export function createServerDirectProjectTools(config, context, diagnostics, options = {}) {
     const files = new WorkspaceFileService(config);
     const tasks = new WorkspaceTaskService(config, undefined, undefined, diagnostics);
-    return [createProjectFileTool(files, context), createProjectTaskTool(tasks, context, config)];
+    const readCache = new Map();
+    const specExecution = createSpecExecutionState(options.specExecution);
+    return [
+        createProjectFileTool(files, context, readCache, specExecution),
+        createProjectTaskTool(tasks, context, config, () => readCache.clear()),
+    ];
 }
-function createProjectFileTool(files, context) {
+function createProjectFileTool(files, context, readCache, specExecution) {
     return {
         label: "Project File",
         name: "project_file",
@@ -68,6 +81,27 @@ function createProjectFileTool(files, context) {
         parameters: projectFileSchema,
         prepareArguments: prepareProjectFileArguments,
         execute: async (_toolCallId, args) => {
+            const cacheKey = projectFileReadCacheKey(args);
+            if (cacheKey) {
+                const cached = readCache.get(cacheKey);
+                if (cached) {
+                    recordSpecExecutionRead(args, cached.details, specExecution);
+                    return cached;
+                }
+                const result = files.handle({
+                    ...getRequiredContext(context),
+                    ...args,
+                });
+                const toolResult = {
+                    content: [{ type: "text", text: formatProjectFileResult(result) }],
+                    details: result,
+                };
+                recordSpecExecutionRead(args, result, specExecution);
+                readCache.set(cacheKey, toolResult);
+                return toolResult;
+            }
+            assertSpecExecutionAllowsProjectFileWrite(args, specExecution);
+            readCache.clear();
             const result = files.handle({ ...getRequiredContext(context), ...args });
             return {
                 content: [{ type: "text", text: formatProjectFileResult(result) }],
@@ -76,7 +110,69 @@ function createProjectFileTool(files, context) {
         },
     };
 }
-function createProjectTaskTool(tasks, context, config) {
+function createSpecExecutionState(policy) {
+    if (!policy?.requiredBeforeImplementation)
+        return undefined;
+    const requiredReads = uniqueNormalizedProjectPaths(policy.requiredReads);
+    if (requiredReads.length === 0)
+        return undefined;
+    const completedReads = new Set();
+    for (const filename of uniqueNormalizedProjectPaths(policy.completedReads ?? [])) {
+        if (requiredReads.includes(filename))
+            completedReads.add(filename);
+    }
+    return { requiredReads, completedReads };
+}
+function recordSpecExecutionRead(args, result, state) {
+    if (!state || args.command !== "get")
+        return;
+    recordCompletedSpecRead(state, args.filename);
+    if (typeof result.filename === "string")
+        recordCompletedSpecRead(state, result.filename);
+}
+function recordCompletedSpecRead(state, filename) {
+    const normalized = normalizeProjectPath(filename);
+    if (!normalized || !state.requiredReads.includes(normalized))
+        return;
+    state.completedReads.add(normalized);
+}
+function assertSpecExecutionAllowsProjectFileWrite(args, state) {
+    if (!state || !isProjectFileWrite(args))
+        return;
+    if (isRequiredSpecReadPath(args.filename, state))
+        return;
+    const missing = state.requiredReads.filter((filename) => !state.completedReads.has(filename));
+    if (missing.length === 0)
+        return;
+    throw new Error(`Spec execution policy blocked project_file ${args.command} ${args.filename}. Read required files first with project_file get: ${missing.join(", ")}.`);
+}
+function isProjectFileWrite(args) {
+    return (args.command === "create" || args.command === "rewrite" || args.command === "update" || args.command === "delete");
+}
+function isRequiredSpecReadPath(filename, state) {
+    const normalized = normalizeProjectPath(filename);
+    return !!normalized && state.requiredReads.includes(normalized);
+}
+function uniqueNormalizedProjectPaths(paths) {
+    const result = [];
+    const seen = new Set();
+    for (const path of paths) {
+        const normalized = normalizeProjectPath(path);
+        if (!normalized || seen.has(normalized))
+            continue;
+        seen.add(normalized);
+        result.push(normalized);
+    }
+    return result;
+}
+function normalizeProjectPath(path) {
+    return path
+        .replace(/\\/g, "/")
+        .replace(/^\.\/+/, "")
+        .replace(/\/+/g, "/")
+        .trim();
+}
+function createProjectTaskTool(tasks, context, config, clearProjectFileReadCache) {
     return {
         label: "Project Task",
         name: "project_task",
@@ -84,13 +180,16 @@ function createProjectTaskTool(tasks, context, config) {
         parameters: projectTaskSchema,
         executionMode: "sequential",
         execute: async (_toolCallId, args, signal) => {
+            clearProjectFileReadCache();
             const requiredContext = getRequiredContext(context);
             const result = await tasks.run({ ...requiredContext, ...args }, args.task === "preview" ? createServerDirectPreviewRequest(config) : undefined, signal);
             return {
                 content: [
                     {
                         type: "text",
-                        text: formatProjectTaskResult(result, { activeSkillNames: requiredContext.activeSkillNames }),
+                        text: formatProjectTaskResult(result, {
+                            activeSkillNames: requiredContext.activeSkillNames,
+                        }),
                     },
                 ],
                 details: result,
@@ -101,11 +200,16 @@ function createProjectTaskTool(tasks, context, config) {
 function createServerDirectPreviewRequest(config) {
     if (config.previewBaseUrl) {
         const url = new URL(config.previewBaseUrl);
-        return { headers: { host: url.host, "x-forwarded-proto": url.protocol.replace(/:$/, "") } };
+        return {
+            headers: {
+                host: url.host,
+                "x-forwarded-proto": url.protocol.replace(/:$/, ""),
+            },
+        };
     }
     return { headers: { host: "localhost:5173", "x-forwarded-proto": "http" } };
 }
-function createSkillLoadTool(skills) {
+function createSkillLoadTool(skills, cache) {
     return {
         label: "Skill Load",
         name: "skill_load",
@@ -113,15 +217,20 @@ function createSkillLoadTool(skills) {
         parameters: skillLoadSchema,
         prepareArguments: prepareSkillLoadArguments,
         execute: async (_toolCallId, args) => {
+            const cached = cache.get(args.name);
+            if (cached)
+                return cached;
             const result = skills.load(args);
-            return {
+            const toolResult = {
                 content: [{ type: "text", text: formatSkillLoadResult(result) }],
                 details: result,
             };
+            cache.set(args.name, toolResult);
+            return toolResult;
         },
     };
 }
-function createSkillResourceTool(skills) {
+function createSkillResourceTool(skills, cache) {
     return {
         label: "Skill Resource",
         name: "skill_resource",
@@ -129,13 +238,26 @@ function createSkillResourceTool(skills) {
         parameters: skillResourceSchema,
         prepareArguments: prepareSkillResourceArguments,
         execute: async (_toolCallId, args) => {
+            const cacheKey = `${args.name}\u0000${args.path}`;
+            const cached = cache.get(cacheKey);
+            if (cached)
+                return cached;
             const result = skills.readResource(args);
-            return {
+            const toolResult = {
                 content: [{ type: "text", text: result.content }],
                 details: result,
             };
+            cache.set(cacheKey, toolResult);
+            return toolResult;
         },
     };
+}
+function projectFileReadCacheKey(args) {
+    if (args.command === "list")
+        return "list";
+    if (args.command === "get")
+        return `get:${args.filename}`;
+    return undefined;
 }
 function getRequiredContext(context) {
     if (!context.sessionId) {
@@ -169,7 +291,7 @@ const commandAliases = {
     list: "list",
     ls: "list",
 };
-const PROJECT_FILE_OMITTED_CONTENT_PATTERN = /^\[project_file content omitted: \d+ chars, \d+ lines from .+\]$/;
+const PROJECT_FILE_OMITTED_CONTENT_PATTERN = /\[project_file (?:content|get result) omitted: \d+ chars, \d+ lines from [^\]]+\]|Project file content omitted from compacted history for [^:]+: \d+ chars, \d+ lines\./;
 function prepareProjectFileArguments(args) {
     const raw = coerceRecord(args);
     const command = normalizeCommand(readString(raw, "command", "operation", "action", "op"));
@@ -201,7 +323,7 @@ function prepareProjectFileArguments(args) {
     throw new Error(`project_file command must be one of create, rewrite, update, get, delete, list. Example: ${projectFileExamples.create}`);
 }
 function assertWritableProjectFileContent(value, filename) {
-    if (!PROJECT_FILE_OMITTED_CONTENT_PATTERN.test(value.trim()))
+    if (!PROJECT_FILE_OMITTED_CONTENT_PATTERN.test(value))
         return;
     throw new Error(`Refusing to write an omitted project_file placeholder to ${filename}. Call project_file get for ${filename} and provide the full current content before writing.`);
 }

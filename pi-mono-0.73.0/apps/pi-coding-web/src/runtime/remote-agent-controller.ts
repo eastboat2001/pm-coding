@@ -7,6 +7,9 @@ type RuntimeRunEventLoader = (
 	runId: string,
 	afterSeq: number,
 ) => RuntimeRunEventRecord[] | Promise<RuntimeRunEventRecord[]>;
+export type RemoteRunEventDrainResult =
+	| { ok: true; afterSeq: number }
+	| { ok: false; afterSeq: number; error: unknown };
 type MutableRemoteState = {
 	errorMessage?: string;
 	pendingToolCalls: ReadonlySet<string>;
@@ -225,6 +228,20 @@ export async function drainRemoteRunEvents(
 	for (const event of [...events].sort((left, right) => left.seq - right.seq)) {
 		if (controller.activeRunId !== runId) return;
 		await controller.applyRunEvent(event);
+	}
+}
+
+export async function tryDrainRemoteRunEvents(
+	runId: string,
+	controller: RemoteAgentController,
+	loadEvents: RuntimeRunEventLoader,
+): Promise<RemoteRunEventDrainResult> {
+	const afterSeq = controller.lastSeq;
+	try {
+		await drainRemoteRunEvents(runId, controller, loadEvents);
+		return { ok: true, afterSeq: controller.lastSeq };
+	} catch (error) {
+		return { ok: false, afterSeq, error };
 	}
 }
 

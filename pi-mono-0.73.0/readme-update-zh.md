@@ -244,6 +244,13 @@ http://localhost:5173
 
 注意：如果启动时看到 Node 的 `SQLite is an experimental feature` warning，不代表 runtime 正在使用 SQLite；只要 `PI_RUNTIME_STORE=postgres`，实际 session/run/message runtime store 会使用 PostgreSQL。诊断日志仍可能使用 SQLite 文件。
 
+
+### 脚本运行
+```bash
+powershell -ExecutionPolicy Bypass -File .\scripts\pi-local-source-dev.ps1 -SkipDocker -SkipWorkerBuild
+```
+
+
 ### Docker 构建
 
 从 `pi-mono-0.73.0` 根目录执行：
@@ -342,6 +349,9 @@ PI_RUN_EVENT_STREAM_TTL_SECONDS=3600
 PI_RUN_EVENT_CHECKPOINT_INTERVAL_MS=400
 PI_RUN_EVENT_CHECKPOINT_MIN_CHARS=256
 PI_CLIENT_ID_REQUIRED=true
+PI_MODEL_STREAM_IDLE_TIMEOUT_MS=120000
+PI_MODEL_MAX_OUTPUT_TOKENS=12000
+PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS=90000
 PI_LOG_ENABLED=true
 PI_LOG_STDOUT=true
 ```
@@ -364,6 +374,7 @@ apps/pi-coding-web/.env
 - `PI_PROJECT_INSTALL_COMMAND`、`PI_PROJECT_BUILD_COMMAND`：生成项目安装和构建命令。
 - `PI_RUNS_ENABLED`、`PI_RUNTIME_STORE`、`PI_POSTGRES_URL`、`PI_REDIS_URL`、`PI_WORKER_*`、`PI_RUN_QUEUE_NAME`、`PI_RUN_EVENT_*`：后台 worker run、PostgreSQL runtime store、Redis 队列和 Redis live event stream 配置。
 - `PI_CLIENT_ID_REQUIRED`：是否强制 PI-owned API 携带 `X-PI-Client-ID`。
+- `PI_MODEL_STREAM_IDLE_TIMEOUT_MS`、`PI_MODEL_MAX_OUTPUT_TOKENS`、`PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS`：模型流空闲超时、每次请求输出 token cap、发送给 provider 的上下文 payload cap。
 - `PI_LOG_*`：诊断日志、深度调试、保留周期和 SQLite 清理策略。
 - `PI_LANGFUSE_*`、`LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`：Langfuse/OTEL 配置和密钥。
 - `PI_OTEL_SERVICE_NAME`、`PI_OTEL_DEPLOYMENT_ENVIRONMENT`：OTEL 标识。
@@ -564,6 +575,7 @@ data/skills/<skill-name>/SKILL.md
 - 默认只保留最近 1 次完整 `project_file` 工具调用内容。
 - 更早的 `project_file.arguments.content` 如果超过默认长度，会替换为 `[project_file content omitted: <chars> chars, <lines> lines from <filename>]`。
 - 这样可以避免多文件生成后，旧的大文件内容长期污染模型上下文。
+- 发送前预算会参考当前模型的 `contextWindow`、`maxTokens` 和 thinking level，并受 `PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS` 上限约束；上下文很大的模型默认仍限制 payload，避免内网 provider 因长上下文和大输出 token cap 产生明显延迟或 429。
 - 代价是模型看不到很早之前写入文件的完整内容；因此系统提示词要求模型在需要修改旧文件时先调用 `project_file get`。
 
 该机制是上下文裁剪，不是智能代码摘要。后续如果要进一步提升小模型稳定性，可以考虑把压缩占位符变得更强约束，或者在编辑已有文件前由工具层强制读取当前文件。

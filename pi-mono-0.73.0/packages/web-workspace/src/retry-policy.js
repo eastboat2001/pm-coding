@@ -1,8 +1,8 @@
-const DEFAULT_MAX_ATTEMPTS = 5;
-const DEFAULT_BASE_DELAY_MS = 1000;
-const DEFAULT_MAX_DELAY_MS = 30000;
+const DEFAULT_MAX_ATTEMPTS = 8;
+const DEFAULT_BASE_DELAY_MS = 2000;
+const DEFAULT_MAX_DELAY_MS = 60000;
 const DEFAULT_JITTER_RATIO = 0.2;
-const MAX_ATTEMPTS_CAP = 5;
+const MAX_ATTEMPTS_CAP = 12;
 const MAX_ERROR_SIGNAL_LENGTH = 2000;
 const TRUNCATED_SIGNAL_SUFFIX = "...[truncated]";
 const NOT_RETRYABLE_PATTERN = /AbortError|request.?aborted.?by.?user|aborted.?by.?(?:user|caller)|(?:user|caller).?aborted|cancelled|canceled|unauthorized|forbidden|401|403|invalid.?request|bad.?request|400|context.?window|context.?length|prompt.?too.?long|request.?too.?large/i;
@@ -15,10 +15,10 @@ export class RetryPolicy {
     random;
     attempts;
     constructor(options = {}) {
-        this.attempts = Math.min(options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS, MAX_ATTEMPTS_CAP);
-        this.baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
-        this.maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
-        this.jitterRatio = options.jitterRatio ?? DEFAULT_JITTER_RATIO;
+        this.attempts = boundedInteger(options.maxAttempts, DEFAULT_MAX_ATTEMPTS, 1, MAX_ATTEMPTS_CAP);
+        this.baseDelayMs = positiveNumber(options.baseDelayMs, DEFAULT_BASE_DELAY_MS);
+        this.maxDelayMs = Math.max(this.baseDelayMs, positiveNumber(options.maxDelayMs, DEFAULT_MAX_DELAY_MS));
+        this.jitterRatio = boundedNumber(options.jitterRatio, DEFAULT_JITTER_RATIO, 0, 1);
         this.random = options.random ?? Math.random;
     }
     get maxAttempts() {
@@ -73,6 +73,17 @@ function errorMessage(error, depth = 0) {
 }
 function isRecord(value) {
     return typeof value === "object" && value !== null;
+}
+function boundedInteger(value, defaultValue, min, max) {
+    const parsed = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : defaultValue;
+    return Math.min(Math.max(parsed, min), max);
+}
+function positiveNumber(value, defaultValue) {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : defaultValue;
+}
+function boundedNumber(value, defaultValue, min, max) {
+    const parsed = typeof value === "number" && Number.isFinite(value) ? value : defaultValue;
+    return Math.min(Math.max(parsed, min), max);
 }
 function isExplicitlyNonRetryable(error) {
     if (!isRecord(error))

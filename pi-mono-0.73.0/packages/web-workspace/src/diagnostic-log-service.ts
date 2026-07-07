@@ -96,6 +96,8 @@ export class WorkspaceDiagnosticLogService {
 				modelOutputSnapshotLoggingEnabled: this.config.modelOutputSnapshotLoggingEnabled,
 				modelOutputSnapshotMaxChars: this.config.modelOutputSnapshotMaxChars,
 				modelStreamIdleTimeoutMs: this.config.modelStreamIdleTimeoutMs,
+				modelMaxOutputTokens: this.config.modelMaxOutputTokens,
+				contextProviderPayloadBudgetChars: this.config.contextProviderPayloadBudgetChars,
 				logRetentionDays: this.config.logRetentionDays,
 				logMaxEvents: this.config.logMaxEvents,
 				...this.langfuse.status(),
@@ -113,6 +115,8 @@ export class WorkspaceDiagnosticLogService {
 				modelOutputSnapshotLoggingEnabled: this.config.modelOutputSnapshotLoggingEnabled,
 				modelOutputSnapshotMaxChars: this.config.modelOutputSnapshotMaxChars,
 				modelStreamIdleTimeoutMs: this.config.modelStreamIdleTimeoutMs,
+				modelMaxOutputTokens: this.config.modelMaxOutputTokens,
+				contextProviderPayloadBudgetChars: this.config.contextProviderPayloadBudgetChars,
 				logRetentionDays: this.config.logRetentionDays,
 				logMaxEvents: this.config.logMaxEvents,
 				...this.langfuse.status(),
@@ -130,6 +134,8 @@ export class WorkspaceDiagnosticLogService {
 			modelOutputSnapshotLoggingEnabled: this.config.modelOutputSnapshotLoggingEnabled,
 			modelOutputSnapshotMaxChars: this.config.modelOutputSnapshotMaxChars,
 			modelStreamIdleTimeoutMs: this.config.modelStreamIdleTimeoutMs,
+			modelMaxOutputTokens: this.config.modelMaxOutputTokens,
+			contextProviderPayloadBudgetChars: this.config.contextProviderPayloadBudgetChars,
 			logRetentionDays: this.config.logRetentionDays,
 			logMaxEvents: this.config.logMaxEvents,
 			...(this.getMetadata("last_cleanup_at") ? { lastCleanupAt: this.getMetadata("last_cleanup_at") } : {}),
@@ -204,6 +210,17 @@ export class WorkspaceDiagnosticLogService {
 	close(): void {
 		this.database?.close();
 		this.database = undefined;
+	}
+
+	deleteSessionEvents(clientId: string, sessionId: string): number {
+		if (!this.config.loggingEnabled || !existsSync(this.config.logsDbFile)) return 0;
+		const deleted = runChanges(
+			this.open()
+				.prepare("DELETE FROM diagnostic_events WHERE session_id = ? AND (client_id = ? OR client_id IS NULL)")
+				.run(sessionId, clientId),
+		);
+		if (deleted > 0) this.vacuumIfNeeded(Date.now());
+		return deleted;
 	}
 
 	queryEvents(query: DiagnosticLogQuery = {}): DiagnosticLogQueryResult {

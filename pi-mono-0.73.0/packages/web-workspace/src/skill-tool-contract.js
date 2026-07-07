@@ -9,7 +9,7 @@ export const skillResourceSchema = Type.Object({
         description: "Configured global skill name that owns the resource.",
     }),
     path: Type.String({
-        description: "Relative path inside the skill directory, such as references/rules.md.",
+        description: "Must exactly match one of the resource paths returned by skill_load for this skill. Do not invent, infer, or guess unlisted paths.",
     }),
 }, { additionalProperties: false });
 export function prepareSkillLoadArguments(args) {
@@ -40,7 +40,7 @@ export function formatSkillLoadResult(result) {
         result.interface?.shortDescription ? `Short description: ${result.interface.shortDescription}` : "",
         `Location: ${result.location}`,
         result.interface?.defaultPrompt ? `Default prompt: ${result.interface.defaultPrompt}` : "",
-        "References are relative to this skill. Use skill_resource to read listed relative resources when needed.",
+        "Use skill_resource only for exact paths listed under Available skill resources below. Do not infer or invent unlisted references paths.",
         "",
         `<skill name="${escapeXml(result.name)}" location="${escapeXml(result.location)}">`,
         result.content,

@@ -333,7 +333,15 @@ export class PostgresRuntimeStore {
 							created_at,
 							updated_at
 						) VALUES ($1, $2, $3, $4, $5, $6, $7)
-						RETURNING ${SESSION_COLUMNS}`, [input.sessionId, input.clientId, input.title, input.model, input.thinkingLevel, createdAt, createdAt]);
+						RETURNING ${SESSION_COLUMNS}`, [
+                    input.sessionId,
+                    input.clientId,
+                    input.title,
+                    input.model,
+                    input.thinkingLevel,
+                    createdAt,
+                    createdAt,
+                ]);
             const baseSession = existingSession
                 ? toSessionRecord(existingSession)
                 : insertedSession

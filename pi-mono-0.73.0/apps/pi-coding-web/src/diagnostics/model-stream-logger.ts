@@ -7,7 +7,10 @@ import {
 	createAssistantMessageEventStream,
 	type Model,
 	type SimpleStreamOptions,
+	type ThinkingBudgets,
+	type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import { summarizeContextBudget } from "./context-budget.js";
 import type { DiagnosticClient, DiagnosticData, DiagnosticEvent } from "./diagnostic-client.js";
 import { summarizeProviderPayload } from "./diagnostic-client.js";
 
@@ -31,6 +34,7 @@ export type DiagnosticStreamLoggingConfig = {
 	modelOutputSnapshotLoggingEnabled?: boolean;
 	modelOutputSnapshotMaxChars?: number;
 	streamIdleTimeoutMs?: number;
+	maxOutputTokens?: number;
 };
 
 type NormalizedDiagnosticStreamLoggingConfig = {
@@ -41,12 +45,20 @@ type NormalizedDiagnosticStreamLoggingConfig = {
 	modelOutputSnapshotLoggingEnabled: boolean;
 	modelOutputSnapshotMaxChars: number;
 	streamIdleTimeoutMs: number;
+	maxOutputTokens: number;
 };
 
 const DEFAULT_RAW_PROVIDER_LOG_MAX_CHARS = 12000;
 const DEFAULT_PROMPT_SNAPSHOT_MAX_CHARS = 20000;
 const DEFAULT_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS = 20000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000;
+const MIN_VISIBLE_OUTPUT_TOKENS = 4_096;
+const DEFAULT_THINKING_BUDGETS: Required<ThinkingBudgets> = {
+	minimal: 1_024,
+	low: 2_048,
+	medium: 8_192,
+	high: 16_384,
+};
 const SNAPSHOT_CHUNK_SIZE = 1800;
 const MAX_SNAPSHOT_MESSAGES = 80;
 const MAX_SNAPSHOT_TOOLS = 80;
@@ -74,6 +86,32 @@ function writeDiagnosticSafely(client: DiagnosticClient, event: DiagnosticEvent)
 	} catch {
 		// Diagnostics must not interrupt model execution.
 	}
+}
+
+function cappedMaxTokensOptions(
+	model: Model<Api>,
+	options: SimpleStreamOptions | undefined,
+	maxOutputTokens: number,
+): Pick<SimpleStreamOptions, "maxTokens"> {
+	if (maxOutputTokens <= 0) return {};
+	const requestedMaxTokens = Math.max(maxOutputTokens, reasoningAwareMaxTokens(options));
+	const candidates = [
+		requestedMaxTokens,
+		positiveInteger(options?.maxTokens, 0),
+		positiveInteger(model.maxTokens, 0),
+	].filter((value) => value > 0);
+	if (candidates.length === 0) return {};
+	return { maxTokens: Math.min(...candidates) };
+}
+
+function reasoningAwareMaxTokens(options: SimpleStreamOptions | undefined): number {
+	if (!options?.reasoning) return 0;
+	return resolveThinkingBudget(options.reasoning, options.thinkingBudgets) + MIN_VISIBLE_OUTPUT_TOKENS;
+}
+
+function resolveThinkingBudget(level: ThinkingLevel, budgets: ThinkingBudgets | undefined): number {
+	const budgetLevel = level === "xhigh" ? "high" : level;
+	return positiveInteger(budgets?.[budgetLevel], DEFAULT_THINKING_BUDGETS[budgetLevel]);
 }
 
 export function createLoggedStreamFn(
@@ -106,6 +144,19 @@ export function createLoggedStreamFn(
 			model: model.id,
 			data: baseData,
 		});
+		writeDiagnosticSafely(client, {
+			level: "debug",
+			category: "model",
+			eventType: "model.context_budget",
+			sessionId: traceContext.sessionId,
+			traceId,
+			spanId,
+			parentSpanId: traceContext.parentSpanId,
+			requestId,
+			provider: model.provider,
+			model: model.id,
+			data: summarizeContextBudget(context),
+		});
 		if (loggingConfig.promptSnapshotLoggingEnabled) {
 			const snapshot = snapshotContext(context, loggingConfig.promptSnapshotMaxChars);
 			inputSnapshot = { source: "context", ...snapshot };
@@ -115,6 +166,7 @@ export function createLoggedStreamFn(
 		try {
 			const stream = await streamFn(model, context, {
 				...options,
+				...cappedMaxTokensOptions(model, options, loggingConfig.maxOutputTokens),
 				signal: combineAbortSignals(options?.signal, streamAbortController.signal),
 				onPayload: async (payload, requestModel) => {
 					const replacement = await options?.onPayload?.(payload, requestModel);
@@ -245,8 +297,19 @@ type StreamSummary = {
 	thinkingDeltaCount: number;
 	thinkingChars: number;
 	toolCallCount: number;
+	toolCallDeltaCount: number;
+	toolCallArgumentChars: number;
+	firstEventLatencyMs?: number;
+	maxEventGapMs: number;
+	maxEventGapAfterEventType?: AssistantMessageEvent["type"];
+	maxEventGapBeforeEventType?: AssistantMessageEvent["type"];
 	stopReason?: string;
 	errorMessage?: string;
+};
+
+type StreamTimingState = {
+	lastEventAt?: number;
+	lastEventType?: AssistantMessageEvent["type"];
 };
 
 type OutputSnapshotState = {
@@ -270,8 +333,11 @@ function observeStream(source: AssistantMessageEventStream, options: ObserveOpti
 		thinkingDeltaCount: 0,
 		thinkingChars: 0,
 		toolCallCount: 0,
+		toolCallDeltaCount: 0,
+		toolCallArgumentChars: 0,
+		maxEventGapMs: 0,
 	};
-	void pumpStream(source, output, options, summary, outputSnapshot);
+	void pumpStream(source, output, options, summary, {}, outputSnapshot);
 	return output;
 }
 
@@ -280,6 +346,7 @@ async function pumpStream(
 	output: AssistantMessageEventStream,
 	options: ObserveOptions,
 	summary: StreamSummary,
+	timing: StreamTimingState,
 	outputSnapshot: OutputSnapshotState | undefined,
 ): Promise<void> {
 	const iterator = source[Symbol.asyncIterator]();
@@ -288,7 +355,7 @@ async function pumpStream(
 			const next = await nextStreamEvent(iterator, options);
 			if (next.done) return;
 			const event = next.value;
-			updateSummary(summary, event);
+			updateSummary(summary, event, Date.now(), options.startedAt, timing);
 			updateOutputSnapshot(outputSnapshot, event);
 			writeRawStreamEvent(options, event);
 			output.push(event);
@@ -561,7 +628,25 @@ function withClippedText(
 	};
 }
 
-function updateSummary(summary: StreamSummary, event: AssistantMessageEvent): void {
+function updateSummary(
+	summary: StreamSummary,
+	event: AssistantMessageEvent,
+	receivedAt: number,
+	startedAt: number,
+	timing: StreamTimingState,
+): void {
+	if (timing.lastEventAt === undefined) {
+		summary.firstEventLatencyMs = Math.max(0, receivedAt - startedAt);
+	} else {
+		const gapMs = Math.max(0, receivedAt - timing.lastEventAt);
+		if (gapMs > summary.maxEventGapMs) {
+			summary.maxEventGapMs = gapMs;
+			summary.maxEventGapAfterEventType = timing.lastEventType;
+			summary.maxEventGapBeforeEventType = event.type;
+		}
+	}
+	timing.lastEventAt = receivedAt;
+	timing.lastEventType = event.type;
 	summary.eventCount += 1;
 	switch (event.type) {
 		case "text_delta":
@@ -574,6 +659,10 @@ function updateSummary(summary: StreamSummary, event: AssistantMessageEvent): vo
 			break;
 		case "toolcall_end":
 			summary.toolCallCount += 1;
+			break;
+		case "toolcall_delta":
+			summary.toolCallDeltaCount += 1;
+			summary.toolCallArgumentChars += event.delta.length;
 			break;
 		case "done":
 			summary.stopReason = event.reason;
@@ -800,6 +889,7 @@ function normalizeLoggingConfig(config: DiagnosticStreamLoggingConfig): Normaliz
 			DEFAULT_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS,
 		),
 		streamIdleTimeoutMs: positiveInteger(config.streamIdleTimeoutMs, DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+		maxOutputTokens: Math.max(0, positiveInteger(config.maxOutputTokens, 0)),
 	};
 }
 

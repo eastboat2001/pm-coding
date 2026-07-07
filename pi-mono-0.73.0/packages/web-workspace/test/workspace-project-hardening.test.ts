@@ -111,6 +111,97 @@ describe("project execution and preview hardening", () => {
 		expect(logText.length).toBeLessThan(80_000);
 		expect(logText).toContain("[truncated");
 	});
+
+	it("fails validate when static app JavaScript does not match the generated HTML contract", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
+		mkdirSync(join(projectDir, "js"), { recursive: true });
+		writeFileSync(
+			join(projectDir, "index.html"),
+			`<!doctype html>
+<html>
+  <body>
+    <span id="lastUpdated">Last Updated: --</span>
+    <div class="chart-loading" id="chart1Loading">Loading chart data...</div>
+    <span class="kpi-value" id="kpiYieldValue">--</span>
+    <script src="./js/app.js"></script>
+  </body>
+</html>`,
+			"utf8",
+		);
+		writeFileSync(
+			join(projectDir, "js", "app.js"),
+			`
+const $ = (selector) => document.querySelector(selector);
+$('#last-updated').textContent = 'now';
+$('#loading-overlay').classList.remove('active');
+$('#kpi-yield').textContent = '91.2%';
+`,
+			"utf8",
+		);
+		const service = new WorkspaceTaskService(config);
+
+		const result = await service.run({
+			task: "validate",
+			clientId: "client-a",
+			sessionId: "s1",
+			title: "Broken Preview",
+		});
+
+		expect(result.status).toBe("failed");
+		expect(result.valid).toBe(false);
+		expect(result.errors?.join("\n")).toContain("#last-updated");
+		expect(result.errors?.join("\n")).toContain("chart1Loading");
+		expect(result.errors?.join("\n")).toContain("kpiYieldValue");
+	});
+
+	it("fails validate when static app JavaScript matches ids but fails before first screen data renders", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
+		mkdirSync(join(projectDir, "js"), { recursive: true });
+		writeFileSync(
+			join(projectDir, "index.html"),
+			`<!doctype html>
+<html>
+  <body>
+    <div class="chart-loading" id="chartLoading">Loading chart data...</div>
+    <span class="kpi-value" id="kpiYieldValue">--</span>
+    <script src="./js/app.js"></script>
+  </body>
+</html>`,
+			"utf8",
+		);
+		writeFileSync(
+			join(projectDir, "js", "app.js"),
+			`
+document.addEventListener('DOMContentLoaded', () => {
+  const loading = document.getElementById('chartLoading');
+  const kpi = document.getElementById('kpiYieldValue');
+  const values = window.missingRows.map((row) => row.value);
+  loading.classList.add('hidden');
+  kpi.textContent = String(values.length);
+});
+`,
+			"utf8",
+		);
+		const service = new WorkspaceTaskService(config);
+
+		const result = await service.run({
+			task: "validate",
+			clientId: "client-a",
+			sessionId: "s1",
+			title: "Runtime Broken Preview",
+		});
+
+		expect(result.status).toBe("failed");
+		expect(result.valid).toBe(false);
+		expect(result.errors?.join("\n")).toContain("Static preview smoke gate");
+		expect(result.errors?.join("\n")).toContain("missingRows");
+		expect(result.errors?.join("\n")).toContain("chartLoading");
+		expect(result.errors?.join("\n")).toContain("kpiYieldValue");
+	});
 });
 
 class MockResponse extends Writable {
@@ -142,6 +233,12 @@ function testConfig(root: string): StorageConfig {
 		runsEnabled: false,
 		workerId: "test-worker",
 		workerConcurrency: 2,
+		runMaxAgentTurns: 80,
+		runMaxAgentToolExecutions: 240,
+		runRetryMaxAttempts: 8,
+		runRetryBaseDelayMs: 2000,
+		runRetryMaxDelayMs: 60000,
+		runRetryJitterRatio: 0.2,
 		runQueueName: "pi:runs",
 		runEventRetentionDays: 30,
 		runEventStreamMaxLen: 5000,
@@ -169,6 +266,8 @@ function testConfig(root: string): StorageConfig {
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 20000,
 		modelStreamIdleTimeoutMs: 60000,
+		modelMaxOutputTokens: 12000,
+		contextProviderPayloadBudgetChars: 90000,
 		logRetentionDays: 30,
 		logMaxEvents: 50000,
 		logCleanupIntervalMs: 3600000,

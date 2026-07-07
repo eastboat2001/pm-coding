@@ -245,6 +245,12 @@ function testConfig(root: string): StorageConfig {
 		runsEnabled: false,
 		workerId: "test-worker",
 		workerConcurrency: 2,
+		runMaxAgentTurns: 80,
+		runMaxAgentToolExecutions: 240,
+		runRetryMaxAttempts: 8,
+		runRetryBaseDelayMs: 2000,
+		runRetryMaxDelayMs: 60000,
+		runRetryJitterRatio: 0.2,
 		runQueueName: "pi:runs",
 		runEventRetentionDays: 30,
 		runEventStreamMaxLen: 5000,
@@ -272,6 +278,8 @@ function testConfig(root: string): StorageConfig {
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 20000,
 		modelStreamIdleTimeoutMs: 60000,
+		modelMaxOutputTokens: 12000,
+		contextProviderPayloadBudgetChars: 90000,
 		logRetentionDays: 30,
 		logMaxEvents: 50000,
 		logCleanupIntervalMs: 3600000,
@@ -317,7 +325,9 @@ function createProjectsApiHarness(config: StorageConfig, files: WorkspaceFileSer
 		runEventBus: { close: async () => undefined } as TestServices["runEventBus"],
 	} satisfies TestServices;
 	const plugin = createConfiguredStoragePluginForTest(services);
-	const configureServer = plugin.configureServer as (server: { middlewares: { use(handler: Middleware): void } }) => void;
+	const configureServer = plugin.configureServer as (server: {
+		middlewares: { use(handler: Middleware): void };
+	}) => void;
 	configureServer({
 		middlewares: {
 			use(handler) {
@@ -337,11 +347,7 @@ async function dispatchJson(
 	const request = new FakeRequest(url, options);
 	const response = new FakeResponse();
 	const done = Promise.resolve(
-		middleware(
-			request as unknown as Connect.IncomingMessage,
-			response as unknown as ServerResponse,
-			() => undefined,
-		),
+		middleware(request as unknown as Connect.IncomingMessage, response as unknown as ServerResponse, () => undefined),
 	);
 	await done;
 	return response;
@@ -353,7 +359,10 @@ class FakeRequest extends EventEmitter {
 	private readonly rawBody: string;
 	private flushed = false;
 
-	constructor(readonly url: string, options: { headers?: Record<string, string>; body?: unknown }) {
+	constructor(
+		readonly url: string,
+		options: { headers?: Record<string, string>; body?: unknown },
+	) {
 		super();
 		this.headers = options.headers || {};
 		this.rawBody = JSON.stringify(options.body || {});
@@ -363,7 +372,11 @@ class FakeRequest extends EventEmitter {
 
 	override on(eventName: string | symbol, listener: (...args: any[]) => void): this {
 		super.on(eventName, listener);
-		if ((eventName === "data" || eventName === "end") && this.listenerCount("data") > 0 && this.listenerCount("end") > 0) {
+		if (
+			(eventName === "data" || eventName === "end") &&
+			this.listenerCount("data") > 0 &&
+			this.listenerCount("end") > 0
+		) {
 			queueMicrotask(() => this.flush());
 		}
 		return this;

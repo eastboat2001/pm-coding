@@ -276,6 +276,12 @@ export interface StorageConfig {
 	runsEnabled: boolean;
 	workerId: string;
 	workerConcurrency: number;
+	runMaxAgentTurns: number;
+	runMaxAgentToolExecutions: number;
+	runRetryMaxAttempts: number;
+	runRetryBaseDelayMs: number;
+	runRetryMaxDelayMs: number;
+	runRetryJitterRatio: number;
 	runQueueName: string;
 	runEventRetentionDays: number;
 	runEventStreamMaxLen: number;
@@ -303,6 +309,8 @@ export interface StorageConfig {
 	modelOutputSnapshotLoggingEnabled: boolean;
 	modelOutputSnapshotMaxChars: number;
 	modelStreamIdleTimeoutMs: number;
+	modelMaxOutputTokens: number;
+	contextProviderPayloadBudgetChars: number;
 	logRetentionDays: number;
 	logMaxEvents: number;
 	logCleanupIntervalMs: number;
@@ -419,6 +427,8 @@ export interface DiagnosticLogStatus extends JsonObject {
 	modelOutputSnapshotLoggingEnabled?: boolean;
 	modelOutputSnapshotMaxChars?: number;
 	modelStreamIdleTimeoutMs?: number;
+	modelMaxOutputTokens?: number;
+	contextProviderPayloadBudgetChars?: number;
 	logRetentionDays?: number;
 	logMaxEvents?: number;
 	lastCleanupAt?: string;

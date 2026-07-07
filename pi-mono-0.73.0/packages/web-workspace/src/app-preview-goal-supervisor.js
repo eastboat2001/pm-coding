@@ -54,7 +54,27 @@ export class AppPreviewGoalSupervisor {
             }
             return;
         }
-        if (isTransientProviderFailureWithoutDurableOutput(run, await this.db.listRunEvents(run.clientId, run.runId, 0))) {
+        const runGuardFailure = classifyRunGuardFailure(run);
+        if (runGuardFailure) {
+            const updated = await this.goals.mark({
+                clientId: run.clientId,
+                sessionId: run.sessionId,
+                status: "blocked",
+                lastRunId: run.runId,
+                lastFailureReason: runGuardFailure.reasonCode,
+                completedAt: new Date().toISOString(),
+            });
+            if (updated) {
+                await this.goals.event(updated, "blocked", runGuardFailure.reasonCode, {
+                    terminalStatus: run.status,
+                    errorMessage: run.error ?? "run guard limit exceeded",
+                    guardLimit: runGuardFailure.guardLimit,
+                }, run.runId);
+            }
+            return;
+        }
+        const runEvents = await this.db.listRunEvents(run.clientId, run.runId, 0);
+        if (isTransientProviderFailureWithoutDurableOutput(run, runEvents)) {
             const updated = await this.goals.mark({
                 clientId: run.clientId,
                 sessionId: run.sessionId,
@@ -66,6 +86,29 @@ export class AppPreviewGoalSupervisor {
             if (updated) {
                 await this.goals.event(updated, "retry_exhausted", "transient_provider_error", { terminalStatus: run.status, errorMessage: run.error ?? "unknown provider error" }, run.runId);
             }
+            return;
+        }
+        if (isNonReplayableTransientProviderFailureWithDurableOutput(run, runEvents)) {
+            if (goal.continuationRunsUsed >= goal.maxContinuationRuns) {
+                const updated = await this.goals.mark({
+                    clientId: run.clientId,
+                    sessionId: run.sessionId,
+                    status: "budget_limited",
+                    lastRunId: run.runId,
+                    lastFailureReason: PROVIDER_TRANSIENT_FAILURE_REASON,
+                    completedAt: new Date().toISOString(),
+                });
+                if (updated) {
+                    await this.goals.event(updated, "budget_limited", "transient_provider_error", { terminalStatus: run.status, errorMessage: run.error }, run.runId);
+                }
+                return;
+            }
+            if (await this.hasOtherActiveRun(run))
+                return;
+            await this.scheduleContinuation(run, goal, PROVIDER_TRANSIENT_FAILURE_REASON, "transient_provider_error", {
+                terminalStatus: run.status,
+                errorMessage: run.error ?? "unknown provider error",
+            });
             return;
         }
         const session = await this.db.getSession(run.clientId, run.sessionId);
@@ -105,6 +148,9 @@ export class AppPreviewGoalSupervisor {
         }
         if (await this.hasOtherActiveRun(run))
             return;
+        await this.scheduleContinuation(run, goal, readiness.reasonCode, "readiness_not_ready", readiness, { readiness });
+    }
+    async scheduleContinuation(run, goal, lastFailureReason, eventReasonCode, eventPayload, queueFailurePayload = eventPayload) {
         const continuationRunId = this.createRunId();
         const continuation = await this.db.createContinuationRun({
             runId: continuationRunId,
@@ -135,7 +181,7 @@ export class AppPreviewGoalSupervisor {
                 await this.goals.event(updated, "queue_unavailable", "queue_unavailable", {
                     errorMessage: message,
                     failedRunId: continuation.runId,
-                    readiness,
+                    ...queueFailurePayload,
                 }, continuation.runId);
             }
             return;
@@ -146,19 +192,31 @@ export class AppPreviewGoalSupervisor {
             status: "active",
             continuationRunsUsed: goal.continuationRunsUsed + 1,
             lastRunId: continuation.runId,
-            lastFailureReason: readiness.reasonCode,
+            lastFailureReason,
         });
         if (!updated)
             return;
-        await this.goals.event(updated, "preview_check_failed", readiness.reasonCode, readiness, run.runId);
-        await this.goals.event(updated, "continuation_scheduled", "readiness_not_ready", continuationPayload(continuation.runId, readiness), continuation.runId);
+        if (eventReasonCode === "readiness_not_ready") {
+            await this.goals.event(updated, "preview_check_failed", lastFailureReason, eventPayload, run.runId);
+        }
+        await this.goals.event(updated, "continuation_scheduled", eventReasonCode, { ...eventPayload, runId: continuation.runId }, continuation.runId);
     }
     async hasOtherActiveRun(run) {
         return (await this.db.listRunsForSession(run.clientId, run.sessionId)).some((candidate) => candidate.runId !== run.runId && ACTIVE_RUN_STATUSES.has(candidate.status));
     }
 }
-function continuationPayload(runId, readiness) {
-    return { ...readiness, runId };
+function classifyRunGuardFailure(run) {
+    if (run.status !== "failed" || !run.error)
+        return undefined;
+    const error = run.error.toLowerCase();
+    if (!error.includes("run guard exceeded"))
+        return undefined;
+    if (error.includes("max agent turns"))
+        return { reasonCode: "max_agent_turns", guardLimit: "agent_turns" };
+    if (error.includes("max agent tool executions")) {
+        return { reasonCode: "max_agent_tool_executions", guardLimit: "agent_tool_executions" };
+    }
+    return { reasonCode: "run_guard_limit_exceeded", guardLimit: "unknown" };
 }
 function isTransientProviderFailureWithoutDurableOutput(run, events) {
     if (run.status !== "failed" || !run.error)
@@ -167,6 +225,16 @@ function isTransientProviderFailureWithoutDurableOutput(run, events) {
     if (!classification.retryable || classification.reasonCode !== "transient_provider_error")
         return false;
     return !events.some((event) => !NON_DURABLE_PROVIDER_RETRY_EVENTS.has(event.type));
+}
+function isNonReplayableTransientProviderFailureWithDurableOutput(run, events) {
+    if (run.status !== "failed" || !run.error)
+        return false;
+    if (!run.error.includes("non-replayable side effects"))
+        return false;
+    const classification = RETRY_POLICY.classify(new Error(run.error));
+    if (!classification.retryable || classification.reasonCode !== "transient_provider_error")
+        return false;
+    return events.some((event) => !NON_DURABLE_PROVIDER_RETRY_EVENTS.has(event.type));
 }
 function safeErrorMessage(error) {
     if (error instanceof Error && error.message)

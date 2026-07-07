@@ -15,14 +15,14 @@ import {
 	SESSIONS_API_PREFIX,
 	SKILLS_API_PREFIX,
 } from "./constants.js";
-import { WorkspaceDiagnosticExportService, type DiagnosticArchiveExport } from "./diagnostic-export-service.js";
+import { type DiagnosticArchiveExport, WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
+import { RunApiError, WorkspaceRunApiService, compactRunEventsForClient } from "./run-api-service.js";
 import { RedisRunEventBus, type RunEventBus } from "./run-event-bus.js";
-import { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunQueue } from "./run-queue.js";
-import { createRuntimeStore } from "./runtime-store-factory.js";
 import type { RuntimeStore } from "./runtime-store.js";
+import { createRuntimeStore } from "./runtime-store-factory.js";
 import type {
 	AppPreviewGoalSource,
 	DiagnosticLogEventInput,
@@ -49,6 +49,7 @@ import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 
 const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
+const LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS = 250;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 
 export interface ConfiguredStoragePluginTestServices {
@@ -110,9 +111,10 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 			deleteSessionWorkspace(clientId, sessionId) {
 				return deleteSessionWorkspace(config.clientsRootDir, sessionId, clientId);
 			},
-		},
-		appPreviewGoals,
-	);
+			},
+			appPreviewGoals,
+			runEventBus,
+		);
 	return createConfiguredStoragePlugin({
 		config,
 		diagnostics,
@@ -295,11 +297,19 @@ export function createStartupDiagnosticEvents(config: StorageConfig): Diagnostic
 				clientsRootDir: config.clientsRootDir,
 				workerId: config.workerId,
 				workerConcurrency: config.workerConcurrency,
+				runMaxAgentTurns: config.runMaxAgentTurns,
+				runMaxAgentToolExecutions: config.runMaxAgentToolExecutions,
+				runRetryMaxAttempts: config.runRetryMaxAttempts,
+				runRetryBaseDelayMs: config.runRetryBaseDelayMs,
+				runRetryMaxDelayMs: config.runRetryMaxDelayMs,
+				runRetryJitterRatio: config.runRetryJitterRatio,
 				clientIdRequired: config.clientIdRequired,
 				loggingEnabled: config.loggingEnabled,
 				logStdoutEnabled: config.logStdoutEnabled,
 				logsDbFile: config.logsDbFile,
 				modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
+				modelMaxOutputTokens: config.modelMaxOutputTokens,
+				contextProviderPayloadBudgetChars: config.contextProviderPayloadBudgetChars,
 			},
 		},
 	];
@@ -492,6 +502,10 @@ async function handleStorageApi(
 			workerConcurrency: config.workerConcurrency,
 			runQueueName: config.runQueueName,
 			runEventRetentionDays: config.runEventRetentionDays,
+			runRetryMaxAttempts: config.runRetryMaxAttempts,
+			runRetryBaseDelayMs: config.runRetryBaseDelayMs,
+			runRetryMaxDelayMs: config.runRetryMaxDelayMs,
+			runRetryJitterRatio: config.runRetryJitterRatio,
 			clientIdRequired: config.clientIdRequired,
 			logsDbFile: config.logsDbFile,
 			loggingEnabled: config.loggingEnabled,
@@ -503,6 +517,8 @@ async function handleStorageApi(
 			modelOutputSnapshotLoggingEnabled: config.modelOutputSnapshotLoggingEnabled,
 			modelOutputSnapshotMaxChars: config.modelOutputSnapshotMaxChars,
 			modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
+			modelMaxOutputTokens: config.modelMaxOutputTokens,
+			contextProviderPayloadBudgetChars: config.contextProviderPayloadBudgetChars,
 			logRetentionDays: config.logRetentionDays,
 			logMaxEvents: config.logMaxEvents,
 			logCleanupIntervalMs: config.logCleanupIntervalMs,
@@ -608,20 +624,14 @@ async function handleLogsApi(
 	sendJson(res, { error: "Not found." }, 404);
 }
 
-function sendDiagnosticArchiveHead(
-	res: ServerResponse,
-	archive: DiagnosticArchiveExport,
-): void {
+function sendDiagnosticArchiveHead(res: ServerResponse, archive: DiagnosticArchiveExport): void {
 	res.statusCode = 200;
 	res.setHeader("Content-Type", archive.contentType);
 	res.setHeader("Content-Disposition", `attachment; filename="${archive.filename}"`);
 	res.end();
 }
 
-async function sendDiagnosticArchive(
-	res: ServerResponse,
-	archive: DiagnosticArchiveExport,
-): Promise<void> {
+async function sendDiagnosticArchive(res: ServerResponse, archive: DiagnosticArchiveExport): Promise<void> {
 	res.statusCode = 200;
 	res.setHeader("Content-Type", archive.contentType);
 	res.setHeader("Content-Disposition", `attachment; filename="${archive.filename}"`);
@@ -817,10 +827,13 @@ async function streamRunEvents(
 	runId: string,
 	afterSeq: number,
 ): Promise<void> {
-	let lastSeq = afterSeq;
+	let readSeq = afterSeq;
+	let sentSeq = afterSeq;
 	let closed = false;
 	let heartbeatAt = Date.now();
 	let streamStarted = false;
+	let pendingLiveMessageUpdate: RuntimeRunEventRecord | undefined;
+	let lastLiveMessageUpdateSentAt = 0;
 	const abortController = new AbortController();
 
 	const closeStream = (): void => {
@@ -845,36 +858,43 @@ async function streamRunEvents(
 
 		res.statusCode = 200;
 		res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-		res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+		res.setHeader("Cache-Control", "no-cache, no-store, no-transform, must-revalidate");
 		res.setHeader("Connection", "keep-alive");
+		res.setHeader("X-Accel-Buffering", "no");
 		res.flushHeaders?.();
 		streamStarted = true;
 		res.write(": connected\n\n");
 
 		for (const event of durableEvents) {
-			if (!writeRunEventIfFresh(res, event, lastSeq)) continue;
-			lastSeq = event.seq;
+			readSeq = Math.max(readSeq, event.seq);
+			if (!writeRunEventIfFresh(res, event, sentSeq)) continue;
+			sentSeq = event.seq;
 		}
 
 		while (!closed && !res.destroyed) {
-			const events = await runEventBus.read({
+			const rawEvents = await runEventBus.read({
 				clientId,
 				sessionId: run.sessionId,
 				runId,
-				afterSeq: lastSeq,
+				afterSeq: readSeq,
 				blockMs: 15000,
 				signal: abortController.signal,
 			});
+			for (const event of rawEvents) {
+				readSeq = Math.max(readSeq, event.seq);
+			}
+			const events = compactRunEventsForClient(rawEvents);
 			if (closed || res.destroyed) break;
 			if (events.length === 0) {
+				flushPendingLiveMessageUpdate(true);
 				heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
 				await waitForRunEventReadBackoff(abortController.signal, EMPTY_RUN_EVENT_READ_BACKOFF_MS);
 				continue;
 			}
 			for (const event of events) {
-				if (!writeRunEventIfFresh(res, event, lastSeq)) continue;
-				lastSeq = event.seq;
+				writeLiveRunEvent(event);
 			}
+			flushPendingLiveMessageUpdate(false);
 			heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
 		}
 	} catch (error) {
@@ -891,6 +911,38 @@ async function streamRunEvents(
 		if (typeof responseWithOn.off === "function") {
 			responseWithOn.off("close", closeStream);
 		}
+	}
+
+	function writeRunEvent(event: RuntimeRunEventRecord): boolean {
+		if (!writeRunEventIfFresh(res, event, sentSeq)) return false;
+		sentSeq = event.seq;
+		return true;
+	}
+
+	function flushPendingLiveMessageUpdate(force: boolean): void {
+		if (!pendingLiveMessageUpdate) return;
+		const now = Date.now();
+		if (!force && now - lastLiveMessageUpdateSentAt < LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS) return;
+		const event = pendingLiveMessageUpdate;
+		pendingLiveMessageUpdate = undefined;
+		if (writeRunEvent(event)) {
+			lastLiveMessageUpdateSentAt = now;
+		}
+	}
+
+	function writeLiveRunEvent(event: RuntimeRunEventRecord): void {
+		if (event.type === "message_update") {
+			pendingLiveMessageUpdate = event;
+			flushPendingLiveMessageUpdate(false);
+			return;
+		}
+		if (event.type === "message_end") {
+			pendingLiveMessageUpdate = undefined;
+			writeRunEvent(event);
+			return;
+		}
+		flushPendingLiveMessageUpdate(true);
+		writeRunEvent(event);
 	}
 }
 

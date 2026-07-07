@@ -25,6 +25,8 @@ export interface ConfiguredStorageStatus {
 	modelOutputSnapshotLoggingEnabled?: boolean;
 	modelOutputSnapshotMaxChars?: number;
 	modelStreamIdleTimeoutMs?: number;
+	modelMaxOutputTokens?: number;
+	contextProviderPayloadBudgetChars?: number;
 	logRetentionDays?: number;
 	logMaxEvents?: number;
 	logCleanupIntervalMs?: number;

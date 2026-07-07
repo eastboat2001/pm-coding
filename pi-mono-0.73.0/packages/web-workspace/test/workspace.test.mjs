@@ -26,6 +26,10 @@ function testConfig(root, overrides = {}) {
 		skillsDir: join(root, "data", "skills"),
 		defaultSkillsDir: join(root, "data", "default-skills"),
 		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
+		runRetryMaxAttempts: 8,
+		runRetryBaseDelayMs: 2000,
+		runRetryMaxDelayMs: 60000,
+		runRetryJitterRatio: 0.2,
 		previewBaseUrl: "http://localhost:5173",
 		projectInstallCommand: "npm install",
 		projectBuildCommand: "npm run build",
@@ -47,6 +51,8 @@ function testConfig(root, overrides = {}) {
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 20000,
 		modelStreamIdleTimeoutMs: 60000,
+		modelMaxOutputTokens: 12000,
+		contextProviderPayloadBudgetChars: 90000,
 		logRetentionDays: 30,
 		logMaxEvents: 50000,
 		logCleanupIntervalMs: 3600000,
@@ -109,6 +115,12 @@ await test("loadStorageConfig reads .env from the app root and strips preview tr
 	assert.equal(config.modelOutputSnapshotLoggingEnabled, false);
 	assert.equal(config.modelOutputSnapshotMaxChars, 20000);
 	assert.equal(config.modelStreamIdleTimeoutMs, 60000);
+	assert.equal(config.runRetryMaxAttempts, 8);
+	assert.equal(config.runRetryBaseDelayMs, 2000);
+	assert.equal(config.runRetryMaxDelayMs, 60000);
+	assert.equal(config.runRetryJitterRatio, 0.2);
+	assert.equal(config.modelMaxOutputTokens, 12000);
+	assert.equal(config.contextProviderPayloadBudgetChars, 90000);
 	assert.equal(config.logRetentionDays, 30);
 	assert.equal(config.logMaxEvents, 50000);
 	assert.equal(config.logCleanupIntervalMs, 3600000);
@@ -284,6 +296,12 @@ await test("loadStorageConfig supports diagnostic log and Langfuse env settings"
 			"PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true",
 			"PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS=8765",
 			"PI_MODEL_STREAM_IDLE_TIMEOUT_MS=2345",
+			"PI_RUN_RETRY_MAX_ATTEMPTS=10",
+			"PI_RUN_RETRY_BASE_DELAY_MS=1500",
+			"PI_RUN_RETRY_MAX_DELAY_MS=90000",
+			"PI_RUN_RETRY_JITTER_RATIO=0.35",
+			"PI_MODEL_MAX_OUTPUT_TOKENS=6789",
+			"PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS=76543",
 			"PI_LOG_RETENTION_DAYS=7",
 			"PI_LOG_MAX_EVENTS=4321",
 			"PI_LOG_CLEANUP_INTERVAL_MS=111",
@@ -318,6 +336,12 @@ await test("loadStorageConfig supports diagnostic log and Langfuse env settings"
 	assert.equal(config.modelOutputSnapshotLoggingEnabled, true);
 	assert.equal(config.modelOutputSnapshotMaxChars, 8765);
 	assert.equal(config.modelStreamIdleTimeoutMs, 2345);
+	assert.equal(config.runRetryMaxAttempts, 10);
+	assert.equal(config.runRetryBaseDelayMs, 1500);
+	assert.equal(config.runRetryMaxDelayMs, 90000);
+	assert.equal(config.runRetryJitterRatio, 0.35);
+	assert.equal(config.modelMaxOutputTokens, 6789);
+	assert.equal(config.contextProviderPayloadBudgetChars, 76543);
 	assert.equal(config.logRetentionDays, 7);
 	assert.equal(config.logMaxEvents, 4321);
 	assert.equal(config.logCleanupIntervalMs, 111);
@@ -340,11 +364,12 @@ await test("WorkspaceDiagnosticLogService stores sanitized events and filters by
 	const root = tempRoot();
 	const service = new WorkspaceDiagnosticLogService(testConfig(root));
 	service.ensureDirs();
+	const now = Date.now();
 
 	const written = service.writeEvents({
 		events: [
 			{
-				timestamp: "2026-06-04T00:00:00.000Z",
+				timestamp: new Date(now).toISOString(),
 				level: "info",
 				category: "provider",
 				eventType: "provider.payload",
@@ -358,7 +383,7 @@ await test("WorkspaceDiagnosticLogService stores sanitized events and filters by
 				},
 			},
 			{
-				timestamp: "2026-06-04T00:01:00.000Z",
+				timestamp: new Date(now + 60_000).toISOString(),
 				level: "error",
 				category: "model",
 				eventType: "stream.error",
@@ -402,14 +427,22 @@ await test("WorkspaceDiagnosticLogService reports disabled status without writin
 	assert.equal(status.eventCount, 0);
 });
 
-await test("WorkspaceDiagnosticLogService reports configured model stream idle timeout", () => {
+await test("WorkspaceDiagnosticLogService reports configured model stream caps", () => {
 	const root = tempRoot();
-	const service = new WorkspaceDiagnosticLogService(testConfig(root, { modelStreamIdleTimeoutMs: 2345 }));
+	const service = new WorkspaceDiagnosticLogService(
+		testConfig(root, {
+			modelStreamIdleTimeoutMs: 2345,
+			modelMaxOutputTokens: 6789,
+			contextProviderPayloadBudgetChars: 76543,
+		}),
+	);
 	service.ensureDirs();
 
 	const status = service.status();
 
 	assert.equal(status.modelStreamIdleTimeoutMs, 2345);
+	assert.equal(status.modelMaxOutputTokens, 6789);
+	assert.equal(status.contextProviderPayloadBudgetChars, 76543);
 });
 
 await test("WorkspaceDiagnosticLogService prunes old events and caps retained rows", () => {

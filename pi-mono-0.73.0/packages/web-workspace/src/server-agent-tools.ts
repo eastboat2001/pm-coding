@@ -64,7 +64,9 @@ const projectFileSchema = Type.Union(
 	[
 		Type.Object(
 			{
-				command: Type.Literal("create", { description: "Create or overwrite a file." }),
+				command: Type.Literal("create", {
+					description: "Create or overwrite a file.",
+				}),
 				filename: filenameSchema,
 				content: contentSchema,
 			},
@@ -72,7 +74,9 @@ const projectFileSchema = Type.Union(
 		),
 		Type.Object(
 			{
-				command: Type.Literal("rewrite", { description: "Replace a file with full new content." }),
+				command: Type.Literal("rewrite", {
+					description: "Replace a file with full new content.",
+				}),
 				filename: filenameSchema,
 				content: contentSchema,
 			},
@@ -80,7 +84,9 @@ const projectFileSchema = Type.Union(
 		),
 		Type.Object(
 			{
-				command: Type.Literal("update", { description: "Replace exact text inside an existing file." }),
+				command: Type.Literal("update", {
+					description: "Replace exact text inside an existing file.",
+				}),
 				filename: filenameSchema,
 				old_str: Type.String({ description: "Exact text to replace." }),
 				new_str: Type.String({ description: "Replacement text." }),
@@ -132,27 +138,52 @@ const projectTaskSchema = Type.Object({
 
 type ProjectFileParams = Static<typeof projectFileSchema>;
 
+export interface ServerDirectSpecExecutionPolicy {
+	requiredBeforeImplementation: boolean;
+	requiredReads: string[];
+	completedReads?: string[];
+}
+
+export interface ServerDirectProjectToolOptions {
+	specExecution?: ServerDirectSpecExecutionPolicy;
+}
+
+type SpecExecutionState = {
+	requiredReads: string[];
+	completedReads: Set<string>;
+};
+
 export function createServerDirectSkillTools(
 	config: StorageConfig,
 	diagnostics?: WorkspaceDiagnosticLogService,
 ): Array<ServerDirectAgentTool<TSchema, SkillLoadResult | SkillResourceResult>> {
 	const skills = new WorkspaceSkillService(config, diagnostics);
-	return [createSkillLoadTool(skills), createSkillResourceTool(skills)];
+	const loadCache = new Map<string, ServerDirectToolResult<SkillLoadResult>>();
+	const resourceCache = new Map<string, ServerDirectToolResult<SkillResourceResult>>();
+	return [createSkillLoadTool(skills, loadCache), createSkillResourceTool(skills, resourceCache)];
 }
 
 export function createServerDirectProjectTools(
 	config: StorageConfig,
 	context: ServerDirectProjectToolContext,
 	diagnostics?: WorkspaceDiagnosticLogService,
+	options: ServerDirectProjectToolOptions = {},
 ): Array<ServerDirectAgentTool<TSchema, ProjectFileResult | ProjectTaskResult>> {
 	const files = new WorkspaceFileService(config);
 	const tasks = new WorkspaceTaskService(config, undefined, undefined, diagnostics);
-	return [createProjectFileTool(files, context), createProjectTaskTool(tasks, context, config)];
+	const readCache = new Map<string, ServerDirectToolResult<ProjectFileResult>>();
+	const specExecution = createSpecExecutionState(options.specExecution);
+	return [
+		createProjectFileTool(files, context, readCache, specExecution),
+		createProjectTaskTool(tasks, context, config, () => readCache.clear()),
+	];
 }
 
 function createProjectFileTool(
 	files: WorkspaceFileService,
 	context: ServerDirectProjectToolContext,
+	readCache: Map<string, ServerDirectToolResult<ProjectFileResult>>,
+	specExecution?: SpecExecutionState,
 ): ServerDirectAgentTool<typeof projectFileSchema, ProjectFileResult> {
 	return {
 		label: "Project File",
@@ -162,6 +193,27 @@ function createProjectFileTool(
 		parameters: projectFileSchema,
 		prepareArguments: prepareProjectFileArguments,
 		execute: async (_toolCallId, args) => {
+			const cacheKey = projectFileReadCacheKey(args);
+			if (cacheKey) {
+				const cached = readCache.get(cacheKey);
+				if (cached) {
+					recordSpecExecutionRead(args, cached.details, specExecution);
+					return cached;
+				}
+				const result = files.handle({
+					...getRequiredContext(context),
+					...args,
+				});
+				const toolResult: ServerDirectToolResult<ProjectFileResult> = {
+					content: [{ type: "text", text: formatProjectFileResult(result) }],
+					details: result,
+				};
+				recordSpecExecutionRead(args, result, specExecution);
+				readCache.set(cacheKey, toolResult);
+				return toolResult;
+			}
+			assertSpecExecutionAllowsProjectFileWrite(args, specExecution);
+			readCache.clear();
 			const result = files.handle({ ...getRequiredContext(context), ...args });
 			return {
 				content: [{ type: "text", text: formatProjectFileResult(result) }],
@@ -171,10 +223,84 @@ function createProjectFileTool(
 	};
 }
 
+function createSpecExecutionState(policy: ServerDirectSpecExecutionPolicy | undefined): SpecExecutionState | undefined {
+	if (!policy?.requiredBeforeImplementation) return undefined;
+	const requiredReads = uniqueNormalizedProjectPaths(policy.requiredReads);
+	if (requiredReads.length === 0) return undefined;
+	const completedReads = new Set<string>();
+	for (const filename of uniqueNormalizedProjectPaths(policy.completedReads ?? [])) {
+		if (requiredReads.includes(filename)) completedReads.add(filename);
+	}
+	return { requiredReads, completedReads };
+}
+
+function recordSpecExecutionRead(
+	args: ProjectFileParams,
+	result: ProjectFileResult,
+	state: SpecExecutionState | undefined,
+): void {
+	if (!state || args.command !== "get") return;
+	recordCompletedSpecRead(state, args.filename);
+	if (typeof result.filename === "string") recordCompletedSpecRead(state, result.filename);
+}
+
+function recordCompletedSpecRead(state: SpecExecutionState, filename: string): void {
+	const normalized = normalizeProjectPath(filename);
+	if (!normalized || !state.requiredReads.includes(normalized)) return;
+	state.completedReads.add(normalized);
+}
+
+function assertSpecExecutionAllowsProjectFileWrite(
+	args: ProjectFileParams,
+	state: SpecExecutionState | undefined,
+): void {
+	if (!state || !isProjectFileWrite(args)) return;
+	if (isRequiredSpecReadPath(args.filename, state)) return;
+	const missing = state.requiredReads.filter((filename) => !state.completedReads.has(filename));
+	if (missing.length === 0) return;
+	throw new Error(
+		`Spec execution policy blocked project_file ${args.command} ${args.filename}. Read required files first with project_file get: ${missing.join(", ")}.`,
+	);
+}
+
+function isProjectFileWrite(
+	args: ProjectFileParams,
+): args is Extract<ProjectFileParams, { command: "create" | "rewrite" | "update" | "delete" }> {
+	return (
+		args.command === "create" || args.command === "rewrite" || args.command === "update" || args.command === "delete"
+	);
+}
+
+function isRequiredSpecReadPath(filename: string, state: SpecExecutionState): boolean {
+	const normalized = normalizeProjectPath(filename);
+	return !!normalized && state.requiredReads.includes(normalized);
+}
+
+function uniqueNormalizedProjectPaths(paths: string[]): string[] {
+	const result: string[] = [];
+	const seen = new Set<string>();
+	for (const path of paths) {
+		const normalized = normalizeProjectPath(path);
+		if (!normalized || seen.has(normalized)) continue;
+		seen.add(normalized);
+		result.push(normalized);
+	}
+	return result;
+}
+
+function normalizeProjectPath(path: string): string {
+	return path
+		.replace(/\\/g, "/")
+		.replace(/^\.\/+/, "")
+		.replace(/\/+/g, "/")
+		.trim();
+}
+
 function createProjectTaskTool(
 	tasks: WorkspaceTaskService,
 	context: ServerDirectProjectToolContext,
 	config: StorageConfig,
+	clearProjectFileReadCache: () => void,
 ): ServerDirectAgentTool<typeof projectTaskSchema, ProjectTaskResult> {
 	return {
 		label: "Project Task",
@@ -184,6 +310,7 @@ function createProjectTaskTool(
 		parameters: projectTaskSchema,
 		executionMode: "sequential",
 		execute: async (_toolCallId, args, signal) => {
+			clearProjectFileReadCache();
 			const requiredContext = getRequiredContext(context);
 			const result = await tasks.run(
 				{ ...requiredContext, ...args },
@@ -194,7 +321,9 @@ function createProjectTaskTool(
 				content: [
 					{
 						type: "text",
-						text: formatProjectTaskResult(result, { activeSkillNames: requiredContext.activeSkillNames }),
+						text: formatProjectTaskResult(result, {
+							activeSkillNames: requiredContext.activeSkillNames,
+						}),
 					},
 				],
 				details: result,
@@ -206,13 +335,19 @@ function createProjectTaskTool(
 function createServerDirectPreviewRequest(config: StorageConfig): PreviewRequestLike {
 	if (config.previewBaseUrl) {
 		const url = new URL(config.previewBaseUrl);
-		return { headers: { host: url.host, "x-forwarded-proto": url.protocol.replace(/:$/, "") } };
+		return {
+			headers: {
+				host: url.host,
+				"x-forwarded-proto": url.protocol.replace(/:$/, ""),
+			},
+		};
 	}
 	return { headers: { host: "localhost:5173", "x-forwarded-proto": "http" } };
 }
 
 function createSkillLoadTool(
 	skills: WorkspaceSkillService,
+	cache: Map<string, ServerDirectToolResult<SkillLoadResult>>,
 ): ServerDirectAgentTool<typeof skillLoadSchema, SkillLoadResult> {
 	return {
 		label: "Skill Load",
@@ -222,17 +357,22 @@ function createSkillLoadTool(
 		parameters: skillLoadSchema,
 		prepareArguments: prepareSkillLoadArguments,
 		execute: async (_toolCallId, args) => {
+			const cached = cache.get(args.name);
+			if (cached) return cached;
 			const result = skills.load(args);
-			return {
+			const toolResult: ServerDirectToolResult<SkillLoadResult> = {
 				content: [{ type: "text", text: formatSkillLoadResult(result) }],
 				details: result,
 			};
+			cache.set(args.name, toolResult);
+			return toolResult;
 		},
 	};
 }
 
 function createSkillResourceTool(
 	skills: WorkspaceSkillService,
+	cache: Map<string, ServerDirectToolResult<SkillResourceResult>>,
 ): ServerDirectAgentTool<typeof skillResourceSchema, SkillResourceResult> {
 	return {
 		label: "Skill Resource",
@@ -242,13 +382,24 @@ function createSkillResourceTool(
 		parameters: skillResourceSchema,
 		prepareArguments: prepareSkillResourceArguments,
 		execute: async (_toolCallId, args) => {
+			const cacheKey = `${args.name}\u0000${args.path}`;
+			const cached = cache.get(cacheKey);
+			if (cached) return cached;
 			const result = skills.readResource(args);
-			return {
+			const toolResult: ServerDirectToolResult<SkillResourceResult> = {
 				content: [{ type: "text", text: result.content }],
 				details: result,
 			};
+			cache.set(cacheKey, toolResult);
+			return toolResult;
 		},
 	};
+}
+
+function projectFileReadCacheKey(args: ProjectFileParams): string | undefined {
+	if (args.command === "list") return "list";
+	if (args.command === "get") return `get:${args.filename}`;
+	return undefined;
 }
 
 function getRequiredContext(context: ServerDirectProjectToolContext): ServerDirectProjectToolContext {
@@ -286,7 +437,8 @@ const commandAliases: Record<string, ProjectFileParams["command"]> = {
 	ls: "list",
 };
 
-const PROJECT_FILE_OMITTED_CONTENT_PATTERN = /^\[project_file content omitted: \d+ chars, \d+ lines from .+\]$/;
+const PROJECT_FILE_OMITTED_CONTENT_PATTERN =
+	/\[project_file (?:content|get result) omitted: \d+ chars, \d+ lines from [^\]]+\]|Project file content omitted from compacted history for [^:]+: \d+ chars, \d+ lines\./;
 
 function prepareProjectFileArguments(args: unknown): ProjectFileParams {
 	const raw = coerceRecord(args);
@@ -321,7 +473,7 @@ function prepareProjectFileArguments(args: unknown): ProjectFileParams {
 }
 
 function assertWritableProjectFileContent(value: string, filename: string): void {
-	if (!PROJECT_FILE_OMITTED_CONTENT_PATTERN.test(value.trim())) return;
+	if (!PROJECT_FILE_OMITTED_CONTENT_PATTERN.test(value)) return;
 	throw new Error(
 		`Refusing to write an omitted project_file placeholder to ${filename}. Call project_file get for ${filename} and provide the full current content before writing.`,
 	);

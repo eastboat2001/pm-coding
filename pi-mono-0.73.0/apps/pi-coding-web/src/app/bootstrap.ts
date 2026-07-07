@@ -57,12 +57,26 @@ import {
 	type PmHandoffPayload,
 	prepareHandoffDocumentFiles,
 } from "../integrations/pm-handoff.js";
-import { compactProjectToolHistory } from "../project-tools/history.js";
+import {
+	type ProjectContextCompactionSummary,
+	resolveProjectContextProviderPayloadBudget,
+} from "../project-tools/context-manifest.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
+import { type CapabilityPlan, capabilityPlanDiagnosticData, planCapabilities } from "../runtime/capability-planner.js";
 import { piClientHeaders } from "../runtime/client-id.js";
+import {
+	type ContextOrchestratorDecision,
+	contextDecisionDiagnosticData,
+	prepareContextPacket,
+} from "../runtime/context-orchestrator.js";
+import { STATIC_PREVIEW_CONTRACT } from "../runtime/platform-contract.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
-import { drainRemoteRunEvents, RemoteAgentController } from "../runtime/remote-agent-controller.js";
+import {
+	type RemoteRunEventDrainResult,
+	RemoteAgentController,
+	tryDrainRemoteRunEvents,
+} from "../runtime/remote-agent-controller.js";
 import { resolveActiveRunRestore, resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import {
 	buildAppPreviewGoalStartRequest,
@@ -96,6 +110,8 @@ import {
 	shouldScheduleProviderStallStatusAfterRunEvent,
 } from "../runtime/run-transient-status.js";
 import { trimRecoverableProviderStallErrors } from "../runtime/runtime-message-conversion.js";
+import { buildSpecArtifact, type SpecArtifact, specArtifactDiagnosticData } from "../runtime/spec-artifact.js";
+import { mergeProjectFileSeeds, specArtifactProjectFileSeeds } from "../runtime/spec-artifact-files.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
@@ -167,6 +183,7 @@ const piRuntimeConfig = {
 	defaultSkills: [] as SkillSummary[],
 	skillDiagnostics: [] as SkillDiagnostic[],
 	skillSlashSuggestions: [] as SkillSlashSuggestion[],
+	contextProviderPayloadBudgetChars: 90_000,
 	diagnosticLogging: {
 		rawProviderLoggingEnabled: false,
 		rawProviderLogMaxChars: 12000,
@@ -175,6 +192,7 @@ const piRuntimeConfig = {
 		modelOutputSnapshotLoggingEnabled: false,
 		modelOutputSnapshotMaxChars: 20000,
 		streamIdleTimeoutMs: 60000,
+		maxOutputTokens: 12_000,
 	} as DiagnosticStreamLoggingConfig,
 };
 
@@ -301,7 +319,12 @@ const loadPiRuntimeConfig = async () => {
 		modelOutputSnapshotLoggingEnabled: status?.modelOutputSnapshotLoggingEnabled === true,
 		modelOutputSnapshotMaxChars: normalizePositiveInteger(status?.modelOutputSnapshotMaxChars, 20000),
 		streamIdleTimeoutMs: normalizePositiveInteger(status?.modelStreamIdleTimeoutMs, 60000),
+		maxOutputTokens: normalizeNonNegativeInteger(status?.modelMaxOutputTokens, 12_000),
 	};
+	piRuntimeConfig.contextProviderPayloadBudgetChars = normalizePositiveInteger(
+		status?.contextProviderPayloadBudgetChars,
+		90_000,
+	);
 	piRuntimeConfig.skillSlashSuggestions = [
 		createSkillSlashCommand(skillApiErrorDetail(diagnostics)),
 		...selectableSkills.map(skillToSlashSuggestion),
@@ -336,6 +359,9 @@ const normalizeThinkingLevel = (value?: string): ThinkingLevel => {
 const normalizePositiveInteger = (value: unknown, fallback: number): number =>
 	typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
 
+const normalizeNonNegativeInteger = (value: unknown, fallback: number): number =>
+	typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : fallback;
+
 const isActiveRunStatus = (status: RunStatus | undefined): status is RunStatus =>
 	status !== undefined && ACTIVE_RUN_STATUSES.has(status);
 
@@ -357,6 +383,8 @@ let currentActiveRunId: string | undefined;
 let currentLastRunId: string | undefined;
 let currentRunStatus: RunStatus | undefined;
 let currentRunUpdatedAt: string | undefined;
+let currentCapabilityPlan: CapabilityPlan | undefined;
+let currentSpecArtifact: SpecArtifact | undefined;
 const remoteRunTransientStatusTexts: RunTransientStatusTexts = {};
 const reportedQueuedRunTimeouts = new Set<string>();
 const resumedInterruptedSessions = new Set<string>();
@@ -570,7 +598,9 @@ async function attachAppPreviewGoalContinuationRun(runId: string): Promise<boole
 	await createAgent({
 		...(sessionModel
 			? { model: sessionModel }
-			: { model: (detail.session.model as unknown as Model<any>) || undefined }),
+			: {
+					model: (detail.session.model as unknown as Model<any>) || undefined,
+				}),
 		thinkingLevel: normalizeThinkingLevel(detail.session.thinkingLevel),
 		messages: runtimeMessages,
 		tools: [],
@@ -747,7 +777,17 @@ const ensureSessionIdentity = async () => {
 	await setCurrentSessionId(crypto.randomUUID());
 };
 
-const buildCurrentSystemPrompt = () => buildCodingSystemPrompt(piRuntimeConfig.globalSkills);
+const buildCurrentSystemPrompt = (capabilityPlan = currentCapabilityPlan, specArtifact = currentSpecArtifact) =>
+	buildCodingSystemPrompt(
+		piRuntimeConfig.globalSkills,
+		capabilityPlan
+			? {
+					platformContract: STATIC_PREVIEW_CONTRACT,
+					capabilityPlan,
+					specArtifact,
+				}
+			: {},
+	);
 
 const DEFAULT_SKILL_EMPTY_DETAIL = "请在服务端 skillsDir 下添加 data/skills/<skill-name>/SKILL.md。";
 
@@ -877,7 +917,9 @@ const renameSessionProject = async (sessionId: string, title: string) => {
 const deleteSessionEverywhere = async (sessionId: string) => {
 	let runtimeDeleteResult: DeleteSessionResult | undefined;
 	try {
-		runtimeDeleteResult = await deleteRuntimeSession(sessionId, { force: true });
+		runtimeDeleteResult = await deleteRuntimeSession(sessionId, {
+			force: true,
+		});
 	} catch (error) {
 		if (!isRuntimeSessionMissingError(error)) throw error;
 	}
@@ -980,6 +1022,7 @@ function summarizeAgentEvent(event: AgentEvent): DiagnosticData {
 			return {
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
+				args: event.args,
 				argsSummary: summarizeUnknown(event.args),
 			};
 		case "tool_execution_end":
@@ -987,6 +1030,7 @@ function summarizeAgentEvent(event: AgentEvent): DiagnosticData {
 				toolCallId: event.toolCallId,
 				toolName: event.toolName,
 				isError: event.isError,
+				result: event.result,
 				resultSummary: summarizeUnknown(event.result),
 			};
 		default:
@@ -1278,10 +1322,10 @@ function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
 	} as AgentMessage;
 }
 
-const drainCurrentRemoteRunEvents = async (runId: string): Promise<void> => {
+const drainCurrentRemoteRunEvents = async (runId: string): Promise<RemoteRunEventDrainResult | undefined> => {
 	const controller = remoteAgentController;
 	if (!controller || controller.activeRunId !== runId) return;
-	await drainRemoteRunEvents(runId, controller, runClient.listRunEvents);
+	return await tryDrainRemoteRunEvents(runId, controller, runClient.listRunEvents);
 };
 
 const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, intervalMs = 200): Promise<boolean> => {
@@ -1301,7 +1345,15 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 			continue;
 		}
 
-		await drainCurrentRemoteRunEvents(run.runId);
+		const drainResult = await drainCurrentRemoteRunEvents(run.runId);
+		if (drainResult && !drainResult.ok) {
+			writeDiagnosticEvent({
+				level: "warn",
+				category: "agent",
+				eventType: "agent.remote_run.event_drain_failed",
+				data: errorDiagnosticData(drainResult.error, { runId: run.runId, afterSeq: drainResult.afterSeq }),
+			});
+		}
 		closeRemoteRunConnection();
 		if (remoteAgentController?.activeRunId === run.runId) {
 			await remoteAgentController.settleRemoteRun(run.status, run.error ?? undefined);
@@ -1453,7 +1505,11 @@ const connectToRemoteRun = (run: RuntimeRunRecord, controller: RemoteAgentContro
 					level: "error",
 					category: "agent",
 					eventType: "agent.remote_event.error",
-					data: errorDiagnosticData(error, { runId: event.runId, sessionId: event.sessionId, seq: event.seq }),
+					data: errorDiagnosticData(error, {
+						runId: event.runId,
+						sessionId: event.sessionId,
+						seq: event.seq,
+					}),
 				});
 				throw error;
 			}
@@ -1497,6 +1553,24 @@ const startRemotePrompt = async (
 	}
 
 	const previousMessages = agent.state.messages.slice();
+	const previousCapabilityPlan = currentCapabilityPlan;
+	const previousSpecArtifact = currentSpecArtifact;
+	const previousSystemPrompt = agent.state.systemPrompt;
+	const capabilityPlan = planCapabilities({
+		messages: [...previousMessages, ...messages],
+		platform: STATIC_PREVIEW_CONTRACT,
+		source: "browser",
+	});
+	const specArtifact = buildSpecArtifact({
+		messages: [...previousMessages, ...messages],
+		capabilityPlan,
+		platform: STATIC_PREVIEW_CONTRACT,
+	});
+	currentCapabilityPlan = capabilityPlan;
+	currentSpecArtifact = specArtifact;
+	agent.state.systemPrompt = buildCurrentSystemPrompt(capabilityPlan, specArtifact);
+	writeCapabilityPlanDiagnostic(capabilityPlan);
+	writeSpecArtifactDiagnostic(specArtifact);
 	agent.state.messages = [...previousMessages, message];
 	renderApp();
 	requestChatPanelUpdate();
@@ -1509,7 +1583,10 @@ const startRemotePrompt = async (
 			? "manual"
 			: undefined;
 	try {
-		const projectFiles = collectProjectFilesFromMessages(messages);
+		const projectFiles = mergeProjectFileSeeds([
+			...specArtifactProjectFileSeeds(specArtifact),
+			...collectProjectFilesFromMessages(messages),
+		]);
 		const appPreviewGoal = currentAppPreviewGoalRequest(appPreviewGoalSource);
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId,
@@ -1522,6 +1599,9 @@ const startRemotePrompt = async (
 		});
 	} catch (error) {
 		agent.state.messages = previousMessages;
+		currentCapabilityPlan = previousCapabilityPlan;
+		currentSpecArtifact = previousSpecArtifact;
+		agent.state.systemPrompt = previousSystemPrompt;
 		if (appPreviewGoalSource === "pm_handoff") {
 			pendingHandoffAppPreviewGoal = false;
 			updateAppPreviewGoalExtensionActions();
@@ -1601,14 +1681,34 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	const defaultModel = await modelController.getDefaultModel();
 	const resolvedInitialState = initialState || createInitialAgentState(defaultModel);
 	agent = new Agent({
-		initialState: { ...resolvedInitialState, systemPrompt: buildCurrentSystemPrompt() },
+		initialState: {
+			...resolvedInitialState,
+			systemPrompt: buildCurrentSystemPrompt(),
+		},
 		convertToLlm: defaultConvertToLlm,
-		transformContext: async (messages) =>
-			compactProjectToolHistory(
+		transformContext: async (messages) => {
+			const providerBudget = resolveProjectContextProviderPayloadBudget({
+				model: agent.state.model,
+				thinkingLevel: agent.state.thinkingLevel,
+				systemPrompt: agent.state.systemPrompt,
+				tools: agent.state.tools,
+				providerPayloadBudgetChars: piRuntimeConfig.contextProviderPayloadBudgetChars,
+			});
+			const result = await prepareContextPacket(
 				await expandSkillCommandsInMessages(messages, {
 					defaultSkillNames: piRuntimeConfig.defaultSkills.map((skill) => skill.name),
 				}),
-			),
+				{
+					capabilityPlan: currentCapabilityPlan,
+					specArtifact: currentSpecArtifact,
+					providerPayloadBudgetChars: providerBudget.providerPayloadBudgetChars,
+					providerPayloadFixedOverheadChars: providerBudget.providerPayloadFixedOverheadChars,
+					onCompaction: writeProjectContextCompactionDiagnostic,
+					onDecision: writeProjectContextPacketDiagnostic,
+				},
+			);
+			return result.messages;
+		},
 		streamFn: createLoggedStreamFn(
 			createStreamFn(getProxyUrl),
 			diagnosticClient,
@@ -1673,8 +1773,48 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	applySkillSlashSuggestions();
 };
 
+function writeProjectContextCompactionDiagnostic(summary: ProjectContextCompactionSummary): void {
+	diagnosticClient.write({
+		level: "info",
+		category: "model",
+		eventType: "model.context_compaction",
+		sessionId: currentSessionId,
+		traceId: currentSessionId,
+		data: { ...summary },
+	});
+}
+
+function writeCapabilityPlanDiagnostic(capabilityPlan: CapabilityPlan): void {
+	writeDiagnosticEvent({
+		level: "info",
+		category: "model",
+		eventType: "model.capability_plan",
+		data: capabilityPlanDiagnosticData(capabilityPlan),
+	});
+}
+
+function writeSpecArtifactDiagnostic(specArtifact: SpecArtifact): void {
+	writeDiagnosticEvent({
+		level: "info",
+		category: "model",
+		eventType: "model.spec_artifact",
+		data: specArtifactDiagnosticData(specArtifact),
+	});
+}
+
+function writeProjectContextPacketDiagnostic(decision: ContextOrchestratorDecision): void {
+	writeDiagnosticEvent({
+		level: "info",
+		category: "model",
+		eventType: "model.context_packet",
+		data: contextDecisionDiagnosticData(decision),
+	});
+}
+
 const loadSession = async (sessionId: string): Promise<boolean> => {
 	pendingHandoffModelContext = undefined;
+	currentCapabilityPlan = undefined;
+	currentSpecArtifact = undefined;
 	pendingHandoffAppPreviewGoal = false;
 	manualAppPreviewGoalEnabled = false;
 	if (!storage.sessions) return false;
@@ -1700,7 +1840,9 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		await createAgent({
 			...(sessionModel
 				? { model: sessionModel }
-				: { model: (runtimeDetail.session.model as unknown as Model<any>) || undefined }),
+				: {
+						model: (runtimeDetail.session.model as unknown as Model<any>) || undefined,
+					}),
 			thinkingLevel: normalizeThinkingLevel(runtimeDetail.session.thinkingLevel),
 			messages: runtimeMessages,
 			tools: [],
@@ -1769,6 +1911,8 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 
 const startFreshSession = async (persistImmediately = false) => {
 	pendingHandoffModelContext = undefined;
+	currentCapabilityPlan = undefined;
+	currentSpecArtifact = undefined;
 	currentAppPreviewGoal = undefined;
 	pendingHandoffAppPreviewGoal = false;
 	manualAppPreviewGoalEnabled = false;
@@ -1829,7 +1973,9 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 			level: "error",
 			category: "handoff",
 			eventType: "handoff.documents.prepare.error",
-			data: errorDiagnosticData(error, { documentCount: payload.documents?.length ?? 0 }),
+			data: errorDiagnosticData(error, {
+				documentCount: payload.documents?.length ?? 0,
+			}),
 		});
 	}
 
@@ -1872,7 +2018,10 @@ const restoreInitialSession = async () => {
 				level: "error",
 				category: "handoff",
 				eventType: "handoff.documents.not_ready",
-				data: { title: payload.title, documentCount: payload.documents?.length ?? 0 },
+				data: {
+					title: payload.title,
+					documentCount: payload.documents?.length ?? 0,
+				},
 			});
 			throw new Error("PM handoff documents are not ready");
 		}
@@ -1924,202 +2073,229 @@ const renderApp = () => {
 	const currentProjectTitle = agent ? sessionTitle(currentTitle, agent.state.messages) : currentTitle;
 
 	const appHtml = html`
-		<div class="example-shell w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
-			<div class="example-header flex items-center justify-between border-b border-border shrink-0">
-				<div class="example-header__brand-row flex items-center gap-3 px-4 py-3 min-w-0">
-					<div class="example-header__logo" aria-label=${i18n("AITC platform logo")}>
-						<span class="example-header__logo-segment example-header__logo-segment--ats">AT&amp;S</span>
-						<span class="example-header__logo-segment example-header__logo-segment--aitc">AITC</span>
-					</div>
-					<div class="example-header__session flex items-center gap-2 min-w-0">
-					${Button({
-						variant: "ghost",
-						size: "sm",
-						children: icon(Plus, "sm"),
-						onClick: () => {
-							void newSession();
-						},
-						title: i18n("New Session"),
-					})}
-
-					${
-						getDisplayTitle()
-							? isEditingTitle
-								? html`<div class="flex items-center gap-2 min-w-0">
-									${Input({
-										type: "text",
-										value: getDisplayTitle(),
-										className: "text-sm w-64 max-w-full",
-										onChange: async (e: Event) => {
-											const newTitle = (e.target as HTMLInputElement).value.trim();
-											if (newTitle && newTitle !== currentTitle && storage.sessions && currentSessionId) {
-												await storage.sessions.updateTitle(currentSessionId, newTitle);
-												currentTitle = newTitle;
-												await saveSession();
-											}
-											isEditingTitle = false;
-											renderApp();
-										},
-										onKeyDown: async (e: KeyboardEvent) => {
-											if (e.key === "Enter") {
-												const newTitle = (e.target as HTMLInputElement).value.trim();
-												if (newTitle && newTitle !== currentTitle && storage.sessions && currentSessionId) {
-													await storage.sessions.updateTitle(currentSessionId, newTitle);
-													currentTitle = newTitle;
-													await saveSession();
-												}
-												isEditingTitle = false;
-												renderApp();
-											} else if (e.key === "Escape") {
-												isEditingTitle = false;
-												renderApp();
-											}
-										},
-									})}
-								</div>`
-								: html`<button
-									class="example-header__title-button px-2 py-1 text-sm text-foreground hover:bg-secondary rounded transition-colors min-w-0"
-									@click=${() => {
-										isEditingTitle = true;
+    <div
+      class="example-shell w-full h-screen flex flex-col bg-background text-foreground overflow-hidden"
+    >
+      <div
+        class="example-header flex items-center justify-between border-b border-border shrink-0"
+      >
+        <div
+          class="example-header__brand-row flex items-center gap-3 px-4 py-3 min-w-0"
+        >
+          <div
+            class="example-header__logo"
+            aria-label=${i18n("AITC platform logo")}
+          >
+            <span
+              class="example-header__logo-segment example-header__logo-segment--ats"
+              >AT&amp;S</span
+            >
+            <span
+              class="example-header__logo-segment example-header__logo-segment--aitc"
+              >AITC</span
+            >
+          </div>
+          <div class="example-header__session flex items-center gap-2 min-w-0">
+            ${Button({
+					variant: "ghost",
+					size: "sm",
+					children: icon(Plus, "sm"),
+					onClick: () => {
+						void newSession();
+					},
+					title: i18n("New Session"),
+				})}
+            ${
+					getDisplayTitle()
+						? isEditingTitle
+							? html`<div class="flex items-center gap-2 min-w-0">
+                    ${Input({
+								type: "text",
+								value: getDisplayTitle(),
+								className: "text-sm w-64 max-w-full",
+								onChange: async (e: Event) => {
+									const newTitle = (e.target as HTMLInputElement).value.trim();
+									if (newTitle && newTitle !== currentTitle && storage.sessions && currentSessionId) {
+										await storage.sessions.updateTitle(currentSessionId, newTitle);
+										currentTitle = newTitle;
+										await saveSession();
+									}
+									isEditingTitle = false;
+									renderApp();
+								},
+								onKeyDown: async (e: KeyboardEvent) => {
+									if (e.key === "Enter") {
+										const newTitle = (e.target as HTMLInputElement).value.trim();
+										if (newTitle && newTitle !== currentTitle && storage.sessions && currentSessionId) {
+											await storage.sessions.updateTitle(currentSessionId, newTitle);
+											currentTitle = newTitle;
+											await saveSession();
+										}
+										isEditingTitle = false;
 										renderApp();
-										requestAnimationFrame(() => {
-											const input = app?.querySelector('input[type="text"]') as HTMLInputElement;
-											if (input) {
-												input.focus();
-												input.select();
-											}
-										});
-									}}
-									title=${i18n("Click to edit title")}
-								>
-									${getDisplayTitle()}
-								</button>`
-							: html`<span class="example-header__title text-base font-semibold text-foreground">${i18n("AI Coding Platform")}</span>`
-					}
-					</div>
-				</div>
-				<div class="example-header__actions flex items-center gap-1 px-2 py-2 shrink-0">
-					<theme-toggle></theme-toggle>
-					${Button({
-						variant: "ghost",
-						size: "sm",
-						children: icon(Settings, "sm"),
-						onClick: () => {
-							const providersTab = new ProvidersModelsTab();
-							providersTab.showKnownProviders = false;
-							const skillStatusTab = new SkillStatusTab();
-							skillStatusTab.skills = piRuntimeConfig.selectableSkills;
-							skillStatusTab.defaultSkills = piRuntimeConfig.defaultSkills;
-							skillStatusTab.diagnostics = piRuntimeConfig.skillDiagnostics;
-							SettingsDialog.open([
-								new LanguageTab(),
-								providersTab,
-								new ProxyTab(),
-								new DiagnosticLogsTab(),
-								skillStatusTab,
-							]);
-						},
-						title: i18n("Settings"),
-					})}
-				</div>
-			</div>
+									} else if (e.key === "Escape") {
+										isEditingTitle = false;
+										renderApp();
+									}
+								},
+							})}
+                  </div>`
+							: html`<button
+                    class="example-header__title-button px-2 py-1 text-sm text-foreground hover:bg-secondary rounded transition-colors min-w-0"
+                    @click=${() => {
+								isEditingTitle = true;
+								renderApp();
+								requestAnimationFrame(() => {
+									const input = app?.querySelector('input[type="text"]') as HTMLInputElement;
+									if (input) {
+										input.focus();
+										input.select();
+									}
+								});
+							}}
+                    title=${i18n("Click to edit title")}
+                  >
+                    ${getDisplayTitle()}
+                  </button>`
+						: html`<span
+                  class="example-header__title text-base font-semibold text-foreground"
+                  >${i18n("AI Coding Platform")}</span
+                >`
+				}
+          </div>
+        </div>
+        <div
+          class="example-header__actions flex items-center gap-1 px-2 py-2 shrink-0"
+        >
+          <theme-toggle></theme-toggle>
+          ${Button({
+					variant: "ghost",
+					size: "sm",
+					children: icon(Settings, "sm"),
+					onClick: () => {
+						const providersTab = new ProvidersModelsTab();
+						providersTab.showKnownProviders = false;
+						const skillStatusTab = new SkillStatusTab();
+						skillStatusTab.skills = piRuntimeConfig.selectableSkills;
+						skillStatusTab.defaultSkills = piRuntimeConfig.defaultSkills;
+						skillStatusTab.diagnostics = piRuntimeConfig.skillDiagnostics;
+						SettingsDialog.open([
+							new LanguageTab(),
+							providersTab,
+							new ProxyTab(),
+							new DiagnosticLogsTab(),
+							skillStatusTab,
+						]);
+					},
+					title: i18n("Settings"),
+				})}
+        </div>
+      </div>
 
-			<main class=${`example-content app-workspace flex-1 min-h-0 overflow-hidden ${activeSidebarPanel ? "app-workspace--panel-open" : ""}`}>
-				<nav class="app-side-rail" aria-label="Workspace tools">
-					<button
-						type="button"
-						class=${`app-side-rail__item ${activeSidebarPanel === "files" ? "app-side-rail__item--active" : ""}`}
-						@click=${toggleCurrentProjectFilesPanel}
-						title="Files"
-						aria-label="Files"
-						aria-pressed=${activeSidebarPanel === "files" ? "true" : "false"}
-					>
-						<span class="app-side-rail__icon">${icon(Folder, "md")}</span>
-						<span class="app-side-rail__label">Files</span>
-					</button>
-					<button
-						type="button"
-						class=${`app-side-rail__item ${activeSidebarPanel === "apps" ? "app-side-rail__item--active" : ""}`}
-						@click=${toggleGeneratedAppsPanel}
-						title="Generated Apps"
-						aria-label="Generated Apps"
-						aria-pressed=${activeSidebarPanel === "apps" ? "true" : "false"}
-					>
-						<span class="app-side-rail__icon">${icon(PanelsTopLeft, "md")}</span>
-						<span class="app-side-rail__label">APP</span>
-					</button>
-				</nav>
-				${
-					activeSidebarPanel === "files"
-						? html`
-							<aside class="current-project-files-sidebar" style=${`width: ${currentProjectFilesPanelWidth}px;`}>
-								<pi-current-project-files-panel
-									.sessionId=${currentSessionId || ""}
-									.title=${currentProjectTitle}
-									.selectedFilename=${currentProjectFilePreviewFilename}
-									@pi-open-current-project-file-preview=${openCurrentProjectFilePreview}
-								></pi-current-project-files-panel>
-							</aside>
-							<div
-								class="current-project-files-resizer"
-								role="separator"
-								aria-orientation="vertical"
-								title="Resize files panel"
-								@pointerdown=${startCurrentProjectFilesPanelResize}
-							></div>
-						`
-						: ""
-				}
-				${
-					activeSidebarPanel === "apps"
-						? html`
-							<aside class="generated-apps-sidebar" style=${`width: ${generatedAppsPanelWidth}px;`}>
-								<pi-generated-apps-panel
-									.openSession=${(sessionId: string) => loadSession(sessionId)}
-									.deleteSession=${(sessionId: string) => deleteSessionEverywhere(sessionId)}
-									.cancelRun=${(runId: string) => cancelCurrentRemoteRun(runId)}
-									.loadProjects=${loadGeneratedAppsForSessions}
-									.renameProject=${(project: { sessionId: string }, title: string) =>
-										renameSessionProject(project.sessionId, title)}
-									.selectedSessionStatus=${isActiveRunStatus(currentRunStatus) ? "running" : "idle"}
-								></pi-generated-apps-panel>
-							</aside>
-							<div
-								class="generated-apps-resizer"
-								role="separator"
-								aria-orientation="vertical"
-								title="Resize generated apps panel"
-								@pointerdown=${startGeneratedAppsPanelResize}
-							></div>
-						`
-						: ""
-				}
-				<section class="app-chat-workspace">
-					${chatPanel}
-				</section>
-				${
-					currentProjectFilePreviewFilename
-						? html`
-							<div
-								class="current-project-file-preview-resizer"
-								role="separator"
-								aria-orientation="vertical"
-								title="Resize file preview"
-								@pointerdown=${startCurrentProjectFilePreviewDrawerResize}
-							></div>
-							<pi-current-project-file-preview-drawer
-								.sessionId=${currentSessionId || ""}
-								.title=${currentProjectTitle}
-								.filename=${currentProjectFilePreviewFilename}
-								style=${`width: ${currentProjectFilePreviewDrawerWidth}px; flex-basis: ${currentProjectFilePreviewDrawerWidth}px;`}
-								@pi-close-current-project-file-preview=${closeCurrentProjectFilePreview}
-							></pi-current-project-file-preview-drawer>
-						`
-						: ""
-				}
-			</main>
-		</div>
-	`;
+      <main
+        class=${`example-content app-workspace flex-1 min-h-0 overflow-hidden ${activeSidebarPanel ? "app-workspace--panel-open" : ""}`}
+      >
+        <nav class="app-side-rail" aria-label="Workspace tools">
+          <button
+            type="button"
+            class=${`app-side-rail__item ${activeSidebarPanel === "files" ? "app-side-rail__item--active" : ""}`}
+            @click=${toggleCurrentProjectFilesPanel}
+            title="Files"
+            aria-label="Files"
+            aria-pressed=${activeSidebarPanel === "files" ? "true" : "false"}
+          >
+            <span class="app-side-rail__icon">${icon(Folder, "md")}</span>
+            <span class="app-side-rail__label">Files</span>
+          </button>
+          <button
+            type="button"
+            class=${`app-side-rail__item ${activeSidebarPanel === "apps" ? "app-side-rail__item--active" : ""}`}
+            @click=${toggleGeneratedAppsPanel}
+            title="Generated Apps"
+            aria-label="Generated Apps"
+            aria-pressed=${activeSidebarPanel === "apps" ? "true" : "false"}
+          >
+            <span class="app-side-rail__icon"
+              >${icon(PanelsTopLeft, "md")}</span
+            >
+            <span class="app-side-rail__label">APP</span>
+          </button>
+        </nav>
+        ${
+				activeSidebarPanel === "files"
+					? html`
+                <aside
+                  class="current-project-files-sidebar"
+                  style=${`width: ${currentProjectFilesPanelWidth}px;`}
+                >
+                  <pi-current-project-files-panel
+                    .sessionId=${currentSessionId || ""}
+                    .title=${currentProjectTitle}
+                    .selectedFilename=${currentProjectFilePreviewFilename}
+                    @pi-open-current-project-file-preview=${openCurrentProjectFilePreview}
+                  ></pi-current-project-files-panel>
+                </aside>
+                <div
+                  class="current-project-files-resizer"
+                  role="separator"
+                  aria-orientation="vertical"
+                  title="Resize files panel"
+                  @pointerdown=${startCurrentProjectFilesPanelResize}
+                ></div>
+              `
+					: ""
+			}
+        ${
+				activeSidebarPanel === "apps"
+					? html`
+                <aside
+                  class="generated-apps-sidebar"
+                  style=${`width: ${generatedAppsPanelWidth}px;`}
+                >
+                  <pi-generated-apps-panel
+                    .openSession=${(sessionId: string) => loadSession(sessionId)}
+                    .deleteSession=${(sessionId: string) => deleteSessionEverywhere(sessionId)}
+                    .cancelRun=${(runId: string) => cancelCurrentRemoteRun(runId)}
+                    .loadProjects=${loadGeneratedAppsForSessions}
+                    .renameProject=${(project: { sessionId: string }, title: string) =>
+								renameSessionProject(project.sessionId, title)}
+                    .selectedSessionStatus=${isActiveRunStatus(currentRunStatus) ? "running" : "idle"}
+                  ></pi-generated-apps-panel>
+                </aside>
+                <div
+                  class="generated-apps-resizer"
+                  role="separator"
+                  aria-orientation="vertical"
+                  title="Resize generated apps panel"
+                  @pointerdown=${startGeneratedAppsPanelResize}
+                ></div>
+              `
+					: ""
+			}
+        <section class="app-chat-workspace">${chatPanel}</section>
+        ${
+				currentProjectFilePreviewFilename
+					? html`
+                <div
+                  class="current-project-file-preview-resizer"
+                  role="separator"
+                  aria-orientation="vertical"
+                  title="Resize file preview"
+                  @pointerdown=${startCurrentProjectFilePreviewDrawerResize}
+                ></div>
+                <pi-current-project-file-preview-drawer
+                  .sessionId=${currentSessionId || ""}
+                  .title=${currentProjectTitle}
+                  .filename=${currentProjectFilePreviewFilename}
+                  style=${`width: ${currentProjectFilePreviewDrawerWidth}px; flex-basis: ${currentProjectFilePreviewDrawerWidth}px;`}
+                  @pi-close-current-project-file-preview=${closeCurrentProjectFilePreview}
+                ></pi-current-project-file-preview-drawer>
+              `
+					: ""
+			}
+      </main>
+    </div>
+  `;
 
 	render(appHtml, app);
 };
@@ -2131,7 +2307,9 @@ window.addEventListener(LANGUAGE_CHANGE_EVENT, () => {
 	chatPanel?.requestUpdate();
 	chatPanel?.agentInterface?.requestUpdate();
 	(
-		chatPanel?.agentInterface?.querySelector("message-editor") as { requestUpdate?: () => void } | null
+		chatPanel?.agentInterface?.querySelector("message-editor") as {
+			requestUpdate?: () => void;
+		} | null
 	)?.requestUpdate?.();
 	renderApp();
 });
@@ -2155,10 +2333,12 @@ export async function initApp() {
 
 	render(
 		html`
-			<div class="w-full h-screen flex items-center justify-center bg-background text-foreground">
-				<div class="text-muted-foreground">${i18n("Loading...")}</div>
-			</div>
-		`,
+      <div
+        class="w-full h-screen flex items-center justify-center bg-background text-foreground"
+      >
+        <div class="text-muted-foreground">${i18n("Loading...")}</div>
+      </div>
+    `,
 		app,
 	);
 

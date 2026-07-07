@@ -1,5 +1,35 @@
 import pg from "pg";
-import type { CreateRunWithMessageInput, RuntimeStore } from "./runtime-store.js";
+import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import {
+	AGENT_V2_ARTIFACT_COLUMNS,
+	AGENT_V2_DIAGNOSTIC_COLUMNS,
+	AGENT_V2_RUN_COLUMNS,
+	AGENT_V2_TASK_COLUMNS,
+	type AgentV2ArtifactRecord,
+	type AgentV2ArtifactRow,
+	type AgentV2DiagnosticRow,
+	type AgentV2RunRow,
+	type AgentV2TaskRow,
+	applyAgentV2RunUpdate,
+	buildAgentV2Artifact,
+	buildAgentV2Run,
+	buildAgentV2Task,
+	type CreateAgentV2RunInput,
+	toAgentV2ArtifactRecord,
+	toAgentV2DiagnosticRecord,
+	toAgentV2RunRecord,
+	toAgentV2TaskRecord,
+	type UpdateAgentV2RunInput,
+	type UpsertAgentV2ArtifactInput,
+	type UpsertAgentV2TaskInput,
+} from "./agent-v2-store.js";
+import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
+import type {
+	CreateRunWithMessageInput,
+	ResetAgentV2RuntimeDataOptions,
+	ResetAgentV2RuntimeDataResult,
+	RuntimeStore,
+} from "./runtime-store.js";
 import type {
 	AppendAppPreviewGoalEventInput,
 	AppendMessageInput,
@@ -128,6 +158,22 @@ interface SessionRunContext {
 
 const ACTIVE_RUN_STATUSES: readonly RunStatus[] = ["queued", "running", "cancelling"];
 const TERMINAL_RUN_STATUSES = new Set<RunStatus>(["cancelled", "completed", "failed", "interrupted"]);
+const LEGACY_RESET_TABLES = [
+	"app_preview_goal_events",
+	"app_preview_goals",
+	"run_events",
+	"messages",
+	"runs",
+	"sessions",
+] as const;
+const AGENT_V2_RESET_TABLES = [
+	"agent_v2_diagnostics",
+	"agent_v2_validations",
+	"agent_v2_artifacts",
+	"agent_v2_tasks",
+	"agent_v2_runs",
+	"agent_v2_schema_metadata",
+] as const;
 
 const SESSION_COLUMNS =
 	"session_id, client_id, title, model_json, thinking_level, created_at, updated_at, last_run_status, last_run_id";
@@ -321,6 +367,154 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		await this.query(
 			this.queryable,
 			"CREATE INDEX IF NOT EXISTS idx_app_preview_goal_events_goal ON app_preview_goal_events(client_id, session_id, id)",
+		);
+	}
+
+	async ensureAgentV2Schema(): Promise<void> {
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS agent_v2_schema_metadata (
+				schema_version INTEGER PRIMARY KEY,
+				applied_at TEXT NOT NULL
+			)
+		`,
+		);
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS agent_v2_runs (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				status TEXT NOT NULL,
+				phase TEXT NOT NULL,
+				attempt INTEGER NOT NULL,
+				input_json JSONB NOT NULL,
+				model_json JSONB NOT NULL,
+				worker_id TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				started_at TEXT,
+				ended_at TEXT,
+				error_json JSONB,
+				PRIMARY KEY (client_id, run_id),
+				FOREIGN KEY (client_id) REFERENCES clients(client_id)
+			)
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at)",
+		);
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS agent_v2_tasks (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				task_id TEXT NOT NULL,
+				parent_task_id TEXT,
+				kind TEXT NOT NULL,
+				title TEXT NOT NULL,
+				status TEXT NOT NULL,
+				depends_on_json JSONB NOT NULL,
+				input_json JSONB NOT NULL,
+				output_json JSONB NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				started_at TEXT,
+				ended_at TEXT,
+				error_json JSONB,
+				PRIMARY KEY (client_id, run_id, task_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			)
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC)",
+		);
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				artifact_id TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				path TEXT NOT NULL,
+				media_type TEXT NOT NULL,
+				checksum TEXT NOT NULL,
+				version TEXT NOT NULL,
+				source_task_id TEXT,
+				validation_status TEXT NOT NULL,
+				metadata_json JSONB NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, artifact_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			)
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)",
+		);
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS agent_v2_validations (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				validation_id TEXT NOT NULL,
+				task_id TEXT,
+				artifact_id TEXT,
+				status TEXT NOT NULL,
+				summary TEXT NOT NULL,
+				details_json JSONB NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, validation_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			)
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_agent_v2_validations_run_updated ON agent_v2_validations(client_id, run_id, updated_at DESC)",
+		);
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS agent_v2_diagnostics (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				diagnostic_id TEXT NOT NULL,
+				severity TEXT NOT NULL,
+				category TEXT NOT NULL,
+				code TEXT NOT NULL,
+				phase TEXT,
+				task_id TEXT,
+				artifact_id TEXT,
+				trace_id TEXT,
+				message TEXT NOT NULL,
+				data_json JSONB NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, diagnostic_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			)
+		`,
+		);
+		await this.query(
+			this.queryable,
+			"CREATE INDEX IF NOT EXISTS idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at ASC)",
+		);
+		await this.query(
+			this.queryable,
+			`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
+			VALUES ($1, $2)
+			ON CONFLICT(schema_version) DO NOTHING`,
+			[AGENT_V2_SCHEMA_VERSION, now()],
 		);
 	}
 
@@ -921,6 +1115,298 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		return rows.map(toAppPreviewGoalEventRecord);
 	}
 
+	async createAgentV2Run(input: CreateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
+		const run = buildAgentV2Run(input);
+		return this.withTransaction(async (tx) => {
+			await this.upsertClientWithQueryable(tx, run.clientId, run.createdAt);
+			const row = await this.queryOne<AgentV2RunRow>(
+				tx,
+				`INSERT INTO agent_v2_runs (
+					client_id,
+					run_id,
+					status,
+					phase,
+					attempt,
+					input_json,
+					model_json,
+					worker_id,
+					created_at,
+					updated_at,
+					started_at,
+					ended_at,
+					error_json
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+				RETURNING ${AGENT_V2_RUN_COLUMNS}`,
+				[
+					run.clientId,
+					run.runId,
+					run.status,
+					run.phase,
+					run.attempt,
+					run.input,
+					run.model,
+					run.workerId ?? null,
+					run.createdAt,
+					run.updatedAt,
+					run.startedAt ?? null,
+					run.endedAt ?? null,
+					run.error ?? null,
+				],
+			);
+			return requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run");
+		});
+	}
+
+	async getAgentV2Run(clientId: string, runId: string): Promise<AgentV2RunSnapshot | undefined> {
+		const row = await this.queryOne<AgentV2RunRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_RUN_COLUMNS}
+			FROM agent_v2_runs
+			WHERE client_id = $1 AND run_id = $2`,
+			[clientId, runId],
+		);
+		return row ? toAgentV2RunRecord(row) : undefined;
+	}
+
+	async updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
+		return this.withTransaction(async (tx) => {
+			const current = requiredRecord(await this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+			const next = applyAgentV2RunUpdate(current, input);
+			const row = await this.queryOne<AgentV2RunRow>(
+				tx,
+				`UPDATE agent_v2_runs
+				SET status = $3,
+					phase = $4,
+					attempt = $5,
+					worker_id = $6,
+					updated_at = $7,
+					started_at = $8,
+					ended_at = $9,
+					error_json = $10
+				WHERE client_id = $1 AND run_id = $2
+				RETURNING ${AGENT_V2_RUN_COLUMNS}`,
+				[
+					input.clientId,
+					input.runId,
+					next.status,
+					next.phase,
+					next.attempt,
+					next.workerId ?? null,
+					next.updatedAt,
+					next.startedAt ?? null,
+					next.endedAt ?? null,
+					next.error ?? null,
+				],
+			);
+			return requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run");
+		});
+	}
+
+	async upsertAgentV2Task(input: UpsertAgentV2TaskInput): Promise<AgentV2TaskNode> {
+		const task = buildAgentV2Task(input);
+		const row = await this.queryOne<AgentV2TaskRow>(
+			this.queryable,
+			`INSERT INTO agent_v2_tasks (
+				client_id,
+				run_id,
+				task_id,
+				parent_task_id,
+				kind,
+				title,
+				status,
+				depends_on_json,
+				input_json,
+				output_json,
+				created_at,
+				updated_at,
+				started_at,
+				ended_at,
+				error_json
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			ON CONFLICT(client_id, run_id, task_id) DO UPDATE SET
+				parent_task_id = excluded.parent_task_id,
+				kind = excluded.kind,
+				title = excluded.title,
+				status = excluded.status,
+				depends_on_json = excluded.depends_on_json,
+				input_json = excluded.input_json,
+				output_json = excluded.output_json,
+				updated_at = excluded.updated_at,
+				started_at = excluded.started_at,
+				ended_at = excluded.ended_at,
+				error_json = excluded.error_json
+			RETURNING ${AGENT_V2_TASK_COLUMNS}`,
+			[
+				input.clientId,
+				input.runId,
+				task.taskId,
+				task.parentTaskId ?? null,
+				task.kind,
+				task.title,
+				task.status,
+				task.dependsOn,
+				task.input,
+				task.output,
+				task.createdAt,
+				task.updatedAt,
+				task.startedAt ?? null,
+				task.endedAt ?? null,
+				task.error ?? null,
+			],
+		);
+		return requiredRecord(row ? toAgentV2TaskRecord(row) : undefined, "agent v2 task");
+	}
+
+	async listAgentV2Tasks(clientId: string, runId: string): Promise<AgentV2TaskNode[]> {
+		const rows = await this.queryRows<AgentV2TaskRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_TASK_COLUMNS}
+			FROM agent_v2_tasks
+			WHERE client_id = $1 AND run_id = $2
+			ORDER BY created_at ASC, task_id ASC`,
+			[clientId, runId],
+		);
+		return rows.map(toAgentV2TaskRecord);
+	}
+
+	async upsertAgentV2Artifact(input: UpsertAgentV2ArtifactInput): Promise<AgentV2ArtifactRecord> {
+		const artifact = buildAgentV2Artifact(input);
+		const row = await this.queryOne<AgentV2ArtifactRow>(
+			this.queryable,
+			`INSERT INTO agent_v2_artifacts (
+				client_id,
+				run_id,
+				artifact_id,
+				kind,
+				path,
+				media_type,
+				checksum,
+				version,
+				source_task_id,
+				validation_status,
+				metadata_json,
+				created_at,
+				updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			ON CONFLICT(client_id, run_id, artifact_id) DO UPDATE SET
+				kind = excluded.kind,
+				path = excluded.path,
+				media_type = excluded.media_type,
+				checksum = excluded.checksum,
+				version = excluded.version,
+				source_task_id = excluded.source_task_id,
+				validation_status = excluded.validation_status,
+				metadata_json = excluded.metadata_json,
+				updated_at = excluded.updated_at
+			RETURNING ${AGENT_V2_ARTIFACT_COLUMNS}`,
+			[
+				artifact.clientId,
+				artifact.runId,
+				artifact.artifactId,
+				artifact.kind,
+				artifact.path,
+				artifact.mediaType,
+				artifact.checksum,
+				artifact.version,
+				artifact.sourceTaskId ?? null,
+				artifact.validationStatus,
+				artifact.metadataJson,
+				artifact.createdAt,
+				artifact.updatedAt,
+			],
+		);
+		return requiredRecord(row ? toAgentV2ArtifactRecord(row) : undefined, "agent v2 artifact");
+	}
+
+	async listAgentV2Artifacts(clientId: string, runId: string): Promise<AgentV2ArtifactRecord[]> {
+		const rows = await this.queryRows<AgentV2ArtifactRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_ARTIFACT_COLUMNS}
+			FROM agent_v2_artifacts
+			WHERE client_id = $1 AND run_id = $2
+			ORDER BY created_at ASC, artifact_id ASC`,
+			[clientId, runId],
+		);
+		return rows.map(toAgentV2ArtifactRecord);
+	}
+
+	async appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): Promise<AgentV2DiagnosticEvent> {
+		const row = await this.queryOne<AgentV2DiagnosticRow>(
+			this.queryable,
+			`INSERT INTO agent_v2_diagnostics (
+				client_id,
+				run_id,
+				diagnostic_id,
+				severity,
+				category,
+				code,
+				phase,
+				task_id,
+				artifact_id,
+				trace_id,
+				message,
+				data_json,
+				created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			RETURNING ${AGENT_V2_DIAGNOSTIC_COLUMNS}`,
+			[
+				input.clientId,
+				input.runId,
+				input.diagnosticId,
+				input.severity,
+				input.category,
+				input.code,
+				input.phase ?? null,
+				input.taskId ?? null,
+				input.artifactId ?? null,
+				input.traceId ?? null,
+				input.message,
+				input.data,
+				input.createdAt,
+			],
+		);
+		return requiredRecord(row ? toAgentV2DiagnosticRecord(row) : undefined, "agent v2 diagnostic");
+	}
+
+	async listAgentV2Diagnostics(clientId: string, runId: string): Promise<AgentV2DiagnosticEvent[]> {
+		const rows = await this.queryRows<AgentV2DiagnosticRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_DIAGNOSTIC_COLUMNS}
+			FROM agent_v2_diagnostics
+			WHERE client_id = $1 AND run_id = $2
+			ORDER BY created_at ASC, diagnostic_id ASC`,
+			[clientId, runId],
+		);
+		return rows.map(toAgentV2DiagnosticRecord);
+	}
+
+	async resetAgentV2RuntimeData(options: ResetAgentV2RuntimeDataOptions = {}): Promise<ResetAgentV2RuntimeDataResult> {
+		await this.ensureSchema();
+		await this.ensureAgentV2Schema();
+
+		const appliedAt = options.now?.() ?? now();
+		return this.withTransaction(async (tx) => {
+			const legacyRowsDeletedBase = await this.deleteAllRows(tx, LEGACY_RESET_TABLES);
+			const agentV2RowsDeleted = await this.deleteAllRows(tx, AGENT_V2_RESET_TABLES);
+			const legacyRowsDeleted = {
+				...legacyRowsDeletedBase,
+				clients: options.includeClients === true ? await this.deleteTableRows(tx, "clients") : 0,
+			};
+			await this.query(
+				tx,
+				`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
+				VALUES ($1, $2)`,
+				[AGENT_V2_SCHEMA_VERSION, appliedAt],
+			);
+
+			return {
+				legacyRowsDeleted,
+				agentV2RowsDeleted,
+				schemaVersion: AGENT_V2_SCHEMA_VERSION,
+			};
+		});
+	}
+
 	async deleteSession(clientId: string, sessionId: string): Promise<boolean> {
 		return this.withTransaction(async (tx) => {
 			await this.query(tx, "DELETE FROM app_preview_goal_events WHERE client_id = $1 AND session_id = $2", [
@@ -1042,6 +1528,22 @@ export class PostgresRuntimeStore implements RuntimeStore {
 			ON CONFLICT(client_id) DO UPDATE SET updated_at = excluded.updated_at`,
 			[clientId, timestamp],
 		);
+	}
+
+	private async deleteAllRows<TableName extends string>(
+		queryable: Queryable,
+		tables: readonly TableName[],
+	): Promise<Record<TableName, number>> {
+		const counts = {} as Record<TableName, number>;
+		for (const table of tables) {
+			counts[table] = await this.deleteTableRows(queryable, table);
+		}
+		return counts;
+	}
+
+	private async deleteTableRows(queryable: Queryable, table: string): Promise<number> {
+		const result = await this.query(queryable, `DELETE FROM ${table}`);
+		return Number(result.rowCount ?? 0);
 	}
 
 	private async withTransaction<T>(callback: (queryable: Queryable) => Promise<T>): Promise<T> {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { type AgentV2RunTransportEvent, appendAgentV2RunEvent } from "../src/agent-v2-run-events.js";
 import type { LiveRunEvent, RunEventBus } from "../src/run-event-bus.js";
 import { RunEventSink, type RunEventSinkAgentEvent, type RunEventSinkStore } from "../src/run-event-sink.js";
 import type { AppendMessageInput, AppendRunEventInput, RuntimeRunRecord } from "../src/types.js";
@@ -182,6 +183,34 @@ describe("RunEventSink", () => {
 		await expect(sink.persistAgentEvent(run, { type: "agent_end" })).rejects.toThrow("redis unavailable");
 
 		expect(store.runEvents).toEqual([]);
+	});
+
+	it("persists agent v2 transport projection events through the sink", async () => {
+		const store = new RecordingStore();
+		const bus = new RecordingBus();
+		const sink = new RunEventSink({ store, bus, checkpointIntervalMs: 1_000, checkpointMinChars: 100 });
+		const event: AgentV2RunTransportEvent = {
+			type: "agent_v2.phase_changed",
+			phase: "validation",
+			attempt: 2,
+			at: "2026-07-07T00:04:00.000Z",
+		};
+
+		await appendAgentV2RunEvent(sink, run, event);
+
+		expect(bus.events.map((liveEvent) => liveEvent.type)).toEqual(["agent_v2.phase_changed"]);
+		expect(store.runEvents).toEqual([
+			{
+				clientId: run.clientId,
+				sessionId: run.sessionId,
+				runId: run.runId,
+				seq: 1,
+				type: "agent_v2.phase_changed",
+				payload: event,
+				createdAt: expect.any(String),
+			},
+		]);
+		expect(store.messages).toEqual([]);
 	});
 });
 

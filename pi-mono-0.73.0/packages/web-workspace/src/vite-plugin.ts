@@ -18,7 +18,7 @@ import {
 import { type DiagnosticArchiveExport, WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
-import { RunApiError, WorkspaceRunApiService, compactRunEventsForClient } from "./run-api-service.js";
+import { compactRunEventsForClient, RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunEventBus, type RunEventBus } from "./run-event-bus.js";
 import { RedisRunQueue } from "./run-queue.js";
 import type { RuntimeStore } from "./runtime-store.js";
@@ -111,10 +111,10 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 			deleteSessionWorkspace(clientId, sessionId) {
 				return deleteSessionWorkspace(config.clientsRootDir, sessionId, clientId);
 			},
-			},
-			appPreviewGoals,
-			runEventBus,
-		);
+		},
+		appPreviewGoals,
+		runEventBus,
+	);
 	return createConfiguredStoragePlugin({
 		config,
 		diagnostics,
@@ -160,6 +160,7 @@ function createConfiguredStoragePlugin({
 			mkdirSync(config.defaultSkillsDir, { recursive: true });
 			diagnostics.ensureDirs();
 			await runtimeDb.ensureSchema();
+			await runtimeDb.ensureAgentV2Schema();
 			writeStartupDiagnosticsOnce();
 			storageDirsReady = true;
 		})().catch((error) => {

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
-import { Script, createContext, type Context } from "node:vm";
+import { type Context, createContext, Script } from "node:vm";
 
 export interface StaticPreviewSmokeGateInput {
 	serveRoot: string;
@@ -146,17 +146,17 @@ class SmokeRuntime {
 	}
 
 	context(): Context {
-		const runtime = this;
 		const windowObject: Record<string, unknown> = {
 			document: this.document,
 			console: {
 				log: () => undefined,
 				info: () => undefined,
 				warn: () => undefined,
-				error: (...values: unknown[]) => runtime.consoleErrors.push(values.map(String).join(" ")),
+				error: (...values: unknown[]) => this.consoleErrors.push(values.map(String).join(" ")),
 			},
 			addEventListener: (type: string, listener: Listener) => this.windowTarget.addEventListener(type, listener),
-			removeEventListener: (type: string, listener: Listener) => this.windowTarget.removeEventListener(type, listener),
+			removeEventListener: (type: string, listener: Listener) =>
+				this.windowTarget.removeEventListener(type, listener),
 			dispatchEvent: (event: SmokeEvent) => this.windowTarget.dispatchEvent(event),
 			setTimeout: (listener: (...args: unknown[]) => void, _delay?: number, ...args: unknown[]) =>
 				this.enqueueTimer(() => listener(...args)),
@@ -284,7 +284,10 @@ class SmokeDocument extends SmokeEventTarget {
 	private readonly elements: SmokeElement[] = [];
 	private readonly byId = new Map<string, SmokeElement>();
 
-	constructor(html: string, private readonly missingSelectors: Set<string>) {
+	constructor(
+		html: string,
+		private readonly missingSelectors: Set<string>,
+	) {
 		super("document");
 		this.documentElement = this.createElement("html");
 		this.body = this.createElement("body");
@@ -541,9 +544,16 @@ function elementText(html: string, tagName: string, match: RegExpMatchArray): st
 }
 
 function selectorMatches(element: SmokeElement, selector: string): boolean {
-	return selector
-		.split(",")
-		.some((part) => simpleSelectorMatches(element, part.trim().split(/\s+|>|\+/).filter(Boolean).pop() ?? ""));
+	return selector.split(",").some((part) =>
+		simpleSelectorMatches(
+			element,
+			part
+				.trim()
+				.split(/\s+|>|\+/)
+				.filter(Boolean)
+				.pop() ?? "",
+		),
+	);
 }
 
 function simpleSelectorMatches(element: SmokeElement, selector: string): boolean {
@@ -576,7 +586,10 @@ function enrichListenerError(error: unknown, listener: Listener): Error {
 function sourceLineFromListener(listener: Listener, errorMessage: string): string {
 	const source = listener.toString();
 	const property = errorMessage.match(/reading ['"`]([^'"`]+)['"`]/)?.[1];
-	const lines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	const lines = source
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
 	if (property) {
 		const propertyLine = lines.find((line) => line.includes(`.${property}`) || line.includes(`[${property}`));
 		if (propertyLine) return propertyLine;
@@ -610,7 +623,9 @@ function pathIsInside(root: string, target: string): boolean {
 }
 
 function relativeCheckedPath(root: string, file: string): string {
-	const relative = normalize(file).slice(normalize(root).length).replace(/^[/\\]+/, "");
+	const relative = normalize(file)
+		.slice(normalize(root).length)
+		.replace(/^[/\\]+/, "");
 	return relative || file;
 }
 

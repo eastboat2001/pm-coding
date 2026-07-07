@@ -44,7 +44,9 @@ describe("InMemoryRunEventBus", () => {
 		await expect(bus.deleteSessionEvents("client-a", "session-a", ["run-a", "run-b"])).resolves.toBe(2);
 
 		await expect(bus.read({ ...identity, afterSeq: 0 })).resolves.toEqual([]);
-		await expect(bus.read({ ...identity, sessionId: "session-b", runId: "run-c", afterSeq: 0 })).resolves.toHaveLength(1);
+		await expect(
+			bus.read({ ...identity, sessionId: "session-b", runId: "run-c", afterSeq: 0 }),
+		).resolves.toHaveLength(1);
 	});
 });
 

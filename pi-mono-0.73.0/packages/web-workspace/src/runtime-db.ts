@@ -1,8 +1,39 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import {
+	AGENT_V2_ARTIFACT_COLUMNS,
+	AGENT_V2_DIAGNOSTIC_COLUMNS,
+	AGENT_V2_RUN_COLUMNS,
+	AGENT_V2_TASK_COLUMNS,
+	type AgentV2ArtifactRecord,
+	type AgentV2ArtifactRow,
+	type AgentV2DiagnosticRow,
+	type AgentV2RunRow,
+	type AgentV2TaskRow,
+	applyAgentV2RunUpdate,
+	buildAgentV2Artifact,
+	buildAgentV2Run,
+	buildAgentV2Task,
+	type CreateAgentV2RunInput,
+	stringifyAgentV2Json,
+	toAgentV2ArtifactRecord,
+	toAgentV2DiagnosticRecord,
+	toAgentV2RunRecord,
+	toAgentV2TaskRecord,
+	type UpdateAgentV2RunInput,
+	type UpsertAgentV2ArtifactInput,
+	type UpsertAgentV2TaskInput,
+} from "./agent-v2-store.js";
+import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
 import { isObject } from "./json.js";
-import type { CreateRunWithMessageInput, RuntimeStore } from "./runtime-store.js";
+import type {
+	CreateRunWithMessageInput,
+	ResetAgentV2RuntimeDataOptions,
+	ResetAgentV2RuntimeDataResult,
+	RuntimeStore,
+} from "./runtime-store.js";
 import type {
 	AppendAppPreviewGoalEventInput,
 	AppendMessageInput,
@@ -29,6 +60,22 @@ import type {
 export type { CreateRunWithMessageInput } from "./runtime-store.js";
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
+const LEGACY_RESET_TABLES = [
+	"app_preview_goal_events",
+	"app_preview_goals",
+	"run_events",
+	"messages",
+	"runs",
+	"sessions",
+] as const;
+const AGENT_V2_RESET_TABLES = [
+	"agent_v2_diagnostics",
+	"agent_v2_validations",
+	"agent_v2_artifacts",
+	"agent_v2_tasks",
+	"agent_v2_runs",
+	"agent_v2_schema_metadata",
+] as const;
 
 type SessionRow = {
 	session_id: string;
@@ -229,6 +276,116 @@ export class RuntimeDbStore implements RuntimeStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_app_preview_goal_events_goal ON app_preview_goal_events(client_id, session_id, id);
 		`);
+	}
+
+	ensureAgentV2Schema(): void {
+		mkdirSync(dirname(this.dbFile), { recursive: true });
+		const db = this.open();
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS agent_v2_schema_metadata (
+				schema_version INTEGER PRIMARY KEY,
+				applied_at TEXT NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS agent_v2_runs (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				status TEXT NOT NULL,
+				phase TEXT NOT NULL,
+				attempt INTEGER NOT NULL,
+				input_json TEXT NOT NULL,
+				model_json TEXT NOT NULL,
+				worker_id TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				started_at TEXT,
+				ended_at TEXT,
+				error_json TEXT,
+				PRIMARY KEY (client_id, run_id),
+				FOREIGN KEY (client_id) REFERENCES clients(client_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at);
+
+			CREATE TABLE IF NOT EXISTS agent_v2_tasks (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				task_id TEXT NOT NULL,
+				parent_task_id TEXT,
+				kind TEXT NOT NULL,
+				title TEXT NOT NULL,
+				status TEXT NOT NULL,
+				depends_on_json TEXT NOT NULL,
+				input_json TEXT NOT NULL,
+				output_json TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				started_at TEXT,
+				ended_at TEXT,
+				error_json TEXT,
+				PRIMARY KEY (client_id, run_id, task_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC);
+
+			CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				artifact_id TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				path TEXT NOT NULL,
+				media_type TEXT NOT NULL,
+				checksum TEXT NOT NULL,
+				version TEXT NOT NULL,
+				source_task_id TEXT,
+				validation_status TEXT NOT NULL,
+				metadata_json TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, artifact_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
+
+			CREATE TABLE IF NOT EXISTS agent_v2_validations (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				validation_id TEXT NOT NULL,
+				task_id TEXT,
+				artifact_id TEXT,
+				status TEXT NOT NULL,
+				summary TEXT NOT NULL,
+				details_json TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, validation_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_agent_v2_validations_run_updated ON agent_v2_validations(client_id, run_id, updated_at DESC);
+
+			CREATE TABLE IF NOT EXISTS agent_v2_diagnostics (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				diagnostic_id TEXT NOT NULL,
+				severity TEXT NOT NULL,
+				category TEXT NOT NULL,
+				code TEXT NOT NULL,
+				phase TEXT,
+				task_id TEXT,
+				artifact_id TEXT,
+				trace_id TEXT,
+				message TEXT NOT NULL,
+				data_json TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, diagnostic_id),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at ASC);
+		`);
+		db.prepare(
+			`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
+			VALUES (?, ?)
+			ON CONFLICT(schema_version) DO NOTHING`,
+		).run(AGENT_V2_SCHEMA_VERSION, now());
 	}
 
 	close(): void {
@@ -818,6 +975,297 @@ export class RuntimeDbStore implements RuntimeStore {
 		return rows.map(toAppPreviewGoalEventRecord);
 	}
 
+	createAgentV2Run(input: CreateAgentV2RunInput): AgentV2RunSnapshot {
+		const run = buildAgentV2Run(input);
+		this.upsertClient(run.clientId);
+		this.open()
+			.prepare(
+				`INSERT INTO agent_v2_runs (
+					client_id,
+					run_id,
+					status,
+					phase,
+					attempt,
+					input_json,
+					model_json,
+					worker_id,
+					created_at,
+					updated_at,
+					started_at,
+					ended_at,
+					error_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+			.run(
+				run.clientId,
+				run.runId,
+				run.status,
+				run.phase,
+				run.attempt,
+				stringifyAgentV2Json(run.input),
+				stringifyAgentV2Json(run.model),
+				run.workerId ?? null,
+				run.createdAt,
+				run.updatedAt,
+				run.startedAt ?? null,
+				run.endedAt ?? null,
+				run.error ? stringifyAgentV2Json(run.error) : null,
+			);
+		return requiredRecord(this.getAgentV2Run(run.clientId, run.runId), "agent v2 run");
+	}
+
+	getAgentV2Run(clientId: string, runId: string): AgentV2RunSnapshot | undefined {
+		const row = this.open()
+			.prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
+			.get(clientId, runId) as AgentV2RunRow | undefined;
+		return row ? toAgentV2RunRecord(row) : undefined;
+	}
+
+	updateAgentV2Run(input: UpdateAgentV2RunInput): AgentV2RunSnapshot {
+		const current = requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+		const next = applyAgentV2RunUpdate(current, input);
+		this.open()
+			.prepare(
+				`UPDATE agent_v2_runs
+				SET status = ?,
+					phase = ?,
+					attempt = ?,
+					worker_id = ?,
+					updated_at = ?,
+					started_at = ?,
+					ended_at = ?,
+					error_json = ?
+				WHERE client_id = ? AND run_id = ?`,
+			)
+			.run(
+				next.status,
+				next.phase,
+				next.attempt,
+				next.workerId ?? null,
+				next.updatedAt,
+				next.startedAt ?? null,
+				next.endedAt ?? null,
+				next.error ? stringifyAgentV2Json(next.error) : null,
+				input.clientId,
+				input.runId,
+			);
+		return requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+	}
+
+	upsertAgentV2Task(input: UpsertAgentV2TaskInput): AgentV2TaskNode {
+		const task = buildAgentV2Task(input);
+		this.open()
+			.prepare(
+				`INSERT INTO agent_v2_tasks (
+					client_id,
+					run_id,
+					task_id,
+					parent_task_id,
+					kind,
+					title,
+					status,
+					depends_on_json,
+					input_json,
+					output_json,
+					created_at,
+					updated_at,
+					started_at,
+					ended_at,
+					error_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(client_id, run_id, task_id) DO UPDATE SET
+					parent_task_id = excluded.parent_task_id,
+					kind = excluded.kind,
+					title = excluded.title,
+					status = excluded.status,
+					depends_on_json = excluded.depends_on_json,
+					input_json = excluded.input_json,
+					output_json = excluded.output_json,
+					updated_at = excluded.updated_at,
+					started_at = excluded.started_at,
+					ended_at = excluded.ended_at,
+					error_json = excluded.error_json`,
+			)
+			.run(
+				input.clientId,
+				input.runId,
+				task.taskId,
+				task.parentTaskId ?? null,
+				task.kind,
+				task.title,
+				task.status,
+				stringifyAgentV2Json(task.dependsOn),
+				stringifyAgentV2Json(task.input),
+				stringifyAgentV2Json(task.output),
+				task.createdAt,
+				task.updatedAt,
+				task.startedAt ?? null,
+				task.endedAt ?? null,
+				task.error ? stringifyAgentV2Json(task.error) : null,
+			);
+		return requiredRecord(
+			this.listAgentV2Tasks(input.clientId, input.runId).find((taskRecord) => taskRecord.taskId === input.taskId),
+			"agent v2 task",
+		);
+	}
+
+	listAgentV2Tasks(clientId: string, runId: string): AgentV2TaskNode[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_TASK_COLUMNS}
+				FROM agent_v2_tasks
+				WHERE client_id = ? AND run_id = ?
+				ORDER BY created_at ASC, task_id ASC`,
+			)
+			.all(clientId, runId) as unknown as AgentV2TaskRow[];
+		return rows.map(toAgentV2TaskRecord);
+	}
+
+	upsertAgentV2Artifact(input: UpsertAgentV2ArtifactInput): AgentV2ArtifactRecord {
+		const artifact = buildAgentV2Artifact(input);
+		this.open()
+			.prepare(
+				`INSERT INTO agent_v2_artifacts (
+					client_id,
+					run_id,
+					artifact_id,
+					kind,
+					path,
+					media_type,
+					checksum,
+					version,
+					source_task_id,
+					validation_status,
+					metadata_json,
+					created_at,
+					updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(client_id, run_id, artifact_id) DO UPDATE SET
+					kind = excluded.kind,
+					path = excluded.path,
+					media_type = excluded.media_type,
+					checksum = excluded.checksum,
+					version = excluded.version,
+					source_task_id = excluded.source_task_id,
+					validation_status = excluded.validation_status,
+					metadata_json = excluded.metadata_json,
+					updated_at = excluded.updated_at`,
+			)
+			.run(
+				artifact.clientId,
+				artifact.runId,
+				artifact.artifactId,
+				artifact.kind,
+				artifact.path,
+				artifact.mediaType,
+				artifact.checksum,
+				artifact.version,
+				artifact.sourceTaskId ?? null,
+				artifact.validationStatus,
+				stringifyAgentV2Json(artifact.metadataJson),
+				artifact.createdAt,
+				artifact.updatedAt,
+			);
+		return requiredRecord(
+			this.listAgentV2Artifacts(input.clientId, input.runId).find(
+				(artifactRecord) => artifactRecord.artifactId === input.artifactId,
+			),
+			"agent v2 artifact",
+		);
+	}
+
+	listAgentV2Artifacts(clientId: string, runId: string): AgentV2ArtifactRecord[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_ARTIFACT_COLUMNS}
+				FROM agent_v2_artifacts
+				WHERE client_id = ? AND run_id = ?
+				ORDER BY created_at ASC, artifact_id ASC`,
+			)
+			.all(clientId, runId) as unknown as AgentV2ArtifactRow[];
+		return rows.map(toAgentV2ArtifactRecord);
+	}
+
+	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): AgentV2DiagnosticEvent {
+		this.open()
+			.prepare(
+				`INSERT INTO agent_v2_diagnostics (
+					client_id,
+					run_id,
+					diagnostic_id,
+					severity,
+					category,
+					code,
+					phase,
+					task_id,
+					artifact_id,
+					trace_id,
+					message,
+					data_json,
+					created_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+			.run(
+				input.clientId,
+				input.runId,
+				input.diagnosticId,
+				input.severity,
+				input.category,
+				input.code,
+				input.phase ?? null,
+				input.taskId ?? null,
+				input.artifactId ?? null,
+				input.traceId ?? null,
+				input.message,
+				stringifyAgentV2Json(input.data),
+				input.createdAt,
+			);
+		return requiredRecord(
+			this.listAgentV2Diagnostics(input.clientId, input.runId).find(
+				(diagnostic) => diagnostic.diagnosticId === input.diagnosticId,
+			),
+			"agent v2 diagnostic",
+		);
+	}
+
+	listAgentV2Diagnostics(clientId: string, runId: string): AgentV2DiagnosticEvent[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_DIAGNOSTIC_COLUMNS}
+				FROM agent_v2_diagnostics
+				WHERE client_id = ? AND run_id = ?
+				ORDER BY created_at ASC, diagnostic_id ASC`,
+			)
+			.all(clientId, runId) as unknown as AgentV2DiagnosticRow[];
+		return rows.map(toAgentV2DiagnosticRecord);
+	}
+
+	resetAgentV2RuntimeData(options: ResetAgentV2RuntimeDataOptions = {}): ResetAgentV2RuntimeDataResult {
+		this.ensureSchema();
+		this.ensureAgentV2Schema();
+
+		const db = this.open();
+		const appliedAt = options.now?.() ?? now();
+		return this.writeTransaction(db, () => {
+			const legacyRowsDeletedBase = deleteAllRows(db, LEGACY_RESET_TABLES);
+			const agentV2RowsDeleted = deleteAllRows(db, AGENT_V2_RESET_TABLES);
+			const legacyRowsDeleted = {
+				...legacyRowsDeletedBase,
+				clients: options.includeClients === true ? deleteAllRows(db, ["clients"]).clients : 0,
+			};
+			db.prepare("INSERT INTO agent_v2_schema_metadata (schema_version, applied_at) VALUES (?, ?)").run(
+				AGENT_V2_SCHEMA_VERSION,
+				appliedAt,
+			);
+
+			return {
+				legacyRowsDeleted,
+				agentV2RowsDeleted,
+				schemaVersion: AGENT_V2_SCHEMA_VERSION,
+			};
+		});
+	}
+
 	deleteSession(clientId: string, sessionId: string): boolean {
 		const db = this.open();
 		return this.writeTransaction(db, () => {
@@ -1038,6 +1486,18 @@ function parseAppPreviewGoalEventPayload(value: string): JsonObject {
 function requiredRecord<T>(record: T | undefined, label: string): T {
 	if (!record) throw new Error(`Runtime ${label} not found`);
 	return record;
+}
+
+function deleteAllRows<TableName extends string>(
+	db: DatabaseSync,
+	tables: readonly TableName[],
+): Record<TableName, number> {
+	const counts = {} as Record<TableName, number>;
+	for (const table of tables) {
+		const result = db.prepare(`DELETE FROM ${table}`).run();
+		counts[table] = Number(result.changes);
+	}
+	return counts;
 }
 
 function now(): string {

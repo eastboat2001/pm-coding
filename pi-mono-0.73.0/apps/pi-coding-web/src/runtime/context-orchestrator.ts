@@ -48,14 +48,14 @@ export interface ContextOrchestratorDecision {
 	retained: {
 		currentObjective: boolean;
 		requirementsSummary: boolean;
-			activeFileSet: boolean;
-			nextBestStep: boolean;
-			specExecution: boolean;
-			taskState: boolean;
-		};
-		compactions: ProjectContextCompactionSummary[];
-		packet: ContextPacket;
-	}
+		activeFileSet: boolean;
+		nextBestStep: boolean;
+		specExecution: boolean;
+		taskState: boolean;
+	};
+	compactions: ProjectContextCompactionSummary[];
+	packet: ContextPacket;
+}
 
 export interface ContextOrchestrationResult {
 	messages: AgentMessage[];
@@ -97,13 +97,13 @@ export async function prepareContextPacket(
 		retained: {
 			currentObjective: packet.currentObjective.length > 0,
 			requirementsSummary: packet.requirementsSummary.length > 0,
-				activeFileSet: packet.activeFileSet.length > 0,
-				nextBestStep: packet.nextBestStep.length > 0,
-				specExecution: packet.specExecution !== undefined,
-				taskState: packet.taskState.specChecklist.length > 0 || packet.taskState.validationFailures.length > 0,
-			},
-			compactions,
-			packet,
+			activeFileSet: packet.activeFileSet.length > 0,
+			nextBestStep: packet.nextBestStep.length > 0,
+			specExecution: packet.specExecution !== undefined,
+			taskState: packet.taskState.specChecklist.length > 0 || packet.taskState.validationFailures.length > 0,
+		},
+		compactions,
+		packet,
 	};
 	options.onDecision?.(decision);
 	return { messages: preparedMessages, packet, decision };
@@ -137,7 +137,9 @@ function buildContextPacket(
 	const openProblems = [
 		...(capabilityPlan?.requiresClarification ? ["Capability request needs clarification before execution."] : []),
 		...(currentErrors.length > 0 ? ["Current project/tool errors must be resolved before final preview."] : []),
-		...(taskState.validationFailures.length > 0 ? ["Validation failures must be resolved before final preview."] : []),
+		...(taskState.validationFailures.length > 0
+			? ["Validation failures must be resolved before final preview."]
+			: []),
 		...(specExecution && specExecution.missingReads.length > 0
 			? ["Spec execution files must be read before implementation edits."]
 			: []),
@@ -200,13 +202,13 @@ function formatContextPacket(packet: ContextPacket): string {
 		formatList("design_decisions", packet.designDecisions),
 		formatList("active_file_set", packet.activeFileSet),
 		formatList("open_problems", packet.openProblems),
-			formatList("current_errors", packet.currentErrors),
-			formatList("required_rereads", packet.requiredRereads),
-			formatSpecExecution(packet.specExecution),
-			formatTaskState(packet.taskState),
-			`next_best_step: ${packet.nextBestStep}`,
-			`compacted_tool_history: ${packet.compactedToolHistory.strategy}; required_rereads_before_edit=${packet.compactedToolHistory.requiredRereadsBeforeEdit}`,
-			"[/Context packet]",
+		formatList("current_errors", packet.currentErrors),
+		formatList("required_rereads", packet.requiredRereads),
+		formatSpecExecution(packet.specExecution),
+		formatTaskState(packet.taskState),
+		`next_best_step: ${packet.nextBestStep}`,
+		`compacted_tool_history: ${packet.compactedToolHistory.strategy}; required_rereads_before_edit=${packet.compactedToolHistory.requiredRereadsBeforeEdit}`,
+		"[/Context packet]",
 	].join("\n");
 }
 
@@ -250,7 +252,9 @@ function latestUserObjective(messages: AgentMessage[]): string {
 
 function summarizeRequirements(objective: string, specArtifact?: SpecArtifact): string[] {
 	if (specArtifact?.requirements.length) {
-		return specArtifact.requirements.map((requirement) => truncateText(requirement.text, MAX_TEXT_CHARS)).slice(0, MAX_SUMMARY_ITEMS);
+		return specArtifact.requirements
+			.map((requirement) => truncateText(requirement.text, MAX_TEXT_CHARS))
+			.slice(0, MAX_SUMMARY_ITEMS);
 	}
 	const parts = objective
 		.split(/(?:\r?\n|[.;])/)
@@ -353,7 +357,10 @@ function collectValidationResults(messages: AgentMessage[]): ValidationResult[] 
 		const errors = readStringArray(toolResult.details, "errors");
 		results.push({
 			status,
-			errors: errors.length > 0 ? errors.map((error) => truncateText(error, MAX_TEXT_CHARS)) : [truncateText(normalizeWhitespace(text), MAX_TEXT_CHARS)],
+			errors:
+				errors.length > 0
+					? errors.map((error) => truncateText(error, MAX_TEXT_CHARS))
+					: [truncateText(normalizeWhitespace(text), MAX_TEXT_CHARS)],
 		});
 	}
 	return results;

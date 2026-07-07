@@ -38,6 +38,7 @@ import {
 	WorkspaceSkillService,
 	workspaceContext,
 } from "@mariozechner/pi-web-workspace";
+import { selectApplicationGenerationRuntime } from "../agent-v2/runtime-entry.js";
 import type { DiagnosticClient, DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
 import { createLoggedStreamFn } from "../diagnostics/model-stream-logger.js";
 import {
@@ -68,6 +69,13 @@ import { readServerProviderApiKey } from "./provider-keys.js";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
+
+export async function ensureRuntimeSchemas(
+	runtimeDb: Pick<RuntimeStore, "ensureSchema" | "ensureAgentV2Schema">,
+): Promise<void> {
+	await runtimeDb.ensureSchema();
+	await runtimeDb.ensureAgentV2Schema();
+}
 
 async function main(): Promise<void> {
 	const config = loadStorageConfig(process.cwd());
@@ -101,7 +109,7 @@ async function main(): Promise<void> {
 	let runEventBus: RedisRunEventBus | undefined;
 	try {
 		runtimeDb = createRuntimeStore(config);
-		await runtimeDb.ensureSchema();
+		await ensureRuntimeSchemas(runtimeDb);
 
 		const queue = new RedisRunQueue({
 			redisUrl: config.redisUrl,
@@ -456,6 +464,9 @@ type CreateRunAgentOptions = {
 };
 
 export function createRunAgent(input: WorkerAgentInput, options: CreateRunAgentOptions): WorkerAgent {
+	selectApplicationGenerationRuntime({
+		requestedVersion: process.env.PI_APP_AGENT_VERSION,
+	});
 	const messages = toInitialAgentMessages(input.messages);
 	const runMessages = toAgentMessages(input.messages);
 	const defaultSkillNames = options.defaultSkills.map((skill) => skill.name);

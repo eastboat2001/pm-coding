@@ -4,9 +4,12 @@ import {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
 	AGENT_V2_DOCUMENT_COLUMNS,
+	AGENT_V2_RUN_EVENT_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
 	AGENT_V2_VALIDATION_COLUMNS,
+	type AgentV2RunEventRecord,
+	type AgentV2RunEventRow,
 	type AgentV2ArtifactRecord,
 	type AgentV2ArtifactRow,
 	type AgentV2DiagnosticRow,
@@ -22,10 +25,12 @@ import {
 	buildAgentV2Run,
 	buildAgentV2Task,
 	buildAgentV2Validation,
+	type AppendAgentV2RunEventInput,
 	type CreateAgentV2RunInput,
 	toAgentV2ArtifactRecord,
 	toAgentV2DiagnosticRecord,
 	toAgentV2DocumentRecord,
+	toAgentV2RunEventRecord,
 	toAgentV2RunRecord,
 	toAgentV2TaskRecord,
 	toAgentV2ValidationRecord,
@@ -184,6 +189,7 @@ const AGENT_V2_RESET_TABLES = [
 	"agent_v2_documents",
 	"agent_v2_artifacts",
 	"agent_v2_tasks",
+	"agent_v2_run_events",
 	"agent_v2_runs",
 	"agent_v2_schema_metadata",
 ] as const;
@@ -418,6 +424,21 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		await this.query(
 			this.queryable,
 			"CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at)",
+		);
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS agent_v2_run_events (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				seq INTEGER NOT NULL,
+				event_type TEXT NOT NULL,
+				payload_json JSONB NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, seq),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			)
+		`,
 		);
 		await this.query(
 			this.queryable,
@@ -1241,6 +1262,50 @@ export class PostgresRuntimeStore implements RuntimeStore {
 			);
 			return requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run");
 		});
+	}
+
+	async appendAgentV2RunEvent(input: AppendAgentV2RunEventInput): Promise<AgentV2RunEventRecord> {
+		const createdAt = input.createdAt ?? now();
+		return this.withTransaction(async (tx) => {
+			requiredRecord(await this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+			const seq =
+				input.seq ??
+				toNumber(
+					(
+						await this.queryOne<SeqRow>(
+							tx,
+							"SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM agent_v2_run_events WHERE client_id = $1 AND run_id = $2",
+							[input.clientId, input.runId],
+						)
+					)?.seq,
+				);
+			const row = await this.queryOne<AgentV2RunEventRow>(
+				tx,
+				`INSERT INTO agent_v2_run_events (
+					client_id,
+					run_id,
+					seq,
+					event_type,
+					payload_json,
+					created_at
+				) VALUES ($1, $2, $3, $4, $5, $6)
+				RETURNING ${AGENT_V2_RUN_EVENT_COLUMNS}`,
+				[input.clientId, input.runId, seq, input.type, input.payload, createdAt],
+			);
+			return requiredRecord(row ? toAgentV2RunEventRecord(row) : undefined, "agent v2 run event");
+		});
+	}
+
+	async listAgentV2RunEvents(clientId: string, runId: string, afterSeq: number): Promise<AgentV2RunEventRecord[]> {
+		const rows = await this.queryRows<AgentV2RunEventRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_RUN_EVENT_COLUMNS}
+			FROM agent_v2_run_events
+			WHERE client_id = $1 AND run_id = $2 AND seq > $3
+			ORDER BY seq ASC`,
+			[clientId, runId, afterSeq],
+		);
+		return rows.map(toAgentV2RunEventRecord);
 	}
 
 	async upsertAgentV2Task(input: UpsertAgentV2TaskInput): Promise<AgentV2TaskNode> {

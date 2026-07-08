@@ -107,6 +107,59 @@ describe("AgentV2RunApiService", () => {
 		}
 	});
 
+	it("startRun marks the run interrupted with a retryable enqueue error when queue enqueue fails", async () => {
+		const store = new GuardedStore([]);
+		const events = new RecordingEventLog();
+		const service = new AgentV2RunApiService({
+			store,
+			queue: new FailingQueue("redis unavailable"),
+			events,
+			now: () => "2026-07-08T09:05:00.000Z",
+			createRunId: () => "run-enqueue-failed",
+		});
+
+		await expect(
+			service.startRun("client-a", {
+				input: { prompt: "Build the gateway", sessionId: "session-a", title: "Gateway" },
+				model: { provider: "test", id: "local" },
+				createdAt: "2026-07-08T09:00:00.000Z",
+			}),
+		).rejects.toMatchObject({
+			name: "AgentV2RunApiError",
+			statusCode: 503,
+			message: "Failed to enqueue agent v2 run: redis unavailable",
+		});
+
+		await expect(store.getAgentV2Run("client-a", "run-enqueue-failed")).resolves.toMatchObject({
+			clientId: "client-a",
+			runId: "run-enqueue-failed",
+			status: "interrupted",
+			phase: "intake",
+			endedAt: "2026-07-08T09:05:00.000Z",
+			updatedAt: "2026-07-08T09:05:00.000Z",
+			error: {
+				code: "agent_v2.run_enqueue_failed",
+				message: "redis unavailable",
+				retryable: true,
+			},
+		});
+		expect(events.appendCalls).toEqual([
+			{
+				clientId: "client-a",
+				runId: "run-enqueue-failed",
+				type: "agent_v2.phase_changed",
+				payload: {
+					type: "agent_v2.phase_changed",
+					phase: "intake",
+					status: "interrupted",
+					attempt: 1,
+					at: "2026-07-08T09:05:00.000Z",
+				},
+				createdAt: "2026-07-08T09:05:00.000Z",
+			},
+		]);
+	});
+
 	it("cancelRun on a queued run requests queue cancellation, marks the run cancelled, and emits a phase/status event", async () => {
 		const { store } = createSqliteStore();
 		const queue = createAgentV2RunQueue(new InMemoryRunQueue());
@@ -466,11 +519,27 @@ class NoopQueue implements AgentV2RunQueue {
 	async requeueActive(): Promise<number> {
 		return 0;
 	}
+	async renewLease(): Promise<boolean> {
+		return true;
+	}
+	async releaseExpiredClaims(): Promise<[]> {
+		return [];
+	}
 	async requestCancel(): Promise<void> {}
 	async isCancelRequested(): Promise<boolean> {
 		return false;
 	}
 	async close(): Promise<void> {}
+}
+
+class FailingQueue extends NoopQueue {
+	constructor(private readonly message: string) {
+		super();
+	}
+
+	override async enqueue(): Promise<void> {
+		throw new Error(this.message);
+	}
 }
 
 function runKey(clientId: string, runId: string): string {

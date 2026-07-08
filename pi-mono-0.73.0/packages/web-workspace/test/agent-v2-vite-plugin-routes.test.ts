@@ -102,6 +102,22 @@ describe("agent v2 Vite runtime routes", () => {
 		expect(api.calls).toContainEqual({ method: "listRunEvents", clientId: CLIENT_ID, runId: "run-a", afterSeq: 1 });
 	});
 
+	it("returns 404 for JSON v2 event replay when the run is missing", async () => {
+		const api = new RecordingAgentV2RunApi();
+		api.getRunResult = undefined;
+		api.listRunEventsResult = [runEvent(2)];
+		const harness = createHarness({ agentV2RunApi: api });
+
+		const response = await dispatch(harness.middleware, {
+			method: "GET",
+			url: `${PREFIX}/missing-run/events?afterSeq=1`,
+		});
+
+		expect(response.statusCode).toBe(404);
+		expect(JSON.parse(response.body)).toEqual({ error: "Agent v2 run not found." });
+		expect(api.calls.map((call) => call.method)).toEqual(["getRun"]);
+	});
+
 	it("streams durable and live v2 events as SSE", async () => {
 		const api = new RecordingAgentV2RunApi();
 		api.getRunResult = runSnapshot({ runId: "run-a" });
@@ -535,6 +551,8 @@ function createRealAgentV2RunApiForRouteTest(): AgentV2RunApiService {
 			claim: vi.fn(async () => undefined),
 			complete: vi.fn(async () => undefined),
 			requeueActive: vi.fn(async () => 0),
+			renewLease: vi.fn(async () => true),
+			releaseExpiredClaims: vi.fn(async () => []),
 			requestCancel: vi.fn(async () => undefined),
 			isCancelRequested: vi.fn(async () => false),
 			close: vi.fn(async () => undefined),

@@ -13,6 +13,12 @@ export function createAgentV2RunQueue(queue) {
         requeueActive(workerId) {
             return queue.requeueActive(workerId);
         },
+        renewLease(run, workerId) {
+            return queue.renewLease(toAgentV2Identity(run), workerId);
+        },
+        async releaseExpiredClaims() {
+            return (await queue.releaseExpiredClaims()).map(fromActiveClaim);
+        },
         requestCancel(run) {
             return queue.requestCancel(toAgentV2Identity(run));
         },
@@ -32,6 +38,15 @@ function fromClaimedRun(run) {
         throw new Error("Agent v2 queue claim is missing runId");
     }
     return { clientId: run.clientId, runId: run.runId };
+}
+function fromActiveClaim(run) {
+    return {
+        ...fromClaimedRun(run),
+        workerId: run.workerId,
+        claimedAtMs: run.claimedAtMs,
+        heartbeatAtMs: run.heartbeatAtMs,
+        leaseExpiresAtMs: run.leaseExpiresAtMs,
+    };
 }
 function toAgentV2Identity(run) {
     if (typeof run.clientId !== "string" || run.clientId.length === 0) {

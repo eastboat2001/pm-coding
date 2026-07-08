@@ -1,4 +1,4 @@
-import type { ClaimedRun, RunQueue } from "./run-queue.js";
+import type { ActiveRunClaim, ClaimedRun, RunQueue } from "./run-queue.js";
 
 export interface AgentV2RunQueueIdentity {
 	clientId: string;
@@ -7,11 +7,20 @@ export interface AgentV2RunQueueIdentity {
 
 export type AgentV2ClaimedRun = AgentV2RunQueueIdentity;
 
+export interface AgentV2ActiveRunClaim extends AgentV2RunQueueIdentity {
+	workerId: string;
+	claimedAtMs: number;
+	heartbeatAtMs: number;
+	leaseExpiresAtMs: number;
+}
+
 export interface AgentV2RunQueue {
 	enqueue(run: AgentV2RunQueueIdentity): Promise<void>;
 	claim(workerId: string, timeoutMs: number): Promise<AgentV2ClaimedRun | undefined>;
 	complete(run: AgentV2RunQueueIdentity, workerId: string): Promise<void>;
 	requeueActive(workerId: string): Promise<number>;
+	renewLease(run: AgentV2RunQueueIdentity, workerId: string): Promise<boolean>;
+	releaseExpiredClaims(): Promise<AgentV2ActiveRunClaim[]>;
 	requestCancel(run: AgentV2RunQueueIdentity): Promise<void>;
 	isCancelRequested(run: AgentV2RunQueueIdentity): Promise<boolean>;
 	close(): Promise<void>;
@@ -31,6 +40,12 @@ export function createAgentV2RunQueue(queue: RunQueue): AgentV2RunQueue {
 		},
 		requeueActive(workerId) {
 			return queue.requeueActive(workerId);
+		},
+		renewLease(run, workerId) {
+			return queue.renewLease(toAgentV2Identity(run), workerId);
+		},
+		async releaseExpiredClaims() {
+			return (await queue.releaseExpiredClaims()).map(fromActiveClaim);
 		},
 		requestCancel(run) {
 			return queue.requestCancel(toAgentV2Identity(run));
@@ -52,6 +67,16 @@ function fromClaimedRun(run: ClaimedRun): AgentV2ClaimedRun {
 		throw new Error("Agent v2 queue claim is missing runId");
 	}
 	return { clientId: run.clientId, runId: run.runId };
+}
+
+function fromActiveClaim(run: ActiveRunClaim): AgentV2ActiveRunClaim {
+	return {
+		...fromClaimedRun(run),
+		workerId: run.workerId,
+		claimedAtMs: run.claimedAtMs,
+		heartbeatAtMs: run.heartbeatAtMs,
+		leaseExpiresAtMs: run.leaseExpiresAtMs,
+	};
 }
 
 function toAgentV2Identity(run: AgentV2RunQueueIdentity): AgentV2RunQueueIdentity {

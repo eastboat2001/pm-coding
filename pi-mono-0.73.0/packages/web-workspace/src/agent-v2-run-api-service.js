@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { AgentV2RunInputContractError, validateAgentV2RunInput, } from "./agent-v2-run-input-contract.js";
+import { AgentV2RunInputContractError, validateAgentV2RunInput } from "./agent-v2-run-input-contract.js";
 export class AgentV2RunApiError extends Error {
     statusCode;
     constructor(message, statusCode) {
@@ -32,7 +32,12 @@ export class AgentV2RunApiService {
             createdAt,
             updatedAt: request.updatedAt ?? createdAt,
         });
-        await this.queue.enqueue({ clientId: run.clientId, runId: run.runId });
+        try {
+            await this.queue.enqueue({ clientId: run.clientId, runId: run.runId });
+        }
+        catch (error) {
+            throw await this.handleEnqueueFailure(run, error);
+        }
         await this.events.append({
             clientId: run.clientId,
             runId: run.runId,
@@ -94,6 +99,27 @@ export class AgentV2RunApiService {
     async listRunEvents(clientId, runId, afterSeq) {
         return await this.events.list(clientId, runId, afterSeq);
     }
+    async handleEnqueueFailure(run, error) {
+        const updatedAt = this.now();
+        const message = errorMessage(error);
+        const interrupted = await this.store.updateAgentV2RunWithResult({
+            clientId: run.clientId,
+            runId: run.runId,
+            status: "interrupted",
+            updatedAt,
+            endedAt: updatedAt,
+            error: {
+                code: "agent_v2.run_enqueue_failed",
+                message,
+                retryable: true,
+            },
+            expectedStatuses: ["queued"],
+        });
+        if (interrupted.applied) {
+            await this.appendPhaseEvent(interrupted.run, interrupted.run.status);
+        }
+        return new AgentV2RunApiError(`Failed to enqueue agent v2 run: ${message}`, 503);
+    }
     async appendPhaseEvent(run, status) {
         await this.events.append({
             clientId: run.clientId,
@@ -130,5 +156,10 @@ function validateStartRunInput(input) {
         }
         throw error;
     }
+}
+function errorMessage(error) {
+    if (error instanceof Error)
+        return error.message;
+    return String(error);
 }
 //# sourceMappingURL=agent-v2-run-api-service.js.map

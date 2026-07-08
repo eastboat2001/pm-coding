@@ -673,6 +673,9 @@ async function handleAgentV2RuntimeRunsApi(method, route, url, req, res, runApi,
                 await streamAgentV2RunEvents(res, req, runApi, runEventBus, runEventLog, clientId, runId, afterSeq);
                 return;
             }
+            const run = await runApi.getRun(clientId, runId);
+            if (!run)
+                throw new AgentV2RunApiError("Agent v2 run not found.", 404);
             sendJson(res, { events: await runApi.listRunEvents(clientId, runId, afterSeq) });
             return;
         }

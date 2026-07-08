@@ -3,6 +3,7 @@ import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 50;
 const DEFAULT_IDLE_SLEEP_MS = 25;
+const DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_STEPS_PER_RUN = 256;
 export class AgentV2WorkerService {
     activeAbortControllers = new Map();
@@ -13,6 +14,7 @@ export class AgentV2WorkerService {
     events;
     execution;
     idleSleepMs;
+    leaseHeartbeatIntervalMs;
     loops = [];
     maxStepsPerRun;
     now;
@@ -32,6 +34,7 @@ export class AgentV2WorkerService {
         this.claimTimeoutMs = options.claimTimeoutMs ?? DEFAULT_CLAIM_TIMEOUT_MS;
         this.cancelPollIntervalMs = options.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS;
         this.idleSleepMs = options.idleSleepMs ?? DEFAULT_IDLE_SLEEP_MS;
+        this.leaseHeartbeatIntervalMs = options.leaseHeartbeatIntervalMs ?? DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS;
         this.maxStepsPerRun = options.maxStepsPerRun ?? DEFAULT_MAX_STEPS_PER_RUN;
     }
     async start() {
@@ -96,6 +99,7 @@ export class AgentV2WorkerService {
     async recoverOwnedRuns() {
         await this.queue.requeueActive(this.workerId);
         await this.markOwnedRunsInterrupted();
+        await this.recoverExpiredClaims();
     }
     async appendDiagnostic(run, code, message) {
         const diagnostic = createAgentV2DiagnosticEvent({
@@ -178,11 +182,20 @@ export class AgentV2WorkerService {
         this.activeAbortControllers.set(key, abortController);
         let current = initialRun;
         let cancelRequested = false;
+        let leaseLost = false;
         const cancelPoll = setInterval(() => {
             void this.pollCancellation(current, abortController).then((wasRequested) => {
                 cancelRequested ||= wasRequested;
             });
         }, this.cancelPollIntervalMs);
+        const leaseHeartbeat = setInterval(() => {
+            void this.queue.renewLease({ clientId: initialRun.clientId, runId: initialRun.runId }, this.workerId).then((refreshed) => {
+                if (refreshed || leaseLost)
+                    return;
+                leaseLost = true;
+                abortController.abort();
+            });
+        }, this.leaseHeartbeatIntervalMs);
         try {
             for (let steps = 0; steps < this.maxStepsPerRun; steps += 1) {
                 if (this.stopping) {
@@ -192,6 +205,10 @@ export class AgentV2WorkerService {
                 current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
                 if (isTerminalRun(current.status))
                     return;
+                if (leaseLost) {
+                    await this.interruptRun(current);
+                    return;
+                }
                 if (current.status === "cancelling") {
                     await this.cancelRun(current);
                     return;
@@ -217,6 +234,10 @@ export class AgentV2WorkerService {
                 current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
                 if (isTerminalRun(current.status))
                     return;
+                if (leaseLost) {
+                    await this.interruptRun(current);
+                    return;
+                }
                 if (this.stopping) {
                     await this.interruptRun(current);
                     return;
@@ -251,6 +272,10 @@ export class AgentV2WorkerService {
             const latest = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
             if (isTerminalRun(latest.status))
                 return;
+            if (leaseLost) {
+                await this.interruptRun(latest);
+                return;
+            }
             if (this.stopping) {
                 await this.interruptRun(latest);
                 return;
@@ -268,6 +293,7 @@ export class AgentV2WorkerService {
         }
         finally {
             clearInterval(cancelPoll);
+            clearInterval(leaseHeartbeat);
             this.activeAbortControllers.delete(key);
         }
     }
@@ -306,6 +332,21 @@ export class AgentV2WorkerService {
     async markOwnedRunsInterrupted() {
         for (const run of await this.store.listAgentV2RunsByWorker(this.workerId)) {
             await this.interruptRun(run);
+        }
+    }
+    async recoverExpiredClaims() {
+        for (const claim of await this.queue.releaseExpiredClaims()) {
+            const run = await this.store.getAgentV2Run(claim.clientId, claim.runId);
+            if (!run) {
+                continue;
+            }
+            if (run.status === "queued") {
+                await this.queue.enqueue({ clientId: claim.clientId, runId: claim.runId });
+                continue;
+            }
+            if (run.status === "running" || run.status === "cancelling") {
+                await this.interruptRun(run);
+            }
         }
     }
     async pollCancellation(run, abortController) {

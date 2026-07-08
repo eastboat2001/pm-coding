@@ -3,7 +3,7 @@ import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
-import type { AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
+import type { AgentV2ActiveRunClaim, AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import {
 	type AgentV2RunEventRecord,
 	type AgentV2RunUpdateResult,
@@ -512,6 +512,103 @@ describe("AgentV2WorkerService", () => {
 		expect(store.getRunSnapshot("client-a", "run-recover-running")).toMatchObject({ status: "interrupted" });
 		expect(store.getRunSnapshot("client-a", "run-recover-cancelling")).toMatchObject({ status: "interrupted" });
 	});
+
+	it("recoverOwnedRuns reclaims expired claims from other workers and does not overwrite terminal runs", async () => {
+		const store = new MemoryWorkerStore();
+		store.createOwnedActiveRun("client-a", "run-stale-running", "running", "worker-b");
+		store.createQueuedRun("client-a", "run-stale-queued");
+		store.createOwnedActiveRun("client-a", "run-terminal", "running", "worker-b");
+		store.forceUpdate({
+			clientId: "client-a",
+			runId: "run-terminal",
+			status: "succeeded",
+			phase: "delivery",
+			endedAt: "2026-07-08T09:06:30.000Z",
+			updatedAt: "2026-07-08T09:06:30.000Z",
+		});
+		const queue = new RecordingQueue();
+		queue.expiredClaims = [
+			{
+				clientId: "client-a",
+				runId: "run-stale-running",
+				workerId: "worker-b",
+				claimedAtMs: 1,
+				heartbeatAtMs: 2,
+				leaseExpiresAtMs: 3,
+			},
+			{
+				clientId: "client-a",
+				runId: "run-stale-queued",
+				workerId: "worker-b",
+				claimedAtMs: 1,
+				heartbeatAtMs: 2,
+				leaseExpiresAtMs: 3,
+			},
+			{
+				clientId: "client-a",
+				runId: "run-terminal",
+				workerId: "worker-b",
+				claimedAtMs: 1,
+				heartbeatAtMs: 2,
+				leaseExpiresAtMs: 3,
+			},
+		];
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-08T09:06:00.000Z", "2026-07-08T09:06:01.000Z"),
+		});
+
+		await worker.recoverOwnedRuns();
+
+		expect(queue.releaseExpiredClaimsCalls).toBe(1);
+		expect(queue.enqueuedClaims).toEqual([{ clientId: "client-a", runId: "run-stale-queued" }]);
+		expect(store.getRunSnapshot("client-a", "run-stale-running")).toMatchObject({ status: "interrupted" });
+		expect(store.getRunSnapshot("client-a", "run-stale-queued")).toMatchObject({ status: "queued" });
+		expect(store.getRunSnapshot("client-a", "run-terminal")).toMatchObject({ status: "succeeded" });
+	});
+
+	it("refreshes the queue lease while executing a claimed run", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-heartbeat");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-heartbeat" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: {
+				executeNextTask: vi.fn(async () => {
+					await new Promise((resolve) => {
+						setTimeout(resolve, 40);
+					});
+					return { status: "complete", diagnosticIds: [] } satisfies AgentV2ExecutionStepResult;
+				}),
+			},
+			workerId: "worker-a",
+			now: timestampSequence(
+				"2026-07-08T09:07:00.000Z",
+				"2026-07-08T09:07:01.000Z",
+				"2026-07-08T09:07:02.000Z",
+				"2026-07-08T09:07:03.000Z",
+			),
+			leaseHeartbeatIntervalMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(45);
+		await expect(processing).resolves.toBe(true);
+
+		expect(queue.renewLeaseCalls.length).toBeGreaterThan(0);
+		expect(queue.renewLeaseCalls).toContainEqual({
+			clientId: "client-a",
+			runId: "run-heartbeat",
+			workerId: "worker-a",
+		});
+	});
 });
 
 class MemoryWorkerStore {
@@ -682,8 +779,12 @@ class MemoryWorkerStore {
 
 class RecordingQueue implements AgentV2RunQueue {
 	readonly completeCalls: Array<{ clientId: string; runId: string; workerId: string }> = [];
+	readonly enqueuedClaims: Array<{ clientId: string; runId: string }> = [];
 	readonly operations: string[] = [];
 	readonly requeueActiveCalls: string[] = [];
+	readonly renewLeaseCalls: Array<{ clientId: string; runId: string; workerId: string }> = [];
+	expiredClaims: AgentV2ActiveRunClaim[] = [];
+	releaseExpiredClaimsCalls = 0;
 	private readonly cancelRequested = new Set<string>();
 	private closed = false;
 	closeCount = 0;
@@ -694,6 +795,7 @@ class RecordingQueue implements AgentV2RunQueue {
 	) {}
 
 	async enqueue(run: { clientId: string; runId: string }): Promise<void> {
+		this.enqueuedClaims.push(run);
 		this.claims.push(run);
 	}
 
@@ -712,6 +814,18 @@ class RecordingQueue implements AgentV2RunQueue {
 	async requeueActive(workerId: string): Promise<number> {
 		this.requeueActiveCalls.push(workerId);
 		return 2;
+	}
+
+	async renewLease(run: { clientId: string; runId: string }, workerId: string): Promise<boolean> {
+		this.renewLeaseCalls.push({ ...run, workerId });
+		return true;
+	}
+
+	async releaseExpiredClaims(): Promise<AgentV2ActiveRunClaim[]> {
+		this.releaseExpiredClaimsCalls += 1;
+		const expired = [...this.expiredClaims];
+		this.expiredClaims = [];
+		return expired;
 	}
 
 	async requestCancel(run: { clientId: string; runId: string }): Promise<void> {

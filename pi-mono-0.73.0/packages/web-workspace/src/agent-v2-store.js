@@ -4,6 +4,7 @@ export const AGENT_V2_RUN_COLUMNS = "client_id, run_id, status, phase, attempt, 
 export const AGENT_V2_TASK_COLUMNS = "client_id, run_id, task_id, parent_task_id, kind, title, status, depends_on_json, acceptance_criteria_json, input_json, output_json, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_ARTIFACT_COLUMNS = "client_id, run_id, artifact_id, kind, path, media_type, checksum, version, source_task_id, validation_status, metadata_json, created_at, updated_at";
 export const AGENT_V2_DOCUMENT_COLUMNS = "client_id, run_id, document_id, kind, version, content_markdown, content_json, source_task_id, created_at, updated_at";
+export const AGENT_V2_RUN_EVENT_COLUMNS = "client_id, run_id, seq, event_type, payload_json, created_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS = "client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
 export const AGENT_V2_VALIDATION_COLUMNS = "client_id, run_id, validation_id, task_id, artifact_id, status, summary, details_json, created_at, updated_at";
 export function buildAgentV2Run(input) {
@@ -177,6 +178,16 @@ export function toAgentV2DocumentRecord(row) {
         ...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
         createdAt: toTimestamp(row.created_at),
         updatedAt: toTimestamp(row.updated_at),
+    };
+}
+export function toAgentV2RunEventRecord(row) {
+    return {
+        clientId: row.client_id,
+        runId: row.run_id,
+        seq: toNumber(row.seq),
+        type: row.event_type,
+        payload: parseJsonObject(row.payload_json),
+        createdAt: toTimestamp(row.created_at),
     };
 }
 export function toAgentV2ValidationRecord(row) {

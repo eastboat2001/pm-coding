@@ -4,21 +4,23 @@ import {
 	AgentV2RunEventLog,
 	AgentV2WorkerService,
 	createAgentV2RunQueue,
-	createRuntimeStore,
 	executeAgentV2NextTask,
-	loadStorageConfig,
 	RedisAgentV2RunEventBus,
-	RedisRunQueue,
 	type AgentV2RunSnapshot,
 	type AgentV2WorkerExecution,
 	type AgentV2WorkerExecutionInput,
+	type RedisAgentV2RunEventBusOptions,
+} from "@mariozechner/pi-web-workspace/agent-v2-runtime";
+import {
+	createRuntimeStore,
+	loadStorageConfig,
+	RedisRunQueue,
 	type DiagnosticLogEventInput,
 	type JsonObject,
-	type RedisAgentV2RunEventBusOptions,
 	type RuntimeStore,
 	type StorageConfig,
 	WorkspaceDiagnosticLogService,
-} from "@mariozechner/pi-web-workspace";
+} from "@mariozechner/pi-web-workspace/runtime-infra";
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 

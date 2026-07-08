@@ -96,6 +96,14 @@ export {
 	renderAgentV2ContextPacketMarkdown,
 } from "./agent-v2-context-packet.js";
 export {
+	type AdvanceAgentV2TaskInput,
+	type AgentV2RuntimeSnapshot,
+	type AgentV2RuntimeStore,
+	type LoadAgentV2RuntimeSnapshotInput,
+	advanceAgentV2Task,
+	loadAgentV2RuntimeSnapshot,
+} from "./agent-v2-runtime-core.js";
+export {
 	AGENT_V2_PHASES,
 	AGENT_V2_RUN_EVENT_TYPES,
 	AGENT_V2_RUN_STATUSES,

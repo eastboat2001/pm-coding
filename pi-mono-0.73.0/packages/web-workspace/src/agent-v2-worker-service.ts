@@ -241,13 +241,13 @@ export class AgentV2WorkerService {
 			});
 		}, this.cancelPollIntervalMs);
 		const leaseHeartbeat = setInterval(() => {
-			void this.queue.renewLease({ clientId: initialRun.clientId, runId: initialRun.runId }, this.workerId).then(
-				(refreshed) => {
+			void this.queue
+				.renewLease({ clientId: initialRun.clientId, runId: initialRun.runId }, this.workerId)
+				.then((refreshed) => {
 					if (refreshed || leaseLost) return;
 					leaseLost = true;
 					abortController.abort();
-				},
-			);
+				});
 		}, this.leaseHeartbeatIntervalMs);
 
 		try {

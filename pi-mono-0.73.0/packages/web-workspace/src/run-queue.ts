@@ -434,12 +434,7 @@ function toClaimedRun(run: RunQueueItem | ClaimedRun): ClaimedRun {
 	return { clientId: run.clientId, runId: run.runId };
 }
 
-function createActiveRunClaim(
-	run: ClaimedRun,
-	workerId: string,
-	nowMs: number,
-	leaseTtlMs: number,
-): ActiveRunClaim {
+function createActiveRunClaim(run: ClaimedRun, workerId: string, nowMs: number, leaseTtlMs: number): ActiveRunClaim {
 	return {
 		...run,
 		workerId,

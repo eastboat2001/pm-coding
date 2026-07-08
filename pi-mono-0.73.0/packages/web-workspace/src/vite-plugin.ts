@@ -58,6 +58,7 @@ const LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS = 250;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/runtime/agent-v2/runs";
 const LEGACY_RUNTIME_RUNS_API_PREFIX = "/api/runtime/runs";
+const LEGACY_RUNS_API_PREFIX = "/api/runs";
 
 export interface ConfiguredStoragePluginTestServices {
 	config: StorageConfig;
@@ -225,13 +226,14 @@ function createConfiguredStoragePlugin({
 			!req.url?.startsWith(PROJECTS_API_PREFIX) &&
 			!req.url?.startsWith(SKILLS_API_PREFIX) &&
 			!req.url?.startsWith(LOGS_API_PREFIX) &&
-				!req.url?.startsWith(SESSIONS_API_PREFIX) &&
-				!req.url?.startsWith(RUNS_API_PREFIX) &&
-				!req.url?.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX) &&
-				!req.url?.startsWith(AGENT_V2_RUNS_API_PREFIX)
-			) {
-				next();
-				return;
+			!req.url?.startsWith(SESSIONS_API_PREFIX) &&
+			!req.url?.startsWith(RUNS_API_PREFIX) &&
+			!req.url?.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX) &&
+			!req.url?.startsWith(LEGACY_RUNS_API_PREFIX) &&
+			!req.url?.startsWith(AGENT_V2_RUNS_API_PREFIX)
+		) {
+			next();
+			return;
 		}
 
 		try {
@@ -239,13 +241,15 @@ function createConfiguredStoragePlugin({
 			const url = new URL(req.url, "http://localhost");
 			const isProjectsApi = url.pathname.startsWith(PROJECTS_API_PREFIX);
 			const isSkillsApi = url.pathname.startsWith(SKILLS_API_PREFIX);
-				const isLogsApi = url.pathname.startsWith(LOGS_API_PREFIX);
-				const isSessionsApi = url.pathname.startsWith(SESSIONS_API_PREFIX);
-				const isAgentV2RunsApi = url.pathname.startsWith(AGENT_V2_RUNS_API_PREFIX);
-				const isRunsApi =
-					url.pathname.startsWith(RUNS_API_PREFIX) || url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX);
-				const prefix = isProjectsApi
-					? PROJECTS_API_PREFIX
+			const isLogsApi = url.pathname.startsWith(LOGS_API_PREFIX);
+			const isSessionsApi = url.pathname.startsWith(SESSIONS_API_PREFIX);
+			const isAgentV2RunsApi = url.pathname.startsWith(AGENT_V2_RUNS_API_PREFIX);
+			const isRunsApi =
+				url.pathname.startsWith(RUNS_API_PREFIX) ||
+				url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX) ||
+				url.pathname.startsWith(LEGACY_RUNS_API_PREFIX);
+			const prefix = isProjectsApi
+				? PROJECTS_API_PREFIX
 				: isSkillsApi
 					? SKILLS_API_PREFIX
 					: isLogsApi
@@ -257,6 +261,8 @@ function createConfiguredStoragePlugin({
 									: isRunsApi
 										? url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX)
 											? LEGACY_RUNTIME_RUNS_API_PREFIX
+											: url.pathname.startsWith(LEGACY_RUNS_API_PREFIX)
+												? LEGACY_RUNS_API_PREFIX
 											: RUNS_API_PREFIX
 										: API_PREFIX;
 			const route = url.pathname.slice(prefix.length) || "/";
@@ -868,7 +874,7 @@ async function handleRuntimeRunsApi(
 			sendJson(res, { error: "Legacy app-preview-goal routes are unavailable when appAgentVersion is v2." }, 404);
 			return;
 		}
-		if (config.appAgentVersion === "v2" && method === "POST" && (route === "/" || route === "" || route === "/start")) {
+		if (config.appAgentVersion === "v2") {
 			sendJson(
 				res,
 				{ error: "Application Generation Agent v1 runtime routes are disabled when appAgentVersion is v2." },

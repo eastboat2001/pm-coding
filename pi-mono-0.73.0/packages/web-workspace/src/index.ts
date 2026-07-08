@@ -72,7 +72,6 @@ export {
 	type AgentV2RunTransportEvent,
 	type AgentV2TaskUpdatedTransportEvent,
 	type AgentV2ValidationRecordedTransportEvent,
-	appendAgentV2RunEvent,
 } from "./agent-v2-run-events.js";
 export { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
 export {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
-import { appendAgentV2RunEvent } from "../src/agent-v2-run-events.js";
+import { appendAgentV2RunEvent } from "../src/legacy-v1-agent-v2-run-event-bridge.js";
 import {
 	AGENT_V2_DOCUMENT_COLUMNS,
 	type AgentV2DocumentRecord,

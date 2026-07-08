@@ -8,7 +8,6 @@ export { createAgentV2FileAdapter, } from "./agent-v2-file-adapter.js";
 export { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap, } from "./agent-v2-planning-bootstrap.js";
 export { planAgentV2RepairActions, } from "./agent-v2-repair-engine.js";
 export { assertAgentV2ResetConfirmation, resetAgentV2RuntimeData, } from "./agent-v2-reset.js";
-export { appendAgentV2RunEvent, } from "./agent-v2-run-events.js";
 export { advanceAgentV2Task, loadAgentV2RuntimeSnapshot, } from "./agent-v2-runtime-core.js";
 export { advanceAgentV2Phase, assertAgentV2RunTransition, createAgentV2RunSnapshot, getReadyAgentV2TaskIds, transitionAgentV2RunSnapshot, } from "./agent-v2-state-machine.js";
 export { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, stringifyAgentV2Json, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";

@@ -14,6 +14,7 @@ import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 
 const CLIENT_ID = "11111111-1111-4111-8111-111111111111";
 const PREFIX = "/api/runtime/agent-v2/runs";
+const LEGACY_RUN_API_PREFIXES = ["/api/runtime/runs", "/api/pi-runs", "/api/runs"] as const;
 const cleanupRoots: string[] = [];
 
 afterEach(() => {
@@ -113,6 +114,33 @@ describe("agent v2 Vite runtime routes", () => {
 		expect(response.statusCode).toBe(410);
 		expect(JSON.parse(response.body).error).toContain("Application Generation Agent v1 runtime routes are disabled");
 		expect(harness.legacyRunApi.startRun).not.toHaveBeenCalled();
+	});
+
+	it("disables legacy run routes in v2 default mode without calling the legacy service", async () => {
+		const harness = createHarness();
+		const cases = LEGACY_RUN_API_PREFIXES.flatMap((prefix) => [
+			{ label: `${prefix} list`, method: "GET", url: prefix },
+			{ label: `${prefix} get`, method: "GET", url: `${prefix}/legacy-run` },
+			{ label: `${prefix} status`, method: "GET", url: `${prefix}/legacy-run/status` },
+			{ label: `${prefix} events JSON`, method: "GET", url: `${prefix}/legacy-run/events?afterSeq=1` },
+			{
+				label: `${prefix} events SSE`,
+				method: "GET",
+				url: `${prefix}/legacy-run/events?afterSeq=1`,
+				headers: { accept: "text/event-stream" },
+			},
+			{ label: `${prefix} cancel`, method: "POST", url: `${prefix}/legacy-run/cancel` },
+		]);
+
+		for (const route of cases) {
+			const response = await dispatch(harness.middleware, route);
+			expect(response.statusCode, route.label).toBe(410);
+			expect(JSON.parse(response.body).error, route.label).toContain(
+				"Application Generation Agent v1 runtime routes are disabled",
+			);
+			expect(response.headers.get("Content-Type"), route.label).toBe("application/json; charset=utf-8");
+		}
+		expectLegacyRunApiUnused(harness.legacyRunApi);
 	});
 
 	it("does not expose app-preview-goal routes in v2 default mode", async () => {
@@ -337,13 +365,34 @@ function legacyRunApiThatMustNotBeCalled(): Record<string, ReturnType<typeof vi.
 		cancelRun: vi.fn(async () => {
 			throw new Error("legacy cancelRun should not be called");
 		}),
+		listRunEvents: vi.fn(async () => {
+			throw new Error("legacy listRunEvents should not be called");
+		}),
+		getRunForEvents: vi.fn(async () => {
+			throw new Error("legacy getRunForEvents should not be called");
+		}),
+		listDurableRunEvents: vi.fn(async () => {
+			throw new Error("legacy listDurableRunEvents should not be called");
+		}),
 		getAppPreviewGoal: vi.fn(async () => {
 			throw new Error("legacy getAppPreviewGoal should not be called");
+		}),
+		listAppPreviewGoalEvents: vi.fn(async () => {
+			throw new Error("legacy listAppPreviewGoalEvents should not be called");
 		}),
 		enableAppPreviewGoal: vi.fn(async () => {
 			throw new Error("legacy enableAppPreviewGoal should not be called");
 		}),
+		disableAppPreviewGoal: vi.fn(async () => {
+			throw new Error("legacy disableAppPreviewGoal should not be called");
+		}),
 	};
+}
+
+function expectLegacyRunApiUnused(legacyRunApi: Record<string, ReturnType<typeof vi.fn>>): void {
+	for (const [method, fn] of Object.entries(legacyRunApi)) {
+		expect(fn, method).not.toHaveBeenCalled();
+	}
 }
 
 function runSnapshot(overrides: Partial<AgentV2RunSnapshot>): AgentV2RunSnapshot {

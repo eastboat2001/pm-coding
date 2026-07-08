@@ -67,5 +67,3 @@ export type AgentV2RunTransportEvent =
 	| AgentV2ArtifactIndexedTransportEvent
 	| AgentV2ValidationRecordedTransportEvent
 	| AgentV2DiagnosticRecordedTransportEvent;
-
-export { appendAgentV2RunEvent } from "./legacy-v1-agent-v2-run-event-bridge.js";

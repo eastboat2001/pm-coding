@@ -3,20 +3,18 @@ import { createAgentV2DiagnosticEvent, type AgentV2DiagnosticEvent } from "./age
 import type { AgentV2ExecutionStepResult } from "./agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "./agent-v2-run-queue.js";
-import type { UpdateAgentV2RunInput } from "./agent-v2-store.js";
 import type { AgentV2Phase, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
+import type { RuntimeStore } from "./runtime-store.js";
 
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 50;
 const DEFAULT_IDLE_SLEEP_MS = 25;
 const DEFAULT_MAX_STEPS_PER_RUN = 256;
 
-export interface AgentV2WorkerStore {
-	getAgentV2Run(clientId: string, runId: string): Promise<AgentV2RunSnapshot | undefined>;
-	updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot>;
-	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): Promise<AgentV2DiagnosticEvent>;
-	listAgentV2OwnedRuns(workerId: string): Promise<AgentV2RunSnapshot[]>;
-}
+export type AgentV2WorkerStore = Pick<
+	RuntimeStore,
+	"getAgentV2Run" | "updateAgentV2Run" | "appendAgentV2Diagnostic" | "listAgentV2RunsByWorker"
+>;
 
 export interface AgentV2WorkerExecutionInput {
 	store: AgentV2WorkerStore;
@@ -199,8 +197,16 @@ export class AgentV2WorkerService {
 					await this.interruptRun(current);
 					return;
 				}
+				current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
+				if (current.status === "cancelled") return;
+				if (current.status === "cancelling") {
+					await this.cancelRun(current);
+					return;
+				}
 				cancelRequested ||= await this.pollCancellation(current, abortController);
 				if (cancelRequested) {
+					current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
+					if (current.status === "cancelled") return;
 					await this.cancelRun(current);
 					return;
 				}
@@ -213,6 +219,15 @@ export class AgentV2WorkerService {
 				});
 
 				current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
+				if (current.status === "cancelled") return;
+				const queueCancelRequested = await this.queue.isCancelRequested({
+					clientId: current.clientId,
+					runId: current.runId,
+				});
+				if (current.status === "cancelling" || queueCancelRequested) {
+					await this.cancelRun(current);
+					return;
+				}
 
 				if (step.status === "complete") {
 					await this.succeedRun(current);
@@ -238,6 +253,8 @@ export class AgentV2WorkerService {
 			);
 		} catch (error) {
 			const latest = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
+			if (latest.status === "cancelled") return;
+			cancelRequested ||= latest.status === "cancelling";
 			const aborted = abortController.signal.aborted;
 			cancelRequested ||= aborted && (await this.queue.isCancelRequested({ clientId: latest.clientId, runId: latest.runId }));
 			if (cancelRequested) {
@@ -279,7 +296,7 @@ export class AgentV2WorkerService {
 	}
 
 	private async markOwnedRunsInterrupted(): Promise<void> {
-		for (const run of await this.store.listAgentV2OwnedRuns(this.workerId)) {
+		for (const run of await this.store.listAgentV2RunsByWorker(this.workerId)) {
 			await this.interruptRun(run);
 		}
 	}

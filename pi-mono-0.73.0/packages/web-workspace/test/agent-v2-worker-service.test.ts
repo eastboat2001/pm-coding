@@ -185,6 +185,44 @@ describe("AgentV2WorkerService", () => {
 		);
 	});
 
+	it("finishes cancelled when execution returns complete after the run was externally moved to cancelling", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-cancelled-before-finalize");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-cancelled-before-finalize" }]);
+		const events = new RecordingEventLog();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events,
+			execution: new ExternalCancellingExecution(store, "client-a", "run-cancelled-before-finalize"),
+			workerId: "worker-a",
+			now: timestampSequence(
+				"2026-07-08T09:03:30.000Z",
+				"2026-07-08T09:03:31.000Z",
+				"2026-07-08T09:03:32.000Z",
+			),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(store.getRunSnapshot("client-a", "run-cancelled-before-finalize")).toMatchObject({
+			status: "cancelled",
+			phase: "cancelled",
+			endedAt: "2026-07-08T09:03:32.000Z",
+		});
+		expect(events.appendCalls).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "agent_v2.phase_changed",
+					payload: expect.objectContaining({ status: "running" }),
+				}),
+				expect.objectContaining({
+					type: "agent_v2.phase_changed",
+					payload: expect.objectContaining({ status: "cancelled", phase: "cancelled" }),
+				}),
+			]),
+		);
+	});
+
 	it("stop marks owned running and cancelling runs interrupted", async () => {
 		const store = new MemoryWorkerStore();
 		store.createOwnedActiveRun("client-a", "run-running", "running", "worker-a");
@@ -300,7 +338,7 @@ class MemoryWorkerStore {
 		return this.update(input);
 	}
 
-	async listAgentV2OwnedRuns(workerId: string): Promise<AgentV2RunSnapshot[]> {
+	async listAgentV2RunsByWorker(workerId: string): Promise<AgentV2RunSnapshot[]> {
 		return [...this.runs.values()].filter(
 			(run) => run.workerId === workerId && (run.status === "running" || run.status === "cancelling"),
 		);
@@ -398,6 +436,24 @@ class AbortAwareExecution {
 				{ once: true },
 			);
 		});
+	}
+}
+
+class ExternalCancellingExecution {
+	constructor(
+		private readonly store: MemoryWorkerStore,
+		private readonly clientId: string,
+		private readonly runId: string,
+	) {}
+
+	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
+		await this.store.updateAgentV2Run({
+			clientId: this.clientId,
+			runId: this.runId,
+			status: "cancelling",
+			updatedAt: "2026-07-08T09:03:31.000Z",
+		});
+		return { status: "complete", diagnosticIds: [] };
 	}
 }
 

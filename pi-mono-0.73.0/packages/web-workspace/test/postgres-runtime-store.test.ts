@@ -577,6 +577,65 @@ describe("PostgresRuntimeStore", () => {
 		);
 	});
 
+	it("lists owned active agent v2 runs for a worker through the shared runtime store contract", async () => {
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (
+				/^SELECT .* FROM agent_v2_runs WHERE worker_id = \$1 AND status IN \('running', 'cancelling'\) ORDER BY updated_at ASC, run_id ASC$/i.test(
+					sql,
+				)
+			) {
+				return {
+					rows: [
+						{
+							client_id: "client-a",
+							run_id: "run-running",
+							status: "running",
+							phase: "implementation",
+							attempt: 1,
+							input_json: { prompt: "Running run" },
+							model_json: { provider: "openai", id: "gpt-5" },
+							worker_id: "worker-1",
+							created_at: "2026-07-08T09:00:00.000Z",
+							updated_at: "2026-07-08T09:00:10.000Z",
+							started_at: "2026-07-08T09:00:10.000Z",
+							ended_at: null,
+							error_json: null,
+						},
+						{
+							client_id: "client-a",
+							run_id: "run-cancelling",
+							status: "cancelling",
+							phase: "implementation",
+							attempt: 1,
+							input_json: { prompt: "Cancelling run" },
+							model_json: { provider: "openai", id: "gpt-5" },
+							worker_id: "worker-1",
+							created_at: "2026-07-08T09:01:00.000Z",
+							updated_at: "2026-07-08T09:01:20.000Z",
+							started_at: "2026-07-08T09:01:10.000Z",
+							ended_at: null,
+							error_json: null,
+						},
+					],
+				};
+			}
+			return undefined;
+		});
+		const store = new PostgresRuntimeStore({ queryable });
+
+		const runs = await store.listAgentV2RunsByWorker("worker-1");
+
+		expect(runs.map((run) => [run.runId, run.status])).toEqual([
+			["run-running", "running"],
+			["run-cancelling", "cancelling"],
+		]);
+		expect(queryable.queries[0]?.values).toEqual(["worker-1"]);
+		expect(normalizeSql(queryable.queries[0]?.sql ?? "")).toContain(
+			"FROM agent_v2_runs WHERE worker_id = $1 AND status IN ('running', 'cancelling') ORDER BY updated_at ASC, run_id ASC",
+		);
+	});
+
 	it("appends and lists durable run events with client scoped queries", async () => {
 		const createdAt = "2026-06-29T04:05:06.000Z";
 		const queryable = new RecordingQueryable().on((query) => {

@@ -72,6 +72,8 @@ describe("Agent v2 state machine", () => {
 		["queued", "succeeded"],
 		["running", "queued"],
 		["cancelling", "running"],
+		["cancelling", "failed"],
+		["cancelling", "succeeded"],
 		["cancelled", "running"],
 		["interrupted", "running"],
 	] as const)("rejects illegal run transition %s -> %s", (from, to) => {

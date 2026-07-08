@@ -782,6 +782,13 @@ export class PostgresRuntimeStore {
 			ORDER BY updated_at DESC, run_id ASC`, [clientId]);
         return rows.map(toAgentV2RunRecord);
     }
+    async listAgentV2RunsByWorker(workerId) {
+        const rows = await this.queryRows(this.queryable, `SELECT ${AGENT_V2_RUN_COLUMNS}
+			FROM agent_v2_runs
+			WHERE worker_id = $1 AND status IN ('running', 'cancelling')
+			ORDER BY updated_at ASC, run_id ASC`, [workerId]);
+        return rows.map(toAgentV2RunRecord);
+    }
     async updateAgentV2Run(input) {
         return this.withTransaction(async (tx) => {
             const current = requiredRecord(await this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");

@@ -79,7 +79,7 @@ npx tsx ../../node_modules/vitest/dist/cli.js --run test/agent-v2-state-machine.
 
 ## Commit SHA
 
-- `d7b8fc8c76171fbb52a64740d66c77ed15fe6b3e`
+- `121b76c0103d6e7f2eee11efed4d578f2668fd5f`
 
 ## 自检
 
@@ -92,3 +92,46 @@ npx tsx ../../node_modules/vitest/dist/cli.js --run test/agent-v2-state-machine.
 ## 顾虑
 
 - 当前 worker 通过最小执行接口驱动任务，不直接耦合 `executeAgentV2NextTask` 的完整上下文装配；这满足 brief 的“最小可注入执行接口”要求，但真正接入生产启动路径时还需要外层适配器提供 execution input。
+
+---
+
+## Task 5 Reviewer Fix（2026-07-08）
+
+### 修改文件
+
+- `pi-mono-0.73.0/packages/web-workspace/src/agent-v2-worker-service.ts`
+- `pi-mono-0.73.0/packages/web-workspace/src/agent-v2-state-machine.ts`
+- `pi-mono-0.73.0/packages/web-workspace/src/agent-v2-state-machine.js`
+- `pi-mono-0.73.0/packages/web-workspace/src/runtime-store.ts`
+- `pi-mono-0.73.0/packages/web-workspace/src/runtime-db.ts`
+- `pi-mono-0.73.0/packages/web-workspace/src/runtime-db.js`
+- `pi-mono-0.73.0/packages/web-workspace/src/postgres-runtime-store.ts`
+- `pi-mono-0.73.0/packages/web-workspace/src/postgres-runtime-store.js`
+- `pi-mono-0.73.0/packages/web-workspace/test/agent-v2-worker-service.test.ts`
+- `pi-mono-0.73.0/packages/web-workspace/test/agent-v2-state-machine.test.ts`
+- `pi-mono-0.73.0/packages/web-workspace/test/runtime-store-contract.test.ts`
+- `pi-mono-0.73.0/packages/web-workspace/test/runtime-db.test.ts`
+- `pi-mono-0.73.0/packages/web-workspace/test/postgres-runtime-store.test.ts`
+
+### 修复说明
+
+- 收紧 v2 run 状态机，禁止 `cancelling -> succeeded/failed`，只允许 `cancelling -> cancelled/interrupted`。
+- worker 在每轮执行前后都会重新读取最新 run；只要 run 已经是 `cancelling`，或者 queue 已存在 cancel request，就优先收敛到 `cancelled`，不再允许后续 step 结果把 run finalize 成 `succeeded` / `failed`。
+- 把 worker stop / recovery 依赖的 owned active run listing 提升为正式 `RuntimeStore` contract：新增 `listAgentV2RunsByWorker(workerId)`，并在 SQLite / PostgreSQL store 中落地。
+
+### 测试命令与结果
+
+1. `cd packages/web-workspace && npx tsx ../../node_modules/vitest/dist/cli.js --run test/agent-v2-worker-service.test.ts test/agent-v2-execution-core.test.ts test/agent-v2-task-engine.test.ts`
+   - 结果：`3 passed`, `31 passed`
+2. `cd packages/web-workspace && npx tsx ../../node_modules/vitest/dist/cli.js --run test/runtime-store-contract.test.ts test/agent-v2-state-machine.test.ts test/runtime-db.test.ts test/postgres-runtime-store.test.ts`
+   - 结果：`4 passed`, `40 passed`
+3. `cd packages/web-workspace && npm run check`
+   - 结果：`tsgo --noEmit`，exit code `0`
+
+### Commit SHA
+
+- `fa0da06d2629850e1db6c5cfc565dd48e128332b`
+
+### 是否仍有顾虑
+
+- 无新增顾虑；本次只按 reviewer 指定范围修复 race 和 store contract。

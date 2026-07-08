@@ -2,7 +2,7 @@ import { AGENT_V2_PHASES, AGENT_V2_RUN_STATUSES, } from "./agent-v2-types.js";
 const RUN_TRANSITIONS = {
     queued: ["running", "cancelled"],
     running: ["cancelling", "succeeded", "failed", "cancelled", "interrupted"],
-    cancelling: ["cancelled", "failed", "succeeded", "interrupted"],
+    cancelling: ["cancelled", "interrupted"],
     succeeded: [],
     failed: [],
     cancelled: [],

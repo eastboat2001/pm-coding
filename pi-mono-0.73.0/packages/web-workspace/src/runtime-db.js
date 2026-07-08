@@ -710,6 +710,15 @@ export class RuntimeDbStore {
             .all(clientId);
         return rows.map(toAgentV2RunRecord);
     }
+    listAgentV2RunsByWorker(workerId) {
+        const rows = this.open()
+            .prepare(`SELECT ${AGENT_V2_RUN_COLUMNS}
+				FROM agent_v2_runs
+				WHERE worker_id = ? AND status IN ('running', 'cancelling')
+				ORDER BY updated_at ASC, run_id ASC`)
+            .all(workerId);
+        return rows.map(toAgentV2RunRecord);
+    }
     updateAgentV2Run(input) {
         const current = requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
         const next = applyAgentV2RunUpdate(current, input);

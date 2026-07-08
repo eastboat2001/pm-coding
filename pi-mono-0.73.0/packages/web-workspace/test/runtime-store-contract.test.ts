@@ -26,6 +26,7 @@ type _RuntimeStoreRequiresAppendAgentV2RunEvent = Expect<
 	IsRequiredKey<RuntimeStore, "appendAgentV2RunEvent">
 >;
 type _RuntimeStoreRequiresListAgentV2Runs = Expect<IsRequiredKey<RuntimeStore, "listAgentV2Runs">>;
+type _RuntimeStoreRequiresListAgentV2RunsByWorker = Expect<IsRequiredKey<RuntimeStore, "listAgentV2RunsByWorker">>;
 type _RuntimeStoreRequiresListAgentV2RunEvents = Expect<
 	IsRequiredKey<RuntimeStore, "listAgentV2RunEvents">
 >;
@@ -127,6 +128,9 @@ describe("runtime store contract", () => {
 				return undefined;
 			},
 			async listAgentV2Runs() {
+				return [];
+			},
+			async listAgentV2RunsByWorker() {
 				return [];
 			},
 			async updateAgentV2Run() {

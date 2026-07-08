@@ -847,7 +847,11 @@ export class PostgresRuntimeStore {
     async appendAgentV2RunEvent(input) {
         const createdAt = input.createdAt ?? now();
         return this.withTransaction(async (tx) => {
-            requiredRecord(await this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+            const runRow = await this.queryOne(tx, `SELECT ${AGENT_V2_RUN_COLUMNS}
+				FROM agent_v2_runs
+				WHERE client_id = $1 AND run_id = $2
+				FOR UPDATE`, [input.clientId, input.runId]);
+            requiredRecord(runRow ? toAgentV2RunRecord(runRow) : undefined, "agent v2 run");
             const seq = input.seq ??
                 toNumber((await this.queryOne(tx, "SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM agent_v2_run_events WHERE client_id = $1 AND run_id = $2", [input.clientId, input.runId]))?.seq);
             const row = await this.queryOne(tx, `INSERT INTO agent_v2_run_events (

@@ -80,6 +80,13 @@ export {
 	type UpsertAgentV2TaskInput,
 } from "./agent-v2-store.js";
 export {
+	type AgentV2ArtifactIndex,
+	type AgentV2ArtifactIndexFilter,
+	buildAgentV2ArtifactIndex,
+	filterAgentV2Artifacts,
+	findLatestAgentV2ArtifactByPath,
+} from "./agent-v2-artifact-index.js";
+export {
 	AGENT_V2_PHASES,
 	AGENT_V2_RUN_EVENT_TYPES,
 	AGENT_V2_RUN_STATUSES,

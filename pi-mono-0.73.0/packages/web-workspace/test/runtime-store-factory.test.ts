@@ -201,7 +201,7 @@ function createPluginLifecycleHarness() {
 	return {
 		configurePreviewServer: plugin.configurePreviewServer as unknown as (server: FakeViteServer) => void,
 		configureServer: plugin.configureServer as unknown as (server: FakeViteServer) => void,
-		runEventBusClose: services.runEventBus.close,
+		runEventBusClose: services.runEventBus!.close,
 	};
 }
 

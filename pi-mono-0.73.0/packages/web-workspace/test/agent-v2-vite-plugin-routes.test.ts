@@ -143,6 +143,29 @@ describe("agent v2 Vite runtime routes", () => {
 		expectLegacyRunApiUnused(harness.legacyRunApi);
 	});
 
+	it("disables legacy run routes in v2 default mode without legacy services", async () => {
+		const harness = createHarness({ includeLegacyRunServices: false });
+
+		const runResponse = await dispatch(harness.middleware, {
+			method: "POST",
+			url: "/api/runtime/runs/start",
+			body: { message: { role: "user", content: "legacy start" } },
+		});
+		const goalResponse = await dispatch(harness.middleware, {
+			method: "GET",
+			url: "/api/runtime/runs/goals/app-preview?sessionId=session-a",
+		});
+
+		expect(runResponse.statusCode).toBe(410);
+		expect(JSON.parse(runResponse.body).error).toContain(
+			"Application Generation Agent v1 runtime routes are disabled",
+		);
+		expect(goalResponse.statusCode).toBe(404);
+		expect(JSON.parse(goalResponse.body).error).toContain("app-preview-goal routes are unavailable");
+		expect(() => harness.closeServer()).not.toThrow();
+		expectLegacyRunApiUnused(harness.legacyRunApi);
+	});
+
 	it("does not expose app-preview-goal routes in v2 default mode", async () => {
 		const harness = createHarness();
 
@@ -165,7 +188,12 @@ describe("agent v2 Vite runtime routes", () => {
 });
 
 type ConfiguredTestServices = Parameters<typeof createConfiguredStoragePluginForTest>[0];
-type TestServices = Omit<ConfiguredTestServices, "agentV2RunApi" | "agentV2RunEventBus" | "agentV2RunEventLog"> & {
+type TestServices = Omit<
+	ConfiguredTestServices,
+	"runApi" | "runEventBus" | "agentV2RunApi" | "agentV2RunEventBus" | "agentV2RunEventLog"
+> & {
+	runApi?: ConfiguredTestServices["runApi"];
+	runEventBus?: ConfiguredTestServices["runEventBus"];
 	agentV2RunApi?: RecordingAgentV2RunApi;
 	agentV2RunEventBus?: AgentV2RunEventBus;
 	agentV2RunEventLog?: RecordingAgentV2RunEventLog;
@@ -178,12 +206,14 @@ type Middleware = (
 
 function createHarness(
 	overrides: {
+		includeLegacyRunServices?: boolean;
 		agentV2RunApi?: RecordingAgentV2RunApi;
 		agentV2RunEventBus?: AgentV2RunEventBus;
 		agentV2RunEventLog?: RecordingAgentV2RunEventLog;
 	} = {},
 ) {
 	let middleware: Middleware | undefined;
+	const closeListeners: Array<() => void> = [];
 	const legacyRunApi = legacyRunApiThatMustNotBeCalled();
 	const services: TestServices = {
 		config: createTestConfig(),
@@ -195,17 +225,35 @@ function createHarness(
 		skills: {} as TestServices["skills"],
 		runtimeDb: { ensureSchema: vi.fn(), ensureAgentV2Schema: vi.fn() } as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
-		runApi: legacyRunApi as unknown as TestServices["runApi"],
-		runEventBus: { close: vi.fn(async () => undefined) } as unknown as TestServices["runEventBus"],
 		agentV2RunApi: overrides.agentV2RunApi ?? new RecordingAgentV2RunApi(),
 		agentV2RunEventBus: overrides.agentV2RunEventBus ?? new ScriptedAgentV2RunEventBus([{ waitForAbort: true }]),
 		agentV2RunEventLog: overrides.agentV2RunEventLog ?? new RecordingAgentV2RunEventLog([]),
 	};
+	if (overrides.includeLegacyRunServices ?? true) {
+		services.runApi = legacyRunApi as unknown as TestServices["runApi"];
+		services.runEventBus = { close: vi.fn(async () => undefined) } as unknown as TestServices["runEventBus"];
+	}
 	const plugin = createConfiguredStoragePluginForTest(services as unknown as ConfiguredTestServices);
-	const configureServer = plugin.configureServer as (server: { middlewares: { use(handler: Middleware): void } }) => void;
-	configureServer({ middlewares: { use: (handler) => (middleware = handler) } });
+	const configureServer = plugin.configureServer as (server: {
+		httpServer: { once(event: "close", listener: () => void): void };
+		middlewares: { use(handler: Middleware): void };
+	}) => void;
+	configureServer({
+		httpServer: {
+			once(event, listener) {
+				if (event === "close") closeListeners.push(listener);
+			},
+		},
+		middlewares: { use: (handler) => (middleware = handler) },
+	});
 	if (!middleware) throw new Error("configured storage plugin did not register middleware");
-	return { legacyRunApi, middleware };
+	return {
+		legacyRunApi,
+		middleware,
+		closeServer() {
+			for (const listener of closeListeners) listener();
+		},
+	};
 }
 
 function dispatch(middleware: Middleware, options: DispatchOptions): Promise<FakeResponse> {

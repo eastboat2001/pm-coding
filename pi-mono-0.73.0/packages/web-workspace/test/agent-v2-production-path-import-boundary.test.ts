@@ -74,6 +74,25 @@ describe("agent v2 production import boundary", () => {
 			expect(publicV2Surface).not.toContain("legacy-v1-agent-v2-run-event-bridge");
 		}
 	});
+
+	it("gates legacy plugin service construction behind v1 mode", () => {
+		const source = readFileSync(join(repoRoot, "packages", "web-workspace", "src", "vite-plugin.ts"), "utf8");
+		const configuredStoragePluginSource = extractFunctionSource(source, "configuredStoragePlugin");
+		const v1GateIndex = configuredStoragePluginSource.indexOf('config.appAgentVersion === "v1"');
+		expect(v1GateIndex).toBeGreaterThanOrEqual(0);
+
+		const legacyReferences = [
+			"new AppPreviewGoalService",
+			"new WorkspaceRunApiService",
+			"new RedisRunEventBus",
+			"queueName: config.runQueueName",
+		];
+		for (const legacyReference of legacyReferences) {
+			const referenceIndex = configuredStoragePluginSource.indexOf(legacyReference);
+			expect(referenceIndex, legacyReference).toBeGreaterThan(v1GateIndex);
+			expect(configuredStoragePluginSource.slice(0, v1GateIndex), legacyReference).not.toContain(legacyReference);
+		}
+	});
 });
 
 function productionV2Files(): string[] {
@@ -93,4 +112,19 @@ function productionV2Files(): string[] {
 
 function toRepoPath(file: string): string {
 	return relative(repoRoot, file).replace(/\\/g, "/");
+}
+
+function extractFunctionSource(source: string, functionName: string): string {
+	const start = source.indexOf(`export function ${functionName}`);
+	if (start < 0) throw new Error(`Could not find ${functionName}`);
+	const bodyStart = source.indexOf("{", start);
+	if (bodyStart < 0) throw new Error(`Could not find ${functionName} body`);
+	let depth = 0;
+	for (let index = bodyStart; index < source.length; index += 1) {
+		const char = source[index];
+		if (char === "{") depth += 1;
+		if (char === "}") depth -= 1;
+		if (depth === 0) return source.slice(start, index + 1);
+	}
+	throw new Error(`Could not find ${functionName} end`);
 }

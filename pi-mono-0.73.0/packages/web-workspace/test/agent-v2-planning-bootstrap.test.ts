@@ -63,6 +63,48 @@ describe("agent v2 planning bootstrap", () => {
 			}),
 		]);
 	});
+
+	it("repeats persistence safely for the same bootstrap without duplicating diagnostics", async () => {
+		const store = createTempRuntimeDbStoreWithV2Schema(cleanupRoots, cleanupStores);
+		const run = store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-retry",
+			input: { prompt: "Build a dashboard with login auth simulated in static preview." },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+
+		const bootstrap = buildAgentV2PlanningBootstrap({
+			run,
+			now: () => "2026-07-07T00:01:00.000Z",
+		});
+
+		await persistAgentV2PlanningBootstrap(store, bootstrap);
+		await expect(persistAgentV2PlanningBootstrap(store, bootstrap)).resolves.toMatchObject({
+			documents: expect.arrayContaining([
+				expect.objectContaining({ documentId: "capability_decision" }),
+				expect.objectContaining({ documentId: "spec" }),
+				expect.objectContaining({ documentId: "plan" }),
+				expect.objectContaining({ documentId: "tasks" }),
+			]),
+			artifacts: expect.arrayContaining([
+				expect.objectContaining({ artifactId: "capability_decision" }),
+				expect.objectContaining({ artifactId: "spec" }),
+				expect.objectContaining({ artifactId: "plan" }),
+				expect.objectContaining({ artifactId: "tasks", sourceTaskId: "plan" }),
+			]),
+		});
+
+		expect(store.listAgentV2Diagnostics("client-a", "run-v2-retry")).toEqual([
+			expect.objectContaining({
+				diagnosticId: "capability-routing",
+				category: "planning",
+				severity: "info",
+				phase: "capability_routing",
+				taskId: "capability",
+			}),
+		]);
+	});
 });
 
 function createTempRuntimeDbStoreWithV2Schema(

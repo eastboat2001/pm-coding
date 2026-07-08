@@ -110,7 +110,7 @@ export function buildAgentV2PlanningBootstrap(input: {
 		{
 			documentId: "tasks",
 			kind: "tasks",
-			sourceTaskId: "deliver",
+			sourceTaskId: "plan",
 			path: "agent-v2/tasks.json",
 			contentJson: taskGraph,
 			contentMarkdown: renderAgentV2DocumentMarkdown(taskGraph),
@@ -210,7 +210,11 @@ export function buildAgentV2PlanningBootstrap(input: {
 export async function persistAgentV2PlanningBootstrap(
 	store: Pick<
 		RuntimeStore,
-		"upsertAgentV2Document" | "upsertAgentV2Task" | "upsertAgentV2Artifact" | "appendAgentV2Diagnostic"
+		| "upsertAgentV2Document"
+		| "upsertAgentV2Task"
+		| "upsertAgentV2Artifact"
+		| "appendAgentV2Diagnostic"
+		| "listAgentV2Diagnostics"
 	>,
 	bootstrap: AgentV2PlanningBootstrap,
 ): Promise<{
@@ -229,8 +233,19 @@ export async function persistAgentV2PlanningBootstrap(
 	for (const artifact of bootstrap.artifacts) {
 		persistedArtifacts.push(await Promise.resolve(store.upsertAgentV2Artifact(artifact)));
 	}
+	const existingDiagnosticIds = new Set(
+		(
+			await Promise.resolve(
+				store.listAgentV2Diagnostics(bootstrap.run.clientId, bootstrap.run.runId),
+			)
+		).map((diagnostic) => diagnostic.diagnosticId),
+	);
 	for (const diagnostic of bootstrap.diagnostics) {
+		if (existingDiagnosticIds.has(diagnostic.diagnosticId)) {
+			continue;
+		}
 		await Promise.resolve(store.appendAgentV2Diagnostic(diagnostic));
+		existingDiagnosticIds.add(diagnostic.diagnosticId);
 	}
 
 	return {

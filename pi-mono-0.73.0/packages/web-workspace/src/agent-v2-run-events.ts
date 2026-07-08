@@ -4,6 +4,7 @@ import {
 	type AgentV2RunEventType,
 	type AgentV2RunStatus,
 } from "./agent-v2-types.js";
+import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
 import type { RunEventSink } from "./run-event-sink.js";
 import type { RuntimeRunRecord } from "./types.js";
 
@@ -11,6 +12,19 @@ type AgentV2TransportEventBase = {
 	type: AgentV2RunEventType;
 	at: string;
 };
+
+export interface AgentV2RunEventIdentity {
+	clientId: string;
+	runId: string;
+}
+
+export type AgentV2LiveRunEvent = AgentV2RunEventRecord;
+
+export interface AgentV2RunEventReadRequest extends AgentV2RunEventIdentity {
+	afterSeq: number;
+	blockMs?: number;
+	signal?: AbortSignal;
+}
 
 export type AgentV2RunCreatedTransportEvent = AgentV2TransportEventBase & {
 	type: "agent_v2.run_created";

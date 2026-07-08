@@ -49,6 +49,20 @@ describe("agent v2 task engine", () => {
 		});
 	});
 
+	it("treats blocked dependency as blocked-by-dependency instead of hard failure", () => {
+		const tasks = [
+			task({ taskId: "spec", status: "blocked" }),
+			task({ taskId: "plan", status: "pending", dependsOn: ["spec"] }),
+			task({ taskId: "deliver", status: "pending", dependsOn: ["plan"] }),
+		];
+
+		expect(selectNextAgentV2Task(tasks)).toEqual({
+			reason: "blocked_by_dependencies",
+			blockedTaskIds: ["spec", "plan", "deliver"],
+			failedDependencyTaskIds: [],
+		});
+	});
+
 	it("reports failed dependencies before dependency blocking", () => {
 		const tasks = [
 			task({ taskId: "capability", status: "failed" }),
@@ -59,7 +73,21 @@ describe("agent v2 task engine", () => {
 		expect(selectNextAgentV2Task(tasks)).toEqual({
 			reason: "failed_dependency",
 			blockedTaskIds: ["plan"],
-			failedDependencyTaskIds: ["spec"],
+			failedDependencyTaskIds: ["capability", "spec"],
+		});
+	});
+
+	it("treats cancelled as failed dependency", () => {
+		const tasks = [
+			task({ taskId: "capability", status: "cancelled" }),
+			task({ taskId: "spec", status: "pending", dependsOn: ["capability"] }),
+			task({ taskId: "plan", status: "pending", dependsOn: ["spec"] }),
+		];
+
+		expect(selectNextAgentV2Task(tasks)).toEqual({
+			reason: "failed_dependency",
+			blockedTaskIds: ["plan"],
+			failedDependencyTaskIds: ["capability", "spec"],
 		});
 	});
 
@@ -132,6 +160,47 @@ describe("agent v2 task engine", () => {
 				now: "2026-07-08T00:04:00.000Z",
 			}),
 		).toThrow("Agent v2 failed task transitions require an error");
+	});
+
+	it("clears endedAt/output/error when restarting from failed task", () => {
+		const failed = transitionAgentV2Task({
+			task: transitionAgentV2Task({
+				task: task({ taskId: "spec", status: "ready" }),
+				status: "running",
+				now: "2026-07-08T00:02:00.000Z",
+			}),
+			status: "failed",
+			now: "2026-07-08T00:03:00.000Z",
+			error: { code: "VALIDATION_FAILED", message: "Build failed", retryable: true },
+			output: { filesChanged: ["src/App.tsx"] },
+		});
+		const retried = transitionAgentV2Task({
+			task: failed,
+			status: "running",
+			now: "2026-07-08T00:04:00.000Z",
+		});
+		const reset = transitionAgentV2Task({
+			task: failed,
+			status: "ready",
+			now: "2026-07-08T00:05:00.000Z",
+		});
+
+		expect(failed).toMatchObject({
+			status: "failed",
+			endedAt: "2026-07-08T00:03:00.000Z",
+			error: { code: "VALIDATION_FAILED", message: "Build failed", retryable: true },
+		});
+		expect(retried).toMatchObject({
+			status: "running",
+			endedAt: undefined,
+			output: {},
+			error: undefined,
+		});
+		expect(reset).toMatchObject({
+			status: "ready",
+			endedAt: undefined,
+			error: undefined,
+		});
 	});
 });
 

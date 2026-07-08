@@ -67,6 +67,15 @@ export {
 	transitionAgentV2RunSnapshot,
 } from "./agent-v2-state-machine.js";
 export {
+	type AgentV2ToolContract,
+	type AgentV2ToolFailure,
+	type AgentV2ToolName,
+	type AgentV2ToolRegistry,
+	createAgentV2ToolFailure,
+	createAgentV2ToolRegistry,
+	assertAgentV2ToolAllowed,
+} from "./agent-v2-tool-governance.js";
+export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
 	AGENT_V2_DOCUMENT_COLUMNS,

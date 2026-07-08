@@ -11,6 +11,7 @@ import {
 } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // Import workspace runtime sources directly so this test cannot pass against stale dist output.
+import type { RedisAgentV2RunEventBusOptions } from "../../../packages/web-workspace/src/agent-v2-run-event-bus.js";
 import { loadStorageConfig } from "../../../packages/web-workspace/src/config.js";
 import { RuntimeDbStore } from "../../../packages/web-workspace/src/runtime-db.js";
 import { InMemoryRunQueue } from "../../../packages/web-workspace/src/run-queue.js";
@@ -22,9 +23,13 @@ import type {
   WorkerAgentInput,
 } from "../../../packages/web-workspace/src/index.js";
 import {
+  createAgentV2WorkerRunEventOptions,
+  createWorkerStartupDiagnosticEvents,
+} from "../src/worker/main.js";
+import {
   createRunAgent,
   createWorkerRunEventOptions,
-} from "../src/worker/main.js";
+} from "../src/worker/legacy-v1-main.js";
 
 describe("worker runtime diagnostics", () => {
   let dir: string | undefined;
@@ -498,6 +503,57 @@ Delivery mode: static_simulation
     expect(sinkOptions).toEqual({
       checkpointIntervalMs: 90,
       checkpointMinChars: 12,
+    });
+  });
+
+  it("records agent v2 defaults in worker startup diagnostics", () => {
+    dir = mkdtempSync(join(tmpdir(), "pi-worker-runtime-v2-startup-"));
+    const config = {
+      ...loadStorageConfig(dir),
+      appAgentVersion: "v2",
+      runQueueName: "legacy-runs",
+      agentV2RunQueueName: "agent-v2-runs",
+      agentV2RunEventStreamMaxLen: 4321,
+      agentV2RunEventStreamTtlSeconds: 8765,
+    } as ReturnType<typeof loadStorageConfig>;
+
+    const events = createWorkerStartupDiagnosticEvents(config);
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        eventType: "system.startup.config",
+        data: expect.objectContaining({
+          appAgentVersion: "v2",
+          runQueueName: "legacy-runs",
+          agentV2RunQueueName: "agent-v2-runs",
+          agentV2RunEventStreamMaxLen: 4321,
+          agentV2RunEventStreamTtlSeconds: 8765,
+        }),
+      }),
+    );
+  });
+
+  it("maps agent v2 worker queue and event stream config into Redis options", () => {
+    dir = mkdtempSync(join(tmpdir(), "pi-worker-runtime-v2-events-"));
+    const config = {
+      ...loadStorageConfig(dir),
+      redisUrl: "redis://127.0.0.1:6381",
+      agentV2RunQueueName: "agent-v2-runs",
+      agentV2RunEventStreamMaxLen: 2222,
+      agentV2RunEventStreamTtlSeconds: 3333,
+    };
+
+    const options = createAgentV2WorkerRunEventOptions(config);
+    const busOptions: RedisAgentV2RunEventBusOptions = options.bus;
+
+    expect(options.queue).toEqual({
+      redisUrl: "redis://127.0.0.1:6381",
+      queueName: "agent-v2-runs",
+    });
+    expect(busOptions).toEqual({
+      redisUrl: "redis://127.0.0.1:6381",
+      maxLen: 2222,
+      ttlSeconds: 3333,
     });
   });
 

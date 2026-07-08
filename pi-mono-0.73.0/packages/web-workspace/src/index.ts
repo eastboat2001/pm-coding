@@ -67,11 +67,36 @@ export {
 	type AgentV2DiagnosticRecordedTransportEvent,
 	type AgentV2PhaseChangedTransportEvent,
 	type AgentV2RunCreatedTransportEvent,
+	type AgentV2RunEventIdentity,
+	type AgentV2RunEventReadRequest,
 	type AgentV2RunTransportEvent,
 	type AgentV2TaskUpdatedTransportEvent,
 	type AgentV2ValidationRecordedTransportEvent,
 	appendAgentV2RunEvent,
 } from "./agent-v2-run-events.js";
+export { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
+export {
+	InMemoryAgentV2RunEventBus,
+	RedisAgentV2RunEventBus,
+	type AgentV2RunEventBus,
+	type RedisAgentV2RunEventBusClient,
+	type RedisAgentV2RunEventBusOptions,
+	agentV2RunEventStreamKey,
+} from "./agent-v2-run-event-bus.js";
+export { AgentV2RunEventLog, type AgentV2RunEventLogOptions } from "./agent-v2-run-event-log.js";
+export {
+	createAgentV2RunQueue,
+	type AgentV2ClaimedRun,
+	type AgentV2RunQueue,
+	type AgentV2RunQueueIdentity,
+} from "./agent-v2-run-queue.js";
+export {
+	AgentV2WorkerService,
+	type AgentV2WorkerExecution,
+	type AgentV2WorkerExecutionInput,
+	type AgentV2WorkerServiceOptions,
+	type AgentV2WorkerStore,
+} from "./agent-v2-worker-service.js";
 export {
 	type AdvanceAgentV2TaskInput,
 	type AgentV2RuntimeSnapshot,
@@ -92,6 +117,7 @@ export {
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
 	AGENT_V2_DOCUMENT_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
+	AGENT_V2_RUN_EVENT_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
 	AGENT_V2_VALIDATION_COLUMNS,
 	type AgentV2ArtifactRecord,
@@ -99,6 +125,7 @@ export {
 	type AgentV2DiagnosticRow,
 	type AgentV2DocumentRecord,
 	type AgentV2DocumentRow,
+	type AgentV2RunEventRecord,
 	type AgentV2RunRow,
 	type AgentV2RunUpdateResult,
 	type AgentV2TaskRow,
@@ -111,6 +138,7 @@ export {
 	buildAgentV2Run,
 	buildAgentV2Task,
 	buildAgentV2Validation,
+	type AppendAgentV2RunEventInput,
 	type CreateAgentV2RunInput,
 	stringifyAgentV2Json,
 	toAgentV2ArtifactRecord,

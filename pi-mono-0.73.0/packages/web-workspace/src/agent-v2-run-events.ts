@@ -1,12 +1,5 @@
-import {
-	AGENT_V2_RUN_EVENT_TYPES,
-	type AgentV2Phase,
-	type AgentV2RunEventType,
-	type AgentV2RunStatus,
-} from "./agent-v2-types.js";
+import { type AgentV2Phase, type AgentV2RunEventType, type AgentV2RunStatus } from "./agent-v2-types.js";
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
-import type { RunEventSink } from "./run-event-sink.js";
-import type { RuntimeRunRecord } from "./types.js";
 
 type AgentV2TransportEventBase = {
 	type: AgentV2RunEventType;
@@ -75,16 +68,4 @@ export type AgentV2RunTransportEvent =
 	| AgentV2ValidationRecordedTransportEvent
 	| AgentV2DiagnosticRecordedTransportEvent;
 
-const AGENT_V2_RUN_EVENT_TYPE_SET = new Set<string>(AGENT_V2_RUN_EVENT_TYPES);
-
-export async function appendAgentV2RunEvent(
-	sink: Pick<RunEventSink, "persistAgentEvent">,
-	run: RuntimeRunRecord,
-	event: AgentV2RunTransportEvent,
-): Promise<void> {
-	if (!AGENT_V2_RUN_EVENT_TYPE_SET.has(event.type)) {
-		throw new Error(`Unsupported Agent v2 transport event type: ${event.type}`);
-	}
-
-	await sink.persistAgentEvent(run, event);
-}
+export { appendAgentV2RunEvent } from "./legacy-v1-agent-v2-run-event-bridge.js";

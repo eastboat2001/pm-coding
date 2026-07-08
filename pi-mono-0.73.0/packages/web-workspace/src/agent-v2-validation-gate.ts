@@ -1,5 +1,11 @@
 import type { UpsertAgentV2ValidationInput } from "./agent-v2-store.js";
-import { type AgentV2ToolFailure, createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
+import {
+	type AgentV2ToolFailure,
+	type AgentV2ToolRegistry,
+	assertAgentV2ToolAllowed,
+	createAgentV2ToolFailure,
+	createAgentV2ToolRegistry,
+} from "./agent-v2-tool-governance.js";
 import type { ProjectTaskResult, StorageConfig } from "./types.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 
@@ -18,6 +24,7 @@ export interface RunAgentV2StaticValidationGateInput {
 	taskId: string;
 	now: string;
 	tasks?: AgentV2ValidationTaskRunner;
+	toolRegistry?: AgentV2ToolRegistry;
 }
 
 export type AgentV2ValidationFailure = AgentV2ToolFailure & {
@@ -35,13 +42,35 @@ export async function runAgentV2StaticValidationGate(
 	input: RunAgentV2StaticValidationGateInput,
 ): Promise<AgentV2ValidationGateResult> {
 	const tasks = input.tasks ?? new WorkspaceTaskService(input.config);
-	const taskResult = await tasks.run({
+	const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
+	assertAgentV2ToolAllowed(registry, "validation.static_quality", "validation");
+	assertAgentV2ToolAllowed(registry, "validation.static_smoke", "validation");
+
+	const initialTaskResult = await tasks.run({
 		clientId: input.context.clientId,
 		sessionId: input.context.sessionId,
 		title: input.context.title,
 		task: "validate",
 	});
-	const rawErrors = Array.isArray(taskResult.errors) ? taskResult.errors.map(String) : [];
+	const initialRawErrors = rawErrorsFor(initialTaskResult);
+	let buildResult: ProjectTaskResult | undefined;
+	let taskResult = initialTaskResult;
+	if (initialRawErrors.some(isBuildRequiredMessage)) {
+		assertAgentV2ToolAllowed(registry, "validation.static_build", "validation");
+		buildResult = await tasks.run({
+			clientId: input.context.clientId,
+			sessionId: input.context.sessionId,
+			title: input.context.title,
+			task: "build_static",
+		});
+		taskResult = await tasks.run({
+			clientId: input.context.clientId,
+			sessionId: input.context.sessionId,
+			title: input.context.title,
+			task: "validate",
+		});
+	}
+	const rawErrors = rawErrorsFor(taskResult);
 	const failures = rawErrors.map((message) => classifyStaticValidationFailure(message, input.taskId));
 	if (failures.length === 0 && taskResult.status === "failed") {
 		failures.push(
@@ -69,6 +98,7 @@ export async function runAgentV2StaticValidationGate(
 			details: {
 				failures,
 				rawErrors,
+				...(buildResult ? { initialRawErrors, buildResult: buildResultSummary(buildResult) } : {}),
 				rawStatus: taskResult.status,
 				projectRoot: taskResult.projectRoot,
 				serveRoot: taskResult.serveRoot,
@@ -78,6 +108,29 @@ export async function runAgentV2StaticValidationGate(
 			updatedAt: input.now,
 		},
 		rawResult: taskResult,
+	};
+}
+
+function rawErrorsFor(result: ProjectTaskResult): string[] {
+	return Array.isArray(result.errors) ? result.errors.map(String) : [];
+}
+
+function isBuildRequiredMessage(message: string): boolean {
+	return /^Static preview found a build source entry at .+?\. Run build_static before preview so PI can serve browser-ready dist\/build output\.$/.test(
+		message.trim(),
+	);
+}
+
+function buildResultSummary(result: ProjectTaskResult): Record<string, unknown> {
+	return {
+		task: result.task,
+		status: result.status,
+		projectRoot: result.projectRoot,
+		serveRoot: result.serveRoot,
+		fileCount: result.fileCount,
+		files: result.files,
+		errors: rawErrorsFor(result),
+		logs: Array.isArray(result.logs) ? result.logs.map(String) : undefined,
 	};
 }
 

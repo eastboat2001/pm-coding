@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import { createAgentV2FileAdapter } from "./agent-v2-file-adapter.js";
 import { planAgentV2RepairActions } from "./agent-v2-repair-engine.js";
 import { advanceAgentV2Task, loadAgentV2RuntimeSnapshot } from "./agent-v2-runtime-core.js";
+import { assertAgentV2ToolAllowed, createAgentV2ToolRegistry, } from "./agent-v2-tool-governance.js";
 import { runAgentV2StaticValidationGate } from "./agent-v2-validation-gate.js";
 export async function executeAgentV2NextTask(input) {
     const now = input.now?.() ?? new Date().toISOString();
@@ -28,6 +30,9 @@ export async function executeAgentV2NextTask(input) {
             now,
         });
     }
+    if (task.kind === "implementation") {
+        return executeImplementationTask(input, snapshot.run, task, now);
+    }
     await advanceAgentV2Task({
         store: input.store,
         clientId: input.context.clientId,
@@ -49,14 +54,69 @@ export async function executeAgentV2NextTask(input) {
         diagnosticIds: [],
     };
 }
+async function executeImplementationTask(input, run, task, now) {
+    const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
+    assertAgentV2ToolAllowed(registry, "file.write", "implementation");
+    const files = createAgentV2FileAdapter({
+        config: input.config,
+        context: input.context,
+    });
+    const write = files.writeFile({
+        path: "index.html",
+        content: deterministicImplementationSource(run, task, input.context),
+        mode: "create",
+        taskId: task.taskId,
+        now,
+    });
+    const artifact = await Promise.resolve(input.store.upsertAgentV2Artifact({
+        clientId: input.context.clientId,
+        runId: input.runId,
+        artifactId: write.artifact.artifactId,
+        kind: write.artifact.kind,
+        path: write.artifact.path,
+        mediaType: write.artifact.mediaType,
+        checksum: write.artifact.checksum,
+        version: write.artifact.version,
+        sourceTaskId: write.artifact.sourceTaskId,
+        validationStatus: write.artifact.validationStatus,
+        metadataJson: write.artifact.metadataJson,
+        createdAt: now,
+        updatedAt: now,
+    }));
+    await advanceAgentV2Task({
+        store: input.store,
+        clientId: input.context.clientId,
+        runId: input.runId,
+        taskId: task.taskId,
+        status: "succeeded",
+        now,
+        output: {
+            ...task.output,
+            artifactIds: [artifact.artifactId],
+            changedFiles: [write.path],
+            phase4: {
+                ...readPhase4TaskOutput(task.output),
+                implementationArtifactId: artifact.artifactId,
+                completedBy: "agent-v2-execution-core",
+            },
+        },
+    });
+    return {
+        status: "task_succeeded",
+        taskId: task.taskId,
+        diagnosticIds: [],
+    };
+}
 async function executeValidationTask(input, state) {
     const maxAttempts = input.maxRepairAttempts ?? 3;
+    const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
     const result = await runAgentV2StaticValidationGate({
         config: input.config,
         context: input.context,
         runId: input.runId,
         taskId: state.taskId,
         now: state.now,
+        toolRegistry: registry,
     });
     await Promise.resolve(input.store.upsertAgentV2Validation(result.validation));
     if (result.status === "passed") {
@@ -85,6 +145,7 @@ async function executeValidationTask(input, state) {
         attempt,
         maxAttempts,
     });
+    const hasRetryableRepairAction = repairActions.some((action) => action.retryable);
     const diagnosticId = `agent_v2.validation_failed:${state.taskId}:${randomUUID()}`;
     await Promise.resolve(input.store.appendAgentV2Diagnostic(createAgentV2DiagnosticEvent({
         diagnosticId,
@@ -105,33 +166,41 @@ async function executeValidationTask(input, state) {
         },
         createdAt: state.now,
     })));
+    const nextStatus = hasRetryableRepairAction && attempt < maxAttempts ? "ready" : "failed";
     await advanceAgentV2Task({
         store: input.store,
         clientId: input.context.clientId,
         runId: input.runId,
         taskId: state.taskId,
-        status: "failed",
+        status: nextStatus,
         now: state.now,
         output: {
             ...state.taskOutput,
             validationId: result.validation.validationId,
             repairActions,
+            attempt,
+            maxAttempts,
             phase4: {
                 ...readPhase4TaskOutput(state.taskOutput),
                 validationRepairAttempt: attempt,
                 validationMaxRepairAttempts: maxAttempts,
             },
         },
-        error: {
-            code: "agent_v2.validation_failed",
-            message: result.validation.summary,
-            retryable: repairActions.some((action) => action.retryable),
-            data: {
-                validationId: result.validation.validationId,
-                attempt,
-                maxAttempts,
-            },
-        },
+        ...(nextStatus === "failed"
+            ? {
+                error: {
+                    code: "agent_v2.validation_failed",
+                    message: result.validation.summary,
+                    retryable: false,
+                    data: {
+                        validationId: result.validation.validationId,
+                        attempt,
+                        maxAttempts,
+                        repairActions,
+                    },
+                },
+            }
+            : {}),
     });
     return {
         status: "task_failed",
@@ -139,10 +208,33 @@ async function executeValidationTask(input, state) {
         diagnosticIds: [diagnosticId],
     };
 }
+function deterministicImplementationSource(run, task, context) {
+    const prompt = typeof run.input.prompt === "string" ? run.input.prompt : "Static application";
+    return [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head>",
+        '  <meta charset="utf-8">',
+        '  <meta name="viewport" content="width=device-width, initial-scale=1">',
+        `  <title>${escapeHtml(context.title)}</title>`,
+        "</head>",
+        "<body>",
+        "  <main>",
+        `    <h1>${escapeHtml(context.title)}</h1>`,
+        `    <p>${escapeHtml(prompt)}</p>`,
+        `    <small data-task-id="${escapeHtml(task.taskId)}">Generated by agent v2.</small>`,
+        "  </main>",
+        "</body>",
+        "</html>",
+        "",
+    ].join("\n");
+}
+function escapeHtml(value) {
+    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 function nextValidationRepairAttempt(taskOutput) {
     const phase4Attempt = positiveInteger(readPhase4TaskOutput(taskOutput).validationRepairAttempt);
-    const legacyAttempt = positiveInteger(taskOutput.repairAttempt);
-    return (phase4Attempt ?? legacyAttempt ?? 0) + 1;
+    return (phase4Attempt ?? 0) + 1;
 }
 function readPhase4TaskOutput(taskOutput) {
     return isRecord(taskOutput.phase4) ? taskOutput.phase4 : {};

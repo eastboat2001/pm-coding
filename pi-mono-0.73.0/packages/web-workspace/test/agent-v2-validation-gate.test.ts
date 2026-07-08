@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentV2FileAdapter } from "../src/agent-v2-file-adapter.js";
+import { createAgentV2ToolRegistry } from "../src/agent-v2-tool-governance.js";
 import { runAgentV2StaticValidationGate } from "../src/agent-v2-validation-gate.js";
-import type { ProjectTaskResult, StorageConfig } from "../src/types.js";
+import type { ProjectTaskName, ProjectTaskResult, StorageConfig } from "../src/types.js";
 
 const cleanupRoots: string[] = [];
 
@@ -83,13 +84,8 @@ describe("agent v2 validation gate", () => {
 		const sourceMessage =
 			"Static preview found a build source entry at ./src/main.ts. Run build_static before preview so PI can serve browser-ready dist/build output.";
 
-		const result = await runAgentV2StaticValidationGate({
-			config,
-			context,
-			runId: "run-a",
-			taskId: "validate",
-			now: "2026-07-08T00:02:00.000Z",
-			tasks: mockTaskService({
+		const tasks = mockTaskSequence([
+			{
 				task: "validate",
 				status: "failed",
 				projectId: "project-a",
@@ -103,11 +99,51 @@ describe("agent v2 validation gate", () => {
 				errors: [sourceMessage],
 				mode: "static",
 				serveRoot: "",
-			}),
+			},
+			{
+				task: "build_static",
+				status: "failed",
+				projectId: "project-a",
+				sessionId: context.sessionId,
+				title: context.title,
+				projectRoot: "C:/demo/project",
+				fileCount: 2,
+				files: ["index.html", "src/main.ts"],
+				hasPackageJson: true,
+				valid: false,
+				errors: ["Build failed: missing dependency"],
+				mode: "static",
+				serveRoot: "",
+			},
+			{
+				task: "validate",
+				status: "failed",
+				projectId: "project-a",
+				sessionId: context.sessionId,
+				title: context.title,
+				projectRoot: "C:/demo/project",
+				fileCount: 2,
+				files: ["index.html", "src/main.ts"],
+				hasPackageJson: true,
+				valid: false,
+				errors: [sourceMessage],
+				mode: "static",
+				serveRoot: "",
+			},
+		]);
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+			tasks,
 		});
 		const [failure] = result.failures;
 		const [rawError] = result.rawResult.errors ?? [];
 
+		expect(tasks.calls).toEqual(["validate", "build_static", "validate"]);
 		expect(result.status).toBe("failed");
 		expect(result.failures).toEqual(
 			expect.arrayContaining([
@@ -124,10 +160,109 @@ describe("agent v2 validation gate", () => {
 		expect(failure?.code).not.toContain("project_task");
 		expect(result.validation.details).toMatchObject({
 			rawErrors: [rawError],
+			buildResult: expect.objectContaining({
+				status: "failed",
+				errors: ["Build failed: missing dependency"],
+			}),
 		});
 		expect(failure?.data).toMatchObject({
 			sourceMessage: rawError,
 		});
+	});
+
+	it("runs build_static between validate attempts when source output must be built", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const sourceMessage =
+			"Static preview found a build source entry at ./src/main.ts. Run build_static before preview so PI can serve browser-ready dist/build output.";
+		const tasks = mockTaskSequence([
+			{
+				task: "validate",
+				status: "failed",
+				projectId: "project-a",
+				sessionId: context.sessionId,
+				title: context.title,
+				projectRoot: "C:/demo/project",
+				fileCount: 2,
+				files: ["index.html", "src/main.ts"],
+				hasPackageJson: true,
+				valid: false,
+				errors: [sourceMessage],
+				mode: "static",
+				serveRoot: "",
+			},
+			{
+				task: "build_static",
+				status: "succeeded",
+				projectId: "project-a",
+				sessionId: context.sessionId,
+				title: context.title,
+				projectRoot: "C:/demo/project",
+				fileCount: 3,
+				files: ["index.html", "src/main.ts", "dist/index.html"],
+				hasPackageJson: true,
+				valid: true,
+				errors: [],
+				logs: ["built dist/index.html"],
+				mode: "static",
+				serveRoot: "C:/demo/project/dist",
+			},
+			{
+				task: "validate",
+				status: "succeeded",
+				projectId: "project-a",
+				sessionId: context.sessionId,
+				title: context.title,
+				projectRoot: "C:/demo/project",
+				fileCount: 3,
+				files: ["index.html", "src/main.ts", "dist/index.html"],
+				hasPackageJson: true,
+				valid: true,
+				errors: [],
+				mode: "static",
+				serveRoot: "C:/demo/project/dist",
+			},
+		]);
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+			tasks,
+		});
+
+		expect(tasks.calls).toEqual(["validate", "build_static", "validate"]);
+		expect(result.status).toBe("passed");
+		expect(result.failures).toEqual([]);
+		expect(result.rawResult.task).toBe("validate");
+		expect(result.validation.details).toMatchObject({
+			rawErrors: [],
+			initialRawErrors: [sourceMessage],
+			buildResult: expect.objectContaining({
+				task: "build_static",
+				status: "succeeded",
+				logs: ["built dist/index.html"],
+			}),
+		});
+	});
+
+	it("blocks static validation through restrictive production tool governance", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+
+		await expect(
+			runAgentV2StaticValidationGate({
+				config,
+				context,
+				runId: "run-a",
+				taskId: "validate",
+				now: "2026-07-08T00:02:00.000Z",
+				tasks: mockTaskSequence([]),
+				toolRegistry: createAgentV2ToolRegistry([]),
+			}),
+		).rejects.toThrow("Agent v2 tool is not registered: validation.static_quality");
 	});
 
 	it("keeps unknown legacy validation text in diagnostics while returning a generic v2 failure", async () => {
@@ -254,5 +389,18 @@ function testConfig(root: string): StorageConfig {
 function mockTaskService(result: ProjectTaskResult) {
 	return {
 		run: async () => result,
+	};
+}
+
+function mockTaskSequence(results: ProjectTaskResult[]) {
+	const calls: ProjectTaskName[] = [];
+	return {
+		calls,
+		run: async (request: { task: ProjectTaskName }) => {
+			calls.push(request.task);
+			const result = results.shift();
+			if (!result) throw new Error(`No mock result for ${request.task}`);
+			return result;
+		},
 	};
 }

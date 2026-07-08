@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
-import type { AgentV2ArtifactRecord } from "./agent-v2-store.js";
 import { createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
 import type { StorageConfig } from "./types.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
@@ -21,8 +20,17 @@ export interface CreateAgentV2FileAdapterInput {
 
 export type AgentV2FileWriteMode = "create" | "rewrite";
 
-export interface AgentV2FileArtifactCandidate
-	extends Omit<AgentV2ArtifactRecord, "clientId" | "runId" | "createdAt" | "updatedAt"> {}
+export interface AgentV2FileArtifactCandidate {
+	artifactId: string;
+	kind: string;
+	path: string;
+	mediaType: string;
+	checksum: string;
+	version: string;
+	sourceTaskId?: string;
+	validationStatus: string;
+	metadataJson: Record<string, unknown>;
+}
 
 export interface AgentV2FileWriteResult {
 	path: string;

@@ -150,7 +150,7 @@ export class AgentV2RunApiService {
 }
 
 function isTerminalRun(status: AgentV2RunStatus): boolean {
-	return status === "succeeded" || status === "failed" || status === "cancelled";
+	return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
 }
 
 export type { AgentV2RunStore, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus, AgentV2Phase };

@@ -4,7 +4,7 @@ export const APPLICATION_GENERATION_RUNTIME_V2 = Object.freeze({
     v1Disabled: true,
     reason: "Application Generation Agent v2 is the replacement default; v1 is not a compatibility target.",
 });
-export const AGENT_V2_RUN_STATUSES = ["queued", "running", "cancelling", "succeeded", "failed", "cancelled"];
+export const AGENT_V2_RUN_STATUSES = ["queued", "running", "cancelling", "succeeded", "failed", "cancelled", "interrupted"];
 export const AGENT_V2_PHASES = [
     "intake",
     "capability_routing",

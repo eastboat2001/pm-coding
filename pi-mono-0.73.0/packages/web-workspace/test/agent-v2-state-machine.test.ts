@@ -56,9 +56,11 @@ describe("Agent v2 state machine", () => {
 		expect(() => assertAgentV2RunTransition("queued", "running")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("queued", "cancelled")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("running", "cancelling")).not.toThrow();
+		expect(() => assertAgentV2RunTransition("running", "interrupted")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("running", "succeeded")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("running", "failed")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("cancelling", "cancelled")).not.toThrow();
+		expect(() => assertAgentV2RunTransition("cancelling", "interrupted")).not.toThrow();
 	});
 
 	it("does not allow terminal runs to restart", () => {
@@ -71,6 +73,7 @@ describe("Agent v2 state machine", () => {
 		["running", "queued"],
 		["cancelling", "running"],
 		["cancelled", "running"],
+		["interrupted", "running"],
 	] as const)("rejects illegal run transition %s -> %s", (from, to) => {
 		expect(() => assertAgentV2RunTransition(from, to)).toThrow(`Invalid Agent v2 run transition: ${from} -> ${to}`);
 	});

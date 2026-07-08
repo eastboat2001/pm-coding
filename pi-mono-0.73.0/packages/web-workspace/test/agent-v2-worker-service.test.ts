@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
-import { applyAgentV2RunUpdate, buildAgentV2Run, type AppendAgentV2RunEventInput } from "../src/agent-v2-store.js";
+import {
+	applyAgentV2RunUpdate,
+	buildAgentV2Run,
+	type AppendAgentV2RunEventInput,
+	type AgentV2RunEventRecord,
+	type CreateAgentV2RunInput,
+} from "../src/agent-v2-store.js";
 import type { AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
 
@@ -313,6 +320,111 @@ describe("AgentV2WorkerService", () => {
 		});
 	});
 
+	it("stop waits for active loop completion before closing the queue", async () => {
+		vi.useRealTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-stop-close-order");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-stop-close-order" }], {
+			throwOnCompleteAfterClose: true,
+		});
+		const execution = new DelayedAbortExecution(20);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution,
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-08T09:03:55.000Z", "2026-07-08T09:03:56.000Z"),
+		});
+
+		await worker.start();
+		await waitFor(() => store.getRunSnapshot("client-a", "run-stop-close-order")?.status === "running");
+		await expect(worker.stop()).resolves.toBeUndefined();
+
+		expect(execution.abortCount).toBe(1);
+		expect(queue.operations).toEqual(["complete:client-a:run-stop-close-order", "close"]);
+		expect(store.getRunSnapshot("client-a", "run-stop-close-order")).toMatchObject({
+			status: "interrupted",
+		});
+	});
+
+	it("does not emit a cancelling event when the poll cancellation CAS already lost", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-poll-cas-miss");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-poll-cas-miss" }]);
+		await queue.requestCancel({ clientId: "client-a", runId: "run-poll-cas-miss" });
+		const raceCancelling = (input: Parameters<MemoryWorkerStore["update"]>[0]) => {
+			if (input.status === "cancelling") {
+				store.forceUpdate({
+					clientId: "client-a",
+					runId: "run-poll-cas-miss",
+					status: "cancelling",
+					updatedAt: "2026-07-08T09:03:57.000Z",
+				});
+				return;
+			}
+			store.runBeforeNextUpdate(raceCancelling);
+		};
+		store.runBeforeNextUpdate(raceCancelling);
+		const events = new RecordingEventLog();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events,
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+			now: timestampSequence(
+				"2026-07-08T09:03:58.000Z",
+				"2026-07-08T09:03:59.000Z",
+				"2026-07-08T09:04:00.000Z",
+			),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		const phaseStatuses = events.appendCalls
+			.filter((event) => event.type === "agent_v2.phase_changed")
+			.map((event) => event.payload.status);
+		expect(phaseStatuses).toEqual(["running", "cancelled"]);
+	});
+
+	it("emits cancelling before cancelled when only a post-step queue cancel key remains", async () => {
+		const store = new MemoryWorkerStore();
+		const staleQueued = store.createQueuedRun("client-a", "run-post-step-cancel-key");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-post-step-cancel-key" }]);
+		const events = new RecordingEventLog();
+		const service = new AgentV2RunApiService({
+			store,
+			queue,
+			events,
+			now: () => "2026-07-08T09:04:04.000Z",
+		});
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events,
+			execution: new ApiQueuedCancelDuringExecution(service, store, staleQueued),
+			workerId: "worker-a",
+			now: timestampSequence(
+				"2026-07-08T09:04:01.000Z",
+				"2026-07-08T09:04:02.000Z",
+				"2026-07-08T09:04:03.000Z",
+				"2026-07-08T09:04:05.000Z",
+			),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		const phaseStatuses = events.appendCalls
+			.filter((event) => event.type === "agent_v2.phase_changed")
+			.map((event) => event.payload.status);
+		expect(phaseStatuses).toEqual(["running", "cancelling", "cancelled"]);
+		expect(store.getRunSnapshot("client-a", "run-post-step-cancel-key")).toMatchObject({
+			status: "cancelled",
+			phase: "cancelled",
+		});
+	});
+
 	it("stop marks owned running and cancelling runs interrupted", async () => {
 		const store = new MemoryWorkerStore();
 		store.createOwnedActiveRun("client-a", "run-running", "running", "worker-a");
@@ -360,8 +472,15 @@ describe("AgentV2WorkerService", () => {
 class MemoryWorkerStore {
 	readonly diagnostics: AgentV2DiagnosticEvent[] = [];
 	simulateStaleTerminalOverwriteWithoutGuard = false;
+	private readonly beforeUpdateCallbacks: Array<(input: Parameters<MemoryWorkerStore["update"]>[0]) => void> = [];
 	private readonly runs = new Map<string, AgentV2RunSnapshot>();
 	private readonly staleReads = new Map<string, AgentV2RunSnapshot[]>();
+
+	async createAgentV2Run(input: CreateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
+		const run = buildAgentV2Run(input);
+		this.runs.set(runKey(run.clientId, run.runId), run);
+		return run;
+	}
 
 	createQueuedRun(clientId: string, runId: string): AgentV2RunSnapshot {
 		const run = buildAgentV2Run({
@@ -417,6 +536,20 @@ class MemoryWorkerStore {
 		return this.getRunSnapshot(clientId, runId);
 	}
 
+	runBeforeNextUpdate(callback: (input: Parameters<MemoryWorkerStore["update"]>[0]) => void): void {
+		this.beforeUpdateCallbacks.push(callback);
+	}
+
+	forceUpdate(input: Omit<Parameters<MemoryWorkerStore["update"]>[0], "expectedStatuses">): AgentV2RunSnapshot {
+		const current = this.getRunSnapshot(input.clientId, input.runId);
+		if (!current) {
+			throw new Error(`Missing run ${input.clientId}/${input.runId}`);
+		}
+		const next = applyAgentV2RunUpdate(current, input);
+		this.runs.set(runKey(input.clientId, input.runId), next);
+		return next;
+	}
+
 	update(input: {
 		clientId: string;
 		runId: string;
@@ -430,6 +563,8 @@ class MemoryWorkerStore {
 		error?: AgentV2RunSnapshot["error"];
 		expectedStatuses?: readonly AgentV2RunStatus[];
 	}): AgentV2RunSnapshot {
+		const beforeUpdate = this.beforeUpdateCallbacks.shift();
+		beforeUpdate?.(input);
 		const current = this.getRunSnapshot(input.clientId, input.runId);
 		if (!current) {
 			throw new Error(`Missing run ${input.clientId}/${input.runId}`);
@@ -463,6 +598,10 @@ class MemoryWorkerStore {
 		);
 	}
 
+	async listAgentV2Runs(clientId: string): Promise<AgentV2RunSnapshot[]> {
+		return [...this.runs.values()].filter((run) => run.clientId === clientId);
+	}
+
 	async appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): Promise<AgentV2DiagnosticEvent> {
 		this.diagnostics.push(input);
 		return input;
@@ -471,11 +610,16 @@ class MemoryWorkerStore {
 
 class RecordingQueue implements AgentV2RunQueue {
 	readonly completeCalls: Array<{ clientId: string; runId: string; workerId: string }> = [];
+	readonly operations: string[] = [];
 	readonly requeueActiveCalls: string[] = [];
 	private readonly cancelRequested = new Set<string>();
+	private closed = false;
 	closeCount = 0;
 
-	constructor(private readonly claims: Array<{ clientId: string; runId: string }> = []) {}
+	constructor(
+		private readonly claims: Array<{ clientId: string; runId: string }> = [],
+		private readonly options: { throwOnCompleteAfterClose?: boolean } = {},
+	) {}
 
 	async enqueue(run: { clientId: string; runId: string }): Promise<void> {
 		this.claims.push(run);
@@ -486,6 +630,10 @@ class RecordingQueue implements AgentV2RunQueue {
 	}
 
 	async complete(run: { clientId: string; runId: string }, workerId: string): Promise<void> {
+		if (this.closed && this.options.throwOnCompleteAfterClose) {
+			throw new Error("Run queue is closed");
+		}
+		this.operations.push(`complete:${run.clientId}:${run.runId}`);
 		this.completeCalls.push({ ...run, workerId });
 	}
 
@@ -503,7 +651,9 @@ class RecordingQueue implements AgentV2RunQueue {
 	}
 
 	async close(): Promise<void> {
+		this.closed = true;
 		this.closeCount += 1;
+		this.operations.push("close");
 	}
 }
 
@@ -520,6 +670,10 @@ class RecordingEventLog implements Pick<AgentV2RunEventLog, "append"> {
 			payload: input.payload,
 			createdAt: input.createdAt ?? "2026-07-08T00:00:00.000Z",
 		};
+	}
+
+	async list(): Promise<AgentV2RunEventRecord[]> {
+		return [];
 	}
 }
 
@@ -551,6 +705,25 @@ class AbortAwareExecution {
 				() => {
 					this.abortCount += 1;
 					reject(new Error("execution aborted"));
+				},
+				{ once: true },
+			);
+		});
+	}
+}
+
+class DelayedAbortExecution {
+	abortCount = 0;
+
+	constructor(private readonly delayMs: number) {}
+
+	async executeNextTask(input: { signal: AbortSignal }): Promise<AgentV2ExecutionStepResult> {
+		return await new Promise<AgentV2ExecutionStepResult>((_, reject) => {
+			input.signal.addEventListener(
+				"abort",
+				() => {
+					this.abortCount += 1;
+					setTimeout(() => reject(new Error("execution aborted")), this.delayMs);
 				},
 				{ once: true },
 			);
@@ -612,6 +785,20 @@ class ExternalInterruptedExecution {
 			updatedAt: "2026-07-08T09:03:41.000Z",
 			endedAt: "2026-07-08T09:03:41.000Z",
 		});
+		return { status: "complete", diagnosticIds: [] };
+	}
+}
+
+class ApiQueuedCancelDuringExecution {
+	constructor(
+		private readonly service: AgentV2RunApiService,
+		private readonly store: MemoryWorkerStore,
+		private readonly staleQueued: AgentV2RunSnapshot,
+	) {}
+
+	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
+		this.store.returnStaleSnapshotOnNextRead(this.staleQueued);
+		await this.service.cancelRun(this.staleQueued.clientId, this.staleQueued.runId);
 		return { status: "complete", diagnosticIds: [] };
 	}
 }

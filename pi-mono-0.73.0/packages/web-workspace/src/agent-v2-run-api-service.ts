@@ -96,7 +96,7 @@ export class AgentV2RunApiService {
 				endedAt: updatedAt,
 				expectedStatuses: ["queued"],
 			});
-			if (cancelled.status === "cancelled") {
+			if (didApplyStatusTransition(run, cancelled, "cancelled", updatedAt)) {
 				await this.appendPhaseEvent(cancelled, "cancelled");
 			}
 			return cancelled;
@@ -112,7 +112,7 @@ export class AgentV2RunApiService {
 			updatedAt,
 			expectedStatuses: ["running"],
 		});
-		if (cancelling.status === "cancelling") {
+		if (didApplyStatusTransition(run, cancelling, "cancelling", updatedAt)) {
 			await this.appendPhaseEvent(cancelling, cancelling.status);
 		}
 		return cancelling;
@@ -157,6 +157,15 @@ export class AgentV2RunApiService {
 
 function isTerminalRun(status: AgentV2RunStatus): boolean {
 	return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
+}
+
+function didApplyStatusTransition(
+	before: AgentV2RunSnapshot,
+	after: AgentV2RunSnapshot,
+	status: AgentV2RunStatus,
+	updatedAt: string,
+): boolean {
+	return before.status !== status && after.status === status && after.updatedAt === updatedAt;
 }
 
 export type { AgentV2RunStore, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus, AgentV2Phase };

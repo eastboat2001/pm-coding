@@ -41,6 +41,11 @@ export interface AgentV2WorkerServiceOptions {
 	maxStepsPerRun?: number;
 }
 
+interface AgentV2RunTransitionResult {
+	run: AgentV2RunSnapshot;
+	applied: boolean;
+}
+
 export class AgentV2WorkerService {
 	private readonly activeAbortControllers = new Map<string, AbortController>();
 	private readonly cancelPollIntervalMs: number;
@@ -86,9 +91,9 @@ export class AgentV2WorkerService {
 		for (const controller of this.activeAbortControllers.values()) {
 			controller.abort();
 		}
+		await Promise.all(this.loops);
 		await this.markOwnedRunsInterrupted();
 		await this.queue.close();
-		await Promise.all(this.loops);
 		this.loops = [];
 	}
 
@@ -107,9 +112,9 @@ export class AgentV2WorkerService {
 				startedAt: run.startedAt ?? this.now(),
 				expectedStatuses: ["queued"],
 			});
-			if (running.status !== "running") return true;
-			await this.appendPhaseEvent(running, "running");
-			await this.executeClaimedRun(running);
+			if (!running.applied) return true;
+			await this.appendPhaseEvent(running.run, "running");
+			await this.executeClaimedRun(running.run);
 			return true;
 		} finally {
 			await this.queue.complete(claimed, this.workerId);
@@ -179,8 +184,23 @@ export class AgentV2WorkerService {
 			error: undefined,
 			expectedStatuses: ["running", "cancelling"],
 		});
-		if (cancelled.status !== "cancelled") return;
-		await this.appendPhaseEvent(cancelled, cancelled.status);
+		if (!cancelled.applied) return;
+		await this.appendPhaseEvent(cancelled.run, cancelled.run.status);
+	}
+
+	private async cancelRequestedRun(run: AgentV2RunSnapshot): Promise<void> {
+		let current = run;
+		if (current.status === "running") {
+			const cancelling = await this.transitionRun(current, {
+				status: "cancelling",
+				expectedStatuses: ["running"],
+			});
+			current = cancelling.run;
+			if (cancelling.applied) {
+				await this.appendPhaseEvent(current, current.status);
+			}
+		}
+		await this.cancelRun(current);
 	}
 
 	private async executeClaimedRun(initialRun: AgentV2RunSnapshot): Promise<void> {
@@ -216,7 +236,7 @@ export class AgentV2WorkerService {
 						await this.interruptRun(current);
 						return;
 					}
-					await this.cancelRun(current);
+					await this.cancelRequestedRun(current);
 					return;
 				}
 
@@ -238,7 +258,7 @@ export class AgentV2WorkerService {
 					runId: current.runId,
 				});
 				if (current.status === "cancelling" || queueCancelRequested) {
-					await this.cancelRun(current);
+					await this.cancelRequestedRun(current);
 					return;
 				}
 
@@ -275,7 +295,7 @@ export class AgentV2WorkerService {
 			const aborted = abortController.signal.aborted;
 			cancelRequested ||= aborted && (await this.queue.isCancelRequested({ clientId: latest.clientId, runId: latest.runId }));
 			if (cancelRequested) {
-				await this.cancelRun(latest);
+				await this.cancelRequestedRun(latest);
 			} else {
 				await this.failRun(latest, "agent_v2.worker_execution_failed", errorMessage(error));
 			}
@@ -297,12 +317,12 @@ export class AgentV2WorkerService {
 			},
 			expectedStatuses: ["running"],
 		});
-		if (failed.status !== "failed") {
-			await this.finishContendedTerminalWrite(failed);
+		if (!failed.applied) {
+			await this.finishContendedTerminalWrite(failed.run);
 			return;
 		}
-		await this.appendDiagnostic(failed, code, message);
-		await this.appendPhaseEvent(failed, failed.status);
+		await this.appendDiagnostic(failed.run, code, message);
+		await this.appendPhaseEvent(failed.run, failed.run.status);
 	}
 
 	private async interruptRun(run: AgentV2RunSnapshot): Promise<void> {
@@ -313,8 +333,8 @@ export class AgentV2WorkerService {
 			error: undefined,
 			expectedStatuses: ["running", "cancelling"],
 		});
-		if (interrupted.status !== "interrupted") return;
-		await this.appendPhaseEvent(interrupted, interrupted.status);
+		if (!interrupted.applied) return;
+		await this.appendPhaseEvent(interrupted.run, interrupted.run.status);
 	}
 
 	private async markOwnedRunsInterrupted(): Promise<void> {
@@ -330,8 +350,8 @@ export class AgentV2WorkerService {
 		const latest = await this.store.getAgentV2Run(run.clientId, run.runId);
 		if (latest?.status === "running") {
 			const cancelling = await this.transitionRun(latest, { status: "cancelling", expectedStatuses: ["running"] });
-			if (cancelling.status === "cancelling") {
-				await this.appendPhaseEvent(cancelling, cancelling.status);
+			if (cancelling.applied) {
+				await this.appendPhaseEvent(cancelling.run, cancelling.run.status);
 			}
 		}
 		abortController.abort();
@@ -355,11 +375,11 @@ export class AgentV2WorkerService {
 			error: undefined,
 			expectedStatuses: ["running"],
 		});
-		if (succeeded.status !== "succeeded") {
-			await this.finishContendedTerminalWrite(succeeded);
+		if (!succeeded.applied) {
+			await this.finishContendedTerminalWrite(succeeded.run);
 			return;
 		}
-		await this.appendPhaseEvent(succeeded, succeeded.status);
+		await this.appendPhaseEvent(succeeded.run, succeeded.run.status);
 	}
 
 	private async transitionRun(
@@ -373,8 +393,9 @@ export class AgentV2WorkerService {
 			error?: AgentV2RunSnapshot["error"];
 			expectedStatuses?: readonly AgentV2RunStatus[];
 		},
-	): Promise<AgentV2RunSnapshot> {
-		return await this.store.updateAgentV2Run({
+	): Promise<AgentV2RunTransitionResult> {
+		const updatedAt = this.now();
+		const updated = await this.store.updateAgentV2Run({
 			clientId: run.clientId,
 			runId: run.runId,
 			status: patch.status,
@@ -384,8 +405,12 @@ export class AgentV2WorkerService {
 			...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
 			...(patch.error !== undefined ? { error: patch.error } : {}),
 			...(patch.expectedStatuses !== undefined ? { expectedStatuses: patch.expectedStatuses } : {}),
-			updatedAt: this.now(),
+			updatedAt,
 		});
+		return {
+			run: updated,
+			applied: didApplyStatusTransition(run, updated, patch.status, updatedAt),
+		};
 	}
 
 	private async finishContendedTerminalWrite(run: AgentV2RunSnapshot): Promise<void> {
@@ -402,6 +427,15 @@ function errorMessage(error: unknown): string {
 
 function isTerminalRun(status: AgentV2RunStatus): boolean {
 	return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
+}
+
+function didApplyStatusTransition(
+	before: AgentV2RunSnapshot,
+	after: AgentV2RunSnapshot,
+	status: AgentV2RunStatus,
+	updatedAt: string,
+): boolean {
+	return before.status !== status && after.status === status && after.updatedAt === updatedAt;
 }
 
 function runKey(run: AgentV2RunQueueIdentity): string {

@@ -118,6 +118,47 @@ describe("AgentV2RunApiService", () => {
 		});
 	});
 
+	it("cancelRun does not emit a phase event when queued cancellation loses the status guard", async () => {
+		const queued: AgentV2RunSnapshot = {
+			clientId: "client-a",
+			runId: "run-queued-cas-miss",
+			status: "queued",
+			phase: "intake",
+			attempt: 1,
+			input: { prompt: "Queue then lose cancel race" },
+			model: { provider: "test" },
+			createdAt: "2026-07-08T09:00:00.000Z",
+			updatedAt: "2026-07-08T09:00:00.000Z",
+		};
+		const store = new GuardedStore([queued]);
+		store.runBeforeNextUpdate(() => {
+			store.forceRun({
+				...queued,
+				status: "cancelled",
+				phase: "cancelled",
+				updatedAt: "2026-07-08T09:09:59.000Z",
+				endedAt: "2026-07-08T09:09:59.000Z",
+			});
+		});
+		const events = new RecordingEventLog();
+		const service = new AgentV2RunApiService({
+			store,
+			queue: new NoopQueue(),
+			events,
+			now: () => "2026-07-08T09:10:00.000Z",
+		});
+
+		const result = await service.cancelRun("client-a", "run-queued-cas-miss");
+
+		expect(result).toMatchObject({
+			status: "cancelled",
+			phase: "cancelled",
+			updatedAt: "2026-07-08T09:09:59.000Z",
+			endedAt: "2026-07-08T09:09:59.000Z",
+		});
+		expect(events.appendCalls).toEqual([]);
+	});
+
 	it("cancelRun on a running run marks cancellation requested without reading legacy run state", async () => {
 		const { store } = createSqliteStore();
 		const queue = createAgentV2RunQueue(new InMemoryRunQueue());
@@ -283,6 +324,7 @@ class GuardedStore {
 		getAgentV2Run: [] as Array<{ clientId: string; runId: string }>,
 		listAgentV2Runs: [] as string[],
 	};
+	private readonly beforeUpdateCallbacks: Array<(input: UpdateAgentV2RunInput) => void> = [];
 	private readonly runs = new Map<string, AgentV2RunSnapshot>();
 
 	constructor(runs: AgentV2RunSnapshot[]) {
@@ -316,10 +358,23 @@ class GuardedStore {
 		return this.runs.get(runKey(clientId, runId));
 	}
 
+	runBeforeNextUpdate(callback: (input: UpdateAgentV2RunInput) => void): void {
+		this.beforeUpdateCallbacks.push(callback);
+	}
+
+	forceRun(run: AgentV2RunSnapshot): void {
+		this.runs.set(runKey(run.clientId, run.runId), run);
+	}
+
 	async updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
+		const beforeUpdate = this.beforeUpdateCallbacks.shift();
+		beforeUpdate?.(input);
 		const current = this.runs.get(runKey(input.clientId, input.runId));
 		if (!current) {
 			throw new Error(`Missing run ${input.clientId}/${input.runId}`);
+		}
+		if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
+			return current;
 		}
 		const next: AgentV2RunSnapshot = {
 			...current,

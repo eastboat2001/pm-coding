@@ -349,6 +349,36 @@ describe("AgentV2WorkerService", () => {
 		});
 	});
 
+	it("stop waits for active direct processOne completion before closing the queue", async () => {
+		vi.useRealTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-direct-stop-close-order");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-direct-stop-close-order" }], {
+			throwOnCompleteAfterClose: true,
+		});
+		const execution = new DelayedAbortExecution(20);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution,
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-08T09:03:57.000Z", "2026-07-08T09:03:58.000Z"),
+		});
+
+		const processing = worker.processOne();
+		await waitFor(() => store.getRunSnapshot("client-a", "run-direct-stop-close-order")?.status === "running");
+
+		await expect(worker.stop()).resolves.toBeUndefined();
+		await expect(processing).resolves.toBe(true);
+
+		expect(execution.abortCount).toBe(1);
+		expect(queue.operations).toEqual(["complete:client-a:run-direct-stop-close-order", "close"]);
+		expect(store.getRunSnapshot("client-a", "run-direct-stop-close-order")).toMatchObject({
+			status: "interrupted",
+		});
+	});
+
 	it("does not emit a cancelling event when the poll cancellation CAS already lost", async () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-poll-cas-miss");

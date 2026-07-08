@@ -50,6 +50,7 @@ type AgentV2RunTransitionResult = AgentV2RunUpdateResult;
 
 export class AgentV2WorkerService {
 	private readonly activeAbortControllers = new Map<string, AbortController>();
+	private readonly activeProcessOneCalls = new Set<Promise<void>>();
 	private readonly cancelPollIntervalMs: number;
 	private readonly claimTimeoutMs: number;
 	private readonly concurrency: number;
@@ -94,12 +95,28 @@ export class AgentV2WorkerService {
 			controller.abort();
 		}
 		await Promise.all(this.loops);
+		await this.waitForActiveProcessOneCalls();
 		await this.markOwnedRunsInterrupted();
 		await this.queue.close();
 		this.loops = [];
 	}
 
 	async processOne(): Promise<boolean> {
+		if (this.stopping) return false;
+		const processing = this.processOneInternal();
+		const tracked = processing.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.activeProcessOneCalls.add(tracked);
+		try {
+			return await processing;
+		} finally {
+			this.activeProcessOneCalls.delete(tracked);
+		}
+	}
+
+	private async processOneInternal(): Promise<boolean> {
 		const claimed = await this.queue.claim(this.workerId, this.claimTimeoutMs);
 		if (!claimed) return false;
 
@@ -367,6 +384,10 @@ export class AgentV2WorkerService {
 				await sleep(this.idleSleepMs);
 			}
 		}
+	}
+
+	private async waitForActiveProcessOneCalls(): Promise<void> {
+		await Promise.all(this.activeProcessOneCalls);
 	}
 
 	private async succeedRun(run: AgentV2RunSnapshot): Promise<void> {

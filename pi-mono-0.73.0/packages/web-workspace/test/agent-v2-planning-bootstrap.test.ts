@@ -2,10 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-	buildAgentV2PlanningBootstrap,
-	persistAgentV2PlanningBootstrap,
-} from "../src/agent-v2-planning-bootstrap.js";
+import { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap } from "../src/agent-v2-planning-bootstrap.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
 describe("agent v2 planning bootstrap", () => {
@@ -107,10 +104,7 @@ describe("agent v2 planning bootstrap", () => {
 	});
 });
 
-function createTempRuntimeDbStoreWithV2Schema(
-	cleanupRoots: string[],
-	cleanupStores: RuntimeDbStore[],
-): RuntimeDbStore {
+function createTempRuntimeDbStoreWithV2Schema(cleanupRoots: string[], cleanupStores: RuntimeDbStore[]): RuntimeDbStore {
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-planning-bootstrap-"));
 	const store = new RuntimeDbStore(join(root, "runtime.sqlite"));
 	store.ensureSchema();

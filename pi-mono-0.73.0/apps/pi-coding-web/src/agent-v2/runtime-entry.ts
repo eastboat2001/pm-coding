@@ -1,11 +1,11 @@
 import {
-	buildAgentV2PlanningBootstrap,
-	STATIC_APP_V2_PLATFORM_CONTRACT,
 	type AgentV2PlatformContract,
 	type AgentV2RunSnapshot,
+	buildAgentV2PlanningBootstrap,
+	STATIC_APP_V2_PLATFORM_CONTRACT,
 } from "@mariozechner/pi-web-workspace";
-import type { ApplicationGenerationRuntimeSelection, ApplicationGenerationRuntimeVersion } from "./types.js";
 import { STATIC_PREVIEW_CONTRACT } from "../runtime/platform-contract.js";
+import type { ApplicationGenerationRuntimeSelection, ApplicationGenerationRuntimeVersion } from "./types.js";
 
 type TimestampFactory = () => string;
 

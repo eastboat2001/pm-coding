@@ -358,7 +358,7 @@ describe("agent v2 runtime stores", () => {
 				createdAt: "2026-07-07T00:01:00.000Z",
 				updatedAt: "2026-07-07T00:01:00.000Z",
 			}),
-		).toThrowError("Agent v2 document kind mismatch: input.kind=\"spec\" contentJson.kind=\"plan\"");
+		).toThrowError('Agent v2 document kind mismatch: input.kind="spec" contentJson.kind="plan"');
 	});
 
 	it("rejects v2 documents when content kind is present but not a string", () => {

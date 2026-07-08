@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
-import { createAgentV2DiagnosticEvent, type AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { routeAgentV2Capabilities } from "./agent-v2-capability-router.js";
+import { type AgentV2DiagnosticEvent, createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import {
 	buildAgentV2PlanDocument,
 	buildAgentV2SpecDocument,
 	buildAgentV2TaskGraph,
 	renderAgentV2DocumentMarkdown,
 } from "./agent-v2-documents.js";
+import type {
+	AgentV2ArtifactRecord,
+	AgentV2DocumentRecord,
+	UpsertAgentV2ArtifactInput,
+	UpsertAgentV2DocumentInput,
+	UpsertAgentV2TaskInput,
+} from "./agent-v2-store.js";
 import type {
 	AgentV2CapabilityDecision,
 	AgentV2PlanDocument,
@@ -16,13 +23,6 @@ import type {
 	AgentV2TaskGraph,
 } from "./agent-v2-types.js";
 import type { RuntimeStore } from "./runtime-store.js";
-import type {
-	AgentV2ArtifactRecord,
-	AgentV2DocumentRecord,
-	UpsertAgentV2ArtifactInput,
-	UpsertAgentV2DocumentInput,
-	UpsertAgentV2TaskInput,
-} from "./agent-v2-store.js";
 
 type TimestampFactory = () => string;
 
@@ -234,11 +234,9 @@ export async function persistAgentV2PlanningBootstrap(
 		persistedArtifacts.push(await Promise.resolve(store.upsertAgentV2Artifact(artifact)));
 	}
 	const existingDiagnosticIds = new Set(
-		(
-			await Promise.resolve(
-				store.listAgentV2Diagnostics(bootstrap.run.clientId, bootstrap.run.runId),
-			)
-		).map((diagnostic) => diagnostic.diagnosticId),
+		(await Promise.resolve(store.listAgentV2Diagnostics(bootstrap.run.clientId, bootstrap.run.runId))).map(
+			(diagnostic) => diagnostic.diagnosticId,
+		),
 	);
 	for (const diagnostic of bootstrap.diagnostics) {
 		if (existingDiagnosticIds.has(diagnostic.diagnosticId)) {

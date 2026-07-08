@@ -37,6 +37,8 @@ export function planAgentV2RepairActions(input: PlanAgentV2RepairActionsInput): 
 }
 
 function repairActionForFailure(taskId: string, failure: AgentV2ValidationFailure): AgentV2RepairAction {
+	const targetPath = normalizeRepairTargetPath(failure.path);
+
 	if (!failure.retryable) {
 		return {
 			actionId: `repair:${taskId}:${failure.code}:block`,
@@ -44,18 +46,18 @@ function repairActionForFailure(taskId: string, failure: AgentV2ValidationFailur
 			type: "block_task",
 			retryable: false,
 			reason: failure.message,
-			targetPath: failure.path,
+			targetPath,
 			validationCode: failure.code,
 		};
 	}
 
 	return {
-		actionId: `repair:${taskId}:${failure.code}:${failure.path ?? "run"}`,
+		actionId: `repair:${taskId}:${failure.code}:${targetPath ?? "run"}`,
 		taskId,
-		type: failure.path ? "file_patch" : "rerun_validation",
+		type: targetPath ? "file_patch" : "rerun_validation",
 		retryable: true,
 		reason: reasonForFailure(failure),
-		targetPath: failure.path,
+		targetPath,
 		validationCode: failure.code,
 	};
 }
@@ -71,4 +73,17 @@ function reasonForFailure(failure: AgentV2ValidationFailure): string {
 		return "Client script errors must be fixed before delivery.";
 	}
 	return failure.message;
+}
+
+function normalizeRepairTargetPath(path: string | undefined): string | undefined {
+	if (!path) {
+		return undefined;
+	}
+
+	const normalized = path
+		.replace(/\\/g, "/")
+		.replace(/\/+/g, "/")
+		.replace(/^(?:\.\/)+/, "");
+
+	return normalized || undefined;
 }

@@ -74,6 +74,16 @@ describe("agent v2 artifact index", () => {
 
 		expect(index.pendingValidation.map((item) => item.artifactId)).toEqual(["pending", "not-started"]);
 	});
+
+	it("orders with non-ASCII artifact IDs by code-unit comparison independent of locale", () => {
+		const index = buildAgentV2ArtifactIndex([
+			artifact({ artifactId: "å", path: "src/index.md", updatedAt: "2026-07-08T00:01:00.000Z" }),
+			artifact({ artifactId: "z", path: "src/index.md", updatedAt: "2026-07-08T00:01:00.000Z" }),
+		]);
+
+		expect(index.artifacts.map((item) => item.artifactId)).toEqual(["z", "å"]);
+		expect(["z", "å"].sort((left, right) => left.localeCompare(right, "en"))).toEqual(["å", "z"]);
+	});
 });
 
 function artifact(input: Partial<AgentV2ArtifactRecord> & { artifactId: string }): AgentV2ArtifactRecord {

@@ -48,10 +48,14 @@ export function findLatestAgentV2ArtifactByPath(
 
 function compareArtifacts(left: AgentV2ArtifactRecord, right: AgentV2ArtifactRecord): number {
 	return (
-		left.updatedAt.localeCompare(right.updatedAt) ||
-		left.path.localeCompare(right.path) ||
-		left.artifactId.localeCompare(right.artifactId)
+		compareStrings(left.updatedAt, right.updatedAt) ||
+		compareStrings(left.path, right.path) ||
+		compareStrings(left.artifactId, right.artifactId)
 	);
+}
+
+function compareStrings(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function comparePendingValidation(left: AgentV2ArtifactRecord, right: AgentV2ArtifactRecord): number {

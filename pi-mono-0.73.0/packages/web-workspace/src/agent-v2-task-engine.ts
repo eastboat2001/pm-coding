@@ -112,7 +112,7 @@ export function transitionAgentV2Task(input: AgentV2TaskTransitionInput): AgentV
 	const startedAt =
 		input.status === "running"
 			? input.task.status === "running"
-				? input.task.startedAt ?? input.now
+				? (input.task.startedAt ?? input.now)
 				: input.now
 			: isTerminal
 				? input.task.startedAt

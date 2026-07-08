@@ -223,6 +223,61 @@ describe("AgentV2WorkerService", () => {
 		);
 	});
 
+	it("preserves interrupted when a run was externally interrupted before post-step cancel finalization", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-interrupted-before-finalize");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-interrupted-before-finalize" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new ExternalInterruptedExecution(store, queue, "client-a", "run-interrupted-before-finalize"),
+			workerId: "worker-a",
+			now: timestampSequence(
+				"2026-07-08T09:03:40.000Z",
+				"2026-07-08T09:03:41.000Z",
+				"2026-07-08T09:03:42.000Z",
+			),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(store.getRunSnapshot("client-a", "run-interrupted-before-finalize")).toMatchObject({
+			status: "interrupted",
+			endedAt: "2026-07-08T09:03:41.000Z",
+		});
+	});
+
+	it("preserves interrupted when stop races with a requested cancel", async () => {
+		vi.useRealTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-stop-cancel-race");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-stop-cancel-race" }]);
+		const execution = new AbortAwareExecution();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution,
+			workerId: "worker-a",
+			cancelPollIntervalMs: 5,
+			now: timestampSequence(
+				"2026-07-08T09:03:50.000Z",
+				"2026-07-08T09:03:51.000Z",
+				"2026-07-08T09:03:52.000Z",
+			),
+		});
+
+		const processing = worker.processOne();
+		await waitFor(() => store.getRunSnapshot("client-a", "run-stop-cancel-race")?.status === "running");
+		await queue.requestCancel({ clientId: "client-a", runId: "run-stop-cancel-race" });
+		await expect(worker.stop()).resolves.toBeUndefined();
+		await expect(processing).resolves.toBe(true);
+		expect(execution.abortCount).toBe(1);
+		expect(store.getRunSnapshot("client-a", "run-stop-cancel-race")).toMatchObject({
+			status: "interrupted",
+		});
+	});
+
 	it("stop marks owned running and cancelling runs interrupted", async () => {
 		const store = new MemoryWorkerStore();
 		store.createOwnedActiveRun("client-a", "run-running", "running", "worker-a");
@@ -457,6 +512,27 @@ class ExternalCancellingExecution {
 	}
 }
 
+class ExternalInterruptedExecution {
+	constructor(
+		private readonly store: MemoryWorkerStore,
+		private readonly queue: RecordingQueue,
+		private readonly clientId: string,
+		private readonly runId: string,
+	) {}
+
+	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
+		await this.queue.requestCancel({ clientId: this.clientId, runId: this.runId });
+		await this.store.updateAgentV2Run({
+			clientId: this.clientId,
+			runId: this.runId,
+			status: "interrupted",
+			updatedAt: "2026-07-08T09:03:41.000Z",
+			endedAt: "2026-07-08T09:03:41.000Z",
+		});
+		return { status: "complete", diagnosticIds: [] };
+	}
+}
+
 function runKey(clientId: string, runId: string): string {
 	return `${clientId}:${runId}`;
 }
@@ -468,4 +544,14 @@ function timestampSequence(...timestamps: string[]): () => string {
 		index += 1;
 		return value;
 	};
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate()) {
+		if (Date.now() >= deadline) {
+			throw new Error("Timed out waiting for condition");
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
 }

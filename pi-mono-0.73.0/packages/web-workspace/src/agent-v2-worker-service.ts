@@ -198,7 +198,7 @@ export class AgentV2WorkerService {
 					return;
 				}
 				current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
-				if (current.status === "cancelled") return;
+				if (isTerminalRun(current.status)) return;
 				if (current.status === "cancelling") {
 					await this.cancelRun(current);
 					return;
@@ -206,7 +206,11 @@ export class AgentV2WorkerService {
 				cancelRequested ||= await this.pollCancellation(current, abortController);
 				if (cancelRequested) {
 					current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
-					if (current.status === "cancelled") return;
+					if (isTerminalRun(current.status)) return;
+					if (this.stopping) {
+						await this.interruptRun(current);
+						return;
+					}
 					await this.cancelRun(current);
 					return;
 				}
@@ -219,7 +223,11 @@ export class AgentV2WorkerService {
 				});
 
 				current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
-				if (current.status === "cancelled") return;
+				if (isTerminalRun(current.status)) return;
+				if (this.stopping) {
+					await this.interruptRun(current);
+					return;
+				}
 				const queueCancelRequested = await this.queue.isCancelRequested({
 					clientId: current.clientId,
 					runId: current.runId,
@@ -253,14 +261,16 @@ export class AgentV2WorkerService {
 			);
 		} catch (error) {
 			const latest = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
-			if (latest.status === "cancelled") return;
+			if (isTerminalRun(latest.status)) return;
+			if (this.stopping) {
+				await this.interruptRun(latest);
+				return;
+			}
 			cancelRequested ||= latest.status === "cancelling";
 			const aborted = abortController.signal.aborted;
 			cancelRequested ||= aborted && (await this.queue.isCancelRequested({ clientId: latest.clientId, runId: latest.runId }));
 			if (cancelRequested) {
 				await this.cancelRun(latest);
-			} else if (this.stopping) {
-				await this.interruptRun(latest);
 			} else {
 				await this.failRun(latest, "agent_v2.worker_execution_failed", errorMessage(error));
 			}

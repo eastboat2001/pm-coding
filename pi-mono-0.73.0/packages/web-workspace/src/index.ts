@@ -76,6 +76,15 @@ export {
 	assertAgentV2ToolAllowed,
 } from "./agent-v2-tool-governance.js";
 export {
+	type AgentV2FileAdapter,
+	type AgentV2FileAdapterContext,
+	type AgentV2FileArtifactCandidate,
+	type AgentV2FileWriteMode,
+	type AgentV2FileWriteResult,
+	type CreateAgentV2FileAdapterInput,
+	createAgentV2FileAdapter,
+} from "./agent-v2-file-adapter.js";
+export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
 	AGENT_V2_DOCUMENT_COLUMNS,

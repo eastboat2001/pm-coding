@@ -92,6 +92,25 @@ describe("Agent v2 capability router", () => {
 		expect(decision.unsupportedCapabilities).toEqual(expect.arrayContaining(["backend_server"]));
 	});
 
+	it("routes standalone and generic API wording to explicit static simulation instead of clarification fallback", () => {
+		const standaloneDecision = routeAgentV2Capabilities({
+			objective: "Build an API for todos.",
+		});
+		const genericDecision = routeAgentV2Capabilities({
+			objective: "Create an API.",
+		});
+
+		expect(standaloneDecision.deliveryMode).toBe("static_simulation");
+		expect(standaloneDecision.requiresSimulation).toBe(true);
+		expect(standaloneDecision.requiresClarification).toBe(false);
+		expect(standaloneDecision.unsupportedCapabilities).toEqual(expect.arrayContaining(["backend_server"]));
+
+		expect(genericDecision.deliveryMode).toBe("static_simulation");
+		expect(genericDecision.requiresSimulation).toBe(true);
+		expect(genericDecision.requiresClarification).toBe(false);
+		expect(genericDecision.unsupportedCapabilities).toEqual(expect.arrayContaining(["backend_server"]));
+	});
+
 	it("routes image upload requests to explicit static simulation instead of clarification fallback", () => {
 		const decision = routeAgentV2Capabilities({
 			objective: "Build an app where users upload images and photos for moderation.",

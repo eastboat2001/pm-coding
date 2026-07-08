@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
-import {
-	AgentV2RunInputContractError,
-	validateAgentV2RunInput,
-} from "./agent-v2-run-input-contract.js";
+import { AgentV2RunInputContractError, validateAgentV2RunInput } from "./agent-v2-run-input-contract.js";
 import type { AgentV2RunQueue } from "./agent-v2-run-queue.js";
 import type { AgentV2RunUpdateResult, CreateAgentV2RunInput, UpdateAgentV2RunInput } from "./agent-v2-store.js";
 import type { AgentV2Phase, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";

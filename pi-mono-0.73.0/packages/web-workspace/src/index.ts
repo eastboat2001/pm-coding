@@ -92,6 +92,12 @@ export {
 	runAgentV2StaticValidationGate,
 } from "./agent-v2-validation-gate.js";
 export {
+	type AgentV2RepairAction,
+	type AgentV2RepairActionType,
+	type PlanAgentV2RepairActionsInput,
+	planAgentV2RepairActions,
+} from "./agent-v2-repair-engine.js";
+export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
 	AGENT_V2_DOCUMENT_COLUMNS,

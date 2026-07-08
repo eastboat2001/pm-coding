@@ -35,6 +35,12 @@ export {
 	persistAgentV2PlanningBootstrap,
 } from "./agent-v2-planning-bootstrap.js";
 export {
+	type AgentV2ExecutionStepResult,
+	type AgentV2ExecutionStepStatus,
+	type ExecuteAgentV2NextTaskInput,
+	executeAgentV2NextTask,
+} from "./agent-v2-execution-core.js";
+export {
 	type AgentV2ResetDiagnosticsAdapter,
 	type AgentV2ResetOptions,
 	type AgentV2ResetResult,

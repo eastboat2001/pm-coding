@@ -101,7 +101,7 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 	}
 
 	const buildRequired = normalized.match(
-		/^Static preview found a build source entry at (.+?)\. Run project_task build_static before project_task preview so PI can serve browser-ready dist\/build output\.$/,
+		/^Static preview found a build source entry at (.+?)\. Run build_static before preview so PI can serve browser-ready dist\/build output\.$/,
 	);
 	if (buildRequired?.[1]) {
 		return createFailure({

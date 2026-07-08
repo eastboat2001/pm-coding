@@ -77,11 +77,11 @@ describe("agent v2 validation gate", () => {
 		expect(result.validation).toMatchObject({ status: "passed", summary: "Static validation passed" });
 	});
 
-	it("normalizes legacy build-required messaging into v2 preview failures", async () => {
+	it("normalizes build-required messaging into v2 preview failures", async () => {
 		const config = testConfig(tempRoot());
 		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
 		const sourceMessage =
-			"Static preview found a build source entry at ./src/main.ts. Run project_task build_static before project_task preview so PI can serve browser-ready dist/build output.";
+			"Static preview found a build source entry at ./src/main.ts. Run build_static before preview so PI can serve browser-ready dist/build output.";
 
 		const result = await runAgentV2StaticValidationGate({
 			config,
@@ -119,7 +119,7 @@ describe("agent v2 validation gate", () => {
 			]),
 		);
 		expect(result.rawResult.errors).toEqual([sourceMessage]);
-		expect(rawError).toContain("project_task build_static");
+		expect(rawError).toContain("build_static before preview");
 		expect(failure?.message).not.toContain("project_task");
 		expect(failure?.code).not.toContain("project_task");
 		expect(result.validation.details).toMatchObject({

@@ -8,7 +8,7 @@ import { API_PREFIX, LOGS_API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, RUNS_
 import { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
-import { RunApiError, WorkspaceRunApiService, compactRunEventsForClient } from "./run-api-service.js";
+import { compactRunEventsForClient, RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 import { RedisRunEventBus } from "./run-event-bus.js";
 import { RedisRunQueue } from "./run-queue.js";
 import { createRuntimeStore } from "./runtime-store-factory.js";

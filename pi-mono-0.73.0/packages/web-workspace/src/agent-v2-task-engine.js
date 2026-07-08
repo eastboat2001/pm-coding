@@ -64,7 +64,7 @@ export function transitionAgentV2Task(input) {
     const output = input.output !== undefined ? input.output : isTerminal ? input.task.output : {};
     const startedAt = input.status === "running"
         ? input.task.status === "running"
-            ? input.task.startedAt ?? input.now
+            ? (input.task.startedAt ?? input.now)
             : input.now
         : isTerminal
             ? input.task.startedAt

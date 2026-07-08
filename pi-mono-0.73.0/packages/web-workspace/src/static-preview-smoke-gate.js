@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
-import { Script, createContext } from "node:vm";
+import { createContext, Script } from "node:vm";
 const SCRIPT_TAG_PATTERN = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
 const SRC_ATTRIBUTE_PATTERN = /\bsrc\s*=\s*(['"])([^'"]+)\1/i;
 const ID_ATTRIBUTE_PATTERN = /\bid\s*=\s*(['"])([^'"]+)\1/i;
@@ -113,14 +113,13 @@ class SmokeRuntime {
         this.document = new SmokeDocument(html, this.missingSelectors);
     }
     context() {
-        const runtime = this;
         const windowObject = {
             document: this.document,
             console: {
                 log: () => undefined,
                 info: () => undefined,
                 warn: () => undefined,
-                error: (...values) => runtime.consoleErrors.push(values.map(String).join(" ")),
+                error: (...values) => this.consoleErrors.push(values.map(String).join(" ")),
             },
             addEventListener: (type, listener) => this.windowTarget.addEventListener(type, listener),
             removeEventListener: (type, listener) => this.windowTarget.removeEventListener(type, listener),
@@ -482,9 +481,11 @@ function elementText(html, tagName, match) {
     return stripTags(inner).trim();
 }
 function selectorMatches(element, selector) {
-    return selector
-        .split(",")
-        .some((part) => simpleSelectorMatches(element, part.trim().split(/\s+|>|\+/).filter(Boolean).pop() ?? ""));
+    return selector.split(",").some((part) => simpleSelectorMatches(element, part
+        .trim()
+        .split(/\s+|>|\+/)
+        .filter(Boolean)
+        .pop() ?? ""));
 }
 function simpleSelectorMatches(element, selector) {
     if (!selector)
@@ -517,7 +518,10 @@ function enrichListenerError(error, listener) {
 function sourceLineFromListener(listener, errorMessage) {
     const source = listener.toString();
     const property = errorMessage.match(/reading ['"`]([^'"`]+)['"`]/)?.[1];
-    const lines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const lines = source
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
     if (property) {
         const propertyLine = lines.find((line) => line.includes(`.${property}`) || line.includes(`[${property}`));
         if (propertyLine)
@@ -549,7 +553,9 @@ function pathIsInside(root, target) {
     return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}\\`);
 }
 function relativeCheckedPath(root, file) {
-    const relative = normalize(file).slice(normalize(root).length).replace(/^[/\\]+/, "");
+    const relative = normalize(file)
+        .slice(normalize(root).length)
+        .replace(/^[/\\]+/, "");
     return relative || file;
 }
 function toDatasetName(name) {

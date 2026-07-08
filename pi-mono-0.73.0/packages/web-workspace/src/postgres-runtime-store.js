@@ -1,9 +1,16 @@
 import pg from "pg";
-import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_TASK_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunRecord, toAgentV2TaskRecord, } from "./agent-v2-store.js";
+import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_VERSION } from "./agent-v2-types.js";
 const ACTIVE_RUN_STATUSES = ["queued", "running", "cancelling"];
 const TERMINAL_RUN_STATUSES = new Set(["cancelled", "completed", "failed", "interrupted"]);
-const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"];
+const LEGACY_RESET_TABLES = [
+    "app_preview_goal_events",
+    "app_preview_goals",
+    "run_events",
+    "messages",
+    "runs",
+    "sessions",
+];
 const AGENT_V2_RESET_TABLES = [
     "agent_v2_diagnostics",
     "agent_v2_validations",
@@ -223,7 +230,7 @@ export class PostgresRuntimeStore {
 				PRIMARY KEY (client_id, run_id, artifact_id),
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
 			)
-        `);
+		`);
         await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)");
         await this.query(this.queryable, `
 			CREATE TABLE IF NOT EXISTS agent_v2_documents (
@@ -955,6 +962,48 @@ export class PostgresRuntimeStore {
 			FROM agent_v2_documents
 			WHERE client_id = $1 AND run_id = $2 AND document_id = $3`, [clientId, runId, documentId]);
         return row ? toAgentV2DocumentRecord(row) : undefined;
+    }
+    async upsertAgentV2Validation(input) {
+        const validation = buildAgentV2Validation(input);
+        const row = await this.queryOne(this.queryable, `INSERT INTO agent_v2_validations (
+				client_id,
+				run_id,
+				validation_id,
+				task_id,
+				artifact_id,
+				status,
+				summary,
+				details_json,
+				created_at,
+				updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT(client_id, run_id, validation_id) DO UPDATE SET
+				task_id = excluded.task_id,
+				artifact_id = excluded.artifact_id,
+				status = excluded.status,
+				summary = excluded.summary,
+				details_json = excluded.details_json,
+				updated_at = excluded.updated_at
+			RETURNING ${AGENT_V2_VALIDATION_COLUMNS}`, [
+            validation.clientId,
+            validation.runId,
+            validation.validationId,
+            validation.taskId ?? null,
+            validation.artifactId ?? null,
+            validation.status,
+            validation.summary,
+            validation.details,
+            validation.createdAt,
+            validation.updatedAt,
+        ]);
+        return requiredRecord(row ? toAgentV2ValidationRecord(row) : undefined, "agent v2 validation");
+    }
+    async listAgentV2Validations(clientId, runId) {
+        const rows = await this.queryRows(this.queryable, `SELECT ${AGENT_V2_VALIDATION_COLUMNS}
+			FROM agent_v2_validations
+			WHERE client_id = $1 AND run_id = $2
+			ORDER BY created_at ASC, validation_id ASC`, [clientId, runId]);
+        return rows.map(toAgentV2ValidationRecord);
     }
     async appendAgentV2Diagnostic(input) {
         const row = await this.queryOne(this.queryable, `INSERT INTO agent_v2_diagnostics (

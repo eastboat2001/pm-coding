@@ -1,11 +1,18 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_TASK_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, stringifyAgentV2Json, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunRecord, toAgentV2TaskRecord, } from "./agent-v2-store.js";
+import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, stringifyAgentV2Json, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_VERSION } from "./agent-v2-types.js";
 import { isObject } from "./json.js";
 const TERMINAL_RUN_STATUSES = new Set(["cancelled", "completed", "failed", "interrupted"]);
-const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"];
+const LEGACY_RESET_TABLES = [
+    "app_preview_goal_events",
+    "app_preview_goals",
+    "run_events",
+    "messages",
+    "runs",
+    "sessions",
+];
 const AGENT_V2_RESET_TABLES = [
     "agent_v2_diagnostics",
     "agent_v2_validations",
@@ -176,9 +183,9 @@ export class RuntimeDbStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC);
 
-			CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
+				CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
 				artifact_id TEXT NOT NULL,
 				kind TEXT NOT NULL,
 				path TEXT NOT NULL,
@@ -192,28 +199,28 @@ export class RuntimeDbStore {
 				updated_at TEXT NOT NULL,
 				PRIMARY KEY (client_id, run_id, artifact_id),
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
+				);
+				CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
 
-			CREATE TABLE IF NOT EXISTS agent_v2_documents (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				document_id TEXT NOT NULL,
-				kind TEXT NOT NULL,
-				version TEXT NOT NULL,
-				content_markdown TEXT NOT NULL,
-				content_json TEXT NOT NULL,
-				source_task_id TEXT,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, document_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC);
+				CREATE TABLE IF NOT EXISTS agent_v2_documents (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
+					document_id TEXT NOT NULL,
+					kind TEXT NOT NULL,
+					version TEXT NOT NULL,
+					content_markdown TEXT NOT NULL,
+					content_json TEXT NOT NULL,
+					source_task_id TEXT,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL,
+					PRIMARY KEY (client_id, run_id, document_id),
+					FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+				);
+				CREATE INDEX IF NOT EXISTS idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC);
 
-			CREATE TABLE IF NOT EXISTS agent_v2_validations (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
+				CREATE TABLE IF NOT EXISTS agent_v2_validations (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
 				validation_id TEXT NOT NULL,
 				task_id TEXT,
 				artifact_id TEXT,
@@ -245,11 +252,11 @@ export class RuntimeDbStore {
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
 			);
 			CREATE INDEX IF NOT EXISTS idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at ASC);
-		`);
+			`);
         ensureSqliteColumn(db, "agent_v2_tasks", "acceptance_criteria_json", "TEXT NOT NULL DEFAULT '[]'");
         db.prepare(`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
-				VALUES (?, ?)
-				ON CONFLICT(schema_version) DO NOTHING`).run(AGENT_V2_SCHEMA_VERSION, now());
+			VALUES (?, ?)
+			ON CONFLICT(schema_version) DO NOTHING`).run(AGENT_V2_SCHEMA_VERSION, now());
     }
     close() {
         this.database?.close();
@@ -838,6 +845,40 @@ export class RuntimeDbStore {
 				WHERE client_id = ? AND run_id = ? AND document_id = ?`)
             .get(clientId, runId, documentId);
         return row ? toAgentV2DocumentRecord(row) : undefined;
+    }
+    upsertAgentV2Validation(input) {
+        const validation = buildAgentV2Validation(input);
+        this.open()
+            .prepare(`INSERT INTO agent_v2_validations (
+					client_id,
+					run_id,
+					validation_id,
+					task_id,
+					artifact_id,
+					status,
+					summary,
+					details_json,
+					created_at,
+					updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(client_id, run_id, validation_id) DO UPDATE SET
+					task_id = excluded.task_id,
+					artifact_id = excluded.artifact_id,
+					status = excluded.status,
+					summary = excluded.summary,
+					details_json = excluded.details_json,
+					updated_at = excluded.updated_at`)
+            .run(validation.clientId, validation.runId, validation.validationId, validation.taskId ?? null, validation.artifactId ?? null, validation.status, validation.summary, stringifyAgentV2Json(validation.details), validation.createdAt, validation.updatedAt);
+        return requiredRecord(this.listAgentV2Validations(validation.clientId, validation.runId).find((record) => record.validationId === validation.validationId), "agent v2 validation");
+    }
+    listAgentV2Validations(clientId, runId) {
+        const rows = this.open()
+            .prepare(`SELECT ${AGENT_V2_VALIDATION_COLUMNS}
+				FROM agent_v2_validations
+				WHERE client_id = ? AND run_id = ?
+				ORDER BY created_at ASC, validation_id ASC`)
+            .all(clientId, runId);
+        return rows.map(toAgentV2ValidationRecord);
     }
     appendAgentV2Diagnostic(input) {
         this.open()

@@ -8,6 +8,7 @@ import {
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
 	AGENT_V2_VALIDATION_COLUMNS,
+	type AgentV2RunUpdateResult,
 	type AgentV2RunEventRecord,
 	type AgentV2RunEventRow,
 	type AgentV2ArtifactRecord,
@@ -1255,6 +1256,10 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	async updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
+		return (await this.updateAgentV2RunWithResult(input)).run;
+	}
+
+	async updateAgentV2RunWithResult(input: UpdateAgentV2RunInput): Promise<AgentV2RunUpdateResult> {
 		return this.withTransaction(async (tx) => {
 			const currentRow = await this.queryOne<AgentV2RunRow>(
 				tx,
@@ -1266,7 +1271,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 			);
 			const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
 			if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
-				return current;
+				return { run: current, applied: false };
 			}
 			const next = applyAgentV2RunUpdate(current, input);
 			const row = await this.queryOne<AgentV2RunRow>(
@@ -1295,7 +1300,10 @@ export class PostgresRuntimeStore implements RuntimeStore {
 					next.error ?? null,
 				],
 			);
-			return requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run");
+			return {
+				run: requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run"),
+				applied: true,
+			};
 		});
 	}
 

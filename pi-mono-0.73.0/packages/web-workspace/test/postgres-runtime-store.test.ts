@@ -577,7 +577,7 @@ describe("PostgresRuntimeStore", () => {
 		);
 	});
 
-	it("locks agent v2 runs before applying guarded updates and skips stale terminal writes", async () => {
+	it("returns applied false when a guarded PostgreSQL agent v2 run update misses the expected status", async () => {
 		const cancellingRow = {
 			client_id: "client-a",
 			run_id: "run-v2-race",
@@ -601,7 +601,8 @@ describe("PostgresRuntimeStore", () => {
 			return undefined;
 		});
 		const store = new PostgresRuntimeStore({ queryable });
-		const staleTerminalUpdate = {
+
+		const result = await store.updateAgentV2RunWithResult({
 			clientId: "client-a",
 			runId: "run-v2-race",
 			status: "succeeded" as const,
@@ -609,21 +610,89 @@ describe("PostgresRuntimeStore", () => {
 			endedAt: "2026-07-08T00:03:00.000Z",
 			updatedAt: "2026-07-08T00:03:00.000Z",
 			expectedStatuses: ["running" as const],
-		};
-
-		const result = await store.updateAgentV2Run(staleTerminalUpdate);
+		});
 
 		expect(result).toMatchObject({
-			clientId: "client-a",
-			runId: "run-v2-race",
-			status: "cancelling",
-			phase: "implementation",
+			run: {
+				clientId: "client-a",
+				runId: "run-v2-race",
+				status: "cancelling",
+				phase: "implementation",
+			},
+			applied: false,
 		});
 		expect(queryable.statementsMatching(/^SELECT .* FROM agent_v2_runs .* FOR UPDATE$/i)).toHaveLength(1);
 		expect(queryable.statementsMatching(/^UPDATE agent_v2_runs/i)).toHaveLength(0);
 		expect(queryable.queries.map((query) => normalizeSql(query.sql))).toEqual([
 			"BEGIN",
 			expect.stringContaining("FOR UPDATE"),
+			"COMMIT",
+		]);
+	});
+
+	it("returns applied true when a guarded PostgreSQL agent v2 run update writes the row", async () => {
+		const queuedRow = {
+			client_id: "client-a",
+			run_id: "run-v2-apply",
+			status: "queued",
+			phase: "intake",
+			attempt: 1,
+			input_json: { prompt: "build app" },
+			model_json: { provider: "test" },
+			worker_id: null,
+			created_at: "2026-07-08T00:00:00.000Z",
+			updated_at: "2026-07-08T00:00:00.000Z",
+			started_at: null,
+			ended_at: null,
+			error_json: null,
+		};
+		const runningRow = {
+			...queuedRow,
+			status: "running",
+			phase: "implementation",
+			worker_id: "worker-1",
+			updated_at: "2026-07-08T00:01:00.000Z",
+			started_at: "2026-07-08T00:01:00.000Z",
+		};
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (/^SELECT .* FROM agent_v2_runs WHERE client_id = \$1 AND run_id = \$2 FOR UPDATE$/i.test(sql)) {
+				return { rows: [queuedRow] };
+			}
+			if (/^UPDATE agent_v2_runs/i.test(sql)) {
+				return { rows: [runningRow] };
+			}
+			return undefined;
+		});
+		const store = new PostgresRuntimeStore({ queryable });
+
+		const result = await store.updateAgentV2RunWithResult({
+			clientId: "client-a",
+			runId: "run-v2-apply",
+			status: "running",
+			phase: "implementation",
+			workerId: "worker-1",
+			startedAt: "2026-07-08T00:01:00.000Z",
+			updatedAt: "2026-07-08T00:01:00.000Z",
+			expectedStatuses: ["queued"],
+		});
+
+		expect(result).toMatchObject({
+			run: {
+				clientId: "client-a",
+				runId: "run-v2-apply",
+				status: "running",
+				phase: "implementation",
+				workerId: "worker-1",
+			},
+			applied: true,
+		});
+		expect(queryable.statementsMatching(/^SELECT .* FROM agent_v2_runs .* FOR UPDATE$/i)).toHaveLength(1);
+		expect(queryable.statementsMatching(/^UPDATE agent_v2_runs/i)).toHaveLength(1);
+		expect(queryable.queries.map((query) => normalizeSql(query.sql))).toEqual([
+			"BEGIN",
+			expect.stringContaining("FOR UPDATE"),
+			expect.stringMatching(/^UPDATE agent_v2_runs/),
 			"COMMIT",
 		]);
 	});

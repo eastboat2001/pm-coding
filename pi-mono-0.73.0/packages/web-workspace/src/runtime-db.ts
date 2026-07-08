@@ -9,6 +9,7 @@ import {
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
 	AGENT_V2_VALIDATION_COLUMNS,
+	type AgentV2RunUpdateResult,
 	type AgentV2RunEventRecord,
 	type AgentV2RunEventRow,
 	type AgentV2ArtifactRecord,
@@ -1093,6 +1094,10 @@ export class RuntimeDbStore implements RuntimeStore {
 	}
 
 	updateAgentV2Run(input: UpdateAgentV2RunInput): AgentV2RunSnapshot {
+		return this.updateAgentV2RunWithResult(input).run;
+	}
+
+	updateAgentV2RunWithResult(input: UpdateAgentV2RunInput): AgentV2RunUpdateResult {
 		const db = this.open();
 		return this.writeTransaction(db, () => {
 			const currentRow = db
@@ -1100,7 +1105,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				.get(input.clientId, input.runId) as unknown as AgentV2RunRow | undefined;
 			const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
 			if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
-				return current;
+				return { run: current, applied: false };
 			}
 			const next = applyAgentV2RunUpdate(current, input);
 			db.prepare(
@@ -1129,7 +1134,10 @@ export class RuntimeDbStore implements RuntimeStore {
 			const updatedRow = db
 				.prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
 				.get(input.clientId, input.runId) as unknown as AgentV2RunRow | undefined;
-			return requiredRecord(updatedRow ? toAgentV2RunRecord(updatedRow) : undefined, "agent v2 run");
+			return {
+				run: requiredRecord(updatedRow ? toAgentV2RunRecord(updatedRow) : undefined, "agent v2 run"),
+				applied: true,
+			};
 		});
 	}
 

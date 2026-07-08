@@ -10,6 +10,7 @@ import { InMemoryRunQueue } from "../src/run-queue.js";
 import type {
 	AppendAgentV2RunEventInput,
 	AgentV2RunEventRecord,
+	AgentV2RunUpdateResult,
 	CreateAgentV2RunInput,
 	UpdateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
@@ -136,8 +137,8 @@ describe("AgentV2RunApiService", () => {
 				...queued,
 				status: "cancelled",
 				phase: "cancelled",
-				updatedAt: "2026-07-08T09:09:59.000Z",
-				endedAt: "2026-07-08T09:09:59.000Z",
+				updatedAt: "2026-07-08T09:10:00.000Z",
+				endedAt: "2026-07-08T09:10:00.000Z",
 			});
 		});
 		const events = new RecordingEventLog();
@@ -153,8 +154,8 @@ describe("AgentV2RunApiService", () => {
 		expect(result).toMatchObject({
 			status: "cancelled",
 			phase: "cancelled",
-			updatedAt: "2026-07-08T09:09:59.000Z",
-			endedAt: "2026-07-08T09:09:59.000Z",
+			updatedAt: "2026-07-08T09:10:00.000Z",
+			endedAt: "2026-07-08T09:10:00.000Z",
 		});
 		expect(events.appendCalls).toEqual([]);
 	});
@@ -367,6 +368,10 @@ class GuardedStore {
 	}
 
 	async updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
+		return (await this.updateAgentV2RunWithResult(input)).run;
+	}
+
+	async updateAgentV2RunWithResult(input: UpdateAgentV2RunInput): Promise<AgentV2RunUpdateResult> {
 		const beforeUpdate = this.beforeUpdateCallbacks.shift();
 		beforeUpdate?.(input);
 		const current = this.runs.get(runKey(input.clientId, input.runId));
@@ -374,7 +379,7 @@ class GuardedStore {
 			throw new Error(`Missing run ${input.clientId}/${input.runId}`);
 		}
 		if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
-			return current;
+			return { run: current, applied: false };
 		}
 		const next: AgentV2RunSnapshot = {
 			...current,
@@ -388,7 +393,7 @@ class GuardedStore {
 			...(input.error !== undefined ? { error: input.error } : current.error ? { error: current.error } : {}),
 		};
 		this.runs.set(runKey(input.clientId, input.runId), next);
-		return next;
+		return { run: next, applied: true };
 	}
 
 	async listAgentV2Runs(clientId: string): Promise<AgentV2RunSnapshot[]> {

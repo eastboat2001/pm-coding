@@ -302,6 +302,44 @@ describe("agent v2 runtime stores", () => {
 		}
 	});
 
+	it("returns applied false when a guarded SQLite v2 run update misses the expected status", () => {
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-update-result-miss",
+			input: { prompt: "ship it" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-update-result-miss",
+			status: "running",
+			phase: "implementation",
+			workerId: "worker-1",
+			startedAt: "2026-07-08T00:01:00.000Z",
+			updatedAt: "2026-07-08T00:01:00.000Z",
+		});
+		const cancelling = store.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-update-result-miss",
+			status: "cancelling",
+			updatedAt: "2026-07-08T00:02:00.000Z",
+		});
+
+		const result = store.updateAgentV2RunWithResult({
+			clientId: "client-a",
+			runId: "run-update-result-miss",
+			status: "succeeded",
+			phase: "delivery",
+			endedAt: "2026-07-08T00:03:00.000Z",
+			updatedAt: "2026-07-08T00:03:00.000Z",
+			expectedStatuses: ["running"],
+		});
+
+		expect(result).toEqual({ run: cancelling, applied: false });
+		expect(store.getAgentV2Run("client-a", "run-update-result-miss")).toEqual(cancelling);
+	});
+
 	it("stores and lists v2 tasks, artifacts, and diagnostics by run", () => {
 		store.createAgentV2Run({
 			clientId: "client-a",

@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import type { AgentV2RunQueue } from "./agent-v2-run-queue.js";
-import type { CreateAgentV2RunInput, UpdateAgentV2RunInput } from "./agent-v2-store.js";
+import type { AgentV2RunUpdateResult, CreateAgentV2RunInput, UpdateAgentV2RunInput } from "./agent-v2-store.js";
 import type { RuntimeStore } from "./runtime-store.js";
 import type { AgentV2Phase, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
 
-type AgentV2RunStore = Pick<RuntimeStore, "createAgentV2Run" | "getAgentV2Run" | "listAgentV2Runs" | "updateAgentV2Run"> & {
+type AgentV2RunStore = Pick<
+	RuntimeStore,
+	"createAgentV2Run" | "getAgentV2Run" | "listAgentV2Runs" | "updateAgentV2RunWithResult"
+> & {
 	createAgentV2Run(input: CreateAgentV2RunInput): Promise<AgentV2RunSnapshot> | AgentV2RunSnapshot;
-	updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot> | AgentV2RunSnapshot;
+	updateAgentV2RunWithResult(input: UpdateAgentV2RunInput): Promise<AgentV2RunUpdateResult> | AgentV2RunUpdateResult;
 };
 
 export interface AgentV2StartRunRequest {
@@ -87,7 +90,7 @@ export class AgentV2RunApiService {
 		await this.queue.requestCancel({ clientId, runId });
 		const updatedAt = this.now();
 		if (run.status === "queued") {
-			const cancelled = await this.store.updateAgentV2Run({
+			const cancelled = await this.store.updateAgentV2RunWithResult({
 				clientId,
 				runId,
 				status: "cancelled",
@@ -96,26 +99,26 @@ export class AgentV2RunApiService {
 				endedAt: updatedAt,
 				expectedStatuses: ["queued"],
 			});
-			if (didApplyStatusTransition(run, cancelled, "cancelled", updatedAt)) {
-				await this.appendPhaseEvent(cancelled, "cancelled");
+			if (cancelled.applied) {
+				await this.appendPhaseEvent(cancelled.run, "cancelled");
 			}
-			return cancelled;
+			return cancelled.run;
 		}
 		if (run.status === "cancelling") {
 			return run;
 		}
 
-		const cancelling = await this.store.updateAgentV2Run({
+		const cancelling = await this.store.updateAgentV2RunWithResult({
 			clientId,
 			runId,
 			status: "cancelling",
 			updatedAt,
 			expectedStatuses: ["running"],
 		});
-		if (didApplyStatusTransition(run, cancelling, "cancelling", updatedAt)) {
-			await this.appendPhaseEvent(cancelling, cancelling.status);
+		if (cancelling.applied) {
+			await this.appendPhaseEvent(cancelling.run, cancelling.run.status);
 		}
-		return cancelling;
+		return cancelling.run;
 	}
 
 	async getRun(clientId: string, runId: string): Promise<AgentV2RunSnapshot | undefined> {
@@ -157,15 +160,6 @@ export class AgentV2RunApiService {
 
 function isTerminalRun(status: AgentV2RunStatus): boolean {
 	return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
-}
-
-function didApplyStatusTransition(
-	before: AgentV2RunSnapshot,
-	after: AgentV2RunSnapshot,
-	status: AgentV2RunStatus,
-	updatedAt: string,
-): boolean {
-	return before.status !== status && after.status === status && after.updatedAt === updatedAt;
 }
 
 export type { AgentV2RunStore, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus, AgentV2Phase };

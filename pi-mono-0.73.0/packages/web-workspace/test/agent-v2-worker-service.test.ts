@@ -9,6 +9,7 @@ import {
 	buildAgentV2Run,
 	type AppendAgentV2RunEventInput,
 	type AgentV2RunEventRecord,
+	type AgentV2RunUpdateResult,
 	type CreateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
@@ -359,7 +360,7 @@ describe("AgentV2WorkerService", () => {
 					clientId: "client-a",
 					runId: "run-poll-cas-miss",
 					status: "cancelling",
-					updatedAt: "2026-07-08T09:03:57.000Z",
+					updatedAt: "2026-07-08T09:03:59.000Z",
 				});
 				return;
 			}
@@ -386,6 +387,44 @@ describe("AgentV2WorkerService", () => {
 			.filter((event) => event.type === "agent_v2.phase_changed")
 			.map((event) => event.payload.status);
 		expect(phaseStatuses).toEqual(["running", "cancelled"]);
+	});
+
+	it("does not emit or execute when claiming a queued run loses the running status guard with the same timestamp", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-claim-cas-miss");
+		store.runBeforeNextUpdate((input) => {
+			if (input.status !== "running") return;
+			store.forceUpdate({
+				clientId: "client-a",
+				runId: "run-claim-cas-miss",
+				status: "running",
+				phase: "implementation",
+				workerId: "worker-race",
+				startedAt: "2026-07-08T09:04:10.000Z",
+				updatedAt: "2026-07-08T09:04:10.000Z",
+			});
+		});
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-claim-cas-miss" }]);
+		const events = new RecordingEventLog();
+		const execution = new CountingExecution();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events,
+			execution,
+			workerId: "worker-a",
+			now: () => "2026-07-08T09:04:10.000Z",
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(execution.callCount).toBe(0);
+		expect(events.appendCalls.filter((event) => event.type === "agent_v2.phase_changed")).toEqual([]);
+		expect(store.getRunSnapshot("client-a", "run-claim-cas-miss")).toMatchObject({
+			status: "running",
+			workerId: "worker-race",
+			updatedAt: "2026-07-08T09:04:10.000Z",
+		});
 	});
 
 	it("emits cancelling before cancelled when only a post-step queue cancel key remains", async () => {
@@ -563,6 +602,22 @@ class MemoryWorkerStore {
 		error?: AgentV2RunSnapshot["error"];
 		expectedStatuses?: readonly AgentV2RunStatus[];
 	}): AgentV2RunSnapshot {
+		return this.updateWithResult(input).run;
+	}
+
+	updateWithResult(input: {
+		clientId: string;
+		runId: string;
+		status?: AgentV2RunStatus;
+		phase?: AgentV2RunSnapshot["phase"];
+		attempt?: number;
+		workerId?: string;
+		updatedAt?: string;
+		startedAt?: string;
+		endedAt?: string;
+		error?: AgentV2RunSnapshot["error"];
+		expectedStatuses?: readonly AgentV2RunStatus[];
+	}): AgentV2RunUpdateResult {
 		const beforeUpdate = this.beforeUpdateCallbacks.shift();
 		beforeUpdate?.(input);
 		const current = this.getRunSnapshot(input.clientId, input.runId);
@@ -570,7 +625,7 @@ class MemoryWorkerStore {
 			throw new Error(`Missing run ${input.clientId}/${input.runId}`);
 		}
 		if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
-			return current;
+			return { run: current, applied: false };
 		}
 		if (
 			this.simulateStaleTerminalOverwriteWithoutGuard &&
@@ -581,15 +636,19 @@ class MemoryWorkerStore {
 			const staleRunning = { ...current, status: "running" as const };
 			const next = applyAgentV2RunUpdate(staleRunning, input);
 			this.runs.set(runKey(input.clientId, input.runId), next);
-			return next;
+			return { run: next, applied: true };
 		}
 		const next = applyAgentV2RunUpdate(current, input);
 		this.runs.set(runKey(input.clientId, input.runId), next);
-		return next;
+		return { run: next, applied: true };
 	}
 
 	async updateAgentV2Run(input: Parameters<MemoryWorkerStore["update"]>[0]): Promise<AgentV2RunSnapshot> {
 		return this.update(input);
+	}
+
+	async updateAgentV2RunWithResult(input: Parameters<MemoryWorkerStore["update"]>[0]): Promise<AgentV2RunUpdateResult> {
+		return this.updateWithResult(input);
 	}
 
 	async listAgentV2RunsByWorker(workerId: string): Promise<AgentV2RunSnapshot[]> {
@@ -684,6 +743,15 @@ class SequencedExecution {
 
 	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
 		return this.steps[this.index++] ?? { status: "complete", diagnosticIds: [] };
+	}
+}
+
+class CountingExecution {
+	callCount = 0;
+
+	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
+		this.callCount += 1;
+		return { status: "complete", diagnosticIds: [] };
 	}
 }
 

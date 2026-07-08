@@ -4,6 +4,7 @@ import type {
 	AgentV2ArtifactRecord,
 	AgentV2DocumentRecord,
 	AgentV2RunEventRecord,
+	AgentV2RunUpdateResult,
 	AgentV2ValidationRecord,
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "../src/agent-v2-types.js";
@@ -27,6 +28,9 @@ type _RuntimeStoreRequiresAppendAgentV2RunEvent = Expect<
 >;
 type _RuntimeStoreRequiresListAgentV2Runs = Expect<IsRequiredKey<RuntimeStore, "listAgentV2Runs">>;
 type _RuntimeStoreRequiresListAgentV2RunsByWorker = Expect<IsRequiredKey<RuntimeStore, "listAgentV2RunsByWorker">>;
+type _RuntimeStoreRequiresUpdateAgentV2RunWithResult = Expect<
+	IsRequiredKey<RuntimeStore, "updateAgentV2RunWithResult">
+>;
 type _RuntimeStoreRequiresListAgentV2RunEvents = Expect<
 	IsRequiredKey<RuntimeStore, "listAgentV2RunEvents">
 >;
@@ -135,6 +139,9 @@ describe("runtime store contract", () => {
 			},
 			async updateAgentV2Run() {
 				return {} as AgentV2RunSnapshot;
+			},
+			async updateAgentV2RunWithResult() {
+				return {} as AgentV2RunUpdateResult;
 			},
 			async appendAgentV2RunEvent() {
 				return {} as AgentV2RunEventRecord;

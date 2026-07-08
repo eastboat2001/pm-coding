@@ -3,6 +3,7 @@ import { createAgentV2DiagnosticEvent, type AgentV2DiagnosticEvent } from "./age
 import type { AgentV2ExecutionStepResult } from "./agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "./agent-v2-run-queue.js";
+import type { AgentV2RunUpdateResult } from "./agent-v2-store.js";
 import type { AgentV2Phase, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
 import type { RuntimeStore } from "./runtime-store.js";
 
@@ -13,7 +14,11 @@ const DEFAULT_MAX_STEPS_PER_RUN = 256;
 
 export type AgentV2WorkerStore = Pick<
 	RuntimeStore,
-	"getAgentV2Run" | "updateAgentV2Run" | "appendAgentV2Diagnostic" | "listAgentV2RunsByWorker"
+	| "getAgentV2Run"
+	| "updateAgentV2Run"
+	| "updateAgentV2RunWithResult"
+	| "appendAgentV2Diagnostic"
+	| "listAgentV2RunsByWorker"
 >;
 
 export interface AgentV2WorkerExecutionInput {
@@ -41,10 +46,7 @@ export interface AgentV2WorkerServiceOptions {
 	maxStepsPerRun?: number;
 }
 
-interface AgentV2RunTransitionResult {
-	run: AgentV2RunSnapshot;
-	applied: boolean;
-}
+type AgentV2RunTransitionResult = AgentV2RunUpdateResult;
 
 export class AgentV2WorkerService {
 	private readonly activeAbortControllers = new Map<string, AbortController>();
@@ -395,7 +397,7 @@ export class AgentV2WorkerService {
 		},
 	): Promise<AgentV2RunTransitionResult> {
 		const updatedAt = this.now();
-		const updated = await this.store.updateAgentV2Run({
+		return await this.store.updateAgentV2RunWithResult({
 			clientId: run.clientId,
 			runId: run.runId,
 			status: patch.status,
@@ -407,10 +409,6 @@ export class AgentV2WorkerService {
 			...(patch.expectedStatuses !== undefined ? { expectedStatuses: patch.expectedStatuses } : {}),
 			updatedAt,
 		});
-		return {
-			run: updated,
-			applied: didApplyStatusTransition(run, updated, patch.status, updatedAt),
-		};
 	}
 
 	private async finishContendedTerminalWrite(run: AgentV2RunSnapshot): Promise<void> {
@@ -427,15 +425,6 @@ function errorMessage(error: unknown): string {
 
 function isTerminalRun(status: AgentV2RunStatus): boolean {
 	return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
-}
-
-function didApplyStatusTransition(
-	before: AgentV2RunSnapshot,
-	after: AgentV2RunSnapshot,
-	status: AgentV2RunStatus,
-	updatedAt: string,
-): boolean {
-	return before.status !== status && after.status === status && after.updatedAt === updatedAt;
 }
 
 function runKey(run: AgentV2RunQueueIdentity): string {

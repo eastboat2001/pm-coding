@@ -790,6 +790,9 @@ export class PostgresRuntimeStore {
         return rows.map(toAgentV2RunRecord);
     }
     async updateAgentV2Run(input) {
+        return (await this.updateAgentV2RunWithResult(input)).run;
+    }
+    async updateAgentV2RunWithResult(input) {
         return this.withTransaction(async (tx) => {
             const currentRow = await this.queryOne(tx, `SELECT ${AGENT_V2_RUN_COLUMNS}
 				FROM agent_v2_runs
@@ -797,7 +800,7 @@ export class PostgresRuntimeStore {
 				FOR UPDATE`, [input.clientId, input.runId]);
             const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
             if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
-                return current;
+                return { run: current, applied: false };
             }
             const next = applyAgentV2RunUpdate(current, input);
             const row = await this.queryOne(tx, `UPDATE agent_v2_runs
@@ -822,7 +825,10 @@ export class PostgresRuntimeStore {
                 next.endedAt ?? null,
                 next.error ?? null,
             ]);
-            return requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run");
+            return {
+                run: requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run"),
+                applied: true,
+            };
         });
     }
     async upsertAgentV2Task(input) {

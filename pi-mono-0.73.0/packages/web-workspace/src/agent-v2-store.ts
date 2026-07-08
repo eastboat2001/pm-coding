@@ -44,6 +44,11 @@ export interface UpdateAgentV2RunInput extends JsonObject {
 	error?: AgentV2Error;
 }
 
+export interface AgentV2RunUpdateResult {
+	run: AgentV2RunSnapshot;
+	applied: boolean;
+}
+
 export interface UpsertAgentV2TaskInput extends JsonObject {
 	clientId: string;
 	runId: string;

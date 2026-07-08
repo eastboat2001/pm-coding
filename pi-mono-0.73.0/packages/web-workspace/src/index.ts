@@ -100,6 +100,7 @@ export {
 	type AgentV2DocumentRecord,
 	type AgentV2DocumentRow,
 	type AgentV2RunRow,
+	type AgentV2RunUpdateResult,
 	type AgentV2TaskRow,
 	type AgentV2ValidationRecord,
 	type AgentV2ValidationRow,

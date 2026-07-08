@@ -720,6 +720,9 @@ export class RuntimeDbStore {
         return rows.map(toAgentV2RunRecord);
     }
     updateAgentV2Run(input) {
+        return this.updateAgentV2RunWithResult(input).run;
+    }
+    updateAgentV2RunWithResult(input) {
         const db = this.open();
         return this.writeTransaction(db, () => {
             const currentRow = db
@@ -727,7 +730,7 @@ export class RuntimeDbStore {
                 .get(input.clientId, input.runId);
             const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
             if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
-                return current;
+                return { run: current, applied: false };
             }
             const next = applyAgentV2RunUpdate(current, input);
             db.prepare(`UPDATE agent_v2_runs
@@ -744,7 +747,10 @@ export class RuntimeDbStore {
             const updatedRow = db
                 .prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
                 .get(input.clientId, input.runId);
-            return requiredRecord(updatedRow ? toAgentV2RunRecord(updatedRow) : undefined, "agent v2 run");
+            return {
+                run: requiredRecord(updatedRow ? toAgentV2RunRecord(updatedRow) : undefined, "agent v2 run"),
+                applied: true,
+            };
         });
     }
     upsertAgentV2Task(input) {

@@ -67,6 +67,11 @@ export async function loadAgentV2RuntimeSnapshot(
 }
 
 export async function advanceAgentV2Task(input: AdvanceAgentV2TaskInput): Promise<AgentV2TaskNode> {
+	const run = await input.store.getAgentV2Run(input.clientId, input.runId);
+	if (!run) {
+		throw new Error(`Agent v2 run not found: ${input.clientId}/${input.runId}`);
+	}
+
 	const tasks = await input.store.listAgentV2Tasks(input.clientId, input.runId);
 	const task = tasks.find((candidate) => candidate.taskId === input.taskId);
 	if (!task) {

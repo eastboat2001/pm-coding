@@ -1073,7 +1073,7 @@ git commit -m "feat: add agent v2 context packet"
   - `function loadAgentV2RuntimeSnapshot(input: LoadAgentV2RuntimeSnapshotInput): Promise<AgentV2RuntimeSnapshot>`
   - `function advanceAgentV2Task(input: AdvanceAgentV2TaskInput): Promise<AgentV2TaskNode>`
 
-Missing runs must throw directly without persisting a run-scoped diagnostic. That is a v2 schema correctness constraint, not a compatibility gap: `agent_v2_diagnostics` references `agent_v2_runs`, so fabricating a diagnostic for an absent run would fail the real schema. Task transition diagnostics are best-effort only; if the diagnostic write fails after a successful task upsert, the task state remains the source of truth and the API should still resolve with the persisted task.
+Missing runs must throw directly without persisting a run-scoped diagnostic. That is a v2 schema correctness constraint, not a compatibility gap: `agent_v2_diagnostics` references `agent_v2_runs`, so fabricating a diagnostic for an absent run would fail the real schema. `advanceAgentV2Task` must check `getAgentV2Run` first and only emit `task_not_found` when the run exists but the task does not. Task transition diagnostics are best-effort only; if the diagnostic write fails after a successful task upsert, the task state remains the source of truth and the API should still resolve with the persisted task.
 
 - [ ] **Step 1: Write runtime core tests**
 

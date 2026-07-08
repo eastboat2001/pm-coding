@@ -146,14 +146,17 @@ describe("agent v2 runtime core", () => {
 		expect(store.listAgentV2Diagnostics("client-a", "run-v2-diagnostic-failure")).toEqual([]);
 	});
 
-	it("throws a clear missing-run error without persisting a diagnostic", async () => {
+	it("throws a clear run-not-found error without persisting a diagnostic", async () => {
 		const store = createTempRuntimeDbStoreWithV2Schema(cleanupRoots, cleanupStores);
 
 		await expect(
-			loadAgentV2RuntimeSnapshot({
+			advanceAgentV2Task({
 				store: forbidLegacyRuntimeReads(store),
 				clientId: "client-a",
 				runId: "missing-run",
+				taskId: "implement",
+				status: "running",
+				now: "2026-07-08T00:02:00.000Z",
 			}),
 		).rejects.toThrow("Agent v2 run not found: client-a/missing-run");
 		expect(store.listAgentV2Diagnostics("client-a", "missing-run")).toEqual([]);
@@ -195,6 +198,7 @@ function forbidLegacyRuntimeReads(
 		"listRunEvents",
 		"iterateRunEvents",
 		"getLatestRunCheckpoint",
+		"getSessionMessageStats",
 		"upsertAppPreviewGoal",
 		"getAppPreviewGoal",
 		"updateAppPreviewGoal",

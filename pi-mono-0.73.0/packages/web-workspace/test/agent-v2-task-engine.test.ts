@@ -16,7 +16,22 @@ describe("agent v2 task engine", () => {
 		expect(selectNextAgentV2Task(tasks)).toEqual({
 			task: expect.objectContaining({ taskId: "spec" }),
 			reason: "running",
-			blockedTaskIds: [],
+			blockedTaskIds: ["plan"],
+			failedDependencyTaskIds: [],
+		});
+	});
+
+	it("returns running task and still reports full blocked diagnostics", () => {
+		const tasks = [
+			task({ taskId: "running", status: "running" }),
+			task({ taskId: "blocked-root", status: "blocked" }),
+			task({ taskId: "blocked-downstream", status: "pending", dependsOn: ["blocked-root"] }),
+		];
+
+		expect(selectNextAgentV2Task(tasks)).toEqual({
+			task: expect.objectContaining({ taskId: "running" }),
+			reason: "running",
+			blockedTaskIds: ["blocked-root", "blocked-downstream"],
 			failedDependencyTaskIds: [],
 		});
 	});
@@ -72,8 +87,8 @@ describe("agent v2 task engine", () => {
 
 		expect(selectNextAgentV2Task(tasks)).toEqual({
 			reason: "failed_dependency",
-			blockedTaskIds: ["plan"],
-			failedDependencyTaskIds: ["capability", "spec"],
+			blockedTaskIds: [],
+			failedDependencyTaskIds: ["capability", "spec", "plan"],
 		});
 	});
 
@@ -86,8 +101,8 @@ describe("agent v2 task engine", () => {
 
 		expect(selectNextAgentV2Task(tasks)).toEqual({
 			reason: "failed_dependency",
-			blockedTaskIds: ["plan"],
-			failedDependencyTaskIds: ["capability", "spec"],
+			blockedTaskIds: [],
+			failedDependencyTaskIds: ["capability", "spec", "plan"],
 		});
 	});
 
@@ -199,7 +214,40 @@ describe("agent v2 task engine", () => {
 		expect(reset).toMatchObject({
 			status: "ready",
 			endedAt: undefined,
+			output: {},
 			error: undefined,
+		});
+	});
+
+	it("returns a ready task while preserving full blocked diagnostics", () => {
+		const tasks = [
+			task({ taskId: "ready-unrelated", status: "ready", dependsOn: [] }),
+			task({ taskId: "blocked-root", status: "blocked" }),
+			task({ taskId: "blocked-downstream", status: "pending", dependsOn: ["blocked-root"] }),
+			task({ taskId: "blocked-more", status: "pending", dependsOn: ["blocked-downstream"] }),
+		];
+
+		expect(selectNextAgentV2Task(tasks)).toEqual({
+			task: expect.objectContaining({ taskId: "ready-unrelated" }),
+			reason: "ready",
+			blockedTaskIds: ["blocked-root", "blocked-downstream", "blocked-more"],
+			failedDependencyTaskIds: [],
+		});
+	});
+
+	it("returns a ready task while preserving full failed dependency diagnostics", () => {
+		const tasks = [
+			task({ taskId: "ready-unrelated", status: "ready", dependsOn: [] }),
+			task({ taskId: "failed-root", status: "failed", error: { code: "FAILED", message: "Boom", retryable: false } }),
+			task({ taskId: "failed-downstream", status: "pending", dependsOn: ["failed-root"] }),
+			task({ taskId: "failed-running", status: "pending", dependsOn: ["failed-downstream"] }),
+		];
+
+		expect(selectNextAgentV2Task(tasks)).toEqual({
+			task: expect.objectContaining({ taskId: "ready-unrelated" }),
+			reason: "ready",
+			blockedTaskIds: [],
+			failedDependencyTaskIds: ["failed-root", "failed-downstream", "failed-running"],
 		});
 	});
 });

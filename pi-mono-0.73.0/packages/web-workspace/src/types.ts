@@ -274,7 +274,7 @@ export interface StorageConfig {
 	runtimeStore: "postgres" | "sqlite";
 	postgresUrl: string;
 	runsEnabled: boolean;
-	appAgentVersion?: "v1" | "v2";
+	appAgentVersion: "v1" | "v2";
 	workerId: string;
 	workerConcurrency: number;
 	runMaxAgentTurns: number;
@@ -284,12 +284,12 @@ export interface StorageConfig {
 	runRetryMaxDelayMs: number;
 	runRetryJitterRatio: number;
 	runQueueName: string;
-	agentV2RunQueueName?: string;
+	agentV2RunQueueName: string;
 	runEventRetentionDays: number;
 	runEventStreamMaxLen: number;
 	runEventStreamTtlSeconds: number;
-	agentV2RunEventStreamMaxLen?: number;
-	agentV2RunEventStreamTtlSeconds?: number;
+	agentV2RunEventStreamMaxLen: number;
+	agentV2RunEventStreamTtlSeconds: number;
 	runEventCheckpointIntervalMs: number;
 	runEventCheckpointMinChars: number;
 	clientIdRequired: boolean;

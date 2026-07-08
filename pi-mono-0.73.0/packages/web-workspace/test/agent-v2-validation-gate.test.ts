@@ -1,0 +1,190 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { createAgentV2FileAdapter } from "../src/agent-v2-file-adapter.js";
+import { runAgentV2StaticValidationGate } from "../src/agent-v2-validation-gate.js";
+import type { StorageConfig } from "../src/types.js";
+
+const cleanupRoots: string[] = [];
+
+describe("agent v2 validation gate", () => {
+	afterEach(() => {
+		for (const root of cleanupRoots.splice(0)) rmSync(root, { force: true, recursive: true });
+	});
+
+	it("maps visible loading placeholders to structured validation failures", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const files = createAgentV2FileAdapter({ config, context });
+		files.writeFile({
+			path: "index.html",
+			content: "<!doctype html><div id=\"load\" class=\"loading\">Loading...</div>",
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result.status).toBe("failed");
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "static.loading_visible",
+				retryable: true,
+				path: "index.html",
+				source: "static_quality",
+			}),
+		]);
+		expect(result.validation).toMatchObject({
+			validationId: "static:validate",
+			status: "failed",
+			taskId: "validate",
+			summary: "Static validation failed",
+		});
+	});
+
+	it("passes a basic static app", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const files = createAgentV2FileAdapter({ config, context });
+		files.writeFile({
+			path: "index.html",
+			content: "<!doctype html><main><h1>Ready</h1></main>",
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result.status).toBe("passed");
+		expect(result.failures).toEqual([]);
+		expect(result.validation).toMatchObject({ status: "passed", summary: "Static validation passed" });
+	});
+
+	it("normalizes legacy build-required messaging into v2 preview failures", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const projectDir = projectDirFor(root);
+		mkdirSync(projectDir, { recursive: true });
+		writeFileSync(
+			join(projectDir, "index.html"),
+			'<!doctype html><script type="module" src="./src/main.ts"></script>',
+			"utf8",
+		);
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result.status).toBe("failed");
+		expect(result.failures).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: "static.preview_build_required",
+					source: "preview",
+					retryable: false,
+				}),
+			]),
+		);
+		expect(JSON.stringify(result)).not.toContain("project_task");
+		expect(JSON.stringify(result)).not.toContain("browser-ready dist/build output");
+	});
+});
+
+function tempRoot(): string {
+	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-validation-gate-"));
+	cleanupRoots.push(root);
+	return root;
+}
+
+function projectDirFor(root: string): string {
+	return join(root, "data", "clients", "client-a", "sessions", "session-a", "project");
+}
+
+function testConfig(root: string): StorageConfig {
+	return {
+		settingsFile: join(root, "data", "settings.json"),
+		clientsRootDir: join(root, "data", "clients"),
+		skillsDir: join(root, "data", "skills"),
+		defaultSkillsDir: join(root, "data", "default-skills"),
+		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
+		redisUrl: "redis://127.0.0.1:6379",
+		runtimeStore: "postgres",
+		postgresUrl: "postgres://pi:pi@postgres:5432/pi_coding",
+		runsEnabled: false,
+		workerId: "test-worker",
+		workerConcurrency: 2,
+		runMaxAgentTurns: 80,
+		runMaxAgentToolExecutions: 240,
+		runRetryMaxAttempts: 8,
+		runRetryBaseDelayMs: 2000,
+		runRetryMaxDelayMs: 60000,
+		runRetryJitterRatio: 0.2,
+		runQueueName: "pi:runs",
+		runEventRetentionDays: 30,
+		runEventStreamMaxLen: 5000,
+		runEventStreamTtlSeconds: 3600,
+		runEventCheckpointIntervalMs: 400,
+		runEventCheckpointMinChars: 256,
+		clientIdRequired: true,
+		previewBaseUrl: "http://localhost:5173",
+		projectInstallCommand: "npm install",
+		projectBuildCommand: "npm run build",
+		projectInstallTimeoutMs: 120000,
+		projectBuildTimeoutMs: 120000,
+		defaultModelProvider: "",
+		defaultModelId: "",
+		handoffDefaultThinkingLevel: "high",
+		envFile: "",
+		envFileExists: false,
+		logsDbFile: join(root, "data", "logs", "pi-diagnostics.sqlite"),
+		loggingEnabled: true,
+		logStdoutEnabled: false,
+		rawProviderLoggingEnabled: false,
+		rawProviderLogMaxChars: 12000,
+		promptSnapshotLoggingEnabled: false,
+		promptSnapshotMaxChars: 20000,
+		modelOutputSnapshotLoggingEnabled: false,
+		modelOutputSnapshotMaxChars: 20000,
+		modelStreamIdleTimeoutMs: 60000,
+		modelMaxOutputTokens: 12000,
+		contextProviderPayloadBudgetChars: 90000,
+		logRetentionDays: 30,
+		logMaxEvents: 50000,
+		logCleanupIntervalMs: 3600000,
+		logVacuumIntervalMs: 86400000,
+		langfuseEnabled: false,
+		langfuseHost: "",
+		langfusePublicKey: "",
+		langfuseSecretKey: "",
+		langfuseOtelEndpoint: "",
+		langfuseFlushIntervalMs: 5000,
+		langfuseBatchSize: 50,
+		langfuseExportPromptSnapshots: false,
+		langfuseExportRawChunks: false,
+		langfuseExportModelOutputSnapshots: false,
+		otelServiceName: "pi-coding-web",
+		otelDeploymentEnvironment: "",
+	};
+}

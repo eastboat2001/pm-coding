@@ -85,6 +85,13 @@ export {
 	createAgentV2FileAdapter,
 } from "./agent-v2-file-adapter.js";
 export {
+	type AgentV2ValidationFailure,
+	type AgentV2ValidationGateContext,
+	type AgentV2ValidationGateResult,
+	type RunAgentV2StaticValidationGateInput,
+	runAgentV2StaticValidationGate,
+} from "./agent-v2-validation-gate.js";
+export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
 	AGENT_V2_DOCUMENT_COLUMNS,

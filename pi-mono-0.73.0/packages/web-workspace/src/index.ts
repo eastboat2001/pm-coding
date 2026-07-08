@@ -87,6 +87,15 @@ export {
 	findLatestAgentV2ArtifactByPath,
 } from "./agent-v2-artifact-index.js";
 export {
+	type AgentV2ContextDocuments,
+	type AgentV2ContextPacket,
+	type AgentV2ContextPacketInput,
+	type AgentV2ContextProblem,
+	type AgentV2ContextReread,
+	buildAgentV2ContextPacket,
+	renderAgentV2ContextPacketMarkdown,
+} from "./agent-v2-context-packet.js";
+export {
 	AGENT_V2_PHASES,
 	AGENT_V2_RUN_EVENT_TYPES,
 	AGENT_V2_RUN_STATUSES,

@@ -31,10 +31,22 @@ const STATIC_APP_PATTERNS = [
 
 const FRONTEND_BUILD_PATTERNS = [/\breact\b/i, /\bvue\b/i, /\bfrontend\b/i, /\bcomponent library\b/i] as const;
 
+const FULL_STACK_PATTERNS = [/\bfull[ -]?stack\b/i] as const;
 const DATABASE_PATTERNS = [/\bpostgres(?:ql)?\b/i, /\bdatabase\b/i, /\bsql\b/i, /\bprisma\b/i, /\borm\b/i] as const;
 const AUTH_PATTERNS = [/\bauth\b/i, /\blogin\b/i, /\bsign[ -]?in\b/i, /\buser roles?\b/i, /\bpermissions?\b/i] as const;
 const BACKEND_PATTERNS = [/\bapi routes?\b/i, /\bbackend\b/i, /\bserver\b/i, /\bendpoint\b/i] as const;
-const FILE_UPLOAD_PATTERNS = [/\bupload files?\b/i, /\bfile uploads?\b/i, /\battachments?\b/i] as const;
+const API_PATTERNS = [
+	/\b(?:rest(?:ful)?|graphql)\s+api\b/i,
+	/\b(?:build|create|make|ship)\s+(?:an?\s+)?api\b/i,
+	/\bapi\s+for\b/i,
+] as const;
+const FILE_UPLOAD_PATTERNS = [
+	/\bupload files?\b/i,
+	/\bfile uploads?\b/i,
+	/\bupload (?:images?|photos?)\b/i,
+	/\b(?:image|photo) uploads?\b/i,
+	/\battachments?\b/i,
+] as const;
 const SCHEDULED_JOB_PATTERNS = [
 	/\bcron jobs?\b/i,
 	/\bscheduled jobs?\b/i,
@@ -125,6 +137,14 @@ export function routeAgentV2Capabilities(input: {
 	);
 	collectUnsupportedEvidence(
 		objective,
+		FULL_STACK_PATTERNS,
+		"backend_server",
+		"Explicit full-stack scope requires server-side runtime behavior outside the static platform contract.",
+		evidence,
+		unsupportedCapabilities,
+	);
+	collectUnsupportedEvidence(
+		objective,
 		DATABASE_PATTERNS,
 		"database_runtime",
 		"Requires runtime persistence that the static platform contract does not provide.",
@@ -136,6 +156,14 @@ export function routeAgentV2Capabilities(input: {
 		AUTH_PATTERNS,
 		"server_auth",
 		"Requires authentication or role enforcement that needs a server-side authority.",
+		evidence,
+		unsupportedCapabilities,
+	);
+	collectUnsupportedEvidence(
+		objective,
+		API_PATTERNS,
+		"backend_server",
+		"API delivery requires backend request handling beyond a static frontend bundle.",
 		evidence,
 		unsupportedCapabilities,
 	);

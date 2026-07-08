@@ -4,7 +4,24 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { appendAgentV2RunEvent } from "../src/agent-v2-run-events.js";
+import {
+	AGENT_V2_DOCUMENT_COLUMNS,
+	type AgentV2DocumentRecord,
+	type AgentV2DocumentRow,
+	buildAgentV2Document,
+	toAgentV2DocumentRecord,
+	type UpsertAgentV2DocumentInput,
+} from "../src/agent-v2-store.js";
 import type { AgentV2DocumentContent } from "../src/agent-v2-types.js";
+import type {
+	AgentV2DocumentRecord as PublicAgentV2DocumentRecord,
+	UpsertAgentV2DocumentInput as PublicUpsertAgentV2DocumentInput,
+} from "../src/index.js";
+import {
+	AGENT_V2_DOCUMENT_COLUMNS as PUBLIC_AGENT_V2_DOCUMENT_COLUMNS,
+	buildAgentV2Document as publicBuildAgentV2Document,
+	toAgentV2DocumentRecord as publicToAgentV2DocumentRecord,
+} from "../src/index.js";
 import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
 import { InMemoryRunEventBus } from "../src/run-event-bus.js";
 import { RunEventSink } from "../src/run-event-sink.js";
@@ -323,6 +340,39 @@ describe("agent v2 runtime stores", () => {
 		expect(store.listAgentV2Documents("client-a", "run-v2-a")).toEqual([document]);
 		expect(document.contentJson).toEqual(createSpecContent());
 		expectTypeOf(document.contentJson).toMatchTypeOf<AgentV2DocumentContent>();
+	});
+
+	it("re-exports document store helpers from the package root", () => {
+		const input: UpsertAgentV2DocumentInput = {
+			clientId: "client-a",
+			runId: "run-v2-a",
+			documentId: "spec",
+			kind: "spec",
+			version: "v1",
+			contentMarkdown: "# Spec\n",
+			contentJson: createSpecContent(),
+			sourceTaskId: "spec",
+			createdAt: "2026-07-07T00:01:00.000Z",
+			updatedAt: "2026-07-07T00:01:00.000Z",
+		};
+		const row: AgentV2DocumentRow = {
+			client_id: "client-a",
+			run_id: "run-v2-a",
+			document_id: "spec",
+			kind: "spec",
+			version: "v1",
+			content_markdown: "# Spec\n",
+			content_json: createSpecContent(),
+			source_task_id: "spec",
+			created_at: "2026-07-07T00:01:00.000Z",
+			updated_at: "2026-07-07T00:01:00.000Z",
+		};
+
+		expect(PUBLIC_AGENT_V2_DOCUMENT_COLUMNS).toBe(AGENT_V2_DOCUMENT_COLUMNS);
+		expect(publicBuildAgentV2Document(input)).toEqual(buildAgentV2Document(input));
+		expect(publicToAgentV2DocumentRecord(row)).toEqual(toAgentV2DocumentRecord(row));
+		expectTypeOf<PublicAgentV2DocumentRecord>().toEqualTypeOf<AgentV2DocumentRecord>();
+		expectTypeOf<PublicUpsertAgentV2DocumentInput>().toEqualTypeOf<UpsertAgentV2DocumentInput>();
 	});
 
 	it("rejects v2 documents when content kind conflicts with the column kind", () => {

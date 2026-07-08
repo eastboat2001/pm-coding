@@ -62,6 +62,47 @@ describe("Agent v2 capability router", () => {
 		);
 	});
 
+	it("routes full-stack requests to explicit static simulation instead of silent downgrade", () => {
+		const decision = routeAgentV2Capabilities({
+			objective: "Build a full-stack CRM for sales reps.",
+		});
+
+		expect(decision.deliveryMode).toBe("static_simulation");
+		expect(decision.requiresSimulation).toBe(true);
+		expect(decision.unsupportedCapabilities).toEqual(expect.arrayContaining(["backend_server"]));
+	});
+
+	it("routes REST API requests to explicit static simulation instead of silent downgrade", () => {
+		const decision = routeAgentV2Capabilities({
+			objective: "Build a REST API for todos.",
+		});
+
+		expect(decision.deliveryMode).toBe("static_simulation");
+		expect(decision.requiresSimulation).toBe(true);
+		expect(decision.unsupportedCapabilities).toEqual(expect.arrayContaining(["backend_server"]));
+	});
+
+	it("routes GraphQL API requests to explicit static simulation instead of silent downgrade", () => {
+		const decision = routeAgentV2Capabilities({
+			objective: "Build a GraphQL API for inventory.",
+		});
+
+		expect(decision.deliveryMode).toBe("static_simulation");
+		expect(decision.requiresSimulation).toBe(true);
+		expect(decision.unsupportedCapabilities).toEqual(expect.arrayContaining(["backend_server"]));
+	});
+
+	it("routes image upload requests to explicit static simulation instead of clarification fallback", () => {
+		const decision = routeAgentV2Capabilities({
+			objective: "Build an app where users upload images and photos for moderation.",
+		});
+
+		expect(decision.deliveryMode).toBe("static_simulation");
+		expect(decision.requiresSimulation).toBe(true);
+		expect(decision.requiresClarification).toBe(false);
+		expect(decision.unsupportedCapabilities).toEqual(expect.arrayContaining(["file_upload_runtime"]));
+	});
+
 	it("does not require clarification when a generic app request includes unsupported runtime needs", () => {
 		const decision = routeAgentV2Capabilities({
 			objective: "Build an app with PostgreSQL, login auth, API routes, and user roles.",

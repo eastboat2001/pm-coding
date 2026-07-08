@@ -1,5 +1,12 @@
 export { routeAgentV2Capabilities, STATIC_APP_V2_PLATFORM_CONTRACT } from "./agent-v2-capability-router.js";
 export {
+	type AgentV2TaskSelection,
+	type AgentV2TaskSelectionReason,
+	type AgentV2TaskTransitionInput,
+	selectNextAgentV2Task,
+	transitionAgentV2Task,
+} from "./agent-v2-task-engine.js";
+export {
 	AGENT_V2_DIAGNOSTIC_CATEGORIES,
 	type AgentV2DiagnosticCategory,
 	type AgentV2DiagnosticEvent,

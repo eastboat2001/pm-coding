@@ -1,9 +1,9 @@
-import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import {
 	type AgentV2ArtifactIndex,
 	buildAgentV2ArtifactIndex,
 	filterAgentV2Artifacts,
 } from "./agent-v2-artifact-index.js";
+import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type { AgentV2ArtifactRecord, AgentV2DocumentRecord } from "./agent-v2-store.js";
 import { type AgentV2TaskSelection, selectNextAgentV2Task } from "./agent-v2-task-engine.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "./agent-v2-types.js";
@@ -241,10 +241,7 @@ function renderDocuments(documents: AgentV2ContextDocuments): string[] {
 }
 
 function renderArtifactIndex(index: AgentV2ArtifactIndex): string[] {
-	return [
-		`- artifacts: ${index.artifacts.length}`,
-		`- pending validation: ${index.pendingValidation.length}`,
-	];
+	return [`- artifacts: ${index.artifacts.length}`, `- pending validation: ${index.pendingValidation.length}`];
 }
 
 function renderArtifacts(artifacts: AgentV2ArtifactRecord[]): string[] {

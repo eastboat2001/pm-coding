@@ -19,8 +19,18 @@ describe("agent v2 artifact index", () => {
 
 	it("keeps the latest artifact by path", () => {
 		const index = buildAgentV2ArtifactIndex([
-			artifact({ artifactId: "spec-v1", path: "agent-v2/spec.md", version: "1", updatedAt: "2026-07-08T00:01:00.000Z" }),
-			artifact({ artifactId: "spec-v2", path: "agent-v2/spec.md", version: "2", updatedAt: "2026-07-08T00:05:00.000Z" }),
+			artifact({
+				artifactId: "spec-v1",
+				path: "agent-v2/spec.md",
+				version: "1",
+				updatedAt: "2026-07-08T00:01:00.000Z",
+			}),
+			artifact({
+				artifactId: "spec-v2",
+				path: "agent-v2/spec.md",
+				version: "2",
+				updatedAt: "2026-07-08T00:05:00.000Z",
+			}),
 		]);
 
 		expect(findLatestAgentV2ArtifactByPath(index, "agent-v2/spec.md")).toMatchObject({

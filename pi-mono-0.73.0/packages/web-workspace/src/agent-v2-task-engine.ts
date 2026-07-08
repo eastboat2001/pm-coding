@@ -39,7 +39,11 @@ export function selectNextAgentV2Task(tasks: AgentV2TaskNode[]): AgentV2TaskSele
 		),
 	);
 	const blockedTaskIds = new Set(
-		collectReachableAffectedTasks(taskById, blockedByDependency, tasks.filter((task) => task.status === "blocked").map((task) => task.taskId)),
+		collectReachableAffectedTasks(
+			taskById,
+			blockedByDependency,
+			tasks.filter((task) => task.status === "blocked").map((task) => task.taskId),
+		),
 	);
 
 	for (const task of tasks) {
@@ -50,7 +54,9 @@ export function selectNextAgentV2Task(tasks: AgentV2TaskNode[]): AgentV2TaskSele
 	}
 
 	const failedDependencyTaskIdsList = inTaskOrder(tasks, failedDependencyTaskIds);
-	const blockedTaskIdsList = inTaskOrder(tasks, blockedTaskIds).filter((taskId) => !failedDependencyTaskIds.has(taskId));
+	const blockedTaskIdsList = inTaskOrder(tasks, blockedTaskIds).filter(
+		(taskId) => !failedDependencyTaskIds.has(taskId),
+	);
 
 	const running = tasks.find((task) => task.status === "running");
 	if (running) {
@@ -101,8 +107,7 @@ export function transitionAgentV2Task(input: AgentV2TaskTransitionInput): AgentV
 	}
 
 	const isTerminal = TERMINAL_STATUSES.has(input.status);
-	const output =
-		input.output !== undefined ? input.output : isTerminal ? input.task.output : {};
+	const output = input.output !== undefined ? input.output : isTerminal ? input.task.output : {};
 
 	const endedAt = isTerminal ? input.now : undefined;
 
@@ -111,7 +116,7 @@ export function transitionAgentV2Task(input: AgentV2TaskTransitionInput): AgentV
 		status: input.status,
 		output,
 		error: input.status === "failed" ? input.error : undefined,
-		startedAt: input.status === "running" ? input.task.startedAt ?? input.now : input.task.startedAt,
+		startedAt: input.status === "running" ? (input.task.startedAt ?? input.now) : input.task.startedAt,
 		endedAt,
 		updatedAt: input.now,
 	};

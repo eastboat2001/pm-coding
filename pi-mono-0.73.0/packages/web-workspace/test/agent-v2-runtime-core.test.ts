@@ -40,9 +40,26 @@ describe("agent v2 runtime core", () => {
 		});
 
 		expect(snapshot.run.runId).toBe("run-v2-runtime");
-		expect(snapshot.tasks.map((task) => task.taskId)).toEqual(["capability", "spec", "plan", "implement", "validate", "deliver"]);
-		expect(snapshot.documents.map((document) => document.documentId)).toEqual(["capability_decision", "spec", "plan", "tasks"]);
-		expect(snapshot.artifacts.map((artifact) => artifact.artifactId)).toEqual(["capability_decision", "spec", "plan", "tasks"]);
+		expect(snapshot.tasks.map((task) => task.taskId)).toEqual([
+			"capability",
+			"spec",
+			"plan",
+			"implement",
+			"validate",
+			"deliver",
+		]);
+		expect(snapshot.documents.map((document) => document.documentId)).toEqual([
+			"capability_decision",
+			"spec",
+			"plan",
+			"tasks",
+		]);
+		expect(snapshot.artifacts.map((artifact) => artifact.artifactId)).toEqual([
+			"capability_decision",
+			"spec",
+			"plan",
+			"tasks",
+		]);
 		expect(snapshot.contextPacket.taskSelection.reason).toBe("ready");
 		expect(snapshot.contextPacket.markdown).toContain("# Agent v2 Context Packet");
 	});

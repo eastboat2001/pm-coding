@@ -9,7 +9,12 @@ describe("agent v2 context packet", () => {
 		const run = runSnapshot();
 		const tasks = [
 			task({ taskId: "capability", status: "succeeded" }),
-			task({ taskId: "spec", status: "running", dependsOn: ["capability"], acceptanceCriteria: ["Spec describes static preview scope."] }),
+			task({
+				taskId: "spec",
+				status: "running",
+				dependsOn: ["capability"],
+				acceptanceCriteria: ["Spec describes static preview scope."],
+			}),
 		];
 		const packet = buildAgentV2ContextPacket({
 			run,
@@ -17,7 +22,11 @@ describe("agent v2 context packet", () => {
 			documents: [
 				document({ documentId: "plan", kind: "plan", contentMarkdown: "# Plan\nBuild static app." }),
 				document({ documentId: "spec", kind: "spec", contentMarkdown: "# Spec\nStatic dashboard." }),
-				document({ documentId: "capability_decision", kind: "capability_decision", contentMarkdown: "# Capability\nstatic_app" }),
+				document({
+					documentId: "capability_decision",
+					kind: "capability_decision",
+					contentMarkdown: "# Capability\nstatic_app",
+				}),
 				document({ documentId: "tasks", kind: "tasks", contentMarkdown: "# Tasks\nspec" }),
 			],
 			artifacts: [
@@ -63,8 +72,21 @@ describe("agent v2 context packet", () => {
 			],
 			diagnostics: [
 				diagnostic({ diagnosticId: "debug", severity: "debug", code: "IGNORED", message: "ignored" }),
-				diagnostic({ diagnosticId: "warn", severity: "warn", code: "MISSING_ARTIFACT", message: "Artifact missing", taskId: "validate" }),
-				diagnostic({ diagnosticId: "error", severity: "error", code: "BUILD_FAILED", message: "Build failed", taskId: "validate", artifactId: "app" }),
+				diagnostic({
+					diagnosticId: "warn",
+					severity: "warn",
+					code: "MISSING_ARTIFACT",
+					message: "Artifact missing",
+					taskId: "validate",
+				}),
+				diagnostic({
+					diagnosticId: "error",
+					severity: "error",
+					code: "BUILD_FAILED",
+					message: "Build failed",
+					taskId: "validate",
+					artifactId: "app",
+				}),
 			],
 		});
 
@@ -102,7 +124,11 @@ describe("agent v2 context packet", () => {
 				document({ documentId: "plan", kind: "plan", contentMarkdown: "# Plan\nBuild static app." }),
 			],
 			artifacts: [
-				artifact({ artifactId: "artifact-task-md", sourceTaskId: "artifact-task", path: "agent-v2/artifact-task.md" }),
+				artifact({
+					artifactId: "artifact-task-md",
+					sourceTaskId: "artifact-task",
+					path: "agent-v2/artifact-task.md",
+				}),
 			],
 			tasks: [
 				task({
@@ -119,12 +145,19 @@ describe("agent v2 context packet", () => {
 		expect(packet.activeTask).toEqual(expect.objectContaining({ taskId: "artifact-task", kind: "artifact" }));
 		expect(packet.requiredRereads).toEqual([
 			{ kind: "document", id: "plan", reason: "active task context" },
-			{ kind: "artifact", id: "artifact-task-md", path: "agent-v2/artifact-task.md", reason: "active task artifact" },
+			{
+				kind: "artifact",
+				id: "artifact-task-md",
+				path: "agent-v2/artifact-task.md",
+				reason: "active task artifact",
+			},
 		]);
 		expect(packet.markdown).toContain("## Active Task\n- `artifact-task` running");
 		expect(packet.markdown).toContain("## Required Rereads");
 		expect(packet.markdown).toContain("document `plan`: active task context");
-		expect(packet.markdown).toContain("artifact `artifact-task-md` (agent-v2/artifact-task.md): active task artifact");
+		expect(packet.markdown).toContain(
+			"artifact `artifact-task-md` (agent-v2/artifact-task.md): active task artifact",
+		);
 	});
 
 	it("includes the task selection reason in markdown when no task is active", () => {
@@ -177,7 +210,9 @@ function task(input: Partial<AgentV2TaskNode> & { taskId: string }): AgentV2Task
 	};
 }
 
-function document(input: Partial<AgentV2DocumentRecord> & { documentId: string; kind: AgentV2DocumentRecord["kind"] }): AgentV2DocumentRecord {
+function document(
+	input: Partial<AgentV2DocumentRecord> & { documentId: string; kind: AgentV2DocumentRecord["kind"] },
+): AgentV2DocumentRecord {
 	return {
 		clientId: input.clientId ?? "client-a",
 		runId: input.runId ?? "run-v2",
@@ -210,7 +245,14 @@ function artifact(input: Partial<AgentV2ArtifactRecord> & { artifactId: string }
 	};
 }
 
-function diagnostic(input: Partial<AgentV2DiagnosticEvent> & { diagnosticId: string; severity: AgentV2DiagnosticEvent["severity"]; code: string; message: string }): AgentV2DiagnosticEvent {
+function diagnostic(
+	input: Partial<AgentV2DiagnosticEvent> & {
+		diagnosticId: string;
+		severity: AgentV2DiagnosticEvent["severity"];
+		code: string;
+		message: string;
+	},
+): AgentV2DiagnosticEvent {
 	return {
 		diagnosticId: input.diagnosticId,
 		clientId: input.clientId ?? "client-a",

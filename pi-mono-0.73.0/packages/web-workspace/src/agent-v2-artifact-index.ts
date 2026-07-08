@@ -29,7 +29,10 @@ export function buildAgentV2ArtifactIndex(artifacts: AgentV2ArtifactRecord[]): A
 	};
 }
 
-export function filterAgentV2Artifacts(index: AgentV2ArtifactIndex, filter: AgentV2ArtifactIndexFilter): AgentV2ArtifactRecord[] {
+export function filterAgentV2Artifacts(
+	index: AgentV2ArtifactIndex,
+	filter: AgentV2ArtifactIndexFilter,
+): AgentV2ArtifactRecord[] {
 	return index.artifacts.filter((artifact) => {
 		if (filter.kind !== undefined && artifact.kind !== filter.kind) return false;
 		if (filter.sourceTaskId !== undefined && artifact.sourceTaskId !== filter.sourceTaskId) return false;

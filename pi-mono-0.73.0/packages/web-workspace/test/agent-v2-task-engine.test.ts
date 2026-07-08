@@ -238,7 +238,11 @@ describe("agent v2 task engine", () => {
 	it("returns a ready task while preserving full failed dependency diagnostics", () => {
 		const tasks = [
 			task({ taskId: "ready-unrelated", status: "ready", dependsOn: [] }),
-			task({ taskId: "failed-root", status: "failed", error: { code: "FAILED", message: "Boom", retryable: false } }),
+			task({
+				taskId: "failed-root",
+				status: "failed",
+				error: { code: "FAILED", message: "Boom", retryable: false },
+			}),
 			task({ taskId: "failed-downstream", status: "pending", dependsOn: ["failed-root"] }),
 			task({ taskId: "failed-running", status: "pending", dependsOn: ["failed-downstream"] }),
 		];

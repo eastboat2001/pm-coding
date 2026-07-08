@@ -9,13 +9,15 @@ export interface AgentV2ValidationGateContext {
 	title: string;
 }
 
+type AgentV2ValidationTaskRunner = Pick<WorkspaceTaskService, "run">;
+
 export interface RunAgentV2StaticValidationGateInput {
 	config: StorageConfig;
 	context: AgentV2ValidationGateContext;
 	runId: string;
 	taskId: string;
 	now: string;
-	tasks?: WorkspaceTaskService;
+	tasks?: AgentV2ValidationTaskRunner;
 }
 
 export type AgentV2ValidationFailure = AgentV2ToolFailure & {
@@ -66,6 +68,7 @@ export async function runAgentV2StaticValidationGate(
 			summary: status === "passed" ? "Static validation passed" : "Static validation failed",
 			details: {
 				failures,
+				rawErrors,
 				rawStatus: taskResult.status,
 				projectRoot: taskResult.projectRoot,
 				serveRoot: taskResult.serveRoot,
@@ -74,17 +77,17 @@ export async function runAgentV2StaticValidationGate(
 			createdAt: input.now,
 			updatedAt: input.now,
 		},
-		rawResult: sanitizeProjectTaskResult(taskResult, failures),
+		rawResult: taskResult,
 	};
 }
 
 function classifyStaticValidationFailure(message: string, taskId: string): AgentV2ValidationFailure {
 	const normalized = message.trim();
 	if (normalized.startsWith("Static preview quality gate: ")) {
-		return classifyQualityFailure(normalized.slice("Static preview quality gate: ".length), taskId);
+		return classifyQualityFailure(message, normalized.slice("Static preview quality gate: ".length), taskId);
 	}
 	if (normalized.startsWith("Static preview smoke gate: ")) {
-		return classifySmokeFailure(normalized.slice("Static preview smoke gate: ".length), taskId);
+		return classifySmokeFailure(message, normalized.slice("Static preview smoke gate: ".length), taskId);
 	}
 	if (normalized === "Project workspace is empty.") {
 		return createFailure({
@@ -93,6 +96,7 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 			retryable: true,
 			source: "static_validate",
 			taskId,
+			sourceMessage: message,
 		});
 	}
 
@@ -108,6 +112,7 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 			taskId,
 			path: normalizePath(buildRequired[1]),
 			data: { detectedPath: normalizePath(buildRequired[1]) },
+			sourceMessage: message,
 		});
 	}
 
@@ -122,6 +127,7 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 			source: "preview",
 			taskId,
 			path: "index.html",
+			sourceMessage: message,
 		});
 	}
 
@@ -131,10 +137,11 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 		retryable: true,
 		source: "static_validate",
 		taskId,
+		sourceMessage: message,
 	});
 }
 
-function classifyQualityFailure(message: string, taskId: string): AgentV2ValidationFailure {
+function classifyQualityFailure(sourceMessage: string, message: string, taskId: string): AgentV2ValidationFailure {
 	const selectorMismatch = message.match(/^JavaScript selector (#\S+) in (.+) does not match any HTML id\.$/);
 	if (selectorMismatch) {
 		return createFailure({
@@ -145,6 +152,7 @@ function classifyQualityFailure(message: string, taskId: string): AgentV2Validat
 			taskId,
 			path: scriptPath(selectorMismatch[2]),
 			data: { selector: selectorMismatch[1], scripts: selectorMismatch[2].split(", ").map(normalizePath) },
+			sourceMessage,
 		});
 	}
 
@@ -158,6 +166,7 @@ function classifyQualityFailure(message: string, taskId: string): AgentV2Validat
 			taskId,
 			path: "index.html",
 			data: { selector: loadingVisible[1] },
+			sourceMessage,
 		});
 	}
 
@@ -173,6 +182,7 @@ function classifyQualityFailure(message: string, taskId: string): AgentV2Validat
 			taskId,
 			path: "index.html",
 			data: { selector: metricPlaceholder[1] },
+			sourceMessage,
 		});
 	}
 
@@ -185,6 +195,7 @@ function classifyQualityFailure(message: string, taskId: string): AgentV2Validat
 			source: "static_quality",
 			taskId,
 			path: normalizePath(localScriptMissing[1]),
+			sourceMessage,
 		});
 	}
 
@@ -195,10 +206,11 @@ function classifyQualityFailure(message: string, taskId: string): AgentV2Validat
 		source: "static_quality",
 		taskId,
 		path: "index.html",
+		sourceMessage,
 	});
 }
 
-function classifySmokeFailure(message: string, taskId: string): AgentV2ValidationFailure {
+function classifySmokeFailure(sourceMessage: string, message: string, taskId: string): AgentV2ValidationFailure {
 	const loadingVisible = message.match(/^Runtime smoke gate: loading element (#\S+) remained visible after startup\.$/);
 	if (loadingVisible) {
 		return createFailure({
@@ -209,6 +221,7 @@ function classifySmokeFailure(message: string, taskId: string): AgentV2Validatio
 			taskId,
 			path: "index.html",
 			data: { selector: loadingVisible[1] },
+			sourceMessage,
 		});
 	}
 
@@ -224,6 +237,7 @@ function classifySmokeFailure(message: string, taskId: string): AgentV2Validatio
 			taskId,
 			path: "index.html",
 			data: { selector: metricPlaceholder[1] },
+			sourceMessage,
 		});
 	}
 
@@ -236,6 +250,7 @@ function classifySmokeFailure(message: string, taskId: string): AgentV2Validatio
 			source: "static_smoke",
 			taskId,
 			path: normalizePath(localScriptMissing[1]),
+			sourceMessage,
 		});
 	}
 
@@ -253,6 +268,7 @@ function classifySmokeFailure(message: string, taskId: string): AgentV2Validatio
 			retryable: true,
 			source: "static_smoke",
 			taskId,
+			sourceMessage,
 		});
 	}
 
@@ -262,6 +278,7 @@ function classifySmokeFailure(message: string, taskId: string): AgentV2Validatio
 		retryable: true,
 		source: "static_smoke",
 		taskId,
+		sourceMessage,
 	});
 }
 
@@ -273,6 +290,7 @@ function createFailure(input: {
 	taskId: string;
 	path?: string;
 	data?: Record<string, unknown>;
+	sourceMessage?: string;
 }): AgentV2ValidationFailure {
 	return {
 		...createAgentV2ToolFailure({
@@ -282,20 +300,12 @@ function createFailure(input: {
 			phase: "validation",
 			taskId: input.taskId,
 			path: input.path,
-			data: input.data ?? {},
+			data: {
+				...(input.data ?? {}),
+				...(input.sourceMessage ? { sourceMessage: input.sourceMessage } : {}),
+			},
 		}),
 		source: input.source,
-	};
-}
-
-function sanitizeProjectTaskResult(
-	taskResult: ProjectTaskResult,
-	failures: AgentV2ValidationFailure[],
-): ProjectTaskResult {
-	if (failures.length === 0) return taskResult;
-	return {
-		...taskResult,
-		errors: failures.map((failure) => failure.message),
 	};
 }
 

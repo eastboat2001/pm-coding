@@ -1,10 +1,10 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentV2FileAdapter } from "../src/agent-v2-file-adapter.js";
 import { runAgentV2StaticValidationGate } from "../src/agent-v2-validation-gate.js";
-import type { StorageConfig } from "../src/types.js";
+import type { ProjectTaskResult, StorageConfig } from "../src/types.js";
 
 const cleanupRoots: string[] = [];
 
@@ -78,16 +78,10 @@ describe("agent v2 validation gate", () => {
 	});
 
 	it("normalizes legacy build-required messaging into v2 preview failures", async () => {
-		const root = tempRoot();
-		const config = testConfig(root);
+		const config = testConfig(tempRoot());
 		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
-		const projectDir = projectDirFor(root);
-		mkdirSync(projectDir, { recursive: true });
-		writeFileSync(
-			join(projectDir, "index.html"),
-			'<!doctype html><script type="module" src="./src/main.ts"></script>',
-			"utf8",
-		);
+		const sourceMessage =
+			"Static preview found a build source entry at ./src/main.ts. Run project_task build_static before project_task preview so PI can serve browser-ready dist/build output.";
 
 		const result = await runAgentV2StaticValidationGate({
 			config,
@@ -95,7 +89,24 @@ describe("agent v2 validation gate", () => {
 			runId: "run-a",
 			taskId: "validate",
 			now: "2026-07-08T00:02:00.000Z",
+			tasks: mockTaskService({
+				task: "validate",
+				status: "failed",
+				projectId: "project-a",
+				sessionId: context.sessionId,
+				title: context.title,
+				projectRoot: "C:/demo/project",
+				fileCount: 2,
+				files: ["index.html", "src/main.ts"],
+				hasPackageJson: true,
+				valid: false,
+				errors: [sourceMessage],
+				mode: "static",
+				serveRoot: "",
+			}),
 		});
+		const [failure] = result.failures;
+		const [rawError] = result.rawResult.errors ?? [];
 
 		expect(result.status).toBe("failed");
 		expect(result.failures).toEqual(
@@ -107,8 +118,63 @@ describe("agent v2 validation gate", () => {
 				}),
 			]),
 		);
-		expect(JSON.stringify(result)).not.toContain("project_task");
-		expect(JSON.stringify(result)).not.toContain("browser-ready dist/build output");
+		expect(result.rawResult.errors).toEqual([sourceMessage]);
+		expect(rawError).toContain("project_task build_static");
+		expect(failure?.message).not.toContain("project_task");
+		expect(failure?.code).not.toContain("project_task");
+		expect(result.validation.details).toMatchObject({
+			rawErrors: [rawError],
+		});
+		expect(failure?.data).toMatchObject({
+			sourceMessage: rawError,
+		});
+	});
+
+	it("keeps unknown legacy validation text in diagnostics while returning a generic v2 failure", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const sourceMessage = "project_task validate failed: webpack chunk graph exploded";
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+			tasks: mockTaskService({
+				task: "validate",
+				status: "failed",
+				projectId: "project-a",
+				sessionId: context.sessionId,
+				title: context.title,
+				projectRoot: "C:/demo/project",
+				fileCount: 1,
+				files: ["index.html"],
+				hasPackageJson: false,
+				valid: false,
+				errors: [sourceMessage],
+				mode: "static",
+				serveRoot: "C:/demo/project",
+			}),
+		});
+
+		expect(result.status).toBe("failed");
+		expect(result.rawResult.errors).toEqual([sourceMessage]);
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "static.validation_failed",
+				message: "Static validation failed.",
+				source: "static_validate",
+			}),
+		]);
+		expect(result.failures[0]?.message).not.toContain("project_task");
+		expect(result.failures[0]?.code).not.toContain("project_task");
+		expect(result.failures[0]?.data).toMatchObject({
+			sourceMessage,
+		});
+		expect(result.validation.details).toMatchObject({
+			rawErrors: [sourceMessage],
+		});
 	});
 });
 
@@ -186,5 +252,11 @@ function testConfig(root: string): StorageConfig {
 		langfuseExportModelOutputSnapshots: false,
 		otelServiceName: "pi-coding-web",
 		otelDeploymentEnvironment: "",
+	};
+}
+
+function mockTaskService(result: ProjectTaskResult) {
+	return {
+		run: async () => result,
 	};
 }

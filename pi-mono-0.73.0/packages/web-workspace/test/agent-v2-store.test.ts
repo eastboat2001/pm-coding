@@ -249,6 +249,59 @@ describe("agent v2 runtime stores", () => {
 		expect(failed.error?.code).toBe("tool_failed");
 	});
 
+	it("does not let stale terminal updates overwrite a cancelling v2 run", () => {
+		for (const [runId, staleStatus] of [
+			["run-stale-succeeded", "succeeded"],
+			["run-stale-failed", "failed"],
+		] as const) {
+			store.createAgentV2Run({
+				clientId: "client-a",
+				runId,
+				input: { prompt: `ship ${runId}` },
+				model: { provider: "test", model: "local" },
+				createdAt: "2026-07-08T00:00:00.000Z",
+			});
+			store.updateAgentV2Run({
+				clientId: "client-a",
+				runId,
+				status: "running",
+				phase: "implementation",
+				workerId: "worker-1",
+				startedAt: "2026-07-08T00:01:00.000Z",
+				updatedAt: "2026-07-08T00:01:00.000Z",
+			});
+			const cancelling = store.updateAgentV2Run({
+				clientId: "client-a",
+				runId,
+				status: "cancelling",
+				updatedAt: "2026-07-08T00:02:00.000Z",
+			});
+			const staleTerminalUpdate = {
+				clientId: "client-a",
+				runId,
+				status: staleStatus,
+				phase: staleStatus === "succeeded" ? ("delivery" as const) : ("failed" as const),
+				endedAt: "2026-07-08T00:03:00.000Z",
+				updatedAt: "2026-07-08T00:03:00.000Z",
+				expectedStatuses: ["running" as const],
+				...(staleStatus === "failed"
+					? {
+							error: {
+								code: "agent_v2.worker_execution_failed",
+								message: "stale failure",
+								retryable: false,
+							},
+						}
+					: {}),
+			};
+
+			const blocked = store.updateAgentV2Run(staleTerminalUpdate);
+
+			expect(blocked).toEqual(cancelling);
+			expect(store.getAgentV2Run("client-a", runId)).toEqual(cancelling);
+		}
+	});
+
 	it("stores and lists v2 tasks, artifacts, and diagnostics by run", () => {
 		store.createAgentV2Run({
 			clientId: "client-a",

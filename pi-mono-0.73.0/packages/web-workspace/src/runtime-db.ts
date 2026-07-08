@@ -1093,22 +1093,28 @@ export class RuntimeDbStore implements RuntimeStore {
 	}
 
 	updateAgentV2Run(input: UpdateAgentV2RunInput): AgentV2RunSnapshot {
-		const current = requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
-		const next = applyAgentV2RunUpdate(current, input);
-		this.open()
-			.prepare(
+		const db = this.open();
+		return this.writeTransaction(db, () => {
+			const currentRow = db
+				.prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
+				.get(input.clientId, input.runId) as unknown as AgentV2RunRow | undefined;
+			const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
+			if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
+				return current;
+			}
+			const next = applyAgentV2RunUpdate(current, input);
+			db.prepare(
 				`UPDATE agent_v2_runs
-				SET status = ?,
-					phase = ?,
-					attempt = ?,
-					worker_id = ?,
-					updated_at = ?,
-					started_at = ?,
-					ended_at = ?,
-					error_json = ?
-				WHERE client_id = ? AND run_id = ?`,
-			)
-			.run(
+					SET status = ?,
+						phase = ?,
+						attempt = ?,
+						worker_id = ?,
+						updated_at = ?,
+						started_at = ?,
+						ended_at = ?,
+						error_json = ?
+					WHERE client_id = ? AND run_id = ?`,
+			).run(
 				next.status,
 				next.phase,
 				next.attempt,
@@ -1120,7 +1126,11 @@ export class RuntimeDbStore implements RuntimeStore {
 				input.clientId,
 				input.runId,
 			);
-		return requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+			const updatedRow = db
+				.prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
+				.get(input.clientId, input.runId) as unknown as AgentV2RunRow | undefined;
+			return requiredRecord(updatedRow ? toAgentV2RunRecord(updatedRow) : undefined, "agent v2 run");
+		});
 	}
 
 	appendAgentV2RunEvent(input: AppendAgentV2RunEventInput): AgentV2RunEventRecord {

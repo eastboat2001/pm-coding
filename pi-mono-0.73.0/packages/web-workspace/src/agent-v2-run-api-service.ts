@@ -94,8 +94,11 @@ export class AgentV2RunApiService {
 				phase: "cancelled",
 				updatedAt,
 				endedAt: updatedAt,
+				expectedStatuses: ["queued"],
 			});
-			await this.appendPhaseEvent(cancelled, "cancelled");
+			if (cancelled.status === "cancelled") {
+				await this.appendPhaseEvent(cancelled, "cancelled");
+			}
 			return cancelled;
 		}
 		if (run.status === "cancelling") {
@@ -107,8 +110,11 @@ export class AgentV2RunApiService {
 			runId,
 			status: "cancelling",
 			updatedAt,
+			expectedStatuses: ["running"],
 		});
-		await this.appendPhaseEvent(cancelling, cancelling.status);
+		if (cancelling.status === "cancelling") {
+			await this.appendPhaseEvent(cancelling, cancelling.status);
+		}
 		return cancelling;
 	}
 

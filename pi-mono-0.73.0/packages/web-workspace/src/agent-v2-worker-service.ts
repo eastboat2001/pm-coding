@@ -105,7 +105,9 @@ export class AgentV2WorkerService {
 				status: "running",
 				workerId: this.workerId,
 				startedAt: run.startedAt ?? this.now(),
+				expectedStatuses: ["queued"],
 			});
+			if (running.status !== "running") return true;
 			await this.appendPhaseEvent(running, "running");
 			await this.executeClaimedRun(running);
 			return true;
@@ -169,12 +171,15 @@ export class AgentV2WorkerService {
 	}
 
 	private async cancelRun(run: AgentV2RunSnapshot): Promise<void> {
+		if (run.status !== "running" && run.status !== "cancelling") return;
 		const cancelled = await this.transitionRun(run, {
 			status: "cancelled",
 			phase: "cancelled",
 			endedAt: this.now(),
 			error: undefined,
+			expectedStatuses: ["running", "cancelling"],
 		});
+		if (cancelled.status !== "cancelled") return;
 		await this.appendPhaseEvent(cancelled, cancelled.status);
 	}
 
@@ -290,7 +295,12 @@ export class AgentV2WorkerService {
 				message,
 				retryable: false,
 			},
+			expectedStatuses: ["running"],
 		});
+		if (failed.status !== "failed") {
+			await this.finishContendedTerminalWrite(failed);
+			return;
+		}
 		await this.appendDiagnostic(failed, code, message);
 		await this.appendPhaseEvent(failed, failed.status);
 	}
@@ -301,7 +311,9 @@ export class AgentV2WorkerService {
 			status: "interrupted",
 			endedAt: this.now(),
 			error: undefined,
+			expectedStatuses: ["running", "cancelling"],
 		});
+		if (interrupted.status !== "interrupted") return;
 		await this.appendPhaseEvent(interrupted, interrupted.status);
 	}
 
@@ -317,8 +329,10 @@ export class AgentV2WorkerService {
 
 		const latest = await this.store.getAgentV2Run(run.clientId, run.runId);
 		if (latest?.status === "running") {
-			const cancelling = await this.transitionRun(latest, { status: "cancelling" });
-			await this.appendPhaseEvent(cancelling, cancelling.status);
+			const cancelling = await this.transitionRun(latest, { status: "cancelling", expectedStatuses: ["running"] });
+			if (cancelling.status === "cancelling") {
+				await this.appendPhaseEvent(cancelling, cancelling.status);
+			}
 		}
 		abortController.abort();
 		return true;
@@ -339,7 +353,12 @@ export class AgentV2WorkerService {
 			phase: "delivery",
 			endedAt: this.now(),
 			error: undefined,
+			expectedStatuses: ["running"],
 		});
+		if (succeeded.status !== "succeeded") {
+			await this.finishContendedTerminalWrite(succeeded);
+			return;
+		}
 		await this.appendPhaseEvent(succeeded, succeeded.status);
 	}
 
@@ -352,6 +371,7 @@ export class AgentV2WorkerService {
 			startedAt?: string;
 			endedAt?: string;
 			error?: AgentV2RunSnapshot["error"];
+			expectedStatuses?: readonly AgentV2RunStatus[];
 		},
 	): Promise<AgentV2RunSnapshot> {
 		return await this.store.updateAgentV2Run({
@@ -363,8 +383,15 @@ export class AgentV2WorkerService {
 			...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
 			...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
 			...(patch.error !== undefined ? { error: patch.error } : {}),
+			...(patch.expectedStatuses !== undefined ? { expectedStatuses: patch.expectedStatuses } : {}),
 			updatedAt: this.now(),
 		});
+	}
+
+	private async finishContendedTerminalWrite(run: AgentV2RunSnapshot): Promise<void> {
+		if (run.status === "cancelling") {
+			await this.cancelRun(run);
+		}
 	}
 }
 

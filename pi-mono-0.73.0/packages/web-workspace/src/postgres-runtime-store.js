@@ -791,10 +791,17 @@ export class PostgresRuntimeStore {
     }
     async updateAgentV2Run(input) {
         return this.withTransaction(async (tx) => {
-            const current = requiredRecord(await this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+            const currentRow = await this.queryOne(tx, `SELECT ${AGENT_V2_RUN_COLUMNS}
+				FROM agent_v2_runs
+				WHERE client_id = $1 AND run_id = $2
+				FOR UPDATE`, [input.clientId, input.runId]);
+            const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
+            if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
+                return current;
+            }
             const next = applyAgentV2RunUpdate(current, input);
             const row = await this.queryOne(tx, `UPDATE agent_v2_runs
-				SET status = $3,
+					SET status = $3,
 					phase = $4,
 					attempt = $5,
 					worker_id = $6,

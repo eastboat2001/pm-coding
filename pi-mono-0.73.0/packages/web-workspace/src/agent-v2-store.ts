@@ -34,6 +34,7 @@ export interface UpdateAgentV2RunInput extends JsonObject {
 	clientId: string;
 	runId: string;
 	status?: AgentV2RunStatus;
+	expectedStatuses?: readonly AgentV2RunStatus[];
 	phase?: AgentV2Phase;
 	attempt?: number;
 	workerId?: string;

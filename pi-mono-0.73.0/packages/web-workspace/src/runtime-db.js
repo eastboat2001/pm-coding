@@ -720,21 +720,32 @@ export class RuntimeDbStore {
         return rows.map(toAgentV2RunRecord);
     }
     updateAgentV2Run(input) {
-        const current = requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
-        const next = applyAgentV2RunUpdate(current, input);
-        this.open()
-            .prepare(`UPDATE agent_v2_runs
-				SET status = ?,
-					phase = ?,
-					attempt = ?,
-					worker_id = ?,
-					updated_at = ?,
-					started_at = ?,
-					ended_at = ?,
-					error_json = ?
-				WHERE client_id = ? AND run_id = ?`)
-            .run(next.status, next.phase, next.attempt, next.workerId ?? null, next.updatedAt, next.startedAt ?? null, next.endedAt ?? null, next.error ? stringifyAgentV2Json(next.error) : null, input.clientId, input.runId);
-        return requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+        const db = this.open();
+        return this.writeTransaction(db, () => {
+            const currentRow = db
+                .prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
+                .get(input.clientId, input.runId);
+            const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
+            if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
+                return current;
+            }
+            const next = applyAgentV2RunUpdate(current, input);
+            db.prepare(`UPDATE agent_v2_runs
+					SET status = ?,
+						phase = ?,
+						attempt = ?,
+						worker_id = ?,
+						updated_at = ?,
+						started_at = ?,
+						ended_at = ?,
+						error_json = ?
+					WHERE client_id = ? AND run_id = ?`)
+                .run(next.status, next.phase, next.attempt, next.workerId ?? null, next.updatedAt, next.startedAt ?? null, next.endedAt ?? null, next.error ? stringifyAgentV2Json(next.error) : null, input.clientId, input.runId);
+            const updatedRow = db
+                .prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
+                .get(input.clientId, input.runId);
+            return requiredRecord(updatedRow ? toAgentV2RunRecord(updatedRow) : undefined, "agent v2 run");
+        });
     }
     upsertAgentV2Task(input) {
         const task = buildAgentV2Task(input);

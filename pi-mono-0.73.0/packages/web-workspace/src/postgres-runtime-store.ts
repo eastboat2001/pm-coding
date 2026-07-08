@@ -1256,7 +1256,18 @@ export class PostgresRuntimeStore implements RuntimeStore {
 
 	async updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
 		return this.withTransaction(async (tx) => {
-			const current = requiredRecord(await this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+			const currentRow = await this.queryOne<AgentV2RunRow>(
+				tx,
+				`SELECT ${AGENT_V2_RUN_COLUMNS}
+				FROM agent_v2_runs
+				WHERE client_id = $1 AND run_id = $2
+				FOR UPDATE`,
+				[input.clientId, input.runId],
+			);
+			const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
+			if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
+				return current;
+			}
 			const next = applyAgentV2RunUpdate(current, input);
 			const row = await this.queryOne<AgentV2RunRow>(
 				tx,

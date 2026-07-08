@@ -223,6 +223,41 @@ describe("AgentV2WorkerService", () => {
 		);
 	});
 
+	it("does not let a stale running snapshot finalize succeeded after cancellation wins the store race", async () => {
+		const store = new MemoryWorkerStore();
+		store.simulateStaleTerminalOverwriteWithoutGuard = true;
+		store.createQueuedRun("client-a", "run-stale-final-success");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-stale-final-success" }]);
+		const events = new RecordingEventLog();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events,
+			execution: new StaleFinalReadCancellationExecution(store, "client-a", "run-stale-final-success"),
+			workerId: "worker-a",
+			now: timestampSequence(
+				"2026-07-08T09:03:33.000Z",
+				"2026-07-08T09:03:34.000Z",
+				"2026-07-08T09:03:35.000Z",
+			),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(store.getRunSnapshot("client-a", "run-stale-final-success")).toMatchObject({
+			status: "cancelled",
+			phase: "cancelled",
+			endedAt: "2026-07-08T09:03:35.000Z",
+		});
+		expect(events.appendCalls).not.toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "agent_v2.phase_changed",
+					payload: expect.objectContaining({ status: "succeeded" }),
+				}),
+			]),
+		);
+	});
+
 	it("preserves interrupted when a run was externally interrupted before post-step cancel finalization", async () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-interrupted-before-finalize");
@@ -324,7 +359,9 @@ describe("AgentV2WorkerService", () => {
 
 class MemoryWorkerStore {
 	readonly diagnostics: AgentV2DiagnosticEvent[] = [];
+	simulateStaleTerminalOverwriteWithoutGuard = false;
 	private readonly runs = new Map<string, AgentV2RunSnapshot>();
+	private readonly staleReads = new Map<string, AgentV2RunSnapshot[]>();
 
 	createQueuedRun(clientId: string, runId: string): AgentV2RunSnapshot {
 		const run = buildAgentV2Run({
@@ -364,7 +401,19 @@ class MemoryWorkerStore {
 		return this.runs.get(runKey(clientId, runId));
 	}
 
+	returnStaleSnapshotOnNextRead(snapshot: AgentV2RunSnapshot): void {
+		const key = runKey(snapshot.clientId, snapshot.runId);
+		const snapshots = this.staleReads.get(key) ?? [];
+		snapshots.push(snapshot);
+		this.staleReads.set(key, snapshots);
+	}
+
 	async getAgentV2Run(clientId: string, runId: string): Promise<AgentV2RunSnapshot | undefined> {
+		const key = runKey(clientId, runId);
+		const staleSnapshots = this.staleReads.get(key);
+		const staleSnapshot = staleSnapshots?.shift();
+		if (staleSnapshots?.length === 0) this.staleReads.delete(key);
+		if (staleSnapshot) return staleSnapshot;
 		return this.getRunSnapshot(clientId, runId);
 	}
 
@@ -379,10 +428,25 @@ class MemoryWorkerStore {
 		startedAt?: string;
 		endedAt?: string;
 		error?: AgentV2RunSnapshot["error"];
+		expectedStatuses?: readonly AgentV2RunStatus[];
 	}): AgentV2RunSnapshot {
 		const current = this.getRunSnapshot(input.clientId, input.runId);
 		if (!current) {
 			throw new Error(`Missing run ${input.clientId}/${input.runId}`);
+		}
+		if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
+			return current;
+		}
+		if (
+			this.simulateStaleTerminalOverwriteWithoutGuard &&
+			!input.expectedStatuses &&
+			current.status === "cancelling" &&
+			(input.status === "succeeded" || input.status === "failed")
+		) {
+			const staleRunning = { ...current, status: "running" as const };
+			const next = applyAgentV2RunUpdate(staleRunning, input);
+			this.runs.set(runKey(input.clientId, input.runId), next);
+			return next;
 		}
 		const next = applyAgentV2RunUpdate(current, input);
 		this.runs.set(runKey(input.clientId, input.runId), next);
@@ -508,6 +572,25 @@ class ExternalCancellingExecution {
 			status: "cancelling",
 			updatedAt: "2026-07-08T09:03:31.000Z",
 		});
+		return { status: "complete", diagnosticIds: [] };
+	}
+}
+
+class StaleFinalReadCancellationExecution {
+	constructor(
+		private readonly store: MemoryWorkerStore,
+		private readonly clientId: string,
+		private readonly runId: string,
+	) {}
+
+	async executeNextTask(input: { run: AgentV2RunSnapshot }): Promise<AgentV2ExecutionStepResult> {
+		await this.store.updateAgentV2Run({
+			clientId: this.clientId,
+			runId: this.runId,
+			status: "cancelling",
+			updatedAt: "2026-07-08T09:03:34.000Z",
+		});
+		this.store.returnStaleSnapshotOnNextRead(input.run);
 		return { status: "complete", diagnosticIds: [] };
 	}
 }

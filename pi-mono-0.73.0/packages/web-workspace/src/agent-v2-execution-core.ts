@@ -85,6 +85,7 @@ async function executeValidationTask(
 	input: ExecuteAgentV2NextTaskInput,
 	state: { taskId: string; taskOutput: Record<string, unknown>; now: string },
 ): Promise<AgentV2ExecutionStepResult> {
+	const maxAttempts = input.maxRepairAttempts ?? 3;
 	const result = await runAgentV2StaticValidationGate({
 		config: input.config,
 		context: input.context,
@@ -114,11 +115,12 @@ async function executeValidationTask(
 		};
 	}
 
+	const attempt = nextValidationRepairAttempt(state.taskOutput);
 	const repairActions = planAgentV2RepairActions({
 		taskId: state.taskId,
 		failures: result.failures,
-		attempt: 1,
-		maxAttempts: input.maxRepairAttempts ?? 3,
+		attempt,
+		maxAttempts,
 	});
 	const diagnosticId = `agent_v2.validation_failed:${state.taskId}:${randomUUID()}`;
 	await Promise.resolve(
@@ -136,6 +138,8 @@ async function executeValidationTask(
 				data: {
 					validationId: result.validation.validationId,
 					failures: result.failures,
+					attempt,
+					maxAttempts,
 					repairActions,
 				},
 				createdAt: state.now,
@@ -153,6 +157,11 @@ async function executeValidationTask(
 			...state.taskOutput,
 			validationId: result.validation.validationId,
 			repairActions,
+			phase4: {
+				...readPhase4TaskOutput(state.taskOutput),
+				validationRepairAttempt: attempt,
+				validationMaxRepairAttempts: maxAttempts,
+			},
 		},
 		error: {
 			code: "agent_v2.validation_failed",
@@ -160,6 +169,8 @@ async function executeValidationTask(
 			retryable: repairActions.some((action) => action.retryable),
 			data: {
 				validationId: result.validation.validationId,
+				attempt,
+				maxAttempts,
 			},
 		},
 	});
@@ -169,4 +180,24 @@ async function executeValidationTask(
 		taskId: state.taskId,
 		diagnosticIds: [diagnosticId],
 	};
+}
+
+function nextValidationRepairAttempt(taskOutput: Record<string, unknown>): number {
+	const phase4Attempt = positiveInteger(readPhase4TaskOutput(taskOutput).validationRepairAttempt);
+	const legacyAttempt = positiveInteger(taskOutput.repairAttempt);
+	return (phase4Attempt ?? legacyAttempt ?? 0) + 1;
+}
+
+function readPhase4TaskOutput(taskOutput: Record<string, unknown>): Record<string, unknown> {
+	return isRecord(taskOutput.phase4) ? taskOutput.phase4 : {};
+}
+
+function positiveInteger(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+	const integer = Math.trunc(value);
+	return integer >= 1 ? integer : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

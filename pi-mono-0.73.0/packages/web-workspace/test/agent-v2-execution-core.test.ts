@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -132,6 +132,159 @@ describe("agent v2 execution core", () => {
 			}),
 		});
 	});
+
+	it("uses persisted validation repair attempts to stop retryable failures at max attempts", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-validation-attempts",
+			input: { prompt: "Build a static app" },
+			model: { provider: "test" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-validation-attempts",
+			taskId: "validate",
+			kind: "validation",
+			title: "Validate static app",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {
+				phase4: {
+					validationRepairAttempt: 2,
+				},
+			},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+
+		const result = await executeAgentV2NextTask({
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-validation-attempts",
+			now: () => "2026-07-08T00:02:00.000Z",
+			maxRepairAttempts: 3,
+		});
+
+		expect(result).toMatchObject({
+			status: "task_failed",
+			taskId: "validate",
+		});
+		expect(store.listAgentV2Diagnostics("client-a", "run-validation-attempts")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					diagnosticId: result.diagnosticIds[0],
+					code: "agent_v2.validation_failed",
+					data: expect.objectContaining({
+						attempt: 3,
+						maxAttempts: 3,
+						repairActions: [
+							expect.objectContaining({
+								type: "block_task",
+								retryable: false,
+								validationCode: "repair.max_attempts_exceeded",
+							}),
+						],
+					}),
+				}),
+			]),
+		);
+		expect(store.listAgentV2Tasks("client-a", "run-validation-attempts")[0]).toMatchObject({
+			taskId: "validate",
+			status: "failed",
+			error: expect.objectContaining({
+				code: "agent_v2.validation_failed",
+				retryable: false,
+				data: expect.objectContaining({
+					attempt: 3,
+					maxAttempts: 3,
+				}),
+			}),
+			output: expect.objectContaining({
+				validationId: "static:validate",
+				repairActions: [
+					expect.objectContaining({
+						type: "block_task",
+						validationCode: "repair.max_attempts_exceeded",
+					}),
+				],
+				phase4: expect.objectContaining({
+					validationRepairAttempt: 3,
+					validationMaxRepairAttempts: 3,
+				}),
+			}),
+		});
+	});
+
+	it("persists passed validation records and transitions validation tasks to succeeded", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-validation-passed",
+			input: { prompt: "Build a static app" },
+			model: { provider: "test" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-validation-passed",
+			taskId: "validate",
+			kind: "validation",
+			title: "Validate static app",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {
+				phase4: {
+					note: "keep-me",
+				},
+			},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+		writeProjectFile(root, "index.html", "<!doctype html><main><h1>Ready</h1></main>");
+
+		const result = await executeAgentV2NextTask({
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-validation-passed",
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result).toEqual({
+			status: "task_succeeded",
+			taskId: "validate",
+			diagnosticIds: [],
+		});
+		expect(store.listAgentV2Validations("client-a", "run-validation-passed")).toEqual([
+			expect.objectContaining({
+				validationId: "static:validate",
+				status: "passed",
+				taskId: "validate",
+				summary: "Static validation passed",
+			}),
+		]);
+		const persistedTask = store.listAgentV2Tasks("client-a", "run-validation-passed")[0];
+		expect(persistedTask).toMatchObject({
+			taskId: "validate",
+			status: "succeeded",
+			output: expect.objectContaining({
+				validationId: "static:validate",
+				phase4: {
+					note: "keep-me",
+				},
+			}),
+		});
+		expect(persistedTask?.error).toBeUndefined();
+	});
 });
 
 function tempRoot(): string {
@@ -146,6 +299,12 @@ function createStore(root: string): RuntimeDbStore {
 	store.ensureAgentV2Schema();
 	cleanupStores.push(store);
 	return store;
+}
+
+function writeProjectFile(root: string, relativePath: string, content: string): void {
+	const projectDir = join(root, "data", "clients", "client-a", "sessions", "session-a", "project");
+	mkdirSync(projectDir, { recursive: true });
+	writeFileSync(join(projectDir, relativePath), content);
 }
 
 function forbidLegacyRuntimeReads(store: RuntimeDbStore): RuntimeStore {

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
-import { createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
 import type { AgentV2ArtifactRecord } from "./agent-v2-store.js";
+import { createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
 import type { StorageConfig } from "./types.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { safeRelativeProjectPath, workspaceContext } from "./workspace-paths.js";

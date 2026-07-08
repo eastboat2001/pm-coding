@@ -199,7 +199,9 @@ function pathIsInside(root, target) {
     return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}\\`);
 }
 function relativeCheckedPath(root, file) {
-    const relative = normalize(file).slice(normalize(root).length).replace(/^[/\\]+/, "");
+    const relative = normalize(file)
+        .slice(normalize(root).length)
+        .replace(/^[/\\]+/, "");
     return relative || file;
 }
 function unique(values) {

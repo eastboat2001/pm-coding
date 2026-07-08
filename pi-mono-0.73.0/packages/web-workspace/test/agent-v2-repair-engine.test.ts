@@ -65,7 +65,9 @@ describe("agent v2 repair engine", () => {
 	it("blocks non-retryable failures and normalizes the public target path", () => {
 		const actions = planAgentV2RepairActions({
 			taskId: "validate",
-			failures: [failure({ code: "static.preview_build_required", retryable: false, path: ".//dist\\\\//index.html" })],
+			failures: [
+				failure({ code: "static.preview_build_required", retryable: false, path: ".//dist\\\\//index.html" }),
+			],
 			attempt: 1,
 			maxAttempts: 3,
 		});

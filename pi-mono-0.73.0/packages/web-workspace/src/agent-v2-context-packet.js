@@ -175,10 +175,7 @@ function renderDocuments(documents) {
     return lines.length > 0 ? lines : ["- none"];
 }
 function renderArtifactIndex(index) {
-    return [
-        `- artifacts: ${index.artifacts.length}`,
-        `- pending validation: ${index.pendingValidation.length}`,
-    ];
+    return [`- artifacts: ${index.artifacts.length}`, `- pending validation: ${index.pendingValidation.length}`];
 }
 function renderArtifacts(artifacts) {
     if (artifacts.length === 0)

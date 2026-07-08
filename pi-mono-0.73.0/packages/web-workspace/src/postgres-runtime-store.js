@@ -3,7 +3,14 @@ import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUME
 import { AGENT_V2_SCHEMA_VERSION } from "./agent-v2-types.js";
 const ACTIVE_RUN_STATUSES = ["queued", "running", "cancelling"];
 const TERMINAL_RUN_STATUSES = new Set(["cancelled", "completed", "failed", "interrupted"]);
-const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"];
+const LEGACY_RESET_TABLES = [
+    "app_preview_goal_events",
+    "app_preview_goals",
+    "run_events",
+    "messages",
+    "runs",
+    "sessions",
+];
 const AGENT_V2_RESET_TABLES = [
     "agent_v2_diagnostics",
     "agent_v2_validations",
@@ -223,7 +230,7 @@ export class PostgresRuntimeStore {
 				PRIMARY KEY (client_id, run_id, artifact_id),
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
 			)
-        `);
+		`);
         await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)");
         await this.query(this.queryable, `
 			CREATE TABLE IF NOT EXISTS agent_v2_documents (

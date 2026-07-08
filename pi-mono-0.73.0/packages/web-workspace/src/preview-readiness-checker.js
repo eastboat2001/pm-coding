@@ -51,7 +51,7 @@ export class PreviewReadinessChecker {
             return this.notReady("index_html_empty", { ...base, previewUrl });
         }
         const httpResult = await this.fetchHtml(probeUrl);
-        if (!httpResult.ok) {
+        if (httpResult.ok === false) {
             return this.notReady("http_not_ok", { ...base, previewUrl }, httpResult.detail);
         }
         const html = httpResult.html;

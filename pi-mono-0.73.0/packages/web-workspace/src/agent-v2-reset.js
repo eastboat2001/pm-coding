@@ -1,21 +1,3 @@
-function isPromiseLike(value) {
-    return typeof value?.then === "function";
-}
-function withDiagnosticsDeleted(storeResult, diagnosticsDeleted) {
-    if (diagnosticsDeleted === undefined)
-        return { ...storeResult };
-    return {
-        ...storeResult,
-        diagnosticsDeleted,
-    };
-}
-function finalizeResetResult(storeResult, options, diagnostics) {
-    const diagnosticsDeleted = options.includeDiagnostics ? diagnostics?.clearAgentV2Diagnostics?.() : undefined;
-    if (isPromiseLike(diagnosticsDeleted)) {
-        return diagnosticsDeleted.then((deleted) => withDiagnosticsDeleted(storeResult, deleted));
-    }
-    return withDiagnosticsDeleted(storeResult, diagnosticsDeleted);
-}
 export function assertAgentV2ResetConfirmation(confirmation) {
     if (confirmation !== "application-generation-agent-v2") {
         throw new Error("Refusing destructive Agent v2 reset without confirmation token");
@@ -32,3 +14,22 @@ export function resetAgentV2RuntimeData(store, options = {}, diagnostics) {
     }
     return finalizeResetResult(storeResult, options, diagnostics);
 }
+function finalizeResetResult(storeResult, options, diagnostics) {
+    const diagnosticsDeleted = options.includeDiagnostics ? diagnostics?.clearAgentV2Diagnostics?.() : undefined;
+    if (isPromiseLike(diagnosticsDeleted)) {
+        return diagnosticsDeleted.then((deleted) => withDiagnosticsDeleted(storeResult, deleted));
+    }
+    return withDiagnosticsDeleted(storeResult, diagnosticsDeleted);
+}
+function withDiagnosticsDeleted(storeResult, diagnosticsDeleted) {
+    if (diagnosticsDeleted === undefined)
+        return { ...storeResult };
+    return {
+        ...storeResult,
+        diagnosticsDeleted,
+    };
+}
+function isPromiseLike(value) {
+    return typeof value?.then === "function";
+}
+//# sourceMappingURL=agent-v2-reset.js.map

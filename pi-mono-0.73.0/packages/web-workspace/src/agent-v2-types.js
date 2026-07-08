@@ -29,5 +29,13 @@ export const AGENT_V2_RUN_EVENT_TYPES = [
     "agent_v2.validation_recorded",
     "agent_v2.diagnostic_recorded",
 ];
-export const AGENT_V2_TASK_STATUSES = ["pending", "ready", "running", "blocked", "succeeded", "failed", "cancelled"];
+export const AGENT_V2_TASK_STATUSES = [
+    "pending",
+    "ready",
+    "running",
+    "blocked",
+    "succeeded",
+    "failed",
+    "cancelled",
+];
 //# sourceMappingURL=agent-v2-types.js.map

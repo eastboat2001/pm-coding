@@ -1048,7 +1048,7 @@ export class RuntimeDbStore implements RuntimeStore {
 	getAgentV2Run(clientId: string, runId: string): AgentV2RunSnapshot | undefined {
 		const row = this.open()
 			.prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
-			.get(clientId, runId) as AgentV2RunRow | undefined;
+			.get(clientId, runId) as unknown as AgentV2RunRow | undefined;
 		return row ? toAgentV2RunRecord(row) : undefined;
 	}
 
@@ -1281,7 +1281,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				FROM agent_v2_documents
 				WHERE client_id = ? AND run_id = ? AND document_id = ?`,
 			)
-			.get(clientId, runId, documentId) as AgentV2DocumentRow | undefined;
+			.get(clientId, runId, documentId) as unknown as AgentV2DocumentRow | undefined;
 		return row ? toAgentV2DocumentRecord(row) : undefined;
 	}
 

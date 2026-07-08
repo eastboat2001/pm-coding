@@ -1,17 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
-import { advanceAgentV2Task, loadAgentV2RuntimeSnapshot, type AgentV2RuntimeStore } from "./agent-v2-runtime-core.js";
 import { planAgentV2RepairActions } from "./agent-v2-repair-engine.js";
-import { runAgentV2StaticValidationGate, type AgentV2ValidationGateContext } from "./agent-v2-validation-gate.js";
+import { type AgentV2RuntimeStore, advanceAgentV2Task, loadAgentV2RuntimeSnapshot } from "./agent-v2-runtime-core.js";
+import { type AgentV2ValidationGateContext, runAgentV2StaticValidationGate } from "./agent-v2-validation-gate.js";
 import type { RuntimeStore } from "./runtime-store.js";
 import type { StorageConfig } from "./types.js";
 
-export type AgentV2ExecutionStepStatus =
-	| "task_succeeded"
-	| "task_failed"
-	| "task_blocked"
-	| "complete"
-	| "no_task";
+export type AgentV2ExecutionStepStatus = "task_succeeded" | "task_failed" | "task_blocked" | "complete" | "no_task";
 
 export interface AgentV2ExecutionStepResult {
 	status: AgentV2ExecutionStepStatus;
@@ -29,9 +24,7 @@ export interface ExecuteAgentV2NextTaskInput {
 	maxRepairAttempts?: number;
 }
 
-export async function executeAgentV2NextTask(
-	input: ExecuteAgentV2NextTaskInput,
-): Promise<AgentV2ExecutionStepResult> {
+export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput): Promise<AgentV2ExecutionStepResult> {
 	const now = input.now?.() ?? new Date().toISOString();
 	const snapshot = await loadAgentV2RuntimeSnapshot({
 		store: input.store,

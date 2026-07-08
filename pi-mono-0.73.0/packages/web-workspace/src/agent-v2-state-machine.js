@@ -46,9 +46,9 @@ export function createAgentV2RunSnapshot(input) {
 export function transitionAgentV2RunSnapshot(snapshot, to, patch = {}) {
     assertAgentV2RunTransition(snapshot.status, to);
     const updatedAt = patch.updatedAt ?? new Date().toISOString();
-    const startedAt = to === "running" ? patch.startedAt ?? snapshot.startedAt ?? updatedAt : snapshot.startedAt;
-    const endedAt = TERMINAL_RUN_STATUSES.has(to) ? patch.endedAt ?? updatedAt : snapshot.endedAt;
-    const error = TERMINAL_RUN_STATUSES.has(to) ? patch.error ?? snapshot.error : snapshot.error;
+    const startedAt = to === "running" ? (patch.startedAt ?? snapshot.startedAt ?? updatedAt) : snapshot.startedAt;
+    const endedAt = TERMINAL_RUN_STATUSES.has(to) ? (patch.endedAt ?? updatedAt) : snapshot.endedAt;
+    const error = TERMINAL_RUN_STATUSES.has(to) ? (patch.error ?? snapshot.error) : snapshot.error;
     const next = {
         ...snapshot,
         status: to,

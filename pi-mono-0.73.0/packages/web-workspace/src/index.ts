@@ -30,16 +30,31 @@ export {
 	renderAgentV2DocumentMarkdown,
 } from "./agent-v2-documents.js";
 export {
-	type AgentV2PlanningBootstrap,
-	buildAgentV2PlanningBootstrap,
-	persistAgentV2PlanningBootstrap,
-} from "./agent-v2-planning-bootstrap.js";
-export {
 	type AgentV2ExecutionStepResult,
 	type AgentV2ExecutionStepStatus,
 	type ExecuteAgentV2NextTaskInput,
 	executeAgentV2NextTask,
 } from "./agent-v2-execution-core.js";
+export {
+	type AgentV2FileAdapter,
+	type AgentV2FileAdapterContext,
+	type AgentV2FileArtifactCandidate,
+	type AgentV2FileWriteMode,
+	type AgentV2FileWriteResult,
+	type CreateAgentV2FileAdapterInput,
+	createAgentV2FileAdapter,
+} from "./agent-v2-file-adapter.js";
+export {
+	type AgentV2PlanningBootstrap,
+	buildAgentV2PlanningBootstrap,
+	persistAgentV2PlanningBootstrap,
+} from "./agent-v2-planning-bootstrap.js";
+export {
+	type AgentV2RepairAction,
+	type AgentV2RepairActionType,
+	type PlanAgentV2RepairActionsInput,
+	planAgentV2RepairActions,
+} from "./agent-v2-repair-engine.js";
 export {
 	type AgentV2ResetDiagnosticsAdapter,
 	type AgentV2ResetOptions,
@@ -72,37 +87,6 @@ export {
 	getReadyAgentV2TaskIds,
 	transitionAgentV2RunSnapshot,
 } from "./agent-v2-state-machine.js";
-export {
-	type AgentV2ToolContract,
-	type AgentV2ToolFailure,
-	type AgentV2ToolName,
-	type AgentV2ToolRegistry,
-	createAgentV2ToolFailure,
-	createAgentV2ToolRegistry,
-	assertAgentV2ToolAllowed,
-} from "./agent-v2-tool-governance.js";
-export {
-	type AgentV2FileAdapter,
-	type AgentV2FileAdapterContext,
-	type AgentV2FileArtifactCandidate,
-	type AgentV2FileWriteMode,
-	type AgentV2FileWriteResult,
-	type CreateAgentV2FileAdapterInput,
-	createAgentV2FileAdapter,
-} from "./agent-v2-file-adapter.js";
-export {
-	type AgentV2ValidationFailure,
-	type AgentV2ValidationGateContext,
-	type AgentV2ValidationGateResult,
-	type RunAgentV2StaticValidationGateInput,
-	runAgentV2StaticValidationGate,
-} from "./agent-v2-validation-gate.js";
-export {
-	type AgentV2RepairAction,
-	type AgentV2RepairActionType,
-	type PlanAgentV2RepairActionsInput,
-	planAgentV2RepairActions,
-} from "./agent-v2-repair-engine.js";
 export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
@@ -148,6 +132,15 @@ export {
 	transitionAgentV2Task,
 } from "./agent-v2-task-engine.js";
 export {
+	type AgentV2ToolContract,
+	type AgentV2ToolFailure,
+	type AgentV2ToolName,
+	type AgentV2ToolRegistry,
+	assertAgentV2ToolAllowed,
+	createAgentV2ToolFailure,
+	createAgentV2ToolRegistry,
+} from "./agent-v2-tool-governance.js";
+export {
 	AGENT_V2_PHASES,
 	AGENT_V2_RUN_EVENT_TYPES,
 	AGENT_V2_RUN_STATUSES,
@@ -173,6 +166,13 @@ export {
 	type ApplicationGenerationRuntimeSelection,
 	type ApplicationGenerationRuntimeVersion,
 } from "./agent-v2-types.js";
+export {
+	type AgentV2ValidationFailure,
+	type AgentV2ValidationGateContext,
+	type AgentV2ValidationGateResult,
+	type RunAgentV2StaticValidationGateInput,
+	runAgentV2StaticValidationGate,
+} from "./agent-v2-validation-gate.js";
 export {
 	AppPreviewGoalService,
 	budgetForSource,

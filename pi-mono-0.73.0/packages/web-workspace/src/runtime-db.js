@@ -5,7 +5,14 @@ import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUME
 import { AGENT_V2_SCHEMA_VERSION } from "./agent-v2-types.js";
 import { isObject } from "./json.js";
 const TERMINAL_RUN_STATUSES = new Set(["cancelled", "completed", "failed", "interrupted"]);
-const LEGACY_RESET_TABLES = ["app_preview_goal_events", "app_preview_goals", "run_events", "messages", "runs", "sessions"];
+const LEGACY_RESET_TABLES = [
+    "app_preview_goal_events",
+    "app_preview_goals",
+    "run_events",
+    "messages",
+    "runs",
+    "sessions",
+];
 const AGENT_V2_RESET_TABLES = [
     "agent_v2_diagnostics",
     "agent_v2_validations",
@@ -176,9 +183,9 @@ export class RuntimeDbStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC);
 
-			CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
+				CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
 				artifact_id TEXT NOT NULL,
 				kind TEXT NOT NULL,
 				path TEXT NOT NULL,
@@ -192,28 +199,28 @@ export class RuntimeDbStore {
 				updated_at TEXT NOT NULL,
 				PRIMARY KEY (client_id, run_id, artifact_id),
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
+				);
+				CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
 
-			CREATE TABLE IF NOT EXISTS agent_v2_documents (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				document_id TEXT NOT NULL,
-				kind TEXT NOT NULL,
-				version TEXT NOT NULL,
-				content_markdown TEXT NOT NULL,
-				content_json TEXT NOT NULL,
-				source_task_id TEXT,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, document_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC);
+				CREATE TABLE IF NOT EXISTS agent_v2_documents (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
+					document_id TEXT NOT NULL,
+					kind TEXT NOT NULL,
+					version TEXT NOT NULL,
+					content_markdown TEXT NOT NULL,
+					content_json TEXT NOT NULL,
+					source_task_id TEXT,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL,
+					PRIMARY KEY (client_id, run_id, document_id),
+					FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+				);
+				CREATE INDEX IF NOT EXISTS idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC);
 
-			CREATE TABLE IF NOT EXISTS agent_v2_validations (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
+				CREATE TABLE IF NOT EXISTS agent_v2_validations (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
 				validation_id TEXT NOT NULL,
 				task_id TEXT,
 				artifact_id TEXT,
@@ -245,11 +252,11 @@ export class RuntimeDbStore {
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
 			);
 			CREATE INDEX IF NOT EXISTS idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at ASC);
-		`);
+			`);
         ensureSqliteColumn(db, "agent_v2_tasks", "acceptance_criteria_json", "TEXT NOT NULL DEFAULT '[]'");
         db.prepare(`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
-				VALUES (?, ?)
-				ON CONFLICT(schema_version) DO NOTHING`).run(AGENT_V2_SCHEMA_VERSION, now());
+			VALUES (?, ?)
+			ON CONFLICT(schema_version) DO NOTHING`).run(AGENT_V2_SCHEMA_VERSION, now());
     }
     close() {
         this.database?.close();

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,7 +20,7 @@ describe("agent v2 validation gate", () => {
 		const files = createAgentV2FileAdapter({ config, context });
 		files.writeFile({
 			path: "index.html",
-			content: "<!doctype html><div id=\"load\" class=\"loading\">Loading...</div>",
+			content: '<!doctype html><div id="load" class="loading">Loading...</div>',
 			mode: "create",
 			taskId: "implement",
 			now: "2026-07-08T00:01:00.000Z",
@@ -182,10 +182,6 @@ function tempRoot(): string {
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-validation-gate-"));
 	cleanupRoots.push(root);
 	return root;
-}
-
-function projectDirFor(root: string): string {
-	return join(root, "data", "clients", "client-a", "sessions", "session-a", "project");
 }
 
 function testConfig(root: string): StorageConfig {

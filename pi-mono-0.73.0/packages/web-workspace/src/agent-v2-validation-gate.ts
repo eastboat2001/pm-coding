@@ -1,5 +1,5 @@
 import type { UpsertAgentV2ValidationInput } from "./agent-v2-store.js";
-import { createAgentV2ToolFailure, type AgentV2ToolFailure } from "./agent-v2-tool-governance.js";
+import { type AgentV2ToolFailure, createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
 import type { ProjectTaskResult, StorageConfig } from "./types.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 
@@ -211,7 +211,9 @@ function classifyQualityFailure(sourceMessage: string, message: string, taskId: 
 }
 
 function classifySmokeFailure(sourceMessage: string, message: string, taskId: string): AgentV2ValidationFailure {
-	const loadingVisible = message.match(/^Runtime smoke gate: loading element (#\S+) remained visible after startup\.$/);
+	const loadingVisible = message.match(
+		/^Runtime smoke gate: loading element (#\S+) remained visible after startup\.$/,
+	);
 	if (loadingVisible) {
 		return createFailure({
 			code: "static.loading_visible",

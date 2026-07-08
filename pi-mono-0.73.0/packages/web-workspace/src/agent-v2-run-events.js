@@ -1,4 +1,4 @@
-import { AGENT_V2_RUN_EVENT_TYPES } from "./agent-v2-types.js";
+import { AGENT_V2_RUN_EVENT_TYPES, } from "./agent-v2-types.js";
 const AGENT_V2_RUN_EVENT_TYPE_SET = new Set(AGENT_V2_RUN_EVENT_TYPES);
 export async function appendAgentV2RunEvent(sink, run, event) {
     if (!AGENT_V2_RUN_EVENT_TYPE_SET.has(event.type)) {

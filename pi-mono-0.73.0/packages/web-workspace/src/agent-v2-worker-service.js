@@ -257,7 +257,8 @@ export class AgentV2WorkerService {
             }
             cancelRequested ||= latest.status === "cancelling";
             const aborted = abortController.signal.aborted;
-            cancelRequested ||= aborted && (await this.queue.isCancelRequested({ clientId: latest.clientId, runId: latest.runId }));
+            cancelRequested ||=
+                aborted && (await this.queue.isCancelRequested({ clientId: latest.clientId, runId: latest.runId }));
             if (cancelRequested) {
                 await this.cancelRequestedRun(latest);
             }
@@ -383,3 +384,4 @@ function sleep(ms) {
         setTimeout(resolve, ms);
     });
 }
+//# sourceMappingURL=agent-v2-worker-service.js.map

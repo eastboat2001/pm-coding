@@ -5,24 +5,24 @@ export {
 	executeAgentV2NextTask,
 } from "./agent-v2-execution-core.js";
 export {
-	RedisAgentV2RunEventBus,
 	type AgentV2RunEventBus,
+	agentV2RunEventStreamKey,
+	RedisAgentV2RunEventBus,
 	type RedisAgentV2RunEventBusClient,
 	type RedisAgentV2RunEventBusOptions,
-	agentV2RunEventStreamKey,
 } from "./agent-v2-run-event-bus.js";
 export { AgentV2RunEventLog, type AgentV2RunEventLogOptions } from "./agent-v2-run-event-log.js";
 export {
-	createAgentV2RunQueue,
 	type AgentV2ClaimedRun,
 	type AgentV2RunQueue,
 	type AgentV2RunQueueIdentity,
+	createAgentV2RunQueue,
 } from "./agent-v2-run-queue.js";
+export type { AgentV2RunSnapshot } from "./agent-v2-types.js";
 export {
-	AgentV2WorkerService,
 	type AgentV2WorkerExecution,
 	type AgentV2WorkerExecutionInput,
+	AgentV2WorkerService,
 	type AgentV2WorkerServiceOptions,
 	type AgentV2WorkerStore,
 } from "./agent-v2-worker-service.js";
-export type { AgentV2RunSnapshot } from "./agent-v2-types.js";

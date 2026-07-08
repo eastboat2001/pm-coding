@@ -2,21 +2,21 @@ import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
 	AgentV2RunEventLog,
+	type AgentV2RunSnapshot,
+	type AgentV2WorkerExecution,
+	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
 	createAgentV2RunQueue,
 	executeAgentV2NextTask,
 	RedisAgentV2RunEventBus,
-	type AgentV2RunSnapshot,
-	type AgentV2WorkerExecution,
-	type AgentV2WorkerExecutionInput,
 	type RedisAgentV2RunEventBusOptions,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
 import {
 	createRuntimeStore,
-	loadStorageConfig,
-	RedisRunQueue,
 	type DiagnosticLogEventInput,
 	type JsonObject,
+	loadStorageConfig,
+	RedisRunQueue,
 	type RuntimeStore,
 	type StorageConfig,
 	WorkspaceDiagnosticLogService,
@@ -50,7 +50,9 @@ export function createAgentV2WorkerRunEventOptions(config: StorageConfig): {
 
 export function createAgentV2WorkerExecution(config: StorageConfig): AgentV2WorkerExecution {
 	return {
-		async executeNextTask(input: AgentV2WorkerExecutionInput): Promise<Awaited<ReturnType<typeof executeAgentV2NextTask>>> {
+		async executeNextTask(
+			input: AgentV2WorkerExecutionInput,
+		): Promise<Awaited<ReturnType<typeof executeAgentV2NextTask>>> {
 			return await executeAgentV2NextTask({
 				store: input.store as RuntimeStore,
 				config,
@@ -61,7 +63,11 @@ export function createAgentV2WorkerExecution(config: StorageConfig): AgentV2Work
 	};
 }
 
-export function agentV2ContextFromRunInput(run: AgentV2RunSnapshot): { clientId: string; sessionId: string; title: string } {
+export function agentV2ContextFromRunInput(run: AgentV2RunSnapshot): {
+	clientId: string;
+	sessionId: string;
+	title: string;
+} {
 	const sessionId = nonEmptyInputString(run.input.sessionId);
 	const title = nonEmptyInputString(run.input.title);
 	if (!sessionId || !title) {

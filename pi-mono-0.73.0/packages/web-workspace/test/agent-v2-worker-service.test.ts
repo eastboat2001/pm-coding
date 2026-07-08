@@ -1,19 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
-import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
+import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
+import type { AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import {
-	applyAgentV2RunUpdate,
-	buildAgentV2Run,
-	type AppendAgentV2RunEventInput,
 	type AgentV2RunEventRecord,
 	type AgentV2RunUpdateResult,
+	type AppendAgentV2RunEventInput,
+	applyAgentV2RunUpdate,
+	buildAgentV2Run,
 	type CreateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
-import type { AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
+import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
 
 describe("AgentV2WorkerService", () => {
 	afterEach(() => {
@@ -162,11 +162,7 @@ describe("AgentV2WorkerService", () => {
 			execution,
 			workerId: "worker-a",
 			cancelPollIntervalMs: 5,
-			now: timestampSequence(
-				"2026-07-08T09:03:00.000Z",
-				"2026-07-08T09:03:01.000Z",
-				"2026-07-08T09:03:02.000Z",
-			),
+			now: timestampSequence("2026-07-08T09:03:00.000Z", "2026-07-08T09:03:01.000Z", "2026-07-08T09:03:02.000Z"),
 		});
 
 		setTimeout(() => {
@@ -204,11 +200,7 @@ describe("AgentV2WorkerService", () => {
 			events,
 			execution: new ExternalCancellingExecution(store, "client-a", "run-cancelled-before-finalize"),
 			workerId: "worker-a",
-			now: timestampSequence(
-				"2026-07-08T09:03:30.000Z",
-				"2026-07-08T09:03:31.000Z",
-				"2026-07-08T09:03:32.000Z",
-			),
+			now: timestampSequence("2026-07-08T09:03:30.000Z", "2026-07-08T09:03:31.000Z", "2026-07-08T09:03:32.000Z"),
 		});
 
 		await expect(worker.processOne()).resolves.toBe(true);
@@ -243,11 +235,7 @@ describe("AgentV2WorkerService", () => {
 			events,
 			execution: new StaleFinalReadCancellationExecution(store, "client-a", "run-stale-final-success"),
 			workerId: "worker-a",
-			now: timestampSequence(
-				"2026-07-08T09:03:33.000Z",
-				"2026-07-08T09:03:34.000Z",
-				"2026-07-08T09:03:35.000Z",
-			),
+			now: timestampSequence("2026-07-08T09:03:33.000Z", "2026-07-08T09:03:34.000Z", "2026-07-08T09:03:35.000Z"),
 		});
 
 		await expect(worker.processOne()).resolves.toBe(true);
@@ -276,11 +264,7 @@ describe("AgentV2WorkerService", () => {
 			events: new RecordingEventLog(),
 			execution: new ExternalInterruptedExecution(store, queue, "client-a", "run-interrupted-before-finalize"),
 			workerId: "worker-a",
-			now: timestampSequence(
-				"2026-07-08T09:03:40.000Z",
-				"2026-07-08T09:03:41.000Z",
-				"2026-07-08T09:03:42.000Z",
-			),
+			now: timestampSequence("2026-07-08T09:03:40.000Z", "2026-07-08T09:03:41.000Z", "2026-07-08T09:03:42.000Z"),
 		});
 
 		await expect(worker.processOne()).resolves.toBe(true);
@@ -303,11 +287,7 @@ describe("AgentV2WorkerService", () => {
 			execution,
 			workerId: "worker-a",
 			cancelPollIntervalMs: 5,
-			now: timestampSequence(
-				"2026-07-08T09:03:50.000Z",
-				"2026-07-08T09:03:51.000Z",
-				"2026-07-08T09:03:52.000Z",
-			),
+			now: timestampSequence("2026-07-08T09:03:50.000Z", "2026-07-08T09:03:51.000Z", "2026-07-08T09:03:52.000Z"),
 		});
 
 		const processing = worker.processOne();
@@ -404,11 +384,7 @@ describe("AgentV2WorkerService", () => {
 			events,
 			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
 			workerId: "worker-a",
-			now: timestampSequence(
-				"2026-07-08T09:03:58.000Z",
-				"2026-07-08T09:03:59.000Z",
-				"2026-07-08T09:04:00.000Z",
-			),
+			now: timestampSequence("2026-07-08T09:03:58.000Z", "2026-07-08T09:03:59.000Z", "2026-07-08T09:04:00.000Z"),
 		});
 
 		await expect(worker.processOne()).resolves.toBe(true);
@@ -564,7 +540,12 @@ class MemoryWorkerStore {
 		return run;
 	}
 
-	createOwnedActiveRun(clientId: string, runId: string, status: Extract<AgentV2RunStatus, "running" | "cancelling">, workerId: string): void {
+	createOwnedActiveRun(
+		clientId: string,
+		runId: string,
+		status: Extract<AgentV2RunStatus, "running" | "cancelling">,
+		workerId: string,
+	): void {
 		this.createQueuedRun(clientId, runId);
 		this.update({
 			clientId,
@@ -677,7 +658,9 @@ class MemoryWorkerStore {
 		return this.update(input);
 	}
 
-	async updateAgentV2RunWithResult(input: Parameters<MemoryWorkerStore["update"]>[0]): Promise<AgentV2RunUpdateResult> {
+	async updateAgentV2RunWithResult(
+		input: Parameters<MemoryWorkerStore["update"]>[0],
+	): Promise<AgentV2RunUpdateResult> {
 		return this.updateWithResult(input);
 	}
 

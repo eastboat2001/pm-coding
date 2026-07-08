@@ -217,7 +217,11 @@ function createHarness(
 	const legacyRunApi = legacyRunApiThatMustNotBeCalled();
 	const services: TestServices = {
 		config: createTestConfig(),
-		diagnostics: { ensureDirs: vi.fn(), status: vi.fn(() => ({})), writeEvents: vi.fn() } as unknown as TestServices["diagnostics"],
+		diagnostics: {
+			ensureDirs: vi.fn(),
+			status: vi.fn(() => ({})),
+			writeEvents: vi.fn(),
+		} as unknown as TestServices["diagnostics"],
 		sessions: { ensureDirs: vi.fn() } as unknown as TestServices["sessions"],
 		files: {} as TestServices["files"],
 		previews: { servePreviewRequest: vi.fn(() => false) } as unknown as TestServices["previews"],
@@ -244,7 +248,11 @@ function createHarness(
 				if (event === "close") closeListeners.push(listener);
 			},
 		},
-		middlewares: { use: (handler) => (middleware = handler) },
+		middlewares: {
+			use(handler) {
+				middleware = handler;
+			},
+		},
 	});
 	if (!middleware) throw new Error("configured storage plugin did not register middleware");
 	return {
@@ -464,7 +472,12 @@ function runEvent(seq: number, overrides: Partial<AgentV2RunEventRecord> = {}): 
 		runId: "run-a",
 		seq,
 		type: "agent_v2.phase_changed",
-		payload: { type: "agent_v2.phase_changed", phase: "implementation", status: "running", at: `2026-07-08T09:00:0${seq}.000Z` },
+		payload: {
+			type: "agent_v2.phase_changed",
+			phase: "implementation",
+			status: "running",
+			at: `2026-07-08T09:00:0${seq}.000Z`,
+		},
 		createdAt: `2026-07-08T09:00:0${seq}.000Z`,
 		...overrides,
 	};

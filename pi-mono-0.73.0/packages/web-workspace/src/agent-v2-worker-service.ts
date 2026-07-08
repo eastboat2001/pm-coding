@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createAgentV2DiagnosticEvent, type AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "./agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "./agent-v2-run-queue.js";
@@ -312,7 +312,8 @@ export class AgentV2WorkerService {
 			}
 			cancelRequested ||= latest.status === "cancelling";
 			const aborted = abortController.signal.aborted;
-			cancelRequested ||= aborted && (await this.queue.isCancelRequested({ clientId: latest.clientId, runId: latest.runId }));
+			cancelRequested ||=
+				aborted && (await this.queue.isCancelRequested({ clientId: latest.clientId, runId: latest.runId }));
 			if (cancelRequested) {
 				await this.cancelRequestedRun(latest);
 			} else {

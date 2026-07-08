@@ -19,14 +19,14 @@ const denyStrings = [
 	"legacy-v1-agent-v2-run-event-bridge",
 ];
 
-const allowedLegacyFiles = new Set([
-	"apps/pi-coding-web/src/worker/legacy-v1-main.ts",
-]);
+const allowedLegacyFiles = new Set(["apps/pi-coding-web/src/worker/legacy-v1-main.ts"]);
 const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts";
 
 describe("agent v2 production import boundary", () => {
 	it("publishes explicit v2 worker package subpaths", () => {
-		const packageJson = JSON.parse(readFileSync(join(repoRoot, "packages", "web-workspace", "package.json"), "utf8")) as {
+		const packageJson = JSON.parse(
+			readFileSync(join(repoRoot, "packages", "web-workspace", "package.json"), "utf8"),
+		) as {
 			exports: Record<string, { types?: string; import?: string; default?: string }>;
 		};
 

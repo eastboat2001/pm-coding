@@ -228,3 +228,4 @@ function isAgentV2LiveRunEvent(value) {
 function isObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+//# sourceMappingURL=agent-v2-run-event-bus.js.map

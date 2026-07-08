@@ -1,5 +1,9 @@
 import { createClient } from "redis";
-import type { AgentV2LiveRunEvent, AgentV2RunEventIdentity, AgentV2RunEventReadRequest } from "./agent-v2-run-events.js";
+import type {
+	AgentV2LiveRunEvent,
+	AgentV2RunEventIdentity,
+	AgentV2RunEventReadRequest,
+} from "./agent-v2-run-events.js";
 
 const DEFAULT_EVENT_STREAM_MAX_LEN = 1_000;
 const DEFAULT_EVENT_STREAM_TTL_SECONDS = 24 * 60 * 60;

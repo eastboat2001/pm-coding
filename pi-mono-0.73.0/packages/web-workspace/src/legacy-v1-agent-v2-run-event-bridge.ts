@@ -1,7 +1,7 @@
-import type { RunEventSink } from "./run-event-sink.js";
-import type { RuntimeRunRecord } from "./types.js";
 import type { AgentV2RunTransportEvent } from "./agent-v2-run-events.js";
 import { AGENT_V2_RUN_EVENT_TYPES } from "./agent-v2-types.js";
+import type { RunEventSink } from "./run-event-sink.js";
+import type { RuntimeRunRecord } from "./types.js";
 
 const AGENT_V2_RUN_EVENT_TYPE_SET = new Set<string>(AGENT_V2_RUN_EVENT_TYPES);
 

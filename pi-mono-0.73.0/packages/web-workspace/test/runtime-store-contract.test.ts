@@ -21,19 +21,15 @@ import type {
 } from "../src/types.js";
 
 type Expect<T extends true> = T;
-type IsRequiredKey<T, K extends keyof T> = {} extends Pick<T, K> ? false : true;
+type IsRequiredKey<T, K extends keyof T> = Record<never, never> extends Pick<T, K> ? false : true;
 
-type _RuntimeStoreRequiresAppendAgentV2RunEvent = Expect<
-	IsRequiredKey<RuntimeStore, "appendAgentV2RunEvent">
->;
+type _RuntimeStoreRequiresAppendAgentV2RunEvent = Expect<IsRequiredKey<RuntimeStore, "appendAgentV2RunEvent">>;
 type _RuntimeStoreRequiresListAgentV2Runs = Expect<IsRequiredKey<RuntimeStore, "listAgentV2Runs">>;
 type _RuntimeStoreRequiresListAgentV2RunsByWorker = Expect<IsRequiredKey<RuntimeStore, "listAgentV2RunsByWorker">>;
 type _RuntimeStoreRequiresUpdateAgentV2RunWithResult = Expect<
 	IsRequiredKey<RuntimeStore, "updateAgentV2RunWithResult">
 >;
-type _RuntimeStoreRequiresListAgentV2RunEvents = Expect<
-	IsRequiredKey<RuntimeStore, "listAgentV2RunEvents">
->;
+type _RuntimeStoreRequiresListAgentV2RunEvents = Expect<IsRequiredKey<RuntimeStore, "listAgentV2RunEvents">>;
 
 describe("runtime store contract", () => {
 	it("lets RuntimeDbStore satisfy RuntimeStore", () => {

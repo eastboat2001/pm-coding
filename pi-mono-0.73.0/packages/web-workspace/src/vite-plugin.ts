@@ -4,9 +4,9 @@ import type { ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import type { Connect, Plugin } from "vite";
 import { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
-import { RedisAgentV2RunEventBus, type AgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
+import { type AgentV2RunEventBus, RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
-import { createAgentV2RunQueue, type AgentV2RunQueue } from "./agent-v2-run-queue.js";
+import { type AgentV2RunQueue, createAgentV2RunQueue } from "./agent-v2-run-queue.js";
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
 import { AppPreviewGoalService } from "./app-preview-goal-service.js";
 import { normalizeClientId, readClientIdHeader } from "./client-id.js";
@@ -259,17 +259,17 @@ function createConfiguredStoragePlugin({
 					? SKILLS_API_PREFIX
 					: isLogsApi
 						? LOGS_API_PREFIX
-							: isSessionsApi
-								? SESSIONS_API_PREFIX
-								: isAgentV2RunsApi
-									? AGENT_V2_RUNS_API_PREFIX
-									: isRunsApi
-										? url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX)
-											? LEGACY_RUNTIME_RUNS_API_PREFIX
-											: url.pathname.startsWith(LEGACY_RUNS_API_PREFIX)
-												? LEGACY_RUNS_API_PREFIX
+						: isSessionsApi
+							? SESSIONS_API_PREFIX
+							: isAgentV2RunsApi
+								? AGENT_V2_RUNS_API_PREFIX
+								: isRunsApi
+									? url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX)
+										? LEGACY_RUNTIME_RUNS_API_PREFIX
+										: url.pathname.startsWith(LEGACY_RUNS_API_PREFIX)
+											? LEGACY_RUNS_API_PREFIX
 											: RUNS_API_PREFIX
-										: API_PREFIX;
+									: API_PREFIX;
 			const route = url.pathname.slice(prefix.length) || "/";
 			const method = req.method || "GET";
 
@@ -289,7 +289,9 @@ function createConfiguredStoragePlugin({
 				if (config.appAgentVersion === "v2") {
 					sendJson(
 						res,
-						{ error: "Application Generation Agent v1 runtime session routes are disabled when appAgentVersion is v2." },
+						{
+							error: "Application Generation Agent v1 runtime session routes are disabled when appAgentVersion is v2.",
+						},
 						410,
 					);
 					return;
@@ -842,7 +844,10 @@ async function handleAgentV2RuntimeRunsApi(
 		const clientId = readClientIdHeader(req);
 		if (method === "POST" && route === "/start") {
 			const body = await readJsonBody(req);
-			sendJson(res, (await runApi.startRun(clientId, body as unknown as AgentV2StartRunRequest)) as unknown as JsonObject);
+			sendJson(
+				res,
+				(await runApi.startRun(clientId, body as unknown as AgentV2StartRunRequest)) as unknown as JsonObject,
+			);
 			return;
 		}
 		if (method === "GET" && (route === "/" || route === "")) {

@@ -1,5 +1,5 @@
-import { type AgentV2Phase, type AgentV2RunEventType, type AgentV2RunStatus } from "./agent-v2-types.js";
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
+import type { AgentV2Phase, AgentV2RunEventType, AgentV2RunStatus } from "./agent-v2-types.js";
 
 type AgentV2TransportEventBase = {
 	type: AgentV2RunEventType;

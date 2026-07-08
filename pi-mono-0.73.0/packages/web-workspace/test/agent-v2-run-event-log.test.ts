@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import type { AgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
+import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import type { AgentV2RunEventRecord, AppendAgentV2RunEventInput } from "../src/agent-v2-store.js";
 
 const identity = {
@@ -101,7 +101,12 @@ class RecordingBus implements AgentV2RunEventBus {
 		this.publishCalls.push(event);
 	}
 
-	async read(request: { clientId: string; runId: string; afterSeq: number; blockMs?: number }): Promise<AgentV2RunEventRecord[]> {
+	async read(request: {
+		clientId: string;
+		runId: string;
+		afterSeq: number;
+		blockMs?: number;
+	}): Promise<AgentV2RunEventRecord[]> {
 		this.readCalls.push(request);
 		return this.readResult.filter((entry) => entry.seq > request.afterSeq);
 	}

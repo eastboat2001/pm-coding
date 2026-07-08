@@ -204,7 +204,9 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             }
             if (isSessionsApi) {
                 if (config.appAgentVersion === "v2") {
-                    sendJson(res, { error: "Application Generation Agent v1 runtime session routes are disabled when appAgentVersion is v2." }, 410);
+                    sendJson(res, {
+                        error: "Application Generation Agent v1 runtime session routes are disabled when appAgentVersion is v2.",
+                    }, 410);
                     return;
                 }
                 await handleRuntimeSessionsApi(method, route, url, req, res, requireWorkspaceRunApi(runApi));
@@ -656,7 +658,7 @@ async function handleAgentV2RuntimeRunsApi(method, route, url, req, res, runApi,
         const clientId = readClientIdHeader(req);
         if (method === "POST" && route === "/start") {
             const body = await readJsonBody(req);
-            sendJson(res, await runApi.startRun(clientId, body));
+            sendJson(res, (await runApi.startRun(clientId, body)));
             return;
         }
         if (method === "GET" && (route === "/" || route === "")) {
@@ -676,13 +678,13 @@ async function handleAgentV2RuntimeRunsApi(method, route, url, req, res, runApi,
         }
         const cancelMatch = route.match(/^\/([^/]+)\/cancel$/);
         if (method === "POST" && cancelMatch) {
-            sendJson(res, await runApi.cancelRun(clientId, decodeURIComponent(cancelMatch[1])));
+            sendJson(res, (await runApi.cancelRun(clientId, decodeURIComponent(cancelMatch[1]))));
             return;
         }
         const runMatch = route.match(/^\/([^/]+)$/);
         if (method === "GET" && runMatch) {
             const run = await runApi.getRun(clientId, decodeURIComponent(runMatch[1]));
-            sendJson(res, run || { error: "Agent v2 run not found." }, run ? 200 : 404);
+            sendJson(res, (run || { error: "Agent v2 run not found." }), run ? 200 : 404);
             return;
         }
         sendJson(res, { error: "Not found." }, 404);
@@ -846,9 +848,8 @@ async function streamAgentV2RunEvents(res, req, runApi, runEventBus, runEventLog
         }
     }
     catch (error) {
-        if (!streamStarted) {
+        if (!streamStarted)
             throw error;
-        }
         if (!closed && !res.destroyed) {
             writeServerSentError(res, "Agent v2 runtime event stream unavailable.");
             res.end();
@@ -857,9 +858,8 @@ async function streamAgentV2RunEvents(res, req, runApi, runEventBus, runEventLog
     }
     finally {
         req.off?.("close", closeStream);
-        if (typeof responseWithOn.off === "function") {
+        if (typeof responseWithOn.off === "function")
             responseWithOn.off("close", closeStream);
-        }
     }
 }
 async function streamRunEvents(res, req, runApi, runEventBus, clientId, runId, afterSeq) {

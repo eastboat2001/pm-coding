@@ -1,7 +1,7 @@
-import type { AppendAgentV2RunEventInput, AgentV2RunEventRecord } from "./agent-v2-store.js";
-import type { RuntimeStore } from "./runtime-store.js";
 import type { AgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import type { AgentV2RunEventReadRequest } from "./agent-v2-run-events.js";
+import type { AgentV2RunEventRecord, AppendAgentV2RunEventInput } from "./agent-v2-store.js";
+import type { RuntimeStore } from "./runtime-store.js";
 
 export interface AgentV2RunEventLogOptions {
 	store: Pick<RuntimeStore, "appendAgentV2RunEvent" | "listAgentV2RunEvents">;

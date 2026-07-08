@@ -62,40 +62,33 @@ export {
 	assertAgentV2ResetConfirmation,
 	resetAgentV2RuntimeData,
 } from "./agent-v2-reset.js";
-export {
-	type AgentV2ArtifactIndexedTransportEvent,
-	type AgentV2DiagnosticRecordedTransportEvent,
-	type AgentV2PhaseChangedTransportEvent,
-	type AgentV2RunCreatedTransportEvent,
-	type AgentV2RunEventIdentity,
-	type AgentV2RunEventReadRequest,
-	type AgentV2RunTransportEvent,
-	type AgentV2TaskUpdatedTransportEvent,
-	type AgentV2ValidationRecordedTransportEvent,
-} from "./agent-v2-run-events.js";
 export { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
 export {
+	type AgentV2RunEventBus,
+	agentV2RunEventStreamKey,
 	InMemoryAgentV2RunEventBus,
 	RedisAgentV2RunEventBus,
-	type AgentV2RunEventBus,
 	type RedisAgentV2RunEventBusClient,
 	type RedisAgentV2RunEventBusOptions,
-	agentV2RunEventStreamKey,
 } from "./agent-v2-run-event-bus.js";
 export { AgentV2RunEventLog, type AgentV2RunEventLogOptions } from "./agent-v2-run-event-log.js";
+export type {
+	AgentV2ArtifactIndexedTransportEvent,
+	AgentV2DiagnosticRecordedTransportEvent,
+	AgentV2PhaseChangedTransportEvent,
+	AgentV2RunCreatedTransportEvent,
+	AgentV2RunEventIdentity,
+	AgentV2RunEventReadRequest,
+	AgentV2RunTransportEvent,
+	AgentV2TaskUpdatedTransportEvent,
+	AgentV2ValidationRecordedTransportEvent,
+} from "./agent-v2-run-events.js";
 export {
-	createAgentV2RunQueue,
 	type AgentV2ClaimedRun,
 	type AgentV2RunQueue,
 	type AgentV2RunQueueIdentity,
+	createAgentV2RunQueue,
 } from "./agent-v2-run-queue.js";
-export {
-	AgentV2WorkerService,
-	type AgentV2WorkerExecution,
-	type AgentV2WorkerExecutionInput,
-	type AgentV2WorkerServiceOptions,
-	type AgentV2WorkerStore,
-} from "./agent-v2-worker-service.js";
 export {
 	type AdvanceAgentV2TaskInput,
 	type AgentV2RuntimeSnapshot,
@@ -131,13 +124,13 @@ export {
 	type AgentV2ValidationRecord,
 	type AgentV2ValidationRow,
 	type AgentV2ValidationStatus,
+	type AppendAgentV2RunEventInput,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
 	buildAgentV2Document,
 	buildAgentV2Run,
 	buildAgentV2Task,
 	buildAgentV2Validation,
-	type AppendAgentV2RunEventInput,
 	type CreateAgentV2RunInput,
 	stringifyAgentV2Json,
 	toAgentV2ArtifactRecord,
@@ -201,6 +194,13 @@ export {
 	type RunAgentV2StaticValidationGateInput,
 	runAgentV2StaticValidationGate,
 } from "./agent-v2-validation-gate.js";
+export {
+	type AgentV2WorkerExecution,
+	type AgentV2WorkerExecutionInput,
+	AgentV2WorkerService,
+	type AgentV2WorkerServiceOptions,
+	type AgentV2WorkerStore,
+} from "./agent-v2-worker-service.js";
 export {
 	AppPreviewGoalService,
 	budgetForSource,

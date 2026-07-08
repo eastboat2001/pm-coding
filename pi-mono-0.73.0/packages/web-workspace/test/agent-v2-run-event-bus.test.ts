@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-	AgentV2RunEventBus,
 	agentV2RunEventStreamKey,
 	InMemoryAgentV2RunEventBus,
 	RedisAgentV2RunEventBus,

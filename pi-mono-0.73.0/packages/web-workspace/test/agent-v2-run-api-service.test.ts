@@ -3,18 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
-import { createAgentV2RunQueue, type AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
-import { RuntimeDbStore } from "../src/runtime-db.js";
-import { InMemoryRunQueue } from "../src/run-queue.js";
+import { type AgentV2RunQueue, createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import type {
-	AppendAgentV2RunEventInput,
 	AgentV2RunEventRecord,
 	AgentV2RunUpdateResult,
+	AppendAgentV2RunEventInput,
 	CreateAgentV2RunInput,
 	UpdateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
-import type { AgentV2Phase, AgentV2RunSnapshot } from "../src/agent-v2-types.js";
+import type { AgentV2RunSnapshot } from "../src/agent-v2-types.js";
+import { InMemoryRunQueue } from "../src/run-queue.js";
+import { RuntimeDbStore } from "../src/runtime-db.js";
 
 const cleanupRoots: string[] = [];
 const cleanupStores: RuntimeDbStore[] = [];
@@ -247,7 +247,10 @@ describe("AgentV2RunApiService", () => {
 			events: new RecordingEventLog(),
 		});
 
-		await expect(service.getRun("client-a", "run-a")).resolves.toMatchObject({ runId: "run-a", clientId: "client-a" });
+		await expect(service.getRun("client-a", "run-a")).resolves.toMatchObject({
+			runId: "run-a",
+			clientId: "client-a",
+		});
 		await expect(service.getRun("client-a", "run-b")).resolves.toBeUndefined();
 		await expect(service.listRuns("client-a")).resolves.toEqual([
 			expect.objectContaining({ clientId: "client-a", runId: "run-a" }),
@@ -316,7 +319,9 @@ class RecordingEventLog implements Pick<AgentV2RunEventLog, "append" | "list"> {
 
 	async list(clientId: string, runId: string, afterSeq: number): Promise<AgentV2RunEventRecord[]> {
 		this.listCalls.push({ clientId, runId, afterSeq });
-		return this.listResult.filter((event) => event.clientId === clientId && event.runId === runId && event.seq > afterSeq);
+		return this.listResult.filter(
+			(event) => event.clientId === clientId && event.runId === runId && event.seq > afterSeq,
+		);
 	}
 }
 
@@ -388,8 +393,16 @@ class GuardedStore {
 			...(input.attempt ? { attempt: input.attempt } : {}),
 			...(input.workerId !== undefined ? { workerId: input.workerId } : {}),
 			updatedAt: input.updatedAt ?? current.updatedAt,
-			...(input.startedAt !== undefined ? { startedAt: input.startedAt } : current.startedAt ? { startedAt: current.startedAt } : {}),
-			...(input.endedAt !== undefined ? { endedAt: input.endedAt } : current.endedAt ? { endedAt: current.endedAt } : {}),
+			...(input.startedAt !== undefined
+				? { startedAt: input.startedAt }
+				: current.startedAt
+					? { startedAt: current.startedAt }
+					: {}),
+			...(input.endedAt !== undefined
+				? { endedAt: input.endedAt }
+				: current.endedAt
+					? { endedAt: current.endedAt }
+					: {}),
 			...(input.error !== undefined ? { error: input.error } : current.error ? { error: current.error } : {}),
 		};
 		this.runs.set(runKey(input.clientId, input.runId), next);

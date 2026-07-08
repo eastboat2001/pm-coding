@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
-import { appendAgentV2RunEvent } from "../src/legacy-v1-agent-v2-run-event-bridge.js";
 import {
 	AGENT_V2_DOCUMENT_COLUMNS,
 	type AgentV2DocumentRecord,
@@ -22,6 +21,7 @@ import {
 	buildAgentV2Document as publicBuildAgentV2Document,
 	toAgentV2DocumentRecord as publicToAgentV2DocumentRecord,
 } from "../src/index.js";
+import { appendAgentV2RunEvent } from "../src/legacy-v1-agent-v2-run-event-bridge.js";
 import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
 import { InMemoryRunEventBus } from "../src/run-event-bus.js";
 import { RunEventSink } from "../src/run-event-sink.js";

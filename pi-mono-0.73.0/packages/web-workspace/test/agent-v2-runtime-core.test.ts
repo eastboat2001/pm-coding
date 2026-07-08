@@ -100,30 +100,63 @@ describe("agent v2 runtime core", () => {
 		]);
 	});
 
-	it("records a v2 diagnostic and throws when the run does not exist", async () => {
+	it("keeps the task mutation when diagnostic append fails", async () => {
 		const store = createTempRuntimeDbStoreWithV2Schema(cleanupRoots, cleanupStores);
 		store.createAgentV2Run({
 			clientId: "client-a",
-			runId: "missing-run",
-			input: { prompt: "placeholder" },
+			runId: "run-v2-diagnostic-failure",
+			input: { prompt: "Build a static app" },
 			model: { provider: "test", model: "local" },
 			createdAt: "2026-07-08T00:00:00.000Z",
 		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-v2-diagnostic-failure",
+			taskId: "implement",
+			kind: "implementation",
+			title: "Implement app",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+
+		const updated = await advanceAgentV2Task({
+			store: forbidLegacyRuntimeReads(store, { failAgentV2DiagnosticWrites: true }),
+			clientId: "client-a",
+			runId: "run-v2-diagnostic-failure",
+			taskId: "implement",
+			status: "running",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(updated).toMatchObject({
+			taskId: "implement",
+			status: "running",
+			startedAt: "2026-07-08T00:02:00.000Z",
+		});
+		expect(store.listAgentV2Tasks("client-a", "run-v2-diagnostic-failure")[0]).toMatchObject({
+			taskId: "implement",
+			status: "running",
+			startedAt: "2026-07-08T00:02:00.000Z",
+		});
+		expect(store.listAgentV2Diagnostics("client-a", "run-v2-diagnostic-failure")).toEqual([]);
+	});
+
+	it("throws a clear missing-run error without persisting a diagnostic", async () => {
+		const store = createTempRuntimeDbStoreWithV2Schema(cleanupRoots, cleanupStores);
 
 		await expect(
 			loadAgentV2RuntimeSnapshot({
-				store: forbidLegacyRuntimeReads(store, { hideAgentV2Run: true }),
+				store: forbidLegacyRuntimeReads(store),
 				clientId: "client-a",
 				runId: "missing-run",
 			}),
 		).rejects.toThrow("Agent v2 run not found: client-a/missing-run");
-		expect(store.listAgentV2Diagnostics("client-a", "missing-run")).toEqual([
-			expect.objectContaining({
-				category: "task_graph",
-				code: "agent_v2.run_not_found",
-				severity: "error",
-			}),
-		]);
+		expect(store.listAgentV2Diagnostics("client-a", "missing-run")).toEqual([]);
 	});
 });
 
@@ -139,25 +172,46 @@ function createTempRuntimeDbStoreWithV2Schema(cleanupRoots: string[], cleanupSto
 
 function forbidLegacyRuntimeReads(
 	store: RuntimeDbStore,
-	options: { hideAgentV2Run?: boolean } = {},
+	options: { failAgentV2DiagnosticWrites?: boolean } = {},
 ): RuntimeStore {
+	const legacyReadMethods = new Set([
+		"getSession",
+		"listSessions",
+		"updateSessionTitle",
+		"appendMessage",
+		"listMessages",
+		"iterateMessages",
+		"getRun",
+		"getRunById",
+		"listRuns",
+		"listRunsForSession",
+		"listRunsByStatus",
+		"listRunningRunsByWorker",
+		"createRun",
+		"createContinuationRun",
+		"createRunWithMessage",
+		"updateRunStatus",
+		"appendRunEvent",
+		"listRunEvents",
+		"iterateRunEvents",
+		"getLatestRunCheckpoint",
+		"upsertAppPreviewGoal",
+		"getAppPreviewGoal",
+		"updateAppPreviewGoal",
+		"appendAppPreviewGoalEvent",
+		"listAppPreviewGoalEvents",
+	]);
 	return new Proxy(store, {
 		get(target, property, receiver) {
-			if (options.hideAgentV2Run && property === "getAgentV2Run") {
-				return () => undefined;
+			if (typeof property !== "string") {
+				return Reflect.get(target, property, receiver);
 			}
-			if (
-				property === "getRun" ||
-				property === "getRunById" ||
-				property === "listRuns" ||
-				property === "listRunsForSession" ||
-				property === "listMessages" ||
-				property === "iterateMessages" ||
-				property === "getAppPreviewGoal" ||
-				property === "listAppPreviewGoalEvents"
-			) {
+			if (legacyReadMethods.has(property)) {
+				throw new Error(`legacy runtime read is forbidden in agent v2 runtime core: ${property}`);
+			}
+			if (options.failAgentV2DiagnosticWrites && property === "appendAgentV2Diagnostic") {
 				return () => {
-					throw new Error(`legacy runtime read is forbidden in agent v2 runtime core: ${String(property)}`);
+					throw new Error("diagnostic write failed");
 				};
 			}
 			return Reflect.get(target, property, receiver);

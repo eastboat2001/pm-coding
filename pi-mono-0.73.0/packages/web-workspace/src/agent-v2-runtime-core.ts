@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type { AgentV2ArtifactRecord, AgentV2DocumentRecord, UpsertAgentV2TaskInput } from "./agent-v2-store.js";
@@ -44,12 +45,6 @@ export async function loadAgentV2RuntimeSnapshot(
 ): Promise<AgentV2RuntimeSnapshot> {
 	const run = await input.store.getAgentV2Run(input.clientId, input.runId);
 	if (!run) {
-		await appendRuntimeDiagnostic(input.store, input.clientId, input.runId, {
-			code: "agent_v2.run_not_found",
-			severity: "error",
-			message: `Agent v2 run not found: ${input.clientId}/${input.runId}`,
-			createdAt: new Date().toISOString(),
-		});
 		throw new Error(`Agent v2 run not found: ${input.clientId}/${input.runId}`);
 	}
 
@@ -75,7 +70,7 @@ export async function advanceAgentV2Task(input: AdvanceAgentV2TaskInput): Promis
 	const tasks = await input.store.listAgentV2Tasks(input.clientId, input.runId);
 	const task = tasks.find((candidate) => candidate.taskId === input.taskId);
 	if (!task) {
-		await appendRuntimeDiagnostic(input.store, input.clientId, input.runId, {
+		await appendRuntimeDiagnosticBestEffort(input.store, input.clientId, input.runId, {
 			code: "agent_v2.task_not_found",
 			severity: "error",
 			message: `Agent v2 task not found: ${input.clientId}/${input.runId}/${input.taskId}`,
@@ -94,7 +89,7 @@ export async function advanceAgentV2Task(input: AdvanceAgentV2TaskInput): Promis
 	});
 
 	const persisted = await input.store.upsertAgentV2Task(toUpsertTaskInput(input.clientId, input.runId, transitioned));
-	await appendRuntimeDiagnostic(input.store, input.clientId, input.runId, {
+	await appendRuntimeDiagnosticBestEffort(input.store, input.clientId, input.runId, {
 		code: "agent_v2.task_transitioned",
 		severity: "info",
 		message: `Agent v2 task ${input.taskId} transitioned to ${input.status}`,
@@ -139,7 +134,7 @@ async function appendRuntimeDiagnostic(
 ): Promise<void> {
 	await store.appendAgentV2Diagnostic(
 		createAgentV2DiagnosticEvent({
-			diagnosticId: `${input.code}:${input.taskId ?? "run"}:${input.createdAt}`,
+			diagnosticId: `${input.code}:${input.taskId ?? "run"}:${input.createdAt}:${randomUUID()}`,
 			clientId,
 			runId,
 			severity: input.severity,
@@ -151,4 +146,23 @@ async function appendRuntimeDiagnostic(
 			createdAt: input.createdAt,
 		}),
 	);
+}
+
+async function appendRuntimeDiagnosticBestEffort(
+	store: AgentV2RuntimeStore,
+	clientId: string,
+	runId: string,
+	input: {
+		code: string;
+		severity: "info" | "error";
+		message: string;
+		taskId?: string;
+		createdAt: string;
+	},
+): Promise<void> {
+	try {
+		await appendRuntimeDiagnostic(store, clientId, runId, input);
+	} catch {
+		// Diagnostics are advisory; task state mutation is the source of truth.
+	}
 }

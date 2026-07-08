@@ -1073,6 +1073,8 @@ git commit -m "feat: add agent v2 context packet"
   - `function loadAgentV2RuntimeSnapshot(input: LoadAgentV2RuntimeSnapshotInput): Promise<AgentV2RuntimeSnapshot>`
   - `function advanceAgentV2Task(input: AdvanceAgentV2TaskInput): Promise<AgentV2TaskNode>`
 
+Missing runs must throw directly without persisting a run-scoped diagnostic. That is a v2 schema correctness constraint, not a compatibility gap: `agent_v2_diagnostics` references `agent_v2_runs`, so fabricating a diagnostic for an absent run would fail the real schema. Task transition diagnostics are best-effort only; if the diagnostic write fails after a successful task upsert, the task state remains the source of truth and the API should still resolve with the persisted task.
+
 - [ ] **Step 1: Write runtime core tests**
 
 Create `packages/web-workspace/test/agent-v2-runtime-core.test.ts`:
@@ -1180,7 +1182,53 @@ describe("agent v2 runtime core", () => {
 		]);
 	});
 
-	it("records a v2 diagnostic and throws when the run does not exist", async () => {
+	it("keeps the task mutation when diagnostic append fails", async () => {
+		const store = createTempRuntimeDbStoreWithV2Schema(cleanupRoots, cleanupStores);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-diagnostic-failure",
+			input: { prompt: "Build a static app" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-v2-diagnostic-failure",
+			taskId: "implement",
+			kind: "implementation",
+			title: "Implement app",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+
+		const updated = await advanceAgentV2Task({
+			store: forbidLegacyRuntimeReads(store, { failAgentV2DiagnosticWrites: true }),
+			clientId: "client-a",
+			runId: "run-v2-diagnostic-failure",
+			taskId: "implement",
+			status: "running",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(updated).toMatchObject({
+			taskId: "implement",
+			status: "running",
+			startedAt: "2026-07-08T00:02:00.000Z",
+		});
+		expect(store.listAgentV2Tasks("client-a", "run-v2-diagnostic-failure")[0]).toMatchObject({
+			taskId: "implement",
+			status: "running",
+			startedAt: "2026-07-08T00:02:00.000Z",
+		});
+		expect(store.listAgentV2Diagnostics("client-a", "run-v2-diagnostic-failure")).toEqual([]);
+	});
+
+	it("throws a clear missing-run error without persisting a diagnostic", async () => {
 		const store = createTempRuntimeDbStoreWithV2Schema(cleanupRoots, cleanupStores);
 
 		await expect(
@@ -1190,13 +1238,7 @@ describe("agent v2 runtime core", () => {
 				runId: "missing-run",
 			}),
 		).rejects.toThrow("Agent v2 run not found: client-a/missing-run");
-		expect(store.listAgentV2Diagnostics("client-a", "missing-run")).toEqual([
-			expect.objectContaining({
-				category: "task_graph",
-				code: "agent_v2.run_not_found",
-				severity: "error",
-			}),
-		]);
+		expect(store.listAgentV2Diagnostics("client-a", "missing-run")).toEqual([]);
 	});
 });
 

@@ -89,7 +89,9 @@ export function renderAgentV2ContextPacketMarkdown(packet: Omit<AgentV2ContextPa
 		...renderTaskSelection(packet.taskSelection),
 		"",
 		"## Active Task",
-		packet.activeTask ? `- \`${packet.activeTask.taskId}\` ${packet.activeTask.status}` : "- none",
+		packet.activeTask
+			? `- \`${packet.activeTask.taskId}\` ${packet.activeTask.status}`
+			: `- none (${packet.taskSelection.reason})`,
 		"",
 		"## Documents",
 		...renderDocuments(packet.documents),
@@ -196,11 +198,12 @@ function documentForTask(task: AgentV2TaskNode, documents: AgentV2ContextDocumen
 			return documents.spec;
 		case "plan":
 			return documents.plan;
+		case "artifact":
 		case "implementation":
 		case "validation":
 		case "repair":
 		case "delivery":
-			return documents.tasks;
+			return documents.tasks ?? documents.plan ?? documents.spec;
 	}
 }
 

@@ -93,6 +93,56 @@ describe("agent v2 context packet", () => {
 			},
 		]);
 	});
+
+	it("adds rereads for active artifact tasks and keeps the packet markdown populated", () => {
+		const packet = buildAgentV2ContextPacket({
+			run: runSnapshot(),
+			documents: [
+				document({ documentId: "spec", kind: "spec", contentMarkdown: "# Spec\nStatic dashboard." }),
+				document({ documentId: "plan", kind: "plan", contentMarkdown: "# Plan\nBuild static app." }),
+			],
+			artifacts: [
+				artifact({ artifactId: "artifact-task-md", sourceTaskId: "artifact-task", path: "agent-v2/artifact-task.md" }),
+			],
+			tasks: [
+				task({
+					taskId: "artifact-task",
+					kind: "artifact",
+					status: "running",
+					dependsOn: ["plan"],
+					acceptanceCriteria: ["Artifact task produces indexed output."],
+				}),
+			],
+			diagnostics: [],
+		});
+
+		expect(packet.activeTask).toEqual(expect.objectContaining({ taskId: "artifact-task", kind: "artifact" }));
+		expect(packet.requiredRereads).toEqual([
+			{ kind: "document", id: "plan", reason: "active task context" },
+			{ kind: "artifact", id: "artifact-task-md", path: "agent-v2/artifact-task.md", reason: "active task artifact" },
+		]);
+		expect(packet.markdown).toContain("## Active Task\n- `artifact-task` running");
+		expect(packet.markdown).toContain("## Required Rereads");
+		expect(packet.markdown).toContain("document `plan`: active task context");
+		expect(packet.markdown).toContain("artifact `artifact-task-md` (agent-v2/artifact-task.md): active task artifact");
+	});
+
+	it("includes the task selection reason in markdown when no task is active", () => {
+		const packet = buildAgentV2ContextPacket({
+			run: runSnapshot(),
+			documents: [],
+			artifacts: [],
+			tasks: [
+				task({ taskId: "capability", status: "succeeded" }),
+				task({ taskId: "spec", status: "succeeded", dependsOn: ["capability"] }),
+			],
+			diagnostics: [],
+		});
+
+		expect(packet.taskSelection.reason).toBe("complete");
+		expect(packet.activeTask).toBeUndefined();
+		expect(packet.markdown).toContain("## Active Task\n- none (complete)");
+	});
 });
 
 function runSnapshot(): AgentV2RunSnapshot {

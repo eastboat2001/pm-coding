@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -55,12 +56,85 @@ describe("agent v2 file adapter", () => {
 			}),
 		).toThrow("file.path_invalid");
 	});
+
+	it("computes patch artifact checksum from the persisted file content", () => {
+		const root = tempRoot();
+		const adapter = createAgentV2FileAdapter({
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+		});
+		const path = "src/large-file.ts";
+		const original = `${"a".repeat(540_000)}const value = "old";\n`;
+
+		adapter.writeFile({
+			path,
+			content: original,
+			mode: "create",
+			taskId: "seed",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+
+		const result = adapter.patchFile({
+			path,
+			oldText: 'const value = "old";',
+			newText: 'const value = "new";',
+			taskId: "patch",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		const persisted = readFileSync(projectFile(root, path), "utf8");
+		expect(persisted.endsWith('const value = "new";\n')).toBe(true);
+		expect(result.artifact.checksum).toBe(sha256(persisted));
+	});
+
+	it("normalizes nested public paths to forward slashes", () => {
+		const root = tempRoot();
+		const adapter = createAgentV2FileAdapter({
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+		});
+
+		const write = adapter.writeFile({
+			path: "src\\nested\\foo.ts",
+			content: 'export const value = "a";\n',
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+
+		expect(write.path).toBe("src/nested/foo.ts");
+		expect(write.artifact.path).toBe("src/nested/foo.ts");
+		expect(write.artifact.artifactId).toBe("file:src/nested/foo.ts");
+		expect(adapter.listFiles().files).toEqual(["src/nested/foo.ts"]);
+		expect(adapter.readFile("src\\nested\\foo.ts").path).toBe("src/nested/foo.ts");
+
+		const patch = adapter.patchFile({
+			path: "src\\nested\\foo.ts",
+			oldText: '"a"',
+			newText: '"b"',
+			taskId: "patch",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(patch.path).toBe("src/nested/foo.ts");
+		expect(patch.artifact.path).toBe("src/nested/foo.ts");
+		expect(patch.artifact.artifactId).toBe("file:src/nested/foo.ts");
+		expect(adapter.readFile("src/nested/foo.ts").content).toContain('"b"');
+	});
 });
 
 function tempRoot(): string {
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-file-adapter-"));
 	cleanupRoots.push(root);
 	return root;
+}
+
+function projectFile(root: string, path: string): string {
+	return join(root, "data", "clients", "client-a", "sessions", "session-a", "project", ...path.split("/"));
+}
+
+function sha256(content: string): string {
+	return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 function testConfig(root: string): StorageConfig {

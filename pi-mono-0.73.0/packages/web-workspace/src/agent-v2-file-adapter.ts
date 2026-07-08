@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
-import { extname } from "node:path";
+import { readFileSync } from "node:fs";
+import { extname, resolve } from "node:path";
 import { createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
 import type { AgentV2ArtifactRecord } from "./agent-v2-store.js";
 import type { StorageConfig } from "./types.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
+import { safeRelativeProjectPath, workspaceContext } from "./workspace-paths.js";
 
 export interface AgentV2FileAdapterContext {
 	clientId: string;
@@ -54,11 +56,12 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 		sessionId: input.context.sessionId,
 		title: input.context.title,
 	};
+	const projectDir = workspaceContext(input.config, context).projectDir;
 
 	const artifactFor = (path: string, content: string, taskId: string): AgentV2FileArtifactCandidate => ({
-		artifactId: `file:${path}`,
+		artifactId: `file:${normalizeV2Path(path)}`,
 		kind: "source",
-		path,
+		path: normalizeV2Path(path),
 		mediaType: mediaTypeForPath(path),
 		checksum: `sha256:${createHash("sha256").update(content).digest("hex")}`,
 		version: "v2",
@@ -76,7 +79,7 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 						code: "file.path_invalid",
 						message,
 						retryable: false,
-						path,
+						path: typeof path === "string" ? normalizeV2Path(path) : undefined,
 						data: {},
 					}),
 				),
@@ -85,16 +88,18 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 		throw error;
 	};
 
+	const publicPath = (path: string): string => normalizeV2Path(path);
+
 	return {
 		listFiles() {
 			const result = files.handle({ ...context, command: "list" });
-			return { files: Array.isArray(result.files) ? result.files : [] };
+			return { files: Array.isArray(result.files) ? result.files.map((path) => publicPath(String(path))) : [] };
 		},
 		readFile(path) {
 			try {
 				const result = files.handle({ ...context, command: "get", filename: path });
 				return {
-					path: typeof result.filename === "string" ? result.filename : path,
+					path: publicPath(typeof result.filename === "string" ? result.filename : path),
 					content: typeof result.content === "string" ? result.content : "",
 					truncated: Boolean(result.truncated),
 				};
@@ -110,7 +115,7 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 					filename: write.path,
 					content: write.content,
 				});
-				const path = typeof result.filename === "string" ? result.filename : write.path;
+				const path = publicPath(typeof result.filename === "string" ? result.filename : write.path);
 				return {
 					path,
 					action: result.action === "created" ? "created" : "updated",
@@ -122,7 +127,6 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 		},
 		patchFile(patch) {
 			try {
-				const before = this.readFile(patch.path);
 				const result = files.handle({
 					...context,
 					command: "update",
@@ -130,11 +134,13 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 					old_str: patch.oldText,
 					new_str: patch.newText,
 				});
-				const path = typeof result.filename === "string" ? result.filename : patch.path;
+				const persistedPath = typeof result.filename === "string" ? result.filename : patch.path;
+				const path = publicPath(persistedPath);
+				const content = readPersistedFile(projectDir, persistedPath);
 				return {
 					path,
 					action: "updated",
-					artifact: artifactFor(path, before.content.replace(patch.oldText, patch.newText), patch.taskId),
+					artifact: artifactFor(path, content, patch.taskId),
 				};
 			} catch (error) {
 				return mapError(error, patch.path);
@@ -151,6 +157,10 @@ function isPathValidationError(message: string): boolean {
 	);
 }
 
+function normalizeV2Path(path: string): string {
+	return path.replace(/\\/g, "/");
+}
+
 function mediaTypeForPath(path: string): string {
 	const extension = extname(path).toLowerCase();
 	if (extension === ".html") return "text/html";
@@ -159,4 +169,9 @@ function mediaTypeForPath(path: string): string {
 	if (extension === ".json") return "application/json";
 	if (extension === ".md") return "text/markdown";
 	return "text/plain";
+}
+
+function readPersistedFile(projectDir: string, path: string): string {
+	const relativePath = safeRelativeProjectPath(path);
+	return readFileSync(resolve(projectDir, relativePath), "utf8");
 }

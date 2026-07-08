@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { buildAgentV2ContextPacket } from "./agent-v2-context-packet.js";
+import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { transitionAgentV2Task } from "./agent-v2-task-engine.js";
 export async function loadAgentV2RuntimeSnapshot(input) {
     const run = await input.store.getAgentV2Run(input.clientId, input.runId);
@@ -39,13 +39,36 @@ export async function advanceAgentV2Task(input) {
         });
         throw new Error(`Agent v2 task not found: ${input.clientId}/${input.runId}/${input.taskId}`);
     }
-    const transitioned = transitionAgentV2Task({
-        task,
-        status: input.status,
-        now: input.now,
-        output: input.output,
-        error: input.error,
-    });
+    let transitioned;
+    try {
+        transitioned = transitionAgentV2Task({
+            task,
+            status: input.status,
+            now: input.now,
+            output: input.output,
+            error: input.error,
+        });
+    }
+    catch (error) {
+        const transitionError = error instanceof Error ? error : new Error(String(error));
+        try {
+            await appendRuntimeDiagnostic(input.store, input.clientId, input.runId, {
+                code: "agent_v2.task_transition_rejected",
+                severity: "error",
+                message: `Agent v2 task ${input.taskId} transition to ${input.status} rejected: ${transitionError.message}`,
+                taskId: input.taskId,
+                data: {
+                    requestedStatus: input.status,
+                    errorMessage: transitionError.message,
+                },
+                createdAt: input.now,
+            });
+        }
+        catch {
+            // Preserve the original transition error when diagnostic persistence also fails.
+        }
+        throw error;
+    }
     const persisted = await input.store.upsertAgentV2Task(toUpsertTaskInput(input.clientId, input.runId, transitioned));
     await appendRuntimeDiagnosticBestEffort(input.store, input.clientId, input.runId, {
         code: "agent_v2.task_transitioned",
@@ -86,7 +109,7 @@ async function appendRuntimeDiagnostic(store, clientId, runId, input) {
         code: input.code,
         taskId: input.taskId,
         message: input.message,
-        data: {},
+        data: input.data ?? {},
         createdAt: input.createdAt,
     }));
 }

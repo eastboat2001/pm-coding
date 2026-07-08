@@ -178,6 +178,91 @@ describe("agent v2 runtime core", () => {
 		).rejects.toThrow("Agent v2 run not found: client-a/missing-run");
 		expect(store.listAgentV2Diagnostics("client-a", "missing-run")).toEqual([]);
 	});
+
+	it("records task_not_found when the run exists but task is missing", async () => {
+		const store = createTempRuntimeDbStoreWithV2Schema(cleanupRoots, cleanupStores);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-missing-task",
+			input: { prompt: "Build a static app" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+
+		await expect(
+			advanceAgentV2Task({
+				store: forbidLegacyRuntimeReads(store),
+				clientId: "client-a",
+				runId: "run-v2-missing-task",
+				taskId: "implement",
+				status: "running",
+				now: "2026-07-08T00:02:00.000Z",
+			}),
+		).rejects.toThrow("Agent v2 task not found: client-a/run-v2-missing-task/implement");
+		expect(store.listAgentV2Diagnostics("client-a", "run-v2-missing-task")).toEqual([
+			expect.objectContaining({
+				category: "task_graph",
+				code: "agent_v2.task_not_found",
+				taskId: "implement",
+				severity: "error",
+			}),
+		]);
+	});
+
+	it("records a rejected transition diagnostic and preserves task state when transition validation fails", async () => {
+		const store = createTempRuntimeDbStoreWithV2Schema(cleanupRoots, cleanupStores);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-transition-rejected",
+			input: { prompt: "Build a static app" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-v2-transition-rejected",
+			taskId: "implement",
+			kind: "implementation",
+			title: "Implement app",
+			status: "running",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+			startedAt: "2026-07-08T00:01:00.000Z",
+		});
+
+		await expect(
+			advanceAgentV2Task({
+				store: forbidLegacyRuntimeReads(store),
+				clientId: "client-a",
+				runId: "run-v2-transition-rejected",
+				taskId: "implement",
+				status: "failed",
+				now: "2026-07-08T00:02:00.000Z",
+			}),
+		).rejects.toThrow("Agent v2 blocked and failed task transitions require an error");
+		expect(store.listAgentV2Tasks("client-a", "run-v2-transition-rejected")[0]).toMatchObject({
+			taskId: "implement",
+			status: "running",
+			startedAt: "2026-07-08T00:01:00.000Z",
+		});
+		expect(store.listAgentV2Diagnostics("client-a", "run-v2-transition-rejected")).toEqual([
+			expect.objectContaining({
+				category: "task_graph",
+				code: "agent_v2.task_transition_rejected",
+				taskId: "implement",
+				severity: "error",
+				message: expect.stringContaining("require an error"),
+				data: expect.objectContaining({
+					requestedStatus: "failed",
+					errorMessage: "Agent v2 blocked and failed task transitions require an error",
+				}),
+			}),
+		]);
+	});
 });
 
 function createTempRuntimeDbStoreWithV2Schema(cleanupRoots: string[], cleanupStores: RuntimeDbStore[]): RuntimeDbStore {

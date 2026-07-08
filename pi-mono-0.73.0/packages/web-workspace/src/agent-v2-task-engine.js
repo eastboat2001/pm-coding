@@ -1,5 +1,6 @@
 const TERMINAL_STATUSES = new Set(["blocked", "succeeded", "failed", "cancelled"]);
 const FAILED_DEPENDENCY_ROOT_STATUSES = new Set(["failed", "cancelled"]);
+const ERROR_REQUIRED_STATUSES = new Set(["blocked", "failed"]);
 export function selectNextAgentV2Task(tasks) {
     if (tasks.length === 0)
         return selection("empty_graph");
@@ -56,19 +57,25 @@ export function selectNextAgentV2Task(tasks) {
     return selection("complete");
 }
 export function transitionAgentV2Task(input) {
-    if (input.status === "failed" && !input.error) {
-        throw new Error("Agent v2 failed task transitions require an error");
+    if (ERROR_REQUIRED_STATUSES.has(input.status) && !input.error) {
+        throw new Error("Agent v2 blocked and failed task transitions require an error");
     }
     const isTerminal = TERMINAL_STATUSES.has(input.status);
     const output = input.output !== undefined ? input.output : isTerminal ? input.task.output : {};
-    const endedAt = isTerminal ? input.now : undefined;
+    const startedAt = input.status === "running"
+        ? input.task.status === "running"
+            ? input.task.startedAt ?? input.now
+            : input.now
+        : isTerminal
+            ? input.task.startedAt
+            : undefined;
     return {
         ...input.task,
         status: input.status,
         output,
-        error: input.status === "failed" ? input.error : undefined,
-        startedAt: input.status === "running" ? input.task.startedAt ?? input.now : input.task.startedAt,
-        endedAt,
+        error: ERROR_REQUIRED_STATUSES.has(input.status) ? input.error : undefined,
+        startedAt,
+        endedAt: isTerminal ? input.now : undefined,
         updatedAt: input.now,
     };
 }

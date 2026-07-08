@@ -174,7 +174,33 @@ describe("agent v2 task engine", () => {
 				status: "failed",
 				now: "2026-07-08T00:04:00.000Z",
 			}),
-		).toThrow("Agent v2 failed task transitions require an error");
+		).toThrow("Agent v2 blocked and failed task transitions require an error");
+	});
+
+	it("requires an error for blocked transitions", () => {
+		expect(() =>
+			transitionAgentV2Task({
+				task: task({ taskId: "validate", status: "running" }),
+				status: "blocked",
+				now: "2026-07-08T00:04:00.000Z",
+			}),
+		).toThrow("Agent v2 blocked and failed task transitions require an error");
+	});
+
+	it("persists structured error for blocked transitions", () => {
+		const blocked = transitionAgentV2Task({
+			task: task({ taskId: "validate", status: "running", startedAt: "2026-07-08T00:02:00.000Z" }),
+			status: "blocked",
+			now: "2026-07-08T00:04:00.000Z",
+			error: { code: "WAITING_ON_HUMAN", message: "Need approval", retryable: true },
+		});
+
+		expect(blocked).toMatchObject({
+			status: "blocked",
+			startedAt: "2026-07-08T00:02:00.000Z",
+			endedAt: "2026-07-08T00:04:00.000Z",
+			error: { code: "WAITING_ON_HUMAN", message: "Need approval", retryable: true },
+		});
 	});
 
 	it("clears endedAt/output/error when restarting from failed task", () => {
@@ -213,9 +239,61 @@ describe("agent v2 task engine", () => {
 		});
 		expect(reset).toMatchObject({
 			status: "ready",
+			startedAt: undefined,
 			endedAt: undefined,
 			output: {},
 			error: undefined,
+		});
+	});
+
+	it("resets startedAt when retrying from failed through ready back to running", () => {
+		const failed = transitionAgentV2Task({
+			task: {
+				...task({ taskId: "spec", status: "running", startedAt: "2026-07-08T00:02:00.000Z" }),
+				output: { filesChanged: ["src/App.tsx"] },
+			},
+			status: "failed",
+			now: "2026-07-08T00:03:00.000Z",
+			error: { code: "VALIDATION_FAILED", message: "Build failed", retryable: true },
+		});
+		const reset = transitionAgentV2Task({
+			task: failed,
+			status: "ready",
+			now: "2026-07-08T00:04:00.000Z",
+		});
+		const rerun = transitionAgentV2Task({
+			task: reset,
+			status: "running",
+			now: "2026-07-08T00:05:00.000Z",
+		});
+
+		expect(reset.startedAt).toBeUndefined();
+		expect(rerun).toMatchObject({
+			status: "running",
+			startedAt: "2026-07-08T00:05:00.000Z",
+			endedAt: undefined,
+			error: undefined,
+		});
+	});
+
+	it("uses retry now when going directly from failed back to running", () => {
+		const failed = transitionAgentV2Task({
+			task: task({ taskId: "spec", status: "running", startedAt: "2026-07-08T00:02:00.000Z" }),
+			status: "failed",
+			now: "2026-07-08T00:03:00.000Z",
+			error: { code: "VALIDATION_FAILED", message: "Build failed", retryable: true },
+		});
+
+		const retried = transitionAgentV2Task({
+			task: failed,
+			status: "running",
+			now: "2026-07-08T00:04:00.000Z",
+		});
+
+		expect(retried).toMatchObject({
+			status: "running",
+			startedAt: "2026-07-08T00:04:00.000Z",
+			endedAt: undefined,
 		});
 	});
 

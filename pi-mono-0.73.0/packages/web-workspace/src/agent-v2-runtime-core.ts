@@ -85,13 +85,34 @@ export async function advanceAgentV2Task(input: AdvanceAgentV2TaskInput): Promis
 		throw new Error(`Agent v2 task not found: ${input.clientId}/${input.runId}/${input.taskId}`);
 	}
 
-	const transitioned = transitionAgentV2Task({
-		task,
-		status: input.status,
-		now: input.now,
-		output: input.output,
-		error: input.error,
-	});
+	let transitioned: AgentV2TaskNode;
+	try {
+		transitioned = transitionAgentV2Task({
+			task,
+			status: input.status,
+			now: input.now,
+			output: input.output,
+			error: input.error,
+		});
+	} catch (error) {
+		const transitionError = error instanceof Error ? error : new Error(String(error));
+		try {
+			await appendRuntimeDiagnostic(input.store, input.clientId, input.runId, {
+				code: "agent_v2.task_transition_rejected",
+				severity: "error",
+				message: `Agent v2 task ${input.taskId} transition to ${input.status} rejected: ${transitionError.message}`,
+				taskId: input.taskId,
+				data: {
+					requestedStatus: input.status,
+					errorMessage: transitionError.message,
+				},
+				createdAt: input.now,
+			});
+		} catch {
+			// Preserve the original transition error when diagnostic persistence also fails.
+		}
+		throw error;
+	}
 
 	const persisted = await input.store.upsertAgentV2Task(toUpsertTaskInput(input.clientId, input.runId, transitioned));
 	await appendRuntimeDiagnosticBestEffort(input.store, input.clientId, input.runId, {
@@ -134,6 +155,7 @@ async function appendRuntimeDiagnostic(
 		severity: "info" | "error";
 		message: string;
 		taskId?: string;
+		data?: Record<string, unknown>;
 		createdAt: string;
 	},
 ): Promise<void> {
@@ -147,7 +169,7 @@ async function appendRuntimeDiagnostic(
 			code: input.code,
 			taskId: input.taskId,
 			message: input.message,
-			data: {},
+			data: input.data ?? {},
 			createdAt: input.createdAt,
 		}),
 	);
@@ -162,6 +184,7 @@ async function appendRuntimeDiagnosticBestEffort(
 		severity: "info" | "error";
 		message: string;
 		taskId?: string;
+		data?: Record<string, unknown>;
 		createdAt: string;
 	},
 ): Promise<void> {

@@ -6,6 +6,7 @@ import {
 	AGENT_V2_DOCUMENT_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
+	AGENT_V2_VALIDATION_COLUMNS,
 	type AgentV2ArtifactRecord,
 	type AgentV2ArtifactRow,
 	type AgentV2DiagnosticRow,
@@ -13,21 +14,26 @@ import {
 	type AgentV2DocumentRow,
 	type AgentV2RunRow,
 	type AgentV2TaskRow,
+	type AgentV2ValidationRecord,
+	type AgentV2ValidationRow,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
 	buildAgentV2Document,
 	buildAgentV2Run,
 	buildAgentV2Task,
+	buildAgentV2Validation,
 	type CreateAgentV2RunInput,
 	toAgentV2ArtifactRecord,
 	toAgentV2DiagnosticRecord,
 	toAgentV2DocumentRecord,
 	toAgentV2RunRecord,
 	toAgentV2TaskRecord,
+	toAgentV2ValidationRecord,
 	type UpdateAgentV2RunInput,
 	type UpsertAgentV2ArtifactInput,
 	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
+	type UpsertAgentV2ValidationInput,
 } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
 import type {
@@ -1433,6 +1439,58 @@ export class PostgresRuntimeStore implements RuntimeStore {
 			[clientId, runId, documentId],
 		);
 		return row ? toAgentV2DocumentRecord(row) : undefined;
+	}
+
+	async upsertAgentV2Validation(input: UpsertAgentV2ValidationInput): Promise<AgentV2ValidationRecord> {
+		const validation = buildAgentV2Validation(input);
+		const row = await this.queryOne<AgentV2ValidationRow>(
+			this.queryable,
+			`INSERT INTO agent_v2_validations (
+				client_id,
+				run_id,
+				validation_id,
+				task_id,
+				artifact_id,
+				status,
+				summary,
+				details_json,
+				created_at,
+				updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT(client_id, run_id, validation_id) DO UPDATE SET
+				task_id = excluded.task_id,
+				artifact_id = excluded.artifact_id,
+				status = excluded.status,
+				summary = excluded.summary,
+				details_json = excluded.details_json,
+				updated_at = excluded.updated_at
+			RETURNING ${AGENT_V2_VALIDATION_COLUMNS}`,
+			[
+				validation.clientId,
+				validation.runId,
+				validation.validationId,
+				validation.taskId ?? null,
+				validation.artifactId ?? null,
+				validation.status,
+				validation.summary,
+				validation.details,
+				validation.createdAt,
+				validation.updatedAt,
+			],
+		);
+		return requiredRecord(row ? toAgentV2ValidationRecord(row) : undefined, "agent v2 validation");
+	}
+
+	async listAgentV2Validations(clientId: string, runId: string): Promise<AgentV2ValidationRecord[]> {
+		const rows = await this.queryRows<AgentV2ValidationRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_VALIDATION_COLUMNS}
+			FROM agent_v2_validations
+			WHERE client_id = $1 AND run_id = $2
+			ORDER BY created_at ASC, validation_id ASC`,
+			[clientId, runId],
+		);
+		return rows.map(toAgentV2ValidationRecord);
 	}
 
 	async appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): Promise<AgentV2DiagnosticEvent> {

@@ -8,6 +8,7 @@ import {
 	AGENT_V2_DOCUMENT_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
+	AGENT_V2_VALIDATION_COLUMNS,
 	type AgentV2ArtifactRecord,
 	type AgentV2ArtifactRow,
 	type AgentV2DiagnosticRow,
@@ -15,11 +16,14 @@ import {
 	type AgentV2DocumentRow,
 	type AgentV2RunRow,
 	type AgentV2TaskRow,
+	type AgentV2ValidationRecord,
+	type AgentV2ValidationRow,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
 	buildAgentV2Document,
 	buildAgentV2Run,
 	buildAgentV2Task,
+	buildAgentV2Validation,
 	type CreateAgentV2RunInput,
 	stringifyAgentV2Json,
 	toAgentV2ArtifactRecord,
@@ -27,10 +31,12 @@ import {
 	toAgentV2DocumentRecord,
 	toAgentV2RunRecord,
 	toAgentV2TaskRecord,
+	toAgentV2ValidationRecord,
 	type UpdateAgentV2RunInput,
 	type UpsertAgentV2ArtifactInput,
 	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
+	type UpsertAgentV2ValidationInput,
 } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
 import { isObject } from "./json.js";
@@ -1277,6 +1283,62 @@ export class RuntimeDbStore implements RuntimeStore {
 			)
 			.get(clientId, runId, documentId) as AgentV2DocumentRow | undefined;
 		return row ? toAgentV2DocumentRecord(row) : undefined;
+	}
+
+	upsertAgentV2Validation(input: UpsertAgentV2ValidationInput): AgentV2ValidationRecord {
+		const validation = buildAgentV2Validation(input);
+		this.open()
+			.prepare(
+				`INSERT INTO agent_v2_validations (
+					client_id,
+					run_id,
+					validation_id,
+					task_id,
+					artifact_id,
+					status,
+					summary,
+					details_json,
+					created_at,
+					updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(client_id, run_id, validation_id) DO UPDATE SET
+					task_id = excluded.task_id,
+					artifact_id = excluded.artifact_id,
+					status = excluded.status,
+					summary = excluded.summary,
+					details_json = excluded.details_json,
+					updated_at = excluded.updated_at`,
+			)
+			.run(
+				validation.clientId,
+				validation.runId,
+				validation.validationId,
+				validation.taskId ?? null,
+				validation.artifactId ?? null,
+				validation.status,
+				validation.summary,
+				stringifyAgentV2Json(validation.details),
+				validation.createdAt,
+				validation.updatedAt,
+			);
+		return requiredRecord(
+			this.listAgentV2Validations(validation.clientId, validation.runId).find(
+				(record) => record.validationId === validation.validationId,
+			),
+			"agent v2 validation",
+		);
+	}
+
+	listAgentV2Validations(clientId: string, runId: string): AgentV2ValidationRecord[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_VALIDATION_COLUMNS}
+				FROM agent_v2_validations
+				WHERE client_id = ? AND run_id = ?
+				ORDER BY created_at ASC, validation_id ASC`,
+			)
+			.all(clientId, runId) as unknown as AgentV2ValidationRow[];
+		return rows.map(toAgentV2ValidationRecord);
 	}
 
 	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): AgentV2DiagnosticEvent {

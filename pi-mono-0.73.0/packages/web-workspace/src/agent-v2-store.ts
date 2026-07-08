@@ -120,6 +120,34 @@ export interface UpsertAgentV2DocumentInput extends JsonObject {
 	updatedAt?: string;
 }
 
+export type AgentV2ValidationStatus = "passed" | "failed" | "blocked" | "warning";
+
+export interface AgentV2ValidationRecord extends JsonObject {
+	clientId: string;
+	runId: string;
+	validationId: string;
+	taskId?: string;
+	artifactId?: string;
+	status: AgentV2ValidationStatus;
+	summary: string;
+	details: Record<string, unknown>;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface UpsertAgentV2ValidationInput extends JsonObject {
+	clientId: string;
+	runId: string;
+	validationId: string;
+	taskId?: string;
+	artifactId?: string;
+	status: AgentV2ValidationStatus;
+	summary: string;
+	details: Record<string, unknown>;
+	createdAt?: string;
+	updatedAt?: string;
+}
+
 export interface AgentV2RunRow {
 	client_id: string;
 	run_id: string;
@@ -200,6 +228,19 @@ export interface AgentV2DiagnosticRow {
 	created_at: TimestampValue;
 }
 
+export interface AgentV2ValidationRow {
+	client_id: string;
+	run_id: string;
+	validation_id: string;
+	task_id: string | null;
+	artifact_id: string | null;
+	status: AgentV2ValidationStatus;
+	summary: string;
+	details_json: unknown;
+	created_at: TimestampValue;
+	updated_at: TimestampValue;
+}
+
 export const AGENT_V2_RUN_COLUMNS =
 	"client_id, run_id, status, phase, attempt, input_json, model_json, worker_id, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_TASK_COLUMNS =
@@ -210,6 +251,8 @@ export const AGENT_V2_DOCUMENT_COLUMNS =
 	"client_id, run_id, document_id, kind, version, content_markdown, content_json, source_task_id, created_at, updated_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS =
 	"client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
+export const AGENT_V2_VALIDATION_COLUMNS =
+	"client_id, run_id, validation_id, task_id, artifact_id, status, summary, details_json, created_at, updated_at";
 
 export function buildAgentV2Run(input: CreateAgentV2RunInput): AgentV2RunSnapshot {
 	return createAgentV2RunSnapshot(input);
@@ -313,6 +356,24 @@ export function buildAgentV2Document(input: UpsertAgentV2DocumentInput): AgentV2
 	};
 }
 
+export function buildAgentV2Validation(input: UpsertAgentV2ValidationInput): AgentV2ValidationRecord {
+	const createdAt = input.createdAt ?? new Date().toISOString();
+	const updatedAt = input.updatedAt ?? createdAt;
+
+	return {
+		clientId: input.clientId,
+		runId: input.runId,
+		validationId: input.validationId,
+		...(input.taskId ? { taskId: input.taskId } : {}),
+		...(input.artifactId ? { artifactId: input.artifactId } : {}),
+		status: input.status,
+		summary: input.summary,
+		details: input.details ?? {},
+		createdAt,
+		updatedAt,
+	};
+}
+
 export function toAgentV2RunRecord(row: AgentV2RunRow): AgentV2RunSnapshot {
 	return {
 		clientId: row.client_id,
@@ -378,6 +439,21 @@ export function toAgentV2DocumentRecord(row: AgentV2DocumentRow): AgentV2Documen
 		contentMarkdown: row.content_markdown,
 		contentJson: parseAgentV2DocumentContent(row.content_json, row.kind),
 		...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
+		createdAt: toTimestamp(row.created_at),
+		updatedAt: toTimestamp(row.updated_at),
+	};
+}
+
+export function toAgentV2ValidationRecord(row: AgentV2ValidationRow): AgentV2ValidationRecord {
+	return {
+		clientId: row.client_id,
+		runId: row.run_id,
+		validationId: row.validation_id,
+		...(row.task_id ? { taskId: row.task_id } : {}),
+		...(row.artifact_id ? { artifactId: row.artifact_id } : {}),
+		status: row.status,
+		summary: row.summary,
+		details: parseJsonObject(row.details_json),
 		createdAt: toTimestamp(row.created_at),
 		updatedAt: toTimestamp(row.updated_at),
 	};

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
-import type { AgentV2ArtifactRecord, AgentV2DocumentRecord } from "../src/agent-v2-store.js";
+import type { AgentV2ArtifactRecord, AgentV2DocumentRecord, AgentV2ValidationRecord } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "../src/agent-v2-types.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 import type { RuntimeStore } from "../src/runtime-store.js";
@@ -129,6 +129,12 @@ describe("runtime store contract", () => {
 				return {} as AgentV2DocumentRecord;
 			},
 			async listAgentV2Documents() {
+				return [];
+			},
+			async upsertAgentV2Validation() {
+				return {} as AgentV2ValidationRecord;
+			},
+			async listAgentV2Validations() {
 				return [];
 			},
 			async getAgentV2Document() {

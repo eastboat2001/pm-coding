@@ -126,8 +126,8 @@ export interface RuntimeStore {
 	createAgentV2Run(input: CreateAgentV2RunInputFromStore): MaybePromise<AgentV2RunSnapshot>;
 	getAgentV2Run(clientId: string, runId: string): MaybePromise<AgentV2RunSnapshot | undefined>;
 	updateAgentV2Run(input: UpdateAgentV2RunInputFromStore): MaybePromise<AgentV2RunSnapshot>;
-	appendAgentV2RunEvent?(input: AppendAgentV2RunEventInputFromStore): MaybePromise<AgentV2RunEventRecord>;
-	listAgentV2RunEvents?(clientId: string, runId: string, afterSeq: number): MaybePromise<AgentV2RunEventRecord[]>;
+	appendAgentV2RunEvent(input: AppendAgentV2RunEventInputFromStore): MaybePromise<AgentV2RunEventRecord>;
+	listAgentV2RunEvents(clientId: string, runId: string, afterSeq: number): MaybePromise<AgentV2RunEventRecord[]>;
 	upsertAgentV2Task(input: UpsertAgentV2TaskInputFromStore): MaybePromise<AgentV2TaskNode>;
 	listAgentV2Tasks(clientId: string, runId: string): MaybePromise<AgentV2TaskNode[]>;
 	upsertAgentV2Artifact(input: UpsertAgentV2ArtifactInputFromStore): MaybePromise<AgentV2ArtifactRecord>;

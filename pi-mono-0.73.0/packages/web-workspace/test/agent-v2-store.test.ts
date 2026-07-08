@@ -2,8 +2,26 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import { appendAgentV2RunEvent } from "../src/agent-v2-run-events.js";
+import {
+	AGENT_V2_DOCUMENT_COLUMNS,
+	type AgentV2DocumentRecord,
+	type AgentV2DocumentRow,
+	buildAgentV2Document,
+	toAgentV2DocumentRecord,
+	type UpsertAgentV2DocumentInput,
+} from "../src/agent-v2-store.js";
+import type { AgentV2DocumentContent } from "../src/agent-v2-types.js";
+import type {
+	AgentV2DocumentRecord as PublicAgentV2DocumentRecord,
+	UpsertAgentV2DocumentInput as PublicUpsertAgentV2DocumentInput,
+} from "../src/index.js";
+import {
+	AGENT_V2_DOCUMENT_COLUMNS as PUBLIC_AGENT_V2_DOCUMENT_COLUMNS,
+	buildAgentV2Document as publicBuildAgentV2Document,
+	toAgentV2DocumentRecord as publicToAgentV2DocumentRecord,
+} from "../src/index.js";
 import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
 import { InMemoryRunEventBus } from "../src/run-event-bus.js";
 import { RunEventSink } from "../src/run-event-sink.js";
@@ -45,6 +63,31 @@ class RecordingQueryable implements Queryable {
 
 function normalizeSql(sql: string): string {
 	return sql.replaceAll(/\s+/g, " ").trim();
+}
+
+function createSpecContent(overrides: Partial<Extract<AgentV2DocumentContent, { kind: "spec" }>> = {}) {
+	return {
+		kind: "spec" as const,
+		title: "Spec",
+		objective: "Build dashboard",
+		summary: "Summary",
+		scope: [],
+		goals: [],
+		nonGoals: [],
+		assumptions: [],
+		requirements: [],
+		capabilityBoundaries: [],
+		acceptanceCriteria: [],
+		platformContract: {
+			runtime: "web",
+			framework: "vite",
+			deliveryMode: "static_app" as const,
+			entrypoints: ["src/main.ts"],
+			deliverables: ["dist"],
+			constraints: [],
+		},
+		...overrides,
+	};
 }
 
 describe("agent v2 runtime stores", () => {
@@ -177,7 +220,7 @@ describe("agent v2 runtime stores", () => {
 			clientId: "client-a",
 			runId: "run-v2-a",
 			status: "running",
-			phase: "execution",
+			phase: "implementation",
 			workerId: "worker-1",
 			startedAt: "2026-07-07T00:01:00.000Z",
 			updatedAt: "2026-07-07T00:01:00.000Z",
@@ -197,7 +240,7 @@ describe("agent v2 runtime stores", () => {
 		});
 
 		expect(running.status).toBe("running");
-		expect(running.phase).toBe("execution");
+		expect(running.phase).toBe("implementation");
 		expect(running.workerId).toBe("worker-1");
 		expect(running.startedAt).toBe("2026-07-07T00:01:00.000Z");
 		expect(failed.status).toBe("failed");
@@ -224,6 +267,7 @@ describe("agent v2 runtime stores", () => {
 			title: "Implement the page",
 			status: "running",
 			dependsOn: ["task-1"],
+			acceptanceCriteria: ["Render the page", "Persist generated files metadata"],
 			input: { files: ["src/app.ts"] },
 			output: { changed: 1 },
 			createdAt: "2026-07-07T00:01:00.000Z",
@@ -252,7 +296,7 @@ describe("agent v2 runtime stores", () => {
 			severity: "warn",
 			category: "task_graph",
 			code: "dependency_wait",
-			phase: "execution",
+			phase: "implementation",
 			taskId: "task-2",
 			message: "Waiting on prerequisite task",
 			data: { blockedBy: ["task-1"] },
@@ -260,6 +304,7 @@ describe("agent v2 runtime stores", () => {
 		});
 
 		expect(task.taskId).toBe("task-2");
+		expect(task.acceptanceCriteria).toEqual(["Render the page", "Persist generated files metadata"]);
 		expect(store.listAgentV2Tasks("client-a", "run-v2-a")).toEqual([task]);
 		expect(artifact.artifactId).toBe("artifact-1");
 		expect(artifact.sourceTaskId).toBe("task-2");
@@ -267,6 +312,206 @@ describe("agent v2 runtime stores", () => {
 		expect(store.listAgentV2Artifacts("client-a", "run-v2-a")).toEqual([artifact]);
 		expect(diagnostic.diagnosticId).toBe("diag-1");
 		expect(store.listAgentV2Diagnostics("client-a", "run-v2-a")).toEqual([diagnostic]);
+	});
+
+	it("stores and lists v2 planning documents by run", () => {
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			input: { prompt: "build a dashboard" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+
+		const document = store.upsertAgentV2Document({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			documentId: "spec",
+			kind: "spec",
+			version: "v1",
+			contentMarkdown: "# Spec\n",
+			contentJson: createSpecContent(),
+			sourceTaskId: "spec",
+			createdAt: "2026-07-07T00:01:00.000Z",
+			updatedAt: "2026-07-07T00:01:00.000Z",
+		});
+
+		expect(store.getAgentV2Document("client-a", "run-v2-a", "spec")).toEqual(document);
+		expect(store.listAgentV2Documents("client-a", "run-v2-a")).toEqual([document]);
+		expect(document.contentJson).toEqual(createSpecContent());
+		expectTypeOf(document.contentJson).toMatchTypeOf<AgentV2DocumentContent>();
+	});
+
+	it("re-exports document store helpers from the package root", () => {
+		const input: UpsertAgentV2DocumentInput = {
+			clientId: "client-a",
+			runId: "run-v2-a",
+			documentId: "spec",
+			kind: "spec",
+			version: "v1",
+			contentMarkdown: "# Spec\n",
+			contentJson: createSpecContent(),
+			sourceTaskId: "spec",
+			createdAt: "2026-07-07T00:01:00.000Z",
+			updatedAt: "2026-07-07T00:01:00.000Z",
+		};
+		const row: AgentV2DocumentRow = {
+			client_id: "client-a",
+			run_id: "run-v2-a",
+			document_id: "spec",
+			kind: "spec",
+			version: "v1",
+			content_markdown: "# Spec\n",
+			content_json: createSpecContent(),
+			source_task_id: "spec",
+			created_at: "2026-07-07T00:01:00.000Z",
+			updated_at: "2026-07-07T00:01:00.000Z",
+		};
+
+		expect(PUBLIC_AGENT_V2_DOCUMENT_COLUMNS).toBe(AGENT_V2_DOCUMENT_COLUMNS);
+		expect(publicBuildAgentV2Document(input)).toEqual(buildAgentV2Document(input));
+		expect(publicToAgentV2DocumentRecord(row)).toEqual(toAgentV2DocumentRecord(row));
+		expectTypeOf<PublicAgentV2DocumentRecord>().toEqualTypeOf<AgentV2DocumentRecord>();
+		expectTypeOf<PublicUpsertAgentV2DocumentInput>().toEqualTypeOf<UpsertAgentV2DocumentInput>();
+	});
+
+	it("rejects v2 documents when content kind conflicts with the column kind", () => {
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			input: { prompt: "build a dashboard" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+
+		expect(() =>
+			store.upsertAgentV2Document({
+				clientId: "client-a",
+				runId: "run-v2-a",
+				documentId: "spec",
+				kind: "spec",
+				version: "v1",
+				contentMarkdown: "# Spec\n",
+				contentJson: {
+					kind: "plan",
+					title: "Plan",
+					summary: "Summary",
+					technicalApproach: [],
+					fileStructure: [],
+					dataModel: [],
+					interactionFlow: [],
+					validationStrategy: [],
+					steps: [],
+					risks: [],
+				},
+				sourceTaskId: "spec",
+				createdAt: "2026-07-07T00:01:00.000Z",
+				updatedAt: "2026-07-07T00:01:00.000Z",
+			}),
+		).toThrowError('Agent v2 document kind mismatch: input.kind="spec" contentJson.kind="plan"');
+	});
+
+	it("rejects v2 documents when content kind is present but not a string", () => {
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			input: { prompt: "build a dashboard" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-07T00:00:00.000Z",
+		});
+
+		expect(() =>
+			store.upsertAgentV2Document({
+				clientId: "client-a",
+				runId: "run-v2-a",
+				documentId: "spec",
+				kind: "spec",
+				version: "v1",
+				contentMarkdown: "# Spec\n",
+				contentJson: { ...createSpecContent(), kind: 123 } as never,
+				sourceTaskId: "spec",
+				createdAt: "2026-07-07T00:01:00.000Z",
+				updatedAt: "2026-07-07T00:01:00.000Z",
+			}),
+		).toThrowError('Agent v2 document kind must be a string when present: input.kind="spec" contentJson.kind=123');
+	});
+
+	it("preserves stored document content kind instead of masking inconsistent payloads on read", async () => {
+		const documentRow = {
+			client_id: "client-a",
+			run_id: "run-v2-a",
+			document_id: "spec",
+			kind: "spec",
+			version: "v1",
+			content_markdown: "# Spec\n",
+			content_json: { kind: "plan", title: "Unexpected plan payload" },
+			source_task_id: "spec",
+			created_at: "2026-07-07T00:01:00.000Z",
+			updated_at: "2026-07-07T00:01:00.000Z",
+		};
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (/^CREATE /i.test(sql)) return { rowCount: 0 };
+			if (/FROM agent_v2_documents/i.test(sql)) {
+				return { rows: [documentRow] };
+			}
+			return undefined;
+		});
+		const postgresStore = new PostgresRuntimeStore({ queryable });
+
+		await postgresStore.ensureAgentV2Schema();
+
+		const document = await postgresStore.getAgentV2Document("client-a", "run-v2-a", "spec");
+
+		expect(document?.kind).toBe("spec");
+		expect(document?.contentJson).toEqual({ kind: "plan", title: "Unexpected plan payload" });
+	});
+
+	it("normalizes document content kind before writing to PostgreSQL", async () => {
+		let insertedValues: readonly unknown[] | undefined;
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (/^CREATE /i.test(sql)) return { rowCount: 0 };
+			if (/INSERT INTO agent_v2_documents/i.test(sql)) {
+				insertedValues = query.values;
+				return {
+					rows: [
+						{
+							client_id: query.values[0],
+							run_id: query.values[1],
+							document_id: query.values[2],
+							kind: query.values[3],
+							version: query.values[4],
+							content_markdown: query.values[5],
+							content_json: query.values[6],
+							source_task_id: query.values[7],
+							created_at: query.values[8],
+							updated_at: query.values[9],
+						},
+					],
+				};
+			}
+			return undefined;
+		});
+		const postgresStore = new PostgresRuntimeStore({ queryable });
+
+		await postgresStore.ensureAgentV2Schema();
+
+		const document = await postgresStore.upsertAgentV2Document({
+			clientId: "client-a",
+			runId: "run-v2-a",
+			documentId: "spec",
+			kind: "spec",
+			version: "v1",
+			contentMarkdown: "# Spec\n",
+			contentJson: createSpecContent(),
+			sourceTaskId: "spec",
+			createdAt: "2026-07-07T00:01:00.000Z",
+			updatedAt: "2026-07-07T00:01:00.000Z",
+		});
+
+		expect(insertedValues?.[6]).toEqual(createSpecContent());
+		expect(document.contentJson).toEqual(createSpecContent());
 	});
 
 	it("creates the expected SQLite agent v2 tables", () => {
@@ -285,6 +530,7 @@ describe("agent v2 runtime stores", () => {
 			expect(tables).toEqual([
 				"agent_v2_artifacts",
 				"agent_v2_diagnostics",
+				"agent_v2_documents",
 				"agent_v2_runs",
 				"agent_v2_schema_metadata",
 				"agent_v2_tasks",
@@ -308,6 +554,27 @@ describe("agent v2 runtime stores", () => {
 				"metadata_json",
 				"created_at",
 				"updated_at",
+			]);
+			const taskColumns = (db.prepare("PRAGMA table_info(agent_v2_tasks)").all() as { name: string }[]).map(
+				(row) => row.name,
+			);
+			expect(taskColumns).toEqual([
+				"client_id",
+				"run_id",
+				"task_id",
+				"parent_task_id",
+				"kind",
+				"title",
+				"status",
+				"depends_on_json",
+				"acceptance_criteria_json",
+				"input_json",
+				"output_json",
+				"created_at",
+				"updated_at",
+				"started_at",
+				"ended_at",
+				"error_json",
 			]);
 		} finally {
 			db.close();
@@ -335,10 +602,11 @@ describe("agent v2 runtime stores", () => {
 			run_id: "run-v2-a",
 			task_id: "task-1",
 			parent_task_id: null,
-			kind: "requirements",
+			kind: "spec",
 			title: "Read the brief",
 			status: "ready",
 			depends_on_json: [],
+			acceptance_criteria_json: ["Task graph nodes include acceptance criteria"],
 			input_json: {},
 			output_json: {},
 			created_at: "2026-07-07T00:00:00.000Z",
@@ -362,6 +630,18 @@ describe("agent v2 runtime stores", () => {
 			created_at: "2026-07-07T00:00:00.000Z",
 			updated_at: "2026-07-07T00:00:00.000Z",
 		};
+		const documentRow = {
+			client_id: "client-a",
+			run_id: "run-v2-a",
+			document_id: "spec",
+			kind: "spec",
+			version: "v1",
+			content_markdown: "# Spec\n",
+			content_json: createSpecContent(),
+			source_task_id: "spec",
+			created_at: "2026-07-07T00:01:00.000Z",
+			updated_at: "2026-07-07T00:01:00.000Z",
+		};
 		const queryable = new RecordingQueryable().on((query) => {
 			const sql = normalizeSql(query.sql);
 			if (/^CREATE /i.test(sql)) return { rowCount: 0 };
@@ -369,6 +649,9 @@ describe("agent v2 runtime stores", () => {
 			if (/FROM agent_v2_tasks/i.test(sql)) return { rows: [taskRow] };
 			if (/FROM agent_v2_artifacts/i.test(sql)) {
 				return { rows: [artifactRow] };
+			}
+			if (/FROM agent_v2_documents/i.test(sql)) {
+				return { rows: [documentRow] };
 			}
 			return undefined;
 		});
@@ -378,6 +661,8 @@ describe("agent v2 runtime stores", () => {
 		const run = await store.getAgentV2Run("client-a", "run-v2-a");
 		const tasks = await store.listAgentV2Tasks("client-a", "run-v2-a");
 		const artifacts = await store.listAgentV2Artifacts("client-a", "run-v2-a");
+		const documents = await store.listAgentV2Documents("client-a", "run-v2-a");
+		const document = await store.getAgentV2Document("client-a", "run-v2-a", "spec");
 
 		const statements = queryable.queries.map((query) => normalizeSql(query.sql));
 		for (const table of [
@@ -385,6 +670,7 @@ describe("agent v2 runtime stores", () => {
 			"agent_v2_runs",
 			"agent_v2_tasks",
 			"agent_v2_artifacts",
+			"agent_v2_documents",
 			"agent_v2_validations",
 			"agent_v2_diagnostics",
 		]) {
@@ -407,6 +693,13 @@ describe("agent v2 runtime stores", () => {
 		expect(
 			statements.some((statement) =>
 				statement.includes(
+					"ALTER TABLE agent_v2_tasks ADD COLUMN IF NOT EXISTS acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb",
+				),
+			),
+		).toBe(true);
+		expect(
+			statements.some((statement) =>
+				statement.includes(
 					"CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)",
 				),
 			),
@@ -414,6 +707,13 @@ describe("agent v2 runtime stores", () => {
 		const artifactTableStatement = statements.find((statement) =>
 			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_artifacts"),
 		);
+		const documentTableStatement = statements.find((statement) =>
+			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_documents"),
+		);
+		const taskTableStatement = statements.find((statement) =>
+			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_tasks"),
+		);
+		expect(taskTableStatement).toContain("acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb");
 		expect(artifactTableStatement).toContain("path TEXT NOT NULL");
 		expect(artifactTableStatement).toContain("media_type TEXT NOT NULL");
 		expect(artifactTableStatement).toContain("checksum TEXT NOT NULL");
@@ -424,14 +724,26 @@ describe("agent v2 runtime stores", () => {
 		expect(artifactTableStatement).not.toContain("uri TEXT NOT NULL");
 		expect(artifactTableStatement).not.toContain("title TEXT NOT NULL");
 		expect(artifactTableStatement).not.toContain("description TEXT");
+		expect(documentTableStatement).toContain("document_id TEXT NOT NULL");
+		expect(documentTableStatement).toContain("kind TEXT NOT NULL");
+		expect(documentTableStatement).toContain("version TEXT NOT NULL");
+		expect(documentTableStatement).toContain("content_markdown TEXT NOT NULL");
+		expect(documentTableStatement).toContain("content_json JSONB NOT NULL");
+		expect(documentTableStatement).toContain("source_task_id TEXT");
 		expect(run?.runId).toBe("run-v2-a");
 		expect(tasks[0]?.taskId).toBe("task-1");
+		expect(tasks[0]?.acceptanceCriteria).toEqual(["Task graph nodes include acceptance criteria"]);
 		expect(artifacts[0]?.artifactId).toBe("artifact-1");
+		expect(documents[0]?.documentId).toBe("spec");
+		expect(documents[0]?.contentJson.kind).toBe("spec");
+		expect(document?.sourceTaskId).toBe("spec");
 		expect(queryable.statementsMatching(/FROM runs/i)).toHaveLength(0);
 		expect(queryable.statementsMatching(/FROM tasks/i)).toHaveLength(0);
 		expect(queryable.statementsMatching(/FROM artifacts/i)).toHaveLength(0);
+		expect(queryable.statementsMatching(/FROM documents/i)).toHaveLength(0);
 		expect(queryable.statementsMatching(/FROM agent_v2_runs/i)).toHaveLength(1);
 		expect(queryable.statementsMatching(/FROM agent_v2_tasks/i)).toHaveLength(1);
 		expect(queryable.statementsMatching(/FROM agent_v2_artifacts/i)).toHaveLength(1);
+		expect(queryable.statementsMatching(/FROM agent_v2_documents/i)).toHaveLength(2);
 	});
 });

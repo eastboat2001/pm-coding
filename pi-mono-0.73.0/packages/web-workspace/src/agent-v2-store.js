@@ -1,8 +1,9 @@
 import { isObject } from "./json.js";
 import { createAgentV2RunSnapshot, transitionAgentV2RunSnapshot } from "./agent-v2-state-machine.js";
 export const AGENT_V2_RUN_COLUMNS = "client_id, run_id, status, phase, attempt, input_json, model_json, worker_id, created_at, updated_at, started_at, ended_at, error_json";
-export const AGENT_V2_TASK_COLUMNS = "client_id, run_id, task_id, parent_task_id, kind, title, status, depends_on_json, input_json, output_json, created_at, updated_at, started_at, ended_at, error_json";
+export const AGENT_V2_TASK_COLUMNS = "client_id, run_id, task_id, parent_task_id, kind, title, status, depends_on_json, acceptance_criteria_json, input_json, output_json, created_at, updated_at, started_at, ended_at, error_json";
 export const AGENT_V2_ARTIFACT_COLUMNS = "client_id, run_id, artifact_id, kind, path, media_type, checksum, version, source_task_id, validation_status, metadata_json, created_at, updated_at";
+export const AGENT_V2_DOCUMENT_COLUMNS = "client_id, run_id, document_id, kind, version, content_markdown, content_json, source_task_id, created_at, updated_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS = "client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
 export function buildAgentV2Run(input) {
     return createAgentV2RunSnapshot(input);
@@ -49,6 +50,7 @@ export function buildAgentV2Task(input) {
         title: input.title,
         status: input.status,
         dependsOn: input.dependsOn,
+        acceptanceCriteria: input.acceptanceCriteria ?? [],
         input: input.input,
         output: input.output,
         createdAt,
@@ -73,6 +75,23 @@ export function buildAgentV2Artifact(input) {
         ...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
         validationStatus: input.validationStatus,
         metadataJson: input.metadataJson ?? {},
+        createdAt,
+        updatedAt,
+    };
+}
+export function buildAgentV2Document(input) {
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    const updatedAt = input.updatedAt ?? createdAt;
+    const contentJson = normalizeAgentV2DocumentContent(input.kind, input.contentJson);
+    return {
+        clientId: input.clientId,
+        runId: input.runId,
+        documentId: input.documentId,
+        kind: input.kind,
+        version: input.version,
+        contentMarkdown: input.contentMarkdown,
+        contentJson,
+        ...(input.sourceTaskId ? { sourceTaskId: input.sourceTaskId } : {}),
         createdAt,
         updatedAt,
     };
@@ -102,6 +121,7 @@ export function toAgentV2TaskRecord(row) {
         title: row.title,
         status: row.status,
         dependsOn: parseStringArray(row.depends_on_json),
+        acceptanceCriteria: parseStringArray(row.acceptance_criteria_json),
         input: parseJsonObject(row.input_json),
         output: parseJsonObject(row.output_json),
         createdAt: toTimestamp(row.created_at),
@@ -124,6 +144,20 @@ export function toAgentV2ArtifactRecord(row) {
         ...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
         validationStatus: row.validation_status,
         metadataJson: parseJsonObject(row.metadata_json),
+        createdAt: toTimestamp(row.created_at),
+        updatedAt: toTimestamp(row.updated_at),
+    };
+}
+export function toAgentV2DocumentRecord(row) {
+    return {
+        clientId: row.client_id,
+        runId: row.run_id,
+        documentId: row.document_id,
+        kind: row.kind,
+        version: row.version,
+        contentMarkdown: row.content_markdown,
+        contentJson: parseAgentV2DocumentContent(row.content_json, row.kind),
+        ...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
         createdAt: toTimestamp(row.created_at),
         updatedAt: toTimestamp(row.updated_at),
     };
@@ -177,6 +211,26 @@ function parseAgentV2Error(value) {
     if (isObject(parsed.data))
         error.data = parsed.data;
     return error;
+}
+function normalizeAgentV2DocumentContent(kind, contentJson) {
+    const contentKind = contentJson.kind;
+    if (contentKind !== undefined && typeof contentKind !== "string") {
+        throw new Error(`Agent v2 document kind must be a string when present: input.kind="${kind}" contentJson.kind=${String(contentKind)}`);
+    }
+    if (typeof contentKind === "string" && contentKind !== kind) {
+        throw new Error(`Agent v2 document kind mismatch: input.kind="${kind}" contentJson.kind="${contentKind}"`);
+    }
+    return { ...contentJson, kind };
+}
+function parseAgentV2DocumentContent(value, fallbackKind) {
+    const parsed = parseJsonObject(value);
+    const parsedKind = parsed.kind;
+    if (isAgentV2DocumentKind(parsedKind))
+        return parsed;
+    return { ...parsed, kind: fallbackKind };
+}
+function isAgentV2DocumentKind(value) {
+    return value === "capability_decision" || value === "spec" || value === "plan" || value === "tasks";
 }
 function toNumber(value) {
     return typeof value === "number" ? value : Number(value);

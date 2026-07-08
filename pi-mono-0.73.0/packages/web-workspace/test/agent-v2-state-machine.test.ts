@@ -17,6 +17,7 @@ function task(taskId: string, status: AgentV2TaskNode["status"], dependsOn: stri
 		title: taskId,
 		status,
 		dependsOn,
+		acceptanceCriteria: [],
 		input: {},
 		output: {},
 		createdAt,
@@ -72,13 +73,20 @@ describe("Agent v2 state machine", () => {
 		expect(() => assertAgentV2RunTransition(from, to)).toThrow(`Invalid Agent v2 run transition: ${from} -> ${to}`);
 	});
 
-	it("progresses phases in order", () => {
-		expect(advanceAgentV2Phase("intake")).toBe("planning");
-		expect(advanceAgentV2Phase("planning")).toBe("execution");
-		expect(advanceAgentV2Phase("execution")).toBe("validation");
-		expect(advanceAgentV2Phase("validation")).toBe("repair");
-		expect(advanceAgentV2Phase("repair")).toBe("finalizing");
-		expect(advanceAgentV2Phase("finalizing")).toBe("finalizing");
+	it("advances through the expanded v2 planning phases before implementation", () => {
+		expect(advanceAgentV2Phase("intake")).toBe("capability_routing");
+		expect(advanceAgentV2Phase("capability_routing")).toBe("spec_draft");
+		expect(advanceAgentV2Phase("spec_draft")).toBe("spec_review");
+		expect(advanceAgentV2Phase("spec_review")).toBe("plan_draft");
+		expect(advanceAgentV2Phase("plan_draft")).toBe("task_generation");
+		expect(advanceAgentV2Phase("task_generation")).toBe("implementation");
+	});
+
+	it("does not advance terminal v2 phases", () => {
+		expect(advanceAgentV2Phase("delivery")).toBe("delivery");
+		expect(advanceAgentV2Phase("blocked")).toBe("blocked");
+		expect(advanceAgentV2Phase("failed")).toBe("failed");
+		expect(advanceAgentV2Phase("cancelled")).toBe("cancelled");
 	});
 
 	it("keeps terminal runs immutable", () => {

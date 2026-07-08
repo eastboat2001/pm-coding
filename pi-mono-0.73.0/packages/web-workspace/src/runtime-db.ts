@@ -5,25 +5,31 @@ import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
+	AGENT_V2_DOCUMENT_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
 	type AgentV2ArtifactRecord,
 	type AgentV2ArtifactRow,
 	type AgentV2DiagnosticRow,
+	type AgentV2DocumentRecord,
+	type AgentV2DocumentRow,
 	type AgentV2RunRow,
 	type AgentV2TaskRow,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
+	buildAgentV2Document,
 	buildAgentV2Run,
 	buildAgentV2Task,
 	type CreateAgentV2RunInput,
 	stringifyAgentV2Json,
 	toAgentV2ArtifactRecord,
 	toAgentV2DiagnosticRecord,
+	toAgentV2DocumentRecord,
 	toAgentV2RunRecord,
 	toAgentV2TaskRecord,
 	type UpdateAgentV2RunInput,
 	type UpsertAgentV2ArtifactInput,
+	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
 } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
@@ -71,6 +77,7 @@ const LEGACY_RESET_TABLES = [
 const AGENT_V2_RESET_TABLES = [
 	"agent_v2_diagnostics",
 	"agent_v2_validations",
+	"agent_v2_documents",
 	"agent_v2_artifacts",
 	"agent_v2_tasks",
 	"agent_v2_runs",
@@ -315,6 +322,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				title TEXT NOT NULL,
 				status TEXT NOT NULL,
 				depends_on_json TEXT NOT NULL,
+				acceptance_criteria_json TEXT NOT NULL DEFAULT '[]',
 				input_json TEXT NOT NULL,
 				output_json TEXT NOT NULL,
 				created_at TEXT NOT NULL,
@@ -327,9 +335,9 @@ export class RuntimeDbStore implements RuntimeStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC);
 
-			CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
+				CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
 				artifact_id TEXT NOT NULL,
 				kind TEXT NOT NULL,
 				path TEXT NOT NULL,
@@ -343,12 +351,28 @@ export class RuntimeDbStore implements RuntimeStore {
 				updated_at TEXT NOT NULL,
 				PRIMARY KEY (client_id, run_id, artifact_id),
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
+				);
+				CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
 
-			CREATE TABLE IF NOT EXISTS agent_v2_validations (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
+				CREATE TABLE IF NOT EXISTS agent_v2_documents (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
+					document_id TEXT NOT NULL,
+					kind TEXT NOT NULL,
+					version TEXT NOT NULL,
+					content_markdown TEXT NOT NULL,
+					content_json TEXT NOT NULL,
+					source_task_id TEXT,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL,
+					PRIMARY KEY (client_id, run_id, document_id),
+					FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+				);
+				CREATE INDEX IF NOT EXISTS idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC);
+
+				CREATE TABLE IF NOT EXISTS agent_v2_validations (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
 				validation_id TEXT NOT NULL,
 				task_id TEXT,
 				artifact_id TEXT,
@@ -380,7 +404,8 @@ export class RuntimeDbStore implements RuntimeStore {
 				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
 			);
 			CREATE INDEX IF NOT EXISTS idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at ASC);
-		`);
+			`);
+		ensureSqliteColumn(db, "agent_v2_tasks", "acceptance_criteria_json", "TEXT NOT NULL DEFAULT '[]'");
 		db.prepare(
 			`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
 			VALUES (?, ?)
@@ -1065,6 +1090,7 @@ export class RuntimeDbStore implements RuntimeStore {
 					title,
 					status,
 					depends_on_json,
+					acceptance_criteria_json,
 					input_json,
 					output_json,
 					created_at,
@@ -1072,13 +1098,14 @@ export class RuntimeDbStore implements RuntimeStore {
 					started_at,
 					ended_at,
 					error_json
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(client_id, run_id, task_id) DO UPDATE SET
 					parent_task_id = excluded.parent_task_id,
 					kind = excluded.kind,
 					title = excluded.title,
 					status = excluded.status,
 					depends_on_json = excluded.depends_on_json,
+					acceptance_criteria_json = excluded.acceptance_criteria_json,
 					input_json = excluded.input_json,
 					output_json = excluded.output_json,
 					updated_at = excluded.updated_at,
@@ -1095,6 +1122,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				task.title,
 				task.status,
 				stringifyAgentV2Json(task.dependsOn),
+				stringifyAgentV2Json(task.acceptanceCriteria),
 				stringifyAgentV2Json(task.input),
 				stringifyAgentV2Json(task.output),
 				task.createdAt,
@@ -1184,6 +1212,71 @@ export class RuntimeDbStore implements RuntimeStore {
 			)
 			.all(clientId, runId) as unknown as AgentV2ArtifactRow[];
 		return rows.map(toAgentV2ArtifactRecord);
+	}
+
+	upsertAgentV2Document(input: UpsertAgentV2DocumentInput): AgentV2DocumentRecord {
+		const document = buildAgentV2Document(input);
+		this.open()
+			.prepare(
+				`INSERT INTO agent_v2_documents (
+					client_id,
+					run_id,
+					document_id,
+					kind,
+					version,
+					content_markdown,
+					content_json,
+					source_task_id,
+					created_at,
+					updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(client_id, run_id, document_id) DO UPDATE SET
+					kind = excluded.kind,
+					version = excluded.version,
+					content_markdown = excluded.content_markdown,
+					content_json = excluded.content_json,
+					source_task_id = excluded.source_task_id,
+					updated_at = excluded.updated_at`,
+			)
+			.run(
+				document.clientId,
+				document.runId,
+				document.documentId,
+				document.kind,
+				document.version,
+				document.contentMarkdown,
+				stringifyAgentV2Json(document.contentJson),
+				document.sourceTaskId ?? null,
+				document.createdAt,
+				document.updatedAt,
+			);
+		return requiredRecord(
+			this.getAgentV2Document(input.clientId, input.runId, input.documentId),
+			"agent v2 document",
+		);
+	}
+
+	listAgentV2Documents(clientId: string, runId: string): AgentV2DocumentRecord[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_DOCUMENT_COLUMNS}
+				FROM agent_v2_documents
+				WHERE client_id = ? AND run_id = ?
+				ORDER BY created_at ASC, document_id ASC`,
+			)
+			.all(clientId, runId) as unknown as AgentV2DocumentRow[];
+		return rows.map(toAgentV2DocumentRecord);
+	}
+
+	getAgentV2Document(clientId: string, runId: string, documentId: string): AgentV2DocumentRecord | undefined {
+		const row = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_DOCUMENT_COLUMNS}
+				FROM agent_v2_documents
+				WHERE client_id = ? AND run_id = ? AND document_id = ?`,
+			)
+			.get(clientId, runId, documentId) as AgentV2DocumentRow | undefined;
+		return row ? toAgentV2DocumentRecord(row) : undefined;
 	}
 
 	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): AgentV2DiagnosticEvent {
@@ -1498,6 +1591,12 @@ function deleteAllRows<TableName extends string>(
 		counts[table] = Number(result.changes);
 	}
 	return counts;
+}
+
+function ensureSqliteColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+	const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+	if (columns.some((entry) => entry.name === column)) return;
+	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function now(): string {

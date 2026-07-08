@@ -5,7 +5,22 @@ export const APPLICATION_GENERATION_RUNTIME_V2 = Object.freeze({
     reason: "Application Generation Agent v2 is the replacement default; v1 is not a compatibility target.",
 });
 export const AGENT_V2_RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"];
-export const AGENT_V2_PHASES = ["intake", "planning", "execution", "validation", "repair", "finalizing"];
+export const AGENT_V2_PHASES = [
+    "intake",
+    "capability_routing",
+    "spec_draft",
+    "spec_review",
+    "plan_draft",
+    "task_generation",
+    "implementation",
+    "validation",
+    "repair",
+    "preview",
+    "delivery",
+    "blocked",
+    "failed",
+    "cancelled",
+];
 export const AGENT_V2_RUN_EVENT_TYPES = [
     "agent_v2.run_created",
     "agent_v2.phase_changed",

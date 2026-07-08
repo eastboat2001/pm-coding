@@ -1,3 +1,4 @@
+export { routeAgentV2Capabilities, STATIC_APP_V2_PLATFORM_CONTRACT } from "./agent-v2-capability-router.js";
 export {
 	AGENT_V2_DIAGNOSTIC_CATEGORIES,
 	type AgentV2DiagnosticCategory,
@@ -6,6 +7,17 @@ export {
 	createAgentV2DiagnosticEvent,
 	toWorkspaceDiagnosticEvent,
 } from "./agent-v2-diagnostics.js";
+export {
+	buildAgentV2PlanDocument,
+	buildAgentV2SpecDocument,
+	buildAgentV2TaskGraph,
+	renderAgentV2DocumentMarkdown,
+} from "./agent-v2-documents.js";
+export {
+	type AgentV2PlanningBootstrap,
+	buildAgentV2PlanningBootstrap,
+	persistAgentV2PlanningBootstrap,
+} from "./agent-v2-planning-bootstrap.js";
 export {
 	type AgentV2ResetDiagnosticsAdapter,
 	type AgentV2ResetOptions,
@@ -33,25 +45,31 @@ export {
 export {
 	AGENT_V2_ARTIFACT_COLUMNS,
 	AGENT_V2_DIAGNOSTIC_COLUMNS,
+	AGENT_V2_DOCUMENT_COLUMNS,
 	AGENT_V2_RUN_COLUMNS,
 	AGENT_V2_TASK_COLUMNS,
 	type AgentV2ArtifactRecord,
 	type AgentV2ArtifactRow,
 	type AgentV2DiagnosticRow,
+	type AgentV2DocumentRecord,
+	type AgentV2DocumentRow,
 	type AgentV2RunRow,
 	type AgentV2TaskRow,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
+	buildAgentV2Document,
 	buildAgentV2Run,
 	buildAgentV2Task,
 	type CreateAgentV2RunInput,
 	stringifyAgentV2Json,
 	toAgentV2ArtifactRecord,
 	toAgentV2DiagnosticRecord,
+	toAgentV2DocumentRecord,
 	toAgentV2RunRecord,
 	toAgentV2TaskRecord,
 	type UpdateAgentV2RunInput,
 	type UpsertAgentV2ArtifactInput,
+	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
 } from "./agent-v2-store.js";
 export {
@@ -60,13 +78,19 @@ export {
 	AGENT_V2_RUN_STATUSES,
 	AGENT_V2_SCHEMA_VERSION,
 	AGENT_V2_TASK_STATUSES,
+	type AgentV2CapabilityDecision,
+	type AgentV2CapabilityDeliveryMode,
 	type AgentV2Error,
 	type AgentV2Phase,
+	type AgentV2PlanDocument,
+	type AgentV2PlatformContract,
 	type AgentV2RunEventType,
 	type AgentV2RunInput,
 	type AgentV2RunSnapshot,
 	type AgentV2RunSnapshotInput,
 	type AgentV2RunStatus,
+	type AgentV2SpecDocument,
+	type AgentV2TaskGraph,
 	type AgentV2TaskKind,
 	type AgentV2TaskNode,
 	type AgentV2TaskStatus,

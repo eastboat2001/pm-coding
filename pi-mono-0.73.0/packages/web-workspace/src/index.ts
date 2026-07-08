@@ -1,4 +1,20 @@
+export {
+	type AgentV2ArtifactIndex,
+	type AgentV2ArtifactIndexFilter,
+	buildAgentV2ArtifactIndex,
+	filterAgentV2Artifacts,
+	findLatestAgentV2ArtifactByPath,
+} from "./agent-v2-artifact-index.js";
 export { routeAgentV2Capabilities, STATIC_APP_V2_PLATFORM_CONTRACT } from "./agent-v2-capability-router.js";
+export {
+	type AgentV2ContextDocuments,
+	type AgentV2ContextPacket,
+	type AgentV2ContextPacketInput,
+	type AgentV2ContextProblem,
+	type AgentV2ContextReread,
+	buildAgentV2ContextPacket,
+	renderAgentV2ContextPacketMarkdown,
+} from "./agent-v2-context-packet.js";
 export {
 	AGENT_V2_DIAGNOSTIC_CATEGORIES,
 	type AgentV2DiagnosticCategory,
@@ -36,6 +52,14 @@ export {
 	appendAgentV2RunEvent,
 } from "./agent-v2-run-events.js";
 export {
+	type AdvanceAgentV2TaskInput,
+	type AgentV2RuntimeSnapshot,
+	type AgentV2RuntimeStore,
+	advanceAgentV2Task,
+	type LoadAgentV2RuntimeSnapshotInput,
+	loadAgentV2RuntimeSnapshot,
+} from "./agent-v2-runtime-core.js";
+export {
 	advanceAgentV2Phase,
 	assertAgentV2RunTransition,
 	createAgentV2RunSnapshot,
@@ -72,6 +96,13 @@ export {
 	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
 } from "./agent-v2-store.js";
+export {
+	type AgentV2TaskSelection,
+	type AgentV2TaskSelectionReason,
+	type AgentV2TaskTransitionInput,
+	selectNextAgentV2Task,
+	transitionAgentV2Task,
+} from "./agent-v2-task-engine.js";
 export {
 	AGENT_V2_PHASES,
 	AGENT_V2_RUN_EVENT_TYPES,

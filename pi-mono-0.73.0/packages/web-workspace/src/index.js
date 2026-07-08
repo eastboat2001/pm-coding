@@ -1,4 +1,5 @@
 export { routeAgentV2Capabilities, STATIC_APP_V2_PLATFORM_CONTRACT } from "./agent-v2-capability-router.js";
+export { selectNextAgentV2Task, transitionAgentV2Task, } from "./agent-v2-task-engine.js";
 export { AGENT_V2_DIAGNOSTIC_CATEGORIES, createAgentV2DiagnosticEvent, toWorkspaceDiagnosticEvent, } from "./agent-v2-diagnostics.js";
 export { buildAgentV2PlanDocument, buildAgentV2SpecDocument, buildAgentV2TaskGraph, renderAgentV2DocumentMarkdown, } from "./agent-v2-documents.js";
 export { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap, } from "./agent-v2-planning-bootstrap.js";
@@ -6,6 +7,9 @@ export { assertAgentV2ResetConfirmation, resetAgentV2RuntimeData, } from "./agen
 export { appendAgentV2RunEvent, } from "./agent-v2-run-events.js";
 export { advanceAgentV2Phase, assertAgentV2RunTransition, createAgentV2RunSnapshot, getReadyAgentV2TaskIds, transitionAgentV2RunSnapshot, } from "./agent-v2-state-machine.js";
 export { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_TASK_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, stringifyAgentV2Json, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunRecord, toAgentV2TaskRecord, } from "./agent-v2-store.js";
+export { buildAgentV2ArtifactIndex, filterAgentV2Artifacts, findLatestAgentV2ArtifactByPath, } from "./agent-v2-artifact-index.js";
+export { buildAgentV2ContextPacket, renderAgentV2ContextPacketMarkdown, } from "./agent-v2-context-packet.js";
+export { advanceAgentV2Task, loadAgentV2RuntimeSnapshot, } from "./agent-v2-runtime-core.js";
 export { AGENT_V2_PHASES, AGENT_V2_RUN_EVENT_TYPES, AGENT_V2_RUN_STATUSES, AGENT_V2_SCHEMA_VERSION, AGENT_V2_TASK_STATUSES, APPLICATION_GENERATION_RUNTIME_V2, } from "./agent-v2-types.js";
 export { AppPreviewGoalService, budgetForSource, } from "./app-preview-goal-service.js";
 export { AppPreviewGoalSupervisor } from "./app-preview-goal-supervisor.js";

@@ -701,6 +701,15 @@ export class RuntimeDbStore {
             .get(clientId, runId);
         return row ? toAgentV2RunRecord(row) : undefined;
     }
+    listAgentV2Runs(clientId) {
+        const rows = this.open()
+            .prepare(`SELECT ${AGENT_V2_RUN_COLUMNS}
+				FROM agent_v2_runs
+				WHERE client_id = ?
+				ORDER BY updated_at DESC, run_id ASC`)
+            .all(clientId);
+        return rows.map(toAgentV2RunRecord);
+    }
     updateAgentV2Run(input) {
         const current = requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
         const next = applyAgentV2RunUpdate(current, input);

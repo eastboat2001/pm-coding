@@ -152,8 +152,8 @@ describe("AgentV2RunApiService", () => {
 		expect(cancelling).toMatchObject({
 			clientId: "client-a",
 			runId: "run-running",
-			status: "running",
-			phase: "cancelled",
+			status: "cancelling",
+			phase: "implementation",
 			workerId: "worker-a",
 			updatedAt: "2026-07-08T09:15:00.000Z",
 		});
@@ -164,7 +164,7 @@ describe("AgentV2RunApiService", () => {
 			type: "agent_v2.phase_changed",
 			payload: {
 				type: "agent_v2.phase_changed",
-				phase: "cancelled",
+				phase: "implementation",
 				status: "cancelling",
 				attempt: 1,
 				at: "2026-07-08T09:15:00.000Z",

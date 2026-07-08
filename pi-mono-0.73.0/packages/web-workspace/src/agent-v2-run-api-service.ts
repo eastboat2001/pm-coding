@@ -2,13 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import type { AgentV2RunQueue } from "./agent-v2-run-queue.js";
 import type { CreateAgentV2RunInput, UpdateAgentV2RunInput } from "./agent-v2-store.js";
+import type { RuntimeStore } from "./runtime-store.js";
 import type { AgentV2Phase, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
 
-type AgentV2RunStore = {
+type AgentV2RunStore = Pick<RuntimeStore, "createAgentV2Run" | "getAgentV2Run" | "listAgentV2Runs" | "updateAgentV2Run"> & {
 	createAgentV2Run(input: CreateAgentV2RunInput): Promise<AgentV2RunSnapshot> | AgentV2RunSnapshot;
-	getAgentV2Run(clientId: string, runId: string): Promise<AgentV2RunSnapshot | undefined> | AgentV2RunSnapshot | undefined;
 	updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot> | AgentV2RunSnapshot;
-	listAgentV2Runs?(clientId: string): Promise<AgentV2RunSnapshot[]> | AgentV2RunSnapshot[];
 };
 
 export interface AgentV2StartRunRequest {
@@ -99,14 +98,17 @@ export class AgentV2RunApiService {
 			await this.appendPhaseEvent(cancelled, "cancelled");
 			return cancelled;
 		}
+		if (run.status === "cancelling") {
+			return run;
+		}
 
 		const cancelling = await this.store.updateAgentV2Run({
 			clientId,
 			runId,
-			phase: "cancelled",
+			status: "cancelling",
 			updatedAt,
 		});
-		await this.appendPhaseEvent(cancelling, "cancelling");
+		await this.appendPhaseEvent(cancelling, cancelling.status);
 		return cancelling;
 	}
 
@@ -115,9 +117,6 @@ export class AgentV2RunApiService {
 	}
 
 	async listRuns(clientId: string): Promise<AgentV2RunSnapshot[]> {
-		if (!this.store.listAgentV2Runs) {
-			throw new AgentV2RunApiError("Agent v2 run listing is not configured", 500);
-		}
 		return await this.store.listAgentV2Runs(clientId);
 	}
 
@@ -125,7 +124,7 @@ export class AgentV2RunApiService {
 		return await this.events.list(clientId, runId, afterSeq);
 	}
 
-	private async appendPhaseEvent(run: AgentV2RunSnapshot, status: AgentV2RunStatus | "cancelling"): Promise<void> {
+	private async appendPhaseEvent(run: AgentV2RunSnapshot, status: AgentV2RunStatus): Promise<void> {
 		await this.events.append({
 			clientId: run.clientId,
 			runId: run.runId,

@@ -1068,6 +1068,18 @@ export class RuntimeDbStore implements RuntimeStore {
 		return row ? toAgentV2RunRecord(row) : undefined;
 	}
 
+	listAgentV2Runs(clientId: string): AgentV2RunSnapshot[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_RUN_COLUMNS}
+				FROM agent_v2_runs
+				WHERE client_id = ?
+				ORDER BY updated_at DESC, run_id ASC`,
+			)
+			.all(clientId) as unknown as AgentV2RunRow[];
+		return rows.map(toAgentV2RunRecord);
+	}
+
 	updateAgentV2Run(input: UpdateAgentV2RunInput): AgentV2RunSnapshot {
 		const current = requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
 		const next = applyAgentV2RunUpdate(current, input);

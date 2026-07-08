@@ -1230,6 +1230,18 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		return row ? toAgentV2RunRecord(row) : undefined;
 	}
 
+	async listAgentV2Runs(clientId: string): Promise<AgentV2RunSnapshot[]> {
+		const rows = await this.queryRows<AgentV2RunRow>(
+			this.queryable,
+			`SELECT ${AGENT_V2_RUN_COLUMNS}
+			FROM agent_v2_runs
+			WHERE client_id = $1
+			ORDER BY updated_at DESC, run_id ASC`,
+			[clientId],
+		);
+		return rows.map(toAgentV2RunRecord);
+	}
+
 	async updateAgentV2Run(input: UpdateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
 		return this.withTransaction(async (tx) => {
 			const current = requiredRecord(await this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");

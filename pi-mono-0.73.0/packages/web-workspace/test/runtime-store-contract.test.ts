@@ -25,6 +25,7 @@ type IsRequiredKey<T, K extends keyof T> = {} extends Pick<T, K> ? false : true;
 type _RuntimeStoreRequiresAppendAgentV2RunEvent = Expect<
 	IsRequiredKey<RuntimeStore, "appendAgentV2RunEvent">
 >;
+type _RuntimeStoreRequiresListAgentV2Runs = Expect<IsRequiredKey<RuntimeStore, "listAgentV2Runs">>;
 type _RuntimeStoreRequiresListAgentV2RunEvents = Expect<
 	IsRequiredKey<RuntimeStore, "listAgentV2RunEvents">
 >;
@@ -124,6 +125,9 @@ describe("runtime store contract", () => {
 			},
 			async getAgentV2Run() {
 				return undefined;
+			},
+			async listAgentV2Runs() {
+				return [];
 			},
 			async updateAgentV2Run() {
 				return {} as AgentV2RunSnapshot;

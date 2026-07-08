@@ -125,6 +125,7 @@ export interface RuntimeStore {
 	): MaybePromise<AppPreviewGoalEventRecord[]>;
 	createAgentV2Run(input: CreateAgentV2RunInputFromStore): MaybePromise<AgentV2RunSnapshot>;
 	getAgentV2Run(clientId: string, runId: string): MaybePromise<AgentV2RunSnapshot | undefined>;
+	listAgentV2Runs(clientId: string): MaybePromise<AgentV2RunSnapshot[]>;
 	updateAgentV2Run(input: UpdateAgentV2RunInputFromStore): MaybePromise<AgentV2RunSnapshot>;
 	appendAgentV2RunEvent(input: AppendAgentV2RunEventInputFromStore): MaybePromise<AgentV2RunEventRecord>;
 	listAgentV2RunEvents(clientId: string, runId: string, afterSeq: number): MaybePromise<AgentV2RunEventRecord[]>;

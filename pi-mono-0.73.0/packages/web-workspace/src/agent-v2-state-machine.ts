@@ -10,7 +10,8 @@ import {
 
 const RUN_TRANSITIONS: Record<AgentV2RunStatus, readonly AgentV2RunStatus[]> = {
 	queued: ["running", "cancelled"],
-	running: ["succeeded", "failed", "cancelled"],
+	running: ["cancelling", "succeeded", "failed", "cancelled"],
+	cancelling: ["cancelled", "failed", "succeeded"],
 	succeeded: [],
 	failed: [],
 	cancelled: [],

@@ -522,6 +522,61 @@ describe("PostgresRuntimeStore", () => {
 		expect(normalizeSql(queryable.queries[0]?.sql ?? "")).toContain("status IN ('running', 'cancelling')");
 	});
 
+	it("lists agent v2 runs through the shared runtime store contract", async () => {
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (/^SELECT .* FROM agent_v2_runs WHERE client_id = \$1 ORDER BY updated_at DESC, run_id ASC$/i.test(sql)) {
+				return {
+					rows: [
+						{
+							client_id: "client-a",
+							run_id: "run-newer",
+							status: "cancelling",
+							phase: "implementation",
+							attempt: 1,
+							input_json: { prompt: "Cancel this" },
+							model_json: { provider: "openai", id: "gpt-5" },
+							worker_id: "worker-1",
+							created_at: "2026-07-08T09:00:00.000Z",
+							updated_at: "2026-07-08T09:15:00.000Z",
+							started_at: "2026-07-08T09:01:00.000Z",
+							ended_at: null,
+							error_json: null,
+						},
+						{
+							client_id: "client-a",
+							run_id: "run-older",
+							status: "queued",
+							phase: "intake",
+							attempt: 1,
+							input_json: { prompt: "Queued run" },
+							model_json: { provider: "openai", id: "gpt-5" },
+							worker_id: null,
+							created_at: "2026-07-08T08:55:00.000Z",
+							updated_at: "2026-07-08T08:55:00.000Z",
+							started_at: null,
+							ended_at: null,
+							error_json: null,
+						},
+					],
+				};
+			}
+			return undefined;
+		});
+		const store = new PostgresRuntimeStore({ queryable });
+
+		const runs = await store.listAgentV2Runs("client-a");
+
+		expect(runs.map((run) => [run.runId, run.status])).toEqual([
+			["run-newer", "cancelling"],
+			["run-older", "queued"],
+		]);
+		expect(queryable.queries[0]?.values).toEqual(["client-a"]);
+		expect(normalizeSql(queryable.queries[0]?.sql ?? "")).toContain(
+			"FROM agent_v2_runs WHERE client_id = $1 ORDER BY updated_at DESC, run_id ASC",
+		);
+	});
+
 	it("appends and lists durable run events with client scoped queries", async () => {
 		const createdAt = "2026-06-29T04:05:06.000Z";
 		const queryable = new RecordingQueryable().on((query) => {

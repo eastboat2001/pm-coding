@@ -85,6 +85,36 @@ describe("RuntimeDbStore", () => {
 		expect(store.listRunEvents("client-a", "run-1", 1)).toEqual([]);
 	});
 
+	it("lists agent v2 runs by client in descending updated order", () => {
+		store.ensureAgentV2Schema();
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-older",
+			input: { prompt: "Older run" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:00:00.000Z",
+			updatedAt: "2026-07-08T09:00:00.000Z",
+		});
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-newer",
+			input: { prompt: "Newer run" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:05:00.000Z",
+			updatedAt: "2026-07-08T09:05:00.000Z",
+		});
+		store.createAgentV2Run({
+			clientId: "client-b",
+			runId: "run-other-client",
+			input: { prompt: "Other client" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:10:00.000Z",
+			updatedAt: "2026-07-08T09:10:00.000Z",
+		});
+
+		expect(store.listAgentV2Runs("client-a").map((run) => run.runId)).toEqual(["run-newer", "run-older"]);
+	});
+
 	it("updates run and session timestamps when appending run events", () => {
 		store.upsertClient("client-a");
 		store.createSession({

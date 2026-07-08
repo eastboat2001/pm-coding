@@ -37,7 +37,7 @@ describe("AgentV2RunApiService", () => {
 		});
 
 		const run = await service.startRun("client-a", {
-			input: { prompt: "Build the gateway" },
+			input: { prompt: "Build the gateway", sessionId: "session-a", title: "Gateway" },
 			model: { provider: "test", id: "local" },
 			createdAt: "2026-07-08T09:00:00.000Z",
 		});
@@ -71,6 +71,40 @@ describe("AgentV2RunApiService", () => {
 				createdAt: "2026-07-08T09:00:00.000Z",
 			},
 		]);
+	});
+
+	it("startRun rejects v2 input without executable session context before creating or enqueueing", async () => {
+		const invalidInputs = [
+			{ prompt: "Missing context" },
+			{ prompt: "Blank session", sessionId: " ", title: "Gateway" },
+			{ prompt: "Blank title", sessionId: "session-a", title: "\t" },
+		];
+
+		for (const input of invalidInputs) {
+			const { store } = createSqliteStore();
+			const queue = createAgentV2RunQueue(new InMemoryRunQueue());
+			const events = new RecordingEventLog();
+			const service = new AgentV2RunApiService({
+				store,
+				queue,
+				events,
+				createRunId: () => "run-invalid",
+			});
+
+			await expect(
+				service.startRun("client-a", {
+					input,
+					model: { provider: "test" },
+					createdAt: "2026-07-08T09:00:00.000Z",
+				}),
+			).rejects.toMatchObject({
+				name: "AgentV2RunApiError",
+				statusCode: 400,
+			});
+			expect(store.listAgentV2Runs("client-a")).toEqual([]);
+			await expect(queue.claim("worker-a", 0)).resolves.toBeUndefined();
+			expect(events.appendCalls).toEqual([]);
+		}
 	});
 
 	it("cancelRun on a queued run requests queue cancellation, marks the run cancelled, and emits a phase/status event", async () => {

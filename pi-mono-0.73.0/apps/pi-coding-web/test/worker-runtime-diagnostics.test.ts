@@ -23,6 +23,7 @@ import type {
   WorkerAgentInput,
 } from "../../../packages/web-workspace/src/index.js";
 import {
+  createAgentV2WorkerExecution,
   createAgentV2WorkerRunEventOptions,
   createWorkerStartupDiagnosticEvents,
 } from "../src/worker/main.js";
@@ -555,6 +556,37 @@ Delivery mode: static_simulation
       maxLen: 2222,
       ttlSeconds: 3333,
     });
+  });
+
+  it("forwards the production agent v2 worker cancellation signal into execution", async () => {
+    dir = mkdtempSync(join(tmpdir(), "pi-worker-runtime-v2-cancel-"));
+    const config = loadStorageConfig(dir);
+    const db = new RuntimeDbStore(join(dir, "runtime.sqlite"));
+
+    try {
+      db.ensureSchema();
+      db.ensureAgentV2Schema();
+      const run = db.createAgentV2Run({
+        clientId: "client-a",
+        runId: "run-v2-cancel",
+        input: { prompt: "Build an app", sessionId: "session-1", title: "Diagnostics" },
+        model: { provider: "test" },
+        createdAt: "2026-07-08T09:00:00.000Z",
+      });
+      const controller = new AbortController();
+      controller.abort(new Error("worker cancellation"));
+
+      await expect(
+        createAgentV2WorkerExecution(config).executeNextTask({
+          store: db,
+          run,
+          workerId: "worker-1",
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow("worker cancellation");
+    } finally {
+      db.close();
+    }
   });
 
   it("retries production stream error final events before persisting assistant errors", async () => {

@@ -5,6 +5,13 @@ export {
 	executeAgentV2NextTask,
 } from "./agent-v2-execution-core.js";
 export {
+	type AgentV2ExecutableRunInput,
+	AgentV2RunInputContractError,
+	type AgentV2RunContextInput,
+	parseAgentV2RunContext,
+	validateAgentV2RunInput,
+} from "./agent-v2-run-input-contract.js";
+export {
 	type AgentV2RunEventBus,
 	agentV2RunEventStreamKey,
 	RedisAgentV2RunEventBus,

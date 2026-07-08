@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AgentV2RunInputContractError, validateAgentV2RunInput, } from "./agent-v2-run-input-contract.js";
 export class AgentV2RunApiError extends Error {
     statusCode;
     constructor(message, statusCode) {
@@ -21,11 +22,12 @@ export class AgentV2RunApiService {
         this.createRunId = options.createRunId ?? (() => randomUUID());
     }
     async startRun(clientId, request) {
+        const input = validateStartRunInput(request.input);
         const createdAt = request.createdAt ?? this.now();
         const run = await this.store.createAgentV2Run({
             clientId,
             runId: request.runId ?? this.createRunId(),
-            input: request.input,
+            input,
             model: request.model ?? {},
             createdAt,
             updatedAt: request.updatedAt ?? createdAt,
@@ -117,5 +119,16 @@ export class AgentV2RunApiService {
 }
 function isTerminalRun(status) {
     return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
+}
+function validateStartRunInput(input) {
+    try {
+        return validateAgentV2RunInput(input);
+    }
+    catch (error) {
+        if (error instanceof AgentV2RunInputContractError) {
+            throw new AgentV2RunApiError(error.message, 400);
+        }
+        throw error;
+    }
 }
 //# sourceMappingURL=agent-v2-run-api-service.js.map

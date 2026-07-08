@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Connect } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import type { AgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import type { AgentV2RunEventReadRequest } from "../src/agent-v2-run-events.js";
 import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
@@ -24,13 +25,19 @@ afterEach(() => {
 describe("agent v2 Vite runtime routes", () => {
 	it("starts a v2 run and returns the v2 snapshot", async () => {
 		const api = new RecordingAgentV2RunApi();
-		api.startRunResult = runSnapshot({ runId: "run-started", input: { prompt: "Build a dashboard" } });
+		api.startRunResult = runSnapshot({
+			runId: "run-started",
+			input: { prompt: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
+		});
 		const harness = createHarness({ agentV2RunApi: api });
 
 		const response = await dispatch(harness.middleware, {
 			method: "POST",
 			url: `${PREFIX}/start`,
-			body: { input: { prompt: "Build a dashboard" }, model: { id: "test-model" } },
+			body: {
+				input: { prompt: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
+				model: { id: "test-model" },
+			},
 		});
 
 		expect(response.statusCode).toBe(200);
@@ -38,8 +45,25 @@ describe("agent v2 Vite runtime routes", () => {
 		expect(api.calls).toContainEqual({
 			method: "startRun",
 			clientId: CLIENT_ID,
-			request: { input: { prompt: "Build a dashboard" }, model: { id: "test-model" } },
+			request: {
+				input: { prompt: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
+				model: { id: "test-model" },
+			},
 		});
+		expect(harness.legacyRunApi.startRun).not.toHaveBeenCalled();
+	});
+
+	it("returns 400 when v2 start input lacks executable session context", async () => {
+		const harness = createHarness({ agentV2RunApi: createRealAgentV2RunApiForRouteTest() });
+
+		const response = await dispatch(harness.middleware, {
+			method: "POST",
+			url: `${PREFIX}/start`,
+			body: { input: { prompt: "Build a dashboard" }, model: { id: "test-model" } },
+		});
+
+		expect(response.statusCode).toBe(400);
+		expect(JSON.parse(response.body).error).toContain("sessionId and title");
 		expect(harness.legacyRunApi.startRun).not.toHaveBeenCalled();
 	});
 
@@ -194,7 +218,7 @@ type TestServices = Omit<
 > & {
 	runApi?: ConfiguredTestServices["runApi"];
 	runEventBus?: ConfiguredTestServices["runEventBus"];
-	agentV2RunApi?: RecordingAgentV2RunApi;
+	agentV2RunApi?: ConfiguredTestServices["agentV2RunApi"] | RecordingAgentV2RunApi;
 	agentV2RunEventBus?: AgentV2RunEventBus;
 	agentV2RunEventLog?: RecordingAgentV2RunEventLog;
 };
@@ -207,7 +231,7 @@ type Middleware = (
 function createHarness(
 	overrides: {
 		includeLegacyRunServices?: boolean;
-		agentV2RunApi?: RecordingAgentV2RunApi;
+		agentV2RunApi?: ConfiguredTestServices["agentV2RunApi"] | RecordingAgentV2RunApi;
 		agentV2RunEventBus?: AgentV2RunEventBus;
 		agentV2RunEventLog?: RecordingAgentV2RunEventLog;
 	} = {},
@@ -481,6 +505,54 @@ function runEvent(seq: number, overrides: Partial<AgentV2RunEventRecord> = {}): 
 		createdAt: `2026-07-08T09:00:0${seq}.000Z`,
 		...overrides,
 	};
+}
+
+function createRealAgentV2RunApiForRouteTest(): AgentV2RunApiService {
+	return new AgentV2RunApiService({
+		store: {
+			async createAgentV2Run(input) {
+				return runSnapshot({
+					clientId: input.clientId,
+					runId: input.runId,
+					input: input.input,
+					model: input.model,
+					createdAt: input.createdAt ?? "2026-07-08T09:00:00.000Z",
+					updatedAt: input.updatedAt ?? input.createdAt ?? "2026-07-08T09:00:00.000Z",
+				});
+			},
+			async getAgentV2Run() {
+				return undefined;
+			},
+			async listAgentV2Runs() {
+				return [];
+			},
+			async updateAgentV2RunWithResult() {
+				throw new Error("updateAgentV2RunWithResult should not be called by start route tests");
+			},
+		},
+		queue: {
+			enqueue: vi.fn(async () => undefined),
+			claim: vi.fn(async () => undefined),
+			complete: vi.fn(async () => undefined),
+			requeueActive: vi.fn(async () => 0),
+			requestCancel: vi.fn(async () => undefined),
+			isCancelRequested: vi.fn(async () => false),
+			close: vi.fn(async () => undefined),
+		},
+		events: {
+			append: vi.fn(async (input) => ({
+				clientId: input.clientId,
+				runId: input.runId,
+				seq: input.seq ?? 1,
+				type: input.type,
+				payload: input.payload,
+				createdAt: input.createdAt ?? "2026-07-08T09:00:00.000Z",
+			})),
+			list: vi.fn(async () => []),
+		},
+		createRunId: () => "run-started",
+		now: () => "2026-07-08T09:00:00.000Z",
+	});
 }
 
 function sseDataEvents(body: string): AgentV2RunEventRecord[] {

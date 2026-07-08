@@ -8,6 +8,7 @@ import {
 	AgentV2WorkerService,
 	createAgentV2RunQueue,
 	executeAgentV2NextTask,
+	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
 	type RedisAgentV2RunEventBusOptions,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
@@ -58,6 +59,7 @@ export function createAgentV2WorkerExecution(config: StorageConfig): AgentV2Work
 				config,
 				context: agentV2ContextFromRunInput(input.run),
 				runId: input.run.runId,
+				signal: input.signal,
 			});
 		},
 	};
@@ -68,12 +70,7 @@ export function agentV2ContextFromRunInput(run: AgentV2RunSnapshot): {
 	sessionId: string;
 	title: string;
 } {
-	const sessionId = nonEmptyInputString(run.input.sessionId);
-	const title = nonEmptyInputString(run.input.title);
-	if (!sessionId || !title) {
-		throw new Error("Agent v2 run input must include non-empty string sessionId and title fields.");
-	}
-	return { clientId: run.clientId, sessionId, title };
+	return { clientId: run.clientId, ...parseAgentV2RunContext(run.input) };
 }
 
 async function main(): Promise<void> {
@@ -360,10 +357,6 @@ function redactConnectionUrl(value: string): string {
 	} catch {
 		return value;
 	}
-}
-
-function nonEmptyInputString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function exitAfterShutdownFailure(error: unknown): never {

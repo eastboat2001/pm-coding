@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
+import {
+	AgentV2RunInputContractError,
+	validateAgentV2RunInput,
+} from "./agent-v2-run-input-contract.js";
 import type { AgentV2RunQueue } from "./agent-v2-run-queue.js";
 import type { AgentV2RunUpdateResult, CreateAgentV2RunInput, UpdateAgentV2RunInput } from "./agent-v2-store.js";
 import type { AgentV2Phase, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
@@ -55,11 +59,12 @@ export class AgentV2RunApiService {
 	}
 
 	async startRun(clientId: string, request: AgentV2StartRunRequest): Promise<AgentV2RunSnapshot> {
+		const input = validateStartRunInput(request.input);
 		const createdAt = request.createdAt ?? this.now();
 		const run = await this.store.createAgentV2Run({
 			clientId,
 			runId: request.runId ?? this.createRunId(),
-			input: request.input,
+			input,
 			model: request.model ?? {},
 			createdAt,
 			updatedAt: request.updatedAt ?? createdAt,
@@ -160,6 +165,17 @@ export class AgentV2RunApiService {
 
 function isTerminalRun(status: AgentV2RunStatus): boolean {
 	return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
+}
+
+function validateStartRunInput(input: unknown): AgentV2RunInput {
+	try {
+		return validateAgentV2RunInput(input);
+	} catch (error) {
+		if (error instanceof AgentV2RunInputContractError) {
+			throw new AgentV2RunApiError(error.message, 400);
+		}
+		throw error;
+	}
 }
 
 export type { AgentV2RunStore, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus, AgentV2Phase };

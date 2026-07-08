@@ -1,4 +1,5 @@
 export { executeAgentV2NextTask, } from "./agent-v2-execution-core.js";
+export { AgentV2RunInputContractError, parseAgentV2RunContext, validateAgentV2RunInput, } from "./agent-v2-run-input-contract.js";
 export { agentV2RunEventStreamKey, RedisAgentV2RunEventBus, } from "./agent-v2-run-event-bus.js";
 export { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 export { createAgentV2RunQueue, } from "./agent-v2-run-queue.js";

@@ -29,13 +29,13 @@ describe("agent v2 runtime run SSE events", () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ events: [runEvent(3)] }, { waitForAbort: true }]);
 		const harness = createSseHarness({
-			runApi: {
+			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
 			runEventLog: {
 				list: vi.fn().mockResolvedValue([runEvent(1), runEvent(2)]),
 			},
-			runEventBus: bus,
+			agentV2RunEventBus: bus,
 		});
 
 		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=0`);
@@ -61,13 +61,13 @@ describe("agent v2 runtime run SSE events", () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ events: [runEvent(3), runEvent(4)] }, { waitForAbort: true }]);
 		const harness = createSseHarness({
-			runApi: {
+			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
 			runEventLog: {
 				list: vi.fn().mockResolvedValue([runEvent(3)]),
 			},
-			runEventBus: bus,
+			agentV2RunEventBus: bus,
 		});
 
 		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=2`);
@@ -84,13 +84,13 @@ describe("agent v2 runtime run SSE events", () => {
 	it("returns 404 JSON without SSE headers when the v2 run does not exist", async () => {
 		const bus = new ScriptedAgentV2RunEventBus([]);
 		const harness = createSseHarness({
-			runApi: {
+			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(undefined),
 			},
 			runEventLog: {
 				list: vi.fn(),
 			},
-			runEventBus: bus,
+			agentV2RunEventBus: bus,
 		});
 
 		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/missing-run/events?stream=1&afterSeq=0`);
@@ -106,13 +106,13 @@ describe("agent v2 runtime run SSE events", () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ error: new Error("redis unavailable") }]);
 		const harness = createSseHarness({
-			runApi: {
+			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
 			runEventLog: {
 				list: vi.fn().mockResolvedValue([]),
 			},
-			runEventBus: bus,
+			agentV2RunEventBus: bus,
 		});
 
 		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=0`);
@@ -130,13 +130,13 @@ describe("agent v2 runtime run SSE events", () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ waitForAbort: true }]);
 		const harness = createSseHarness({
-			runApi: {
+			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
 			runEventLog: {
 				list: vi.fn().mockResolvedValue([]),
 			},
-			runEventBus: bus,
+			agentV2RunEventBus: bus,
 		});
 
 		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=0`);
@@ -153,13 +153,13 @@ describe("agent v2 runtime run SSE events", () => {
 		const run = runSnapshot();
 		const bus = new EmptyAgentV2RunEventBus(3);
 		const harness = createSseHarness({
-			runApi: {
+			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
 			runEventLog: {
 				list: vi.fn().mockResolvedValue([]),
 			},
-			runEventBus: bus,
+			agentV2RunEventBus: bus,
 		});
 
 		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=0`);
@@ -182,9 +182,9 @@ type Middleware = (
 ) => void | Promise<void>;
 
 function createSseHarness(options: {
-	runApi: Partial<AgentV2RunApiService>;
+	agentV2RunApi: Partial<AgentV2RunApiService>;
 	runEventLog: Pick<AgentV2RunEventLog, "list">;
-	runEventBus: AgentV2RunEventBus;
+	agentV2RunEventBus: AgentV2RunEventBus;
 }) {
 	let middleware: Middleware | undefined;
 	const services = {
@@ -205,8 +205,8 @@ function createSseHarness(options: {
 		skills: {} as TestServices["skills"],
 		runtimeDb: { ensureAgentV2Schema: vi.fn() } as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
-		agentV2RunApi: options.runApi as TestServices["agentV2RunApi"],
-		agentV2RunEventBus: options.runEventBus,
+		agentV2RunApi: options.agentV2RunApi as TestServices["agentV2RunApi"],
+		agentV2RunEventBus: options.agentV2RunEventBus,
 		agentV2RunEventLog: options.runEventLog,
 	} satisfies TestServices;
 	const plugin = createConfiguredStoragePluginForTest(services);

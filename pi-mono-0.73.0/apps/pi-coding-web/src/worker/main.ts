@@ -98,7 +98,7 @@ async function main(): Promise<void> {
 	});
 
 	let runtimeDb: WorkerV2ExecutionStore | undefined;
-	let runEventBus: RedisAgentV2RunEventBus | undefined;
+	let agentV2RunEventBus: RedisAgentV2RunEventBus | undefined;
 	let worker: AgentV2WorkerService | undefined;
 	try {
 		runtimeDb = createRuntimeStore(config) as AgentV2SchemaStore & AgentV2WorkerStore & WorkerV2Db;
@@ -109,8 +109,8 @@ async function main(): Promise<void> {
 			redisUrl: config.redisUrl,
 			queueName: config.agentV2RunQueueName,
 		});
-		runEventBus = new RedisAgentV2RunEventBus(options.bus);
-		const events = new AgentV2RunEventLog({ store: runtimeDb, bus: runEventBus });
+		agentV2RunEventBus = new RedisAgentV2RunEventBus(options.bus);
+		const events = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
 		worker = new AgentV2WorkerService({
 			store: runtimeDb,
 			queue,
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
 			shuttingDown = true;
 			console.log(`PI worker received ${signal}; stopping.`);
 			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopping", "info", { signal });
-			const exitCode = await stopWorkerRuntime({ worker, runEventBus, runtimeDb, diagnostics });
+			const exitCode = await stopWorkerRuntime({ worker, agentV2RunEventBus, runtimeDb, diagnostics });
 			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopped", exitCode === 0 ? "info" : "error", {
 				signal,
 				exitCode,
@@ -155,7 +155,7 @@ async function main(): Promise<void> {
 			...diagnosticErrorData(error),
 			hint: "The agent v2 worker process failed before it could stay online and claim queued runs.",
 		});
-		await stopWorkerRuntime({ worker, runEventBus, runtimeDb, diagnostics });
+		await stopWorkerRuntime({ worker, agentV2RunEventBus, runtimeDb, diagnostics });
 		removeProcessLifecycleDiagnostics();
 		removeFatalDiagnostics();
 		throw error;
@@ -164,7 +164,7 @@ async function main(): Promise<void> {
 
 async function stopWorkerRuntime(input: {
 	worker?: AgentV2WorkerService;
-	runEventBus?: RedisAgentV2RunEventBus;
+	agentV2RunEventBus?: RedisAgentV2RunEventBus;
 	runtimeDb?: WorkerV2Db;
 	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse">;
 }): Promise<number> {
@@ -176,10 +176,10 @@ async function stopWorkerRuntime(input: {
 		logCleanupError("worker.stop", error);
 	}
 	try {
-		await input.runEventBus?.close();
+		await input.agentV2RunEventBus?.close();
 	} catch (error) {
 		exitCode = 1;
-		logCleanupError("runEventBus.close", error);
+		logCleanupError("agentV2RunEventBus.close", error);
 	}
 	try {
 		await input.diagnostics.flushLangfuse();

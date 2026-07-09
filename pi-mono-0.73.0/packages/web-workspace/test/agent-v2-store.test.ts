@@ -97,7 +97,6 @@ describe("agent v2 runtime stores", () => {
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "pi-runtime-agent-v2-db-"));
 		store = new RuntimeDbStore(join(dir, "runtime.sqlite"));
-		store.ensureSchema();
 		store.ensureAgentV2Schema();
 	});
 
@@ -107,6 +106,7 @@ describe("agent v2 runtime stores", () => {
 	});
 
 	it("initializes v2 schema independently from legacy sessions", () => {
+		store.ensureSchema();
 		store.createSession({
 			clientId: "client-a",
 			sessionId: "session-1",
@@ -130,6 +130,7 @@ describe("agent v2 runtime stores", () => {
 	});
 
 	it("does not read legacy runs as v2 runs", () => {
+		store.ensureSchema();
 		store.createSession({
 			clientId: "client-a",
 			sessionId: "session-1",
@@ -149,6 +150,7 @@ describe("agent v2 runtime stores", () => {
 	});
 
 	it("keeps v2 reads undefined when only legacy runs and run_events exist for replay", async () => {
+		store.ensureSchema();
 		store.createSession({
 			clientId: "client-a",
 			sessionId: "session-transport",

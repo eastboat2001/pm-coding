@@ -107,7 +107,6 @@ describe("agent v2 planning bootstrap", () => {
 function createTempRuntimeDbStoreWithV2Schema(cleanupRoots: string[], cleanupStores: RuntimeDbStore[]): RuntimeDbStore {
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-planning-bootstrap-"));
 	const store = new RuntimeDbStore(join(root, "runtime.sqlite"));
-	store.ensureSchema();
 	store.ensureAgentV2Schema();
 	cleanupRoots.push(root);
 	cleanupStores.push(store);

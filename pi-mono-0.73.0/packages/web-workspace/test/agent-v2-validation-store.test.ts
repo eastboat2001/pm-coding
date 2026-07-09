@@ -66,7 +66,6 @@ describe("agent v2 validation store", () => {
 function createStore(): RuntimeDbStore {
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-validation-store-"));
 	const store = new RuntimeDbStore(join(root, "runtime.sqlite"));
-	store.ensureSchema();
 	store.ensureAgentV2Schema();
 	cleanupRoots.push(root);
 	cleanupStores.push(store);

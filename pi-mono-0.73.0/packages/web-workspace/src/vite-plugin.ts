@@ -718,8 +718,8 @@ async function handleAgentV2RuntimeRunsApi(
 	url: URL,
 	req: Connect.IncomingMessage,
 	res: ServerResponse,
-	runApi: AgentV2RunApiService,
-	runEventBus: AgentV2RunEventBus,
+	agentV2RunApi: AgentV2RunApiService,
+	agentV2RunEventBus: AgentV2RunEventBus,
 	runEventLog: Pick<AgentV2RunEventLog, "list">,
 ): Promise<void> {
 	try {
@@ -728,12 +728,12 @@ async function handleAgentV2RuntimeRunsApi(
 			const body = await readJsonBody(req);
 			sendJson(
 				res,
-				(await runApi.startRun(clientId, body as unknown as AgentV2StartRunRequest)) as unknown as JsonObject,
+				(await agentV2RunApi.startRun(clientId, body as unknown as AgentV2StartRunRequest)) as unknown as JsonObject,
 			);
 			return;
 		}
 		if (method === "GET" && (route === "/" || route === "")) {
-			sendJson(res, { runs: await runApi.listRuns(clientId) });
+			sendJson(res, { runs: await agentV2RunApi.listRuns(clientId) });
 			return;
 		}
 
@@ -742,24 +742,36 @@ async function handleAgentV2RuntimeRunsApi(
 			const runId = decodeURIComponent(eventsMatch[1]);
 			const afterSeq = queryNumber(url, "afterSeq") ?? 0;
 			if (wantsEventStream(req, url)) {
-				await streamAgentV2RunEvents(res, req, runApi, runEventBus, runEventLog, clientId, runId, afterSeq);
+				await streamAgentV2RunEvents(
+					res,
+					req,
+					agentV2RunApi,
+					agentV2RunEventBus,
+					runEventLog,
+					clientId,
+					runId,
+					afterSeq,
+				);
 				return;
 			}
-			const run = await runApi.getRun(clientId, runId);
+			const run = await agentV2RunApi.getRun(clientId, runId);
 			if (!run) throw new AgentV2RunApiError("Agent v2 run not found.", 404);
-			sendJson(res, { events: await runApi.listRunEvents(clientId, runId, afterSeq) });
+			sendJson(res, { events: await agentV2RunApi.listRunEvents(clientId, runId, afterSeq) });
 			return;
 		}
 
 		const cancelMatch = route.match(/^\/([^/]+)\/cancel$/);
 		if (method === "POST" && cancelMatch) {
-			sendJson(res, (await runApi.cancelRun(clientId, decodeURIComponent(cancelMatch[1]))) as unknown as JsonObject);
+			sendJson(
+				res,
+				(await agentV2RunApi.cancelRun(clientId, decodeURIComponent(cancelMatch[1]))) as unknown as JsonObject,
+			);
 			return;
 		}
 
 		const runMatch = route.match(/^\/([^/]+)$/);
 		if (method === "GET" && runMatch) {
-			const run = await runApi.getRun(clientId, decodeURIComponent(runMatch[1]));
+			const run = await agentV2RunApi.getRun(clientId, decodeURIComponent(runMatch[1]));
 			sendJson(res, (run || { error: "Agent v2 run not found." }) as unknown as JsonObject, run ? 200 : 404);
 			return;
 		}
@@ -789,8 +801,8 @@ function wantsEventStream(req: Connect.IncomingMessage, url: URL): boolean {
 async function streamAgentV2RunEvents(
 	res: ServerResponse,
 	req: Connect.IncomingMessage,
-	runApi: AgentV2RunApiService,
-	runEventBus: AgentV2RunEventBus,
+	agentV2RunApi: AgentV2RunApiService,
+	agentV2RunEventBus: AgentV2RunEventBus,
 	runEventLog: Pick<AgentV2RunEventLog, "list">,
 	clientId: string,
 	runId: string,
@@ -817,7 +829,7 @@ async function streamAgentV2RunEvents(
 	if (typeof responseWithOn.on === "function") responseWithOn.on("close", closeStream);
 
 	try {
-		const run = await runApi.getRun(clientId, runId);
+		const run = await agentV2RunApi.getRun(clientId, runId);
 		if (!run) throw new AgentV2RunApiError("Agent v2 run not found.", 404);
 		const durableEvents = await runEventLog.list(clientId, runId, afterSeq);
 		if (closed || res.destroyed) return;
@@ -838,7 +850,7 @@ async function streamAgentV2RunEvents(
 		}
 
 		while (!closed && !res.destroyed) {
-			const events = await runEventBus.read({
+			const events = await agentV2RunEventBus.read({
 				clientId,
 				runId,
 				afterSeq: readSeq,

@@ -379,7 +379,6 @@ describe("AgentV2RunApiService", () => {
 function createSqliteStore(): { store: RuntimeDbStore } {
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-run-api-service-"));
 	const store = new RuntimeDbStore(join(root, "runtime.sqlite"));
-	store.ensureSchema();
 	store.ensureAgentV2Schema();
 	cleanupRoots.push(root);
 	cleanupStores.push(store);

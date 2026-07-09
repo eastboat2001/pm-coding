@@ -88,6 +88,7 @@ describe("agent v2 run event store", () => {
 			now: () => "2026-07-08T01:02:00.000Z",
 		});
 
+		store.ensureSchema();
 		store.createSession({
 			clientId: "client-a",
 			sessionId: "legacy-session",
@@ -123,7 +124,6 @@ function createStore(): { dbFile: string; store: RuntimeDbStore } {
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-run-event-store-"));
 	const dbFile = join(root, "runtime.sqlite");
 	const store = new RuntimeDbStoreCtor(dbFile);
-	store.ensureSchema();
 	store.ensureAgentV2Schema();
 	cleanupRoots.push(root);
 	cleanupStores.push(store);

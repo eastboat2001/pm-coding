@@ -82,7 +82,6 @@ describe("worker runtime diagnostics", () => {
 		const db = new RuntimeDbStore(join(dir, "runtime.sqlite"));
 
 		try {
-			db.ensureSchema();
 			db.ensureAgentV2Schema();
 			const run = db.createAgentV2Run({
 				clientId: "client-a",

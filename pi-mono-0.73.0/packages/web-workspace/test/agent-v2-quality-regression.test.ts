@@ -534,7 +534,6 @@ function createSqliteStore(): { root: string; store: RuntimeDbStore; dbFile: str
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-quality-regression-"));
 	const dbFile = join(root, "runtime.sqlite");
 	const store = new RuntimeDbStore(dbFile);
-	store.ensureSchema();
 	store.ensureAgentV2Schema();
 	cleanupRoots.push(root);
 	cleanupStores.push(store);
@@ -542,6 +541,7 @@ function createSqliteStore(): { root: string; store: RuntimeDbStore; dbFile: str
 }
 
 function seedLegacyRuntime(store: RuntimeDbStore, runId: string): void {
+	store.ensureSchema();
 	store.createSession({
 		clientId: "client-a",
 		sessionId: `legacy-session-${runId}`,

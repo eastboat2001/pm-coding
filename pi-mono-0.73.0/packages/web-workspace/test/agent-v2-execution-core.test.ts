@@ -468,7 +468,6 @@ function tempRoot(): string {
 
 function createStore(root: string): RuntimeDbStore {
 	const store = new RuntimeDbStore(join(root, "runtime.sqlite"));
-	store.ensureSchema();
 	store.ensureAgentV2Schema();
 	cleanupStores.push(store);
 	return store;

@@ -6,6 +6,15 @@ Phase 4 建立 Application Generation Agent v2 的工具治理、验证 gate、r
 
 Phase 4 仍不接管生产 worker 主路径。worker cutover 放到 Phase 5。Phase 4 必须产出可以被 Phase 5 worker adapter 调用的 v2-native execution boundary。
 
+## Reset Procedure
+
+1. Stop v2 workers.
+2. Run the Agent v2 reset maintenance operation with confirmation token application-generation-agent-v2.
+3. Start v2 workers.
+4. Verify /api/agent-v2/runs/start and event replay.
+
+Rollback: redeploy the previous code version and restore from backup if required.
+
 ## 关键结论
 
 当前旧 worker 入口 `apps/pi-coding-web/src/worker/main.ts:createRunAgent` 仍然构造旧 `Agent`，并调用旧 capability planner、旧 spec artifact、旧 context orchestrator 和旧 prompt/tool flow。Phase 4 不在这个入口上继续补丁。
@@ -19,7 +28,7 @@ Phase 3 的 `agent-v2-runtime-core.ts` 已经提供 v2 runtime snapshot 和 task
 - 不兼容旧 agent 内部模块接口、旧 prompt 流程、旧 spec/plan/tasks 文件生成逻辑。
 - 不复用旧 preview goal continuation repair 逻辑。
 - 不迁移旧 run/session/message/app preview goal/diagnostic 测试数据。
-- `PI_APP_AGENT_VERSION=v1/v2` 只允许作为短期本地调试开关，不是正式架构目标。
+- 正式产品路径不存在运行时版本开关；Application Generation Agent v2 是唯一支持的运行时目标。
 - v2 correctness、diagnosability、task state machine、validation/repair loop 优先于旧路径兼容。
 - 旧模块如果不适合作为 infra adapter，Phase 4 应重构或新增 v2 adapter，而不是迁就复用。
 

@@ -187,8 +187,12 @@ describe("WorkspaceDiagnosticExportService", () => {
 			runEventsByRunId: { "run-v2": [event] },
 			agentV2DiagnosticsByRunId: { "run-v2": [diagnostic] },
 		});
+		expect(JSON.stringify(JSON.parse(files["manifest.json"]))).toContain("\"runId\":\"run-v2\"");
+		expect(files["runtime/session.json"].trim()).toBe("null");
+		expect(files["runtime/messages.ndjson"]).toBe("");
 		expect(files["runtime/run-events/run-v2.events.ndjson"]).toContain("agent_v2.phase_changed");
 		expect(files["agent-v2/diagnostics/run-v2.diagnostics.ndjson"]).toContain("schema_check_failed");
+		expect(files["agent-v2/diagnostics/run-v2.diagnostics.ndjson"]).toContain("diag-v2");
 		expect(JSON.parse(files["diagnostics/overview.json"])).toMatchObject({
 			session: null,
 			counts: {

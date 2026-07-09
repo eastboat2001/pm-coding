@@ -111,5 +111,9 @@ class RecordingBus implements AgentV2RunEventBus {
 		return this.readResult.filter((entry) => entry.seq > request.afterSeq);
 	}
 
+	async purge(): Promise<{ streamsDeleted: number }> {
+		return { streamsDeleted: 0 };
+	}
+
 	async close(): Promise<void> {}
 }

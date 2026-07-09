@@ -75,12 +75,6 @@ export function agentV2ContextFromRunInput(run: AgentV2RunSnapshot): {
 
 async function main(): Promise<void> {
 	const config = loadStorageConfig(process.cwd());
-	if (config.appAgentVersion === "v1") {
-		const legacy = await import("./legacy-v1-main.js");
-		await legacy.runLegacyV1Worker();
-		return;
-	}
-
 	const diagnostics = new WorkspaceDiagnosticLogService(config);
 	diagnostics.ensureDirs();
 	const removeFatalDiagnostics = installWorkerFatalDiagnostics(config, diagnostics);
@@ -93,7 +87,6 @@ async function main(): Promise<void> {
 				category: "system",
 				eventType: "system.worker.starting",
 				data: {
-					appAgentVersion: config.appAgentVersion,
 					workerId: config.workerId,
 					workerConcurrency: config.workerConcurrency,
 					agentV2RunQueueName: config.agentV2RunQueueName,
@@ -209,7 +202,6 @@ export function createWorkerStartupDiagnosticEvents(config: StorageConfig): Diag
 				envFile: config.envFile,
 				envFileExists,
 				runsEnabled: config.runsEnabled,
-				appAgentVersion: config.appAgentVersion,
 				redisUrl: redactConnectionUrl(config.redisUrl),
 				runQueueName: config.runQueueName,
 				agentV2RunQueueName: config.agentV2RunQueueName,
@@ -317,7 +309,6 @@ function writeWorkerProcessDiagnostic(
 				category: "system",
 				eventType,
 				data: {
-					appAgentVersion: config.appAgentVersion,
 					workerId: config.workerId,
 					workerConcurrency: config.workerConcurrency,
 					agentV2RunQueueName: config.agentV2RunQueueName,

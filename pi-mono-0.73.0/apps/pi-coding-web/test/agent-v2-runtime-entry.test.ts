@@ -1,12 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { loadStorageConfig } from "../../../packages/web-workspace/src/config.js";
-import type { WorkerAgentInput } from "../../../packages/web-workspace/src/index.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { selectApplicationGenerationRuntime } from "../src/agent-v2/runtime-entry.js";
 import { STATIC_PREVIEW_CONTRACT } from "../src/runtime/platform-contract.js";
-import { createRunAgent } from "../src/worker/main.js";
+import { createWorkerStartupDiagnosticEvents } from "../src/worker/main.js";
 
 describe("application generation runtime entry", () => {
 	let dir: string | undefined;
@@ -52,65 +52,21 @@ describe("application generation runtime entry", () => {
 		expect(second).not.toBe(first);
 	});
 
-	it("rejects retired v1 before createRunAgent constructs the worker agent", () => {
+	it("ignores PI_APP_AGENT_VERSION=v1 and keeps the worker entry on the v2 path", () => {
 		dir = mkdtempSync(join(tmpdir(), "pi-agent-v2-runtime-entry-"));
 		process.env.PI_APP_AGENT_VERSION = "v1";
+		const config = loadStorageConfig(dir);
+		const workerEntrySource = readFileSync(new URL("../src/worker/main.ts", import.meta.url), "utf8");
 
-		expect(() =>
-			createRunAgent(createWorkerInput(), {
-				config: loadStorageConfig(dir),
-				diagnostics: { writeEvents: () => ({ accepted: 0, dropped: 0 }) },
-				skills: { load: () => ({ name: "unused", content: "unused" }) },
-				promptSkills: [],
-				defaultSkills: [],
+		expect("appAgentVersion" in config).toBe(false);
+		expect(createWorkerStartupDiagnosticEvents(config)).toContainEqual(
+			expect.objectContaining({
+				eventType: "system.startup.config",
+				data: expect.not.objectContaining({
+					appAgentVersion: expect.anything(),
+				}),
 			}),
-		).toThrow("v1 is retired");
+		);
+		expect(workerEntrySource).not.toContain("legacy-v1-main");
 	});
 });
-
-function createWorkerInput(): WorkerAgentInput {
-	return {
-		run: {
-			runId: "run-1",
-			clientId: "client-a",
-			sessionId: "session-1",
-			status: "running",
-			model: { provider: "test", id: "test-model" },
-			thinkingLevel: "medium",
-			createdAt: "2026-06-11T00:00:00.000Z",
-			updatedAt: "2026-06-11T00:00:00.000Z",
-		},
-		session: {
-			sessionId: "session-1",
-			clientId: "client-a",
-			title: "Runtime guard",
-			model: { provider: "test", id: "test-model" },
-			thinkingLevel: "medium",
-			createdAt: "2026-06-11T00:00:00.000Z",
-			updatedAt: "2026-06-11T00:00:00.000Z",
-		},
-		messages: [
-			{
-				messageId: 1,
-				clientId: "client-a",
-				sessionId: "session-1",
-				role: "user",
-				payload: { content: "hello" },
-				createdAt: "2026-06-11T00:00:00.000Z",
-			},
-		],
-		model: {
-			id: "test-model",
-			name: "Test Model",
-			api: "openai-completions",
-			provider: "Test Provider",
-			baseUrl: "http://127.0.0.1:8000/v1",
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 32768,
-			maxTokens: 4096,
-		},
-		thinkingLevel: "medium",
-		signal: new AbortController().signal,
-	};
-}

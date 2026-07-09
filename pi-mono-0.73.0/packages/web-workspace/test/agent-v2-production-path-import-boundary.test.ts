@@ -19,7 +19,7 @@ const denyStrings = [
 	"legacy-v1-agent-v2-run-event-bridge",
 ];
 
-const allowedLegacyFiles = new Set(["apps/pi-coding-web/src/worker/legacy-v1-main.ts"]);
+const allowedLegacyFiles = new Set<string>();
 const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts";
 
 describe("agent v2 production import boundary", () => {
@@ -75,11 +75,10 @@ describe("agent v2 production import boundary", () => {
 		}
 	});
 
-	it("gates legacy plugin service construction behind v1 mode", () => {
+	it("does not retain v1 gating or legacy plugin service construction in configured storage plugin", () => {
 		const source = readFileSync(join(repoRoot, "packages", "web-workspace", "src", "vite-plugin.ts"), "utf8");
 		const configuredStoragePluginSource = extractFunctionSource(source, "configuredStoragePlugin");
-		const v1GateIndex = configuredStoragePluginSource.indexOf('config.appAgentVersion === "v1"');
-		expect(v1GateIndex).toBeGreaterThanOrEqual(0);
+		expect(configuredStoragePluginSource).not.toContain('config.appAgentVersion === "v1"');
 
 		const legacyReferences = [
 			"new AppPreviewGoalService",
@@ -88,10 +87,12 @@ describe("agent v2 production import boundary", () => {
 			"queueName: config.runQueueName",
 		];
 		for (const legacyReference of legacyReferences) {
-			const referenceIndex = configuredStoragePluginSource.indexOf(legacyReference);
-			expect(referenceIndex, legacyReference).toBeGreaterThan(v1GateIndex);
-			expect(configuredStoragePluginSource.slice(0, v1GateIndex), legacyReference).not.toContain(legacyReference);
+			expect(configuredStoragePluginSource, legacyReference).not.toContain(legacyReference);
 		}
+	});
+
+	it("deletes the legacy v1 worker entry", () => {
+		expect(existsSync(join(repoRoot, "apps", "pi-coding-web", "src", "worker", "legacy-v1-main.ts"))).toBe(false);
 	});
 });
 

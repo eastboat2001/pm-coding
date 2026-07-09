@@ -257,7 +257,6 @@ function createTestConfig(): StorageConfig {
 		runtimeStore: "sqlite",
 		postgresUrl: "postgres://user:pass@example.com:5432/pi",
 		runsEnabled: true,
-		appAgentVersion: "v2",
 		workerId: "test-worker",
 		workerConcurrency: 1,
 		runMaxAgentTurns: 80,

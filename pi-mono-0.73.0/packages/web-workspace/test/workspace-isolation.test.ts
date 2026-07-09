@@ -243,7 +243,6 @@ function testConfig(root: string): StorageConfig {
 		runtimeStore: "postgres",
 		postgresUrl: "postgres://pi:pi@postgres:5432/pi_coding",
 		runsEnabled: false,
-		appAgentVersion: "v2",
 		workerId: "test-worker",
 		workerConcurrency: 2,
 		runMaxAgentTurns: 80,

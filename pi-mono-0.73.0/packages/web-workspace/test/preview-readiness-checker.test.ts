@@ -371,7 +371,6 @@ describe("PreviewReadinessChecker", () => {
 			runtimeStore: "postgres",
 			postgresUrl: "postgres://pi:pi@postgres:5432/pi_coding",
 			runsEnabled: true,
-			appAgentVersion: "v2",
 			workerId: "worker-1",
 			workerConcurrency: 1,
 			runMaxAgentTurns: 80,

@@ -1731,6 +1731,10 @@ class ClaimFailingQueue implements RunQueue {
 		return false;
 	}
 
+	async clear(): Promise<{ queueItemsDeleted: number; activeClaimsDeleted: number; cancelKeysDeleted: number }> {
+		return { queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 };
+	}
+
 	async close(): Promise<void> {}
 
 	async waitForClaims(count: number): Promise<void> {

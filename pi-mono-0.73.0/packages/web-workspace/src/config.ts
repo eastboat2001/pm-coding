@@ -36,7 +36,6 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		runtimeStore: stringValue(env("PI_RUNTIME_STORE")) === "sqlite" ? "sqlite" : "postgres",
 		postgresUrl: stringValue(env("PI_POSTGRES_URL")) || "postgres://pi:pi@postgres:5432/pi_coding",
 		runsEnabled: envBooleanValue(env("PI_RUNS_ENABLED")) ?? true,
-		appAgentVersion: stringValue(env("PI_APP_AGENT_VERSION")) === "v1" ? "v1" : "v2",
 		workerId: stringValue(env("PI_WORKER_ID")) || "pi-worker",
 		workerConcurrency: positiveIntegerValue(env("PI_WORKER_CONCURRENCY"), 2),
 		runMaxAgentTurns: nonNegativeIntegerValue(env("PI_RUN_MAX_AGENT_TURNS"), 80),

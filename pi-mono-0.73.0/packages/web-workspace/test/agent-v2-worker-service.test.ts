@@ -836,6 +836,10 @@ class RecordingQueue implements AgentV2RunQueue {
 		return this.cancelRequested.has(runKey(run.clientId, run.runId));
 	}
 
+	async clear(): Promise<{ queueItemsDeleted: number; activeClaimsDeleted: number; cancelKeysDeleted: number }> {
+		return { queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 };
+	}
+
 	async close(): Promise<void> {
 		this.closed = true;
 		this.closeCount += 1;

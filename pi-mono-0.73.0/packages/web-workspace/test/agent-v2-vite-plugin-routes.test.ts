@@ -142,7 +142,7 @@ describe("agent v2 Vite runtime routes", () => {
 		await request.done;
 	});
 
-	it("returns 410 for legacy run start when appAgentVersion is v2", async () => {
+it("returns 410 for legacy run start after the v1 runtime removal", async () => {
 		const harness = createHarness();
 
 		const response = await dispatch(harness.middleware, {
@@ -151,12 +151,12 @@ describe("agent v2 Vite runtime routes", () => {
 			body: { message: { role: "user", content: "legacy start" } },
 		});
 
-		expect(response.statusCode).toBe(410);
-		expect(JSON.parse(response.body).error).toContain("Application Generation Agent v1 runtime routes are disabled");
-		expect(harness.legacyRunApi.startRun).not.toHaveBeenCalled();
-	});
+	expect(response.statusCode).toBe(410);
+	expect(JSON.parse(response.body).error).toBe("Application Generation Agent v1 runtime routes have been removed.");
+	expect(harness.legacyRunApi.startRun).not.toHaveBeenCalled();
+});
 
-	it("disables legacy run routes in v2 default mode without calling the legacy service", async () => {
+it("returns fixed 410 responses for legacy run routes without calling the legacy service", async () => {
 		const harness = createHarness();
 		const cases = LEGACY_RUN_API_PREFIXES.flatMap((prefix) => [
 			{ label: `${prefix} list`, method: "GET", url: prefix },
@@ -175,15 +175,15 @@ describe("agent v2 Vite runtime routes", () => {
 		for (const route of cases) {
 			const response = await dispatch(harness.middleware, route);
 			expect(response.statusCode, route.label).toBe(410);
-			expect(JSON.parse(response.body).error, route.label).toContain(
-				"Application Generation Agent v1 runtime routes are disabled",
+			expect(JSON.parse(response.body).error, route.label).toBe(
+				"Application Generation Agent v1 runtime routes have been removed.",
 			);
 			expect(response.headers.get("Content-Type"), route.label).toBe("application/json; charset=utf-8");
 		}
 		expectLegacyRunApiUnused(harness.legacyRunApi);
 	});
 
-	it("disables legacy run routes in v2 default mode without legacy services", async () => {
+it("returns fixed legacy removal responses without legacy services", async () => {
 		const harness = createHarness({ includeLegacyRunServices: false });
 
 		const runResponse = await dispatch(harness.middleware, {
@@ -197,16 +197,14 @@ describe("agent v2 Vite runtime routes", () => {
 		});
 
 		expect(runResponse.statusCode).toBe(410);
-		expect(JSON.parse(runResponse.body).error).toContain(
-			"Application Generation Agent v1 runtime routes are disabled",
-		);
+		expect(JSON.parse(runResponse.body).error).toBe("Application Generation Agent v1 runtime routes have been removed.");
 		expect(goalResponse.statusCode).toBe(404);
-		expect(JSON.parse(goalResponse.body).error).toContain("app-preview-goal routes are unavailable");
+		expect(JSON.parse(goalResponse.body).error).toBe("Legacy app-preview-goal routes have been removed.");
 		expect(() => harness.closeServer()).not.toThrow();
 		expectLegacyRunApiUnused(harness.legacyRunApi);
 	});
 
-	it("does not expose app-preview-goal routes in v2 default mode", async () => {
+it("does not expose legacy app-preview-goal routes", async () => {
 		const harness = createHarness();
 
 		const getResponse = await dispatch(harness.middleware, {
@@ -221,7 +219,7 @@ describe("agent v2 Vite runtime routes", () => {
 
 		expect(getResponse.statusCode).toBe(404);
 		expect(postResponse.statusCode).toBe(404);
-		expect(JSON.parse(getResponse.body).error).toContain("app-preview-goal routes are unavailable");
+		expect(JSON.parse(getResponse.body).error).toBe("Legacy app-preview-goal routes have been removed.");
 		expect(harness.legacyRunApi.getAppPreviewGoal).not.toHaveBeenCalled();
 		expect(harness.legacyRunApi.enableAppPreviewGoal).not.toHaveBeenCalled();
 	});
@@ -444,6 +442,10 @@ class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
 		});
 	}
 
+	async purge(): Promise<{ streamsDeleted: number }> {
+		return { streamsDeleted: 0 };
+	}
+
 	async close(): Promise<void> {}
 }
 
@@ -555,6 +557,7 @@ function createRealAgentV2RunApiForRouteTest(): AgentV2RunApiService {
 			releaseExpiredClaims: vi.fn(async () => []),
 			requestCancel: vi.fn(async () => undefined),
 			isCancelRequested: vi.fn(async () => false),
+			clear: vi.fn(async () => ({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 })),
 			close: vi.fn(async () => undefined),
 		},
 		events: {
@@ -601,7 +604,6 @@ function createTestConfig(): StorageConfig {
 		runtimeStore: "sqlite",
 		postgresUrl: "postgres://user:pass@example.com:5432/pi",
 		runsEnabled: true,
-		appAgentVersion: "v2",
 		workerId: "test-worker",
 		workerConcurrency: 1,
 		runMaxAgentTurns: 80,

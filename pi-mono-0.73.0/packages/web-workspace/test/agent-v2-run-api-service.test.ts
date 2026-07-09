@@ -529,6 +529,9 @@ class NoopQueue implements AgentV2RunQueue {
 	async isCancelRequested(): Promise<boolean> {
 		return false;
 	}
+	async clear(): Promise<{ queueItemsDeleted: number; activeClaimsDeleted: number; cancelKeysDeleted: number }> {
+		return { queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 };
+	}
 	async close(): Promise<void> {}
 }
 

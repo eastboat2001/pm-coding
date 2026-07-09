@@ -274,7 +274,6 @@ export interface StorageConfig {
 	runtimeStore: "postgres" | "sqlite";
 	postgresUrl: string;
 	runsEnabled: boolean;
-	appAgentVersion: "v1" | "v2";
 	workerId: string;
 	workerConcurrency: number;
 	runMaxAgentTurns: number;

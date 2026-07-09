@@ -6,7 +6,7 @@ import {
 	type AgentV2WorkerExecution,
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
-	createAgentV2RunQueue,
+	createRedisAgentV2RunQueue,
 	executeAgentV2NextTask,
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
@@ -17,7 +17,6 @@ import {
 	type DiagnosticLogEventInput,
 	type JsonObject,
 	loadStorageConfig,
-	RedisRunQueue,
 	type RuntimeStore,
 	type StorageConfig,
 	WorkspaceDiagnosticLogService,
@@ -102,7 +101,7 @@ async function main(): Promise<void> {
 		await ensureRuntimeSchemas(runtimeDb);
 
 		const options = createAgentV2WorkerRunEventOptions(config);
-		const queue = createAgentV2RunQueue(new RedisRunQueue(options.queue));
+		const queue = createRedisAgentV2RunQueue(options.queue);
 		runEventBus = new RedisAgentV2RunEventBus(options.bus);
 		const events = new AgentV2RunEventLog({ store: runtimeDb, bus: runEventBus });
 		worker = new AgentV2WorkerService({

@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
+import {
+	type AgentV2RunQueueClearResult,
+	type AgentV2RunQueueIdentity,
+	createAgentV2RunQueue,
+} from "../src/agent-v2-run-queue.js";
 import { InMemoryRunQueue } from "../src/run-queue.js";
-import type { RunQueue, RunQueueClearResult } from "../src/run-queue.js";
+import type { RunQueue } from "../src/run-queue.js";
 
 describe("AgentV2RunQueue", () => {
 	test("claims only structured v2 identities", async () => {
@@ -32,7 +36,7 @@ describe("AgentV2RunQueue", () => {
 	});
 
 	test("delegates clear to the wrapped queue", async () => {
-		const result: RunQueueClearResult = {
+		const result: AgentV2RunQueueClearResult = {
 			queueItemsDeleted: 4,
 			activeClaimsDeleted: 3,
 			cancelKeysDeleted: 2,
@@ -48,9 +52,9 @@ describe("AgentV2RunQueue", () => {
 class ClearOnlyRunQueue implements RunQueue {
 	clearCalls = 0;
 
-	constructor(private readonly result: RunQueueClearResult) {}
+	constructor(private readonly result: AgentV2RunQueueClearResult) {}
 
-	async enqueue(): Promise<void> {
+	async enqueue(_run: AgentV2RunQueueIdentity | string): Promise<void> {
 		throw new Error("wrapper must delegate clear without inferring queue keys");
 	}
 
@@ -82,7 +86,7 @@ class ClearOnlyRunQueue implements RunQueue {
 		throw new Error("wrapper must delegate clear without inferring queue keys");
 	}
 
-	async clear(): Promise<RunQueueClearResult> {
+	async clear(): Promise<AgentV2RunQueueClearResult> {
 		this.clearCalls += 1;
 		return this.result;
 	}

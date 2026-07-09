@@ -22,8 +22,11 @@ export {
 export {
 	type AgentV2ClaimedRun,
 	type AgentV2RunQueue,
+	type AgentV2RunQueueClearResult,
 	type AgentV2RunQueueIdentity,
+	type RedisAgentV2RunQueueOptions,
 	createAgentV2RunQueue,
+	createRedisAgentV2RunQueue,
 } from "./agent-v2-run-queue.js";
 export type { AgentV2RunSnapshot } from "./agent-v2-types.js";
 export {

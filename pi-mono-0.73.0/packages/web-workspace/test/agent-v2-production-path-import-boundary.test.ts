@@ -23,6 +23,69 @@ const denyStrings = [
 	"legacy-v1-main",
 	"legacy-v1-agent-v2-run-event-bridge",
 ];
+const legacyRootServiceExports = [
+	"AppPreviewGoalService",
+	"AppPreviewGoalSupervisor",
+	"WorkspaceRunApiService",
+	"WorkspaceRunWorkerService",
+	"RunApiError",
+	"budgetForSource",
+	"WorkerAgent",
+	"WorkerAgentEvent",
+	"WorkspaceRunWorkerServiceOptions",
+	"RunWorkerDiagnostics",
+];
+const legacyRootRuntimeExports = [
+	"AppendAppPreviewGoalEventInput",
+	"AppPreviewGoalEventRecord",
+	"AppPreviewGoalEventType",
+	"AppPreviewGoalRecord",
+	"AppPreviewGoalSource",
+	"AppPreviewGoalStartRequest",
+	"AppPreviewGoalStatus",
+	"ClaimedRun",
+	"CreateRunInput",
+	"CreateSessionInput",
+	"DeleteSessionResult",
+	"InMemoryRunEventBus",
+	"InMemoryRunQueue",
+	"LiveRunEvent",
+	"RedisRunEventBus",
+	"RedisRunQueue",
+	"RunEventBus",
+	"RunEventIdentity",
+	"RunEventReadRequest",
+	"RunEventSink",
+	"RunEventSinkAgentEvent",
+	"RunEventSinkOptions",
+	"RunEventSinkStore",
+	"RunQueue",
+	"RunQueueClearResult",
+	"RunQueueIdentity",
+	"RunQueueItem",
+	"RunRetryController",
+	"RunRetryControllerDiagnostics",
+	"RunRetryControllerOptions",
+	"RunRetryExecutionInput",
+	"RunStatus",
+	"RunStatusPatch",
+	"RuntimeActiveRunRestore",
+	"RuntimeMessageRecord",
+	"RuntimeRunEventListResult",
+	"RuntimeRunEventRecord",
+	"RuntimeRunListResult",
+	"RuntimeRunRecord",
+	"RuntimeSessionDetail",
+	"RuntimeSessionListResult",
+	"RuntimeSessionRecord",
+	"RuntimeStore",
+	"StartRunProjectFile",
+	"StartRunRequest",
+	"StartRunResult",
+	"UpdateAppPreviewGoalInput",
+	"UpsertAppPreviewGoalInput",
+	"WorkerAgentInput",
+];
 
 const allowedLegacyFiles = new Set<string>();
 const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts";
@@ -30,18 +93,7 @@ const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-ru
 describe("agent v2 production import boundary", () => {
 	it("does not expose legacy v1 product services through the root package barrel", () => {
 		const rootExports = readRootBarrelExportNames();
-		for (const legacyExport of [
-			"AppPreviewGoalService",
-			"AppPreviewGoalSupervisor",
-			"WorkspaceRunApiService",
-			"WorkspaceRunWorkerService",
-			"RunApiError",
-			"budgetForSource",
-			"WorkerAgent",
-			"WorkerAgentEvent",
-			"WorkspaceRunWorkerServiceOptions",
-			"RunWorkerDiagnostics",
-		]) {
+		for (const legacyExport of [...legacyRootServiceExports, ...legacyRootRuntimeExports]) {
 			expect(rootExports, `root barrel must not export ${legacyExport}`).not.toContain(legacyExport);
 		}
 	});

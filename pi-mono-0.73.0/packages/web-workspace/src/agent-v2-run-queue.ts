@@ -1,4 +1,4 @@
-import type { ActiveRunClaim, ClaimedRun, RunQueue, RunQueueClearResult } from "./run-queue.js";
+import { RedisRunQueue, type ActiveRunClaim, type ClaimedRun, type RunQueue } from "./run-queue.js";
 
 export interface AgentV2RunQueueIdentity {
 	clientId: string;
@@ -14,6 +14,19 @@ export interface AgentV2ActiveRunClaim extends AgentV2RunQueueIdentity {
 	leaseExpiresAtMs: number;
 }
 
+export interface AgentV2RunQueueClearResult {
+	queueItemsDeleted: number;
+	activeClaimsDeleted: number;
+	cancelKeysDeleted: number;
+}
+
+export interface RedisAgentV2RunQueueOptions {
+	redisUrl: string;
+	queueName: string;
+	claimLeaseTtlMs?: number;
+	cancelTtlSeconds?: number;
+}
+
 export interface AgentV2RunQueue {
 	enqueue(run: AgentV2RunQueueIdentity): Promise<void>;
 	claim(workerId: string, timeoutMs: number): Promise<AgentV2ClaimedRun | undefined>;
@@ -23,8 +36,12 @@ export interface AgentV2RunQueue {
 	releaseExpiredClaims(): Promise<AgentV2ActiveRunClaim[]>;
 	requestCancel(run: AgentV2RunQueueIdentity): Promise<void>;
 	isCancelRequested(run: AgentV2RunQueueIdentity): Promise<boolean>;
-	clear(): Promise<RunQueueClearResult>;
+	clear(): Promise<AgentV2RunQueueClearResult>;
 	close(): Promise<void>;
+}
+
+export function createRedisAgentV2RunQueue(options: RedisAgentV2RunQueueOptions): AgentV2RunQueue {
+	return createAgentV2RunQueue(new RedisRunQueue(options));
 }
 
 export function createAgentV2RunQueue(queue: RunQueue): AgentV2RunQueue {

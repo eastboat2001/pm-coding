@@ -5,6 +5,8 @@ import type {
 	ResetAgentV2RuntimeDataResult as RuntimeStoreResetResult,
 } from "./runtime-store.js";
 
+export const AGENT_V2_RESET_CONFIRMATION = "application-generation-agent-v2";
+
 export interface AgentV2ResetOptions extends RuntimeStoreResetOptions {
 	includeDiagnostics?: boolean;
 	confirmation?: string;
@@ -23,11 +25,15 @@ type SyncResetCapableStore = RuntimeStore & {
 };
 
 export function assertAgentV2ResetConfirmation(confirmation: string | undefined): void {
-	if (confirmation !== "application-generation-agent-v2") {
+	if (confirmation !== AGENT_V2_RESET_CONFIRMATION) {
 		throw new Error("Refusing destructive Agent v2 reset without confirmation token");
 	}
 }
 
+/**
+ * DB/log-sink reset compatibility wrapper. Use resetAgentV2Runtime for full
+ * operational runtime cleanup.
+ */
 export function resetAgentV2RuntimeData(
 	store: SyncResetCapableStore,
 	options?: AgentV2ResetOptions,

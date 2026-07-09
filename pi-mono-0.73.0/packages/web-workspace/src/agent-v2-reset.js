@@ -1,5 +1,6 @@
+export const AGENT_V2_RESET_CONFIRMATION = "application-generation-agent-v2";
 export function assertAgentV2ResetConfirmation(confirmation) {
-    if (confirmation !== "application-generation-agent-v2") {
+    if (confirmation !== AGENT_V2_RESET_CONFIRMATION) {
         throw new Error("Refusing destructive Agent v2 reset without confirmation token");
     }
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	AGENT_V2_RESET_CONFIRMATION,
 	type AgentV2ResetDiagnosticsAdapter,
 	assertAgentV2ResetConfirmation,
 	resetAgentV2RuntimeData,
@@ -11,7 +12,7 @@ import {
 import { AGENT_V2_SCHEMA_VERSION } from "../src/agent-v2-types.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
-const CONFIRMATION_TOKEN = "application-generation-agent-v2";
+const CONFIRMATION_TOKEN = AGENT_V2_RESET_CONFIRMATION;
 
 describe("agent v2 destructive reset", () => {
 	let dir: string;
@@ -32,6 +33,7 @@ describe("agent v2 destructive reset", () => {
 	});
 
 	it("requires confirmation for destructive reset", () => {
+		expect(AGENT_V2_RESET_CONFIRMATION).toBe("application-generation-agent-v2");
 		expect(() => resetAgentV2RuntimeData(store, {})).toThrow("confirmation token");
 		expect(() => assertAgentV2ResetConfirmation(undefined)).toThrow("confirmation token");
 	});

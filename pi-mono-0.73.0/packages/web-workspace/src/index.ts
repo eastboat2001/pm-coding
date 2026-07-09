@@ -56,6 +56,14 @@ export {
 	planAgentV2RepairActions,
 } from "./agent-v2-repair-engine.js";
 export {
+	type AgentV2GeneratedProjectCleanupResult,
+	type AgentV2RuntimeResetOptions,
+	type AgentV2RuntimeResetResult,
+	clearAgentV2GeneratedProjectWorkspaces,
+	resetAgentV2Runtime,
+} from "./agent-v2-maintenance.js";
+export {
+	AGENT_V2_RESET_CONFIRMATION,
 	type AgentV2ResetDiagnosticsAdapter,
 	type AgentV2ResetOptions,
 	type AgentV2ResetResult,

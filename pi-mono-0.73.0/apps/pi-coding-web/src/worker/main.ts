@@ -17,15 +17,15 @@ import {
 	type DiagnosticLogEventInput,
 	type JsonObject,
 	loadStorageConfig,
-	type RuntimeStore,
 	type StorageConfig,
 	WorkspaceDiagnosticLogService,
 } from "@mariozechner/pi-web-workspace/runtime-infra";
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
+type WorkerRuntimeStore = ReturnType<typeof createRuntimeStore>;
 
 export async function ensureRuntimeSchemas(
-	runtimeDb: Pick<RuntimeStore, "ensureAgentV2Schema">,
+	runtimeDb: Pick<WorkerRuntimeStore, "ensureAgentV2Schema">,
 ): Promise<void> {
 	await runtimeDb.ensureAgentV2Schema();
 }
@@ -53,7 +53,7 @@ export function createAgentV2WorkerExecution(config: StorageConfig): AgentV2Work
 			input: AgentV2WorkerExecutionInput,
 		): Promise<Awaited<ReturnType<typeof executeAgentV2NextTask>>> {
 			return await executeAgentV2NextTask({
-				store: input.store as RuntimeStore,
+				store: input.store as WorkerRuntimeStore,
 				config,
 				context: agentV2ContextFromRunInput(input.run),
 				runId: input.run.runId,
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
 		],
 	});
 
-	let runtimeDb: RuntimeStore | undefined;
+	let runtimeDb: WorkerRuntimeStore | undefined;
 	let runEventBus: RedisAgentV2RunEventBus | undefined;
 	let worker: AgentV2WorkerService | undefined;
 	try {
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
 async function stopWorkerRuntime(input: {
 	worker?: AgentV2WorkerService;
 	runEventBus?: RedisAgentV2RunEventBus;
-	runtimeDb?: RuntimeStore;
+	runtimeDb?: WorkerRuntimeStore;
 	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse">;
 }): Promise<number> {
 	let exitCode = 0;

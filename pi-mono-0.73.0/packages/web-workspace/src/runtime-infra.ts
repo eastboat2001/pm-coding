@@ -6,6 +6,5 @@ export {
 	type RedisAgentV2RunQueueOptions,
 	createRedisAgentV2RunQueue,
 } from "./agent-v2-run-queue.js";
-export type { RuntimeStore } from "./runtime-store.js";
 export { createRuntimeStore } from "./runtime-store-factory.js";
 export type { DiagnosticLogEventInput, JsonObject, StorageConfig } from "./types.js";

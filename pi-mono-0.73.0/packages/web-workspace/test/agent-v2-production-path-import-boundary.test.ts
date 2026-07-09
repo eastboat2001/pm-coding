@@ -125,6 +125,14 @@ describe("agent v2 production import boundary", () => {
 		expect(source).toContain('from "@mariozechner/pi-web-workspace/runtime-infra"');
 	});
 
+	it("keeps the runtime-infra subpath limited to v2 queue exports", () => {
+		const source = readFileSync(join(repoRoot, "packages", "web-workspace", "src", "runtime-infra.ts"), "utf8");
+
+		expect(source).not.toMatch(/\bRuntimeStore\b/);
+		expect(source).not.toContain("./runtime-store.js");
+		expect(source).toContain("createRedisAgentV2RunQueue");
+	});
+
 	it("keeps production v2 files independent from legacy v1 generation internals", () => {
 		const violations = productionV2Files()
 			.filter((file) => !allowedLegacyFiles.has(toRepoPath(file)))

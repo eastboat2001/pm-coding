@@ -32,7 +32,6 @@ import {
 import type {
 	AgentV2RunEventRecord,
 	AgentV2RunSnapshot,
-	DeleteSessionResult,
 	RunStatus,
 	RuntimeRunEventRecord,
 	RuntimeRunRecord,
@@ -84,10 +83,6 @@ import {
 	startAgentV2Run,
 	type AgentV2RunEventConnection as RunEventConnection,
 } from "../runtime/agent-v2-run-client.js";
-import {
-	deleteSession as deleteRuntimeSession,
-	renameSession as renameRuntimeSession,
-} from "../runtime/run-client.js";
 import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
 import {
@@ -133,7 +128,6 @@ import type { GeneratedAppsPanel } from "./GeneratedAppsPanel.js";
 import {
 	clampGeneratedAppsPanelWidth,
 	GENERATED_APPS_PANEL_DEFAULT_WIDTH,
-	isRuntimeSessionDeletionDeferred,
 	loadSessionProjectApps,
 	readGeneratedAppsPanelWidth,
 	writeGeneratedAppsPanelWidth,
@@ -769,11 +763,6 @@ const loadGeneratedAppsForSessions = async (options: { force?: boolean } = {}) =
 };
 
 const renameSessionProject = async (sessionId: string, title: string) => {
-	try {
-		await renameRuntimeSession(sessionId, title);
-	} catch (error) {
-		if (!isRuntimeSessionMissingError(error)) throw error;
-	}
 	if (storage.sessions) {
 		await storage.sessions.updateTitle(sessionId, title);
 	}
@@ -786,19 +775,6 @@ const renameSessionProject = async (sessionId: string, title: string) => {
 };
 
 const deleteSessionEverywhere = async (sessionId: string) => {
-	let runtimeDeleteResult: DeleteSessionResult | undefined;
-	try {
-		runtimeDeleteResult = await deleteRuntimeSession(sessionId, {
-			force: true,
-		});
-	} catch (error) {
-		if (!isRuntimeSessionMissingError(error)) throw error;
-	}
-	if (isRuntimeSessionDeletionDeferred(runtimeDeleteResult)) {
-		refreshGeneratedAppsPanel();
-		if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
-		return;
-	}
 	if (storage.sessions) {
 		await storage.sessions.deleteSession(sessionId);
 	}
@@ -817,11 +793,6 @@ const deleteSessionEverywhere = async (sessionId: string) => {
 	refreshGeneratedAppsPanel();
 	if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 };
-
-function isRuntimeSessionMissingError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
-	return message === "Session not found." || message.includes("HTTP 404");
-}
 
 const handleAgentEvent = async (event: AgentEvent) => {
 	recordAgentEvent(event);

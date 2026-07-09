@@ -2,10 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
+import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
+import type { AgentV2RunSnapshot } from "../src/agent-v2-types.js";
 import { loadStorageConfig } from "../src/config.js";
 import { WorkspaceDiagnosticExportService } from "../src/diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "../src/diagnostic-log-service.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
+import type { RuntimeStore } from "../src/runtime-store.js";
 import { WorkspaceSessionService } from "../src/workspace-session-service.js";
 
 describe("WorkspaceDiagnosticExportService", () => {
@@ -18,7 +22,7 @@ describe("WorkspaceDiagnosticExportService", () => {
 		dir = mkdtempSync(join(tmpdir(), "pi-diagnostic-export-"));
 		const config = { ...loadStorageConfig(dir), logStdoutEnabled: false };
 		runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
-		runtimeDb.ensureSchema();
+		runtimeDb.ensureAgentV2Schema();
 		diagnostics = new WorkspaceDiagnosticLogService(config);
 		sessions = new WorkspaceSessionService(config);
 		sessions.ensureDirs();
@@ -38,32 +42,15 @@ describe("WorkspaceDiagnosticExportService", () => {
 			},
 			"client-a",
 		);
-		runtimeDb.createSession({
+		runtimeDb.createAgentV2Run({
 			clientId: "client-a",
-			sessionId: "session-1",
-			title: "Token limit repro",
-			model: { id: "mimo-v2.5", provider: "custom-provider:test", maxTokens: 512 },
-			thinkingLevel: "off",
-			createdAt: "2026-06-12T00:00:00.000Z",
-		});
-		runtimeDb.appendMessage({
-			clientId: "client-a",
-			sessionId: "session-1",
-			role: "user",
-			payload: { content: "count forever" },
-			createdAt: "2026-06-12T00:00:01.000Z",
-		});
-		runtimeDb.createRun({
-			clientId: "client-a",
-			sessionId: "session-1",
 			runId: "run-1",
+			input: { sessionId: "session-1", title: "Token limit repro", prompt: "count forever" },
 			model: { id: "mimo-v2.5", provider: "custom-provider:test", maxTokens: 512 },
-			thinkingLevel: "off",
 			createdAt: "2026-06-12T00:00:02.000Z",
 		});
-		runtimeDb.appendRunEvent({
+		runtimeDb.appendAgentV2RunEvent({
 			clientId: "client-a",
-			sessionId: "session-1",
 			runId: "run-1",
 			type: "message_end",
 			payload: { message: { stopReason: "length", usage: { output: 512 } } },
@@ -95,13 +82,14 @@ describe("WorkspaceDiagnosticExportService", () => {
 
 		expect(exported.query).toMatchObject({ clientId: "client-a", sessionId: "session-1" });
 		expect(exported.runtime).toMatchObject({
-			session: { sessionId: "session-1", title: "Token limit repro" },
-			messages: [{ role: "user", payload: { content: "count forever" } }],
-			runs: [{ runId: "run-1", sessionId: "session-1" }],
+			session: null,
+			messages: [],
+			runs: [{ runId: "run-1", input: { sessionId: "session-1", prompt: "count forever" } }],
 		});
 		expect(exported.runtime.runEventsByRunId).toMatchObject({
 			"run-1": [{ type: "message_end", payload: { message: { stopReason: "length", usage: { output: 512 } } } }],
 		});
+		expect(exported.runtime.agentV2DiagnosticsByRunId).toMatchObject({ "run-1": [] });
 		expect(exported.diagnostics).toMatchObject({
 			total: 2,
 			exported: 2,
@@ -117,6 +105,102 @@ describe("WorkspaceDiagnosticExportService", () => {
 		});
 	});
 
+	it("exports a browser metadata session without reading legacy runtime tables", async () => {
+		const store = createV2OnlyRuntimeStore();
+		const service = new WorkspaceDiagnosticExportService(store, diagnostics, sessions);
+
+		const exported = await service.export({
+			clientId: "client-a",
+			sessionId: "browser-session",
+			includeSettings: false,
+		});
+		const archive = await service.exportArchive({
+			clientId: "client-a",
+			sessionId: "browser-session",
+			includeSettings: false,
+		});
+		const files = await collectArchiveFiles(archive.entries);
+
+		expect(exported.query).toMatchObject({ clientId: "client-a", sessionId: "browser-session" });
+		expect(exported.runtime).toMatchObject({
+			session: null,
+			messages: [],
+			runs: [],
+			runEventsByRunId: {},
+			agentV2DiagnosticsByRunId: {},
+		});
+		expect(JSON.parse(files["runtime/session.json"])).toBe(null);
+		expect(files["runtime/messages.ndjson"]).toBe("");
+		expect(JSON.parse(files["runtime/runs.json"])).toEqual([]);
+	});
+
+	it("exports v2 runs, events, and diagnostics by run id without legacy session lookups", async () => {
+		const run = createAgentV2Run({ runId: "run-v2", sessionId: "browser-session" });
+		const event: AgentV2RunEventRecord = {
+			clientId: "client-a",
+			runId: "run-v2",
+			seq: 1,
+			type: "agent_v2.phase_changed",
+			payload: { type: "agent_v2.phase_changed", phase: "validation", status: "running" },
+			createdAt: "2026-07-08T00:00:01.000Z",
+		};
+		const diagnostic: AgentV2DiagnosticEvent = {
+			clientId: "client-a",
+			runId: "run-v2",
+			diagnosticId: "diag-v2",
+			severity: "warn",
+			category: "validation",
+			code: "schema_check_failed",
+			phase: "validation",
+			message: "Schema check failed",
+			data: { path: "manifest.blocks[0]" },
+			createdAt: "2026-07-08T00:00:02.000Z",
+		};
+		const store = createV2OnlyRuntimeStore({
+			runs: [run],
+			runEventsByRunId: { "run-v2": [event] },
+			diagnosticsByRunId: { "run-v2": [diagnostic] },
+		});
+		const service = new WorkspaceDiagnosticExportService(store, diagnostics, sessions);
+
+		const exported = await service.export({
+			clientId: "client-a",
+			runId: "run-v2",
+			includeSettings: false,
+		});
+		const archive = await service.exportArchive({
+			clientId: "client-a",
+			runId: "run-v2",
+			includeSettings: false,
+		});
+		const files = await collectArchiveFiles(archive.entries);
+
+		expect(exported.query).toMatchObject({
+			clientId: "client-a",
+			sessionId: "browser-session",
+			runId: "run-v2",
+		});
+		expect(exported.runtime).toMatchObject({
+			session: null,
+			messages: [],
+			runs: [{ runId: "run-v2", input: { sessionId: "browser-session" } }],
+			runEventsByRunId: { "run-v2": [event] },
+			agentV2DiagnosticsByRunId: { "run-v2": [diagnostic] },
+		});
+		expect(files["runtime/run-events/run-v2.events.ndjson"]).toContain("agent_v2.phase_changed");
+		expect(files["agent-v2/diagnostics/run-v2.diagnostics.ndjson"]).toContain("schema_check_failed");
+		expect(JSON.parse(files["diagnostics/overview.json"])).toMatchObject({
+			session: null,
+			counts: {
+				messages: 0,
+				runs: 1,
+				runtimeRunEvents: 1,
+				agentV2Diagnostics: 1,
+			},
+			runs: [{ runId: "run-v2", phase: "intake", eventCount: 1, agentV2DiagnosticCodes: { schema_check_failed: 1 } }],
+		});
+	});
+
 	it("exports a multi-file archive manifest with runtime events and full settings", async () => {
 		sessions.writeSettings(
 			{
@@ -125,42 +209,24 @@ describe("WorkspaceDiagnosticExportService", () => {
 			},
 			"client-a",
 		);
-		runtimeDb.createSession({
+		runtimeDb.createAgentV2Run({
 			clientId: "client-a",
-			sessionId: "session-1",
-			title: "Runaway thinking repro",
-			model: { id: "mimo-v2.5", provider: "custom-provider:test", maxTokens: 512 },
-			thinkingLevel: "high",
-			createdAt: "2026-06-12T00:00:00.000Z",
-		});
-		runtimeDb.appendMessage({
-			clientId: "client-a",
-			sessionId: "session-1",
-			role: "user",
-			payload: { content: "make a dashboard" },
-			createdAt: "2026-06-12T00:00:01.000Z",
-		});
-		runtimeDb.createRun({
-			clientId: "client-a",
-			sessionId: "session-1",
 			runId: "run-1",
+			input: { sessionId: "session-1", title: "Runaway thinking repro", prompt: "make a dashboard" },
 			model: { id: "mimo-v2.5", provider: "custom-provider:test", maxTokens: 512 },
-			thinkingLevel: "high",
 			createdAt: "2026-06-12T00:00:02.000Z",
 		});
 		for (let index = 0; index < 25; index += 1) {
-			runtimeDb.appendRunEvent({
+			runtimeDb.appendAgentV2RunEvent({
 				clientId: "client-a",
-				sessionId: "session-1",
 				runId: "run-1",
 				type: "message_update",
 				payload: { type: "message_update", delta: `thinking chunk ${index}` },
 				createdAt: `2026-06-12T00:00:${String(index + 3).padStart(2, "0")}.000Z`,
 			});
 		}
-		runtimeDb.appendRunEvent({
+		runtimeDb.appendAgentV2RunEvent({
 			clientId: "client-a",
-			sessionId: "session-1",
 			runId: "run-1",
 			type: "message_end",
 			payload: { type: "message_end", message: { stopReason: "length", usage: { output: 512 } } },
@@ -188,6 +254,8 @@ describe("WorkspaceDiagnosticExportService", () => {
 		expect(zipBuffer.includes(Buffer.from("manifest.json"))).toBe(true);
 		expect(zipBuffer.includes(Buffer.from("runtime/run-events/run-1.events.ndjson"))).toBe(true);
 		expect(Object.keys(files).sort()).toEqual([
+			"agent-v2/diagnostics/run-1.diagnostics.ndjson",
+			"agent-v2/diagnostics/run-1.summary.json",
 			"diagnostics/events.ndjson",
 			"diagnostics/global-events.ndjson",
 			"diagnostics/overview.json",
@@ -209,26 +277,26 @@ describe("WorkspaceDiagnosticExportService", () => {
 		});
 		expect(manifest.files).toContainEqual({
 			path: "runtime/run-events/run-1.events.ndjson",
-			kind: "runtime-run-events",
+			kind: "agent-v2-run-events",
 		});
-		expect(JSON.parse(files["runtime/session.json"])).toMatchObject({
-			sessionId: "session-1",
-			model: { id: "mimo-v2.5", provider: "custom-provider:test" },
-			thinkingLevel: "high",
-		});
-		expect(files["runtime/messages.ndjson"].trim().split("\n")).toHaveLength(1);
+		expect(JSON.parse(files["runtime/session.json"])).toBe(null);
+		expect(files["runtime/messages.ndjson"]).toBe("");
 		expect(files["runtime/run-events/run-1.events.ndjson"].trim().split("\n")).toHaveLength(26);
 		expect(JSON.parse(files["runtime/run-events/run-1.summary.json"])).toMatchObject({
 			runId: "run-1",
 			totalEvents: 26,
 			eventTypes: { message_update: 25, message_end: 1 },
 		});
+		expect(JSON.parse(files["agent-v2/diagnostics/run-1.summary.json"])).toMatchObject({
+			runId: "run-1",
+			totalDiagnostics: 0,
+		});
 		expect(files["diagnostics/events.ndjson"]).toContain("model.stream.summary");
 		expect(files["diagnostics/session-events.ndjson"]).toContain("model.stream.summary");
-		expect(files["diagnostics/timeline.ndjson"]).toContain("runtime.run_event");
+		expect(files["diagnostics/timeline.ndjson"]).toContain("agent_v2.run_event");
 		expect(JSON.parse(files["diagnostics/overview.json"])).toMatchObject({
-			session: { sessionId: "session-1", title: "Runaway thinking repro" },
-			counts: { messages: 1, runs: 1 },
+			session: null,
+			counts: { messages: 0, runs: 1 },
 			runs: [{ runId: "run-1", eventCount: 26 }],
 		});
 		expect(JSON.parse(files["settings/settings.json"])).toMatchObject({
@@ -238,30 +306,18 @@ describe("WorkspaceDiagnosticExportService", () => {
 	});
 
 	it("exports global diagnostics, timeline, and findings for a queued run with no worker progress", async () => {
-		runtimeDb.createSession({
+		runtimeDb.createAgentV2Run({
 			clientId: "client-a",
-			sessionId: "session-queued",
-			title: "你好你好",
-			model: { id: "ATS_MAX", provider: "custom-provider:ats" },
-			thinkingLevel: "off",
-			createdAt: "2026-06-23T07:50:36.355Z",
-		});
-		runtimeDb.appendMessage({
-			clientId: "client-a",
-			sessionId: "session-queued",
-			role: "user",
-			payload: { content: "你好你好" },
-			createdAt: "2026-06-23T07:50:36.355Z",
-		});
-		runtimeDb.createRun({
-			clientId: "client-a",
-			sessionId: "session-queued",
 			runId: "run-queued",
+			input: { sessionId: "session-queued", title: "你好你好", prompt: "你好你好" },
 			model: { id: "ATS_MAX", provider: "custom-provider:ats" },
-			thinkingLevel: "off",
 			createdAt: "2026-06-23T07:50:36.545Z",
 		});
-		runtimeDb.updateRunStatus("run-queued", "client-a", "cancelled", {
+		runtimeDb.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-queued",
+			status: "cancelled",
+			phase: "cancelled",
 			endedAt: "2026-06-23T07:51:16.782Z",
 			updatedAt: "2026-06-23T07:51:16.782Z",
 		});
@@ -348,7 +404,7 @@ describe("WorkspaceDiagnosticExportService", () => {
 		expect(files["diagnostics/session-events.ndjson"]).toContain("agent.remote_run.queued_timeout");
 		expect(files["diagnostics/global-events.ndjson"]).toContain("worker.queue.claim.error");
 		expect(files["diagnostics/global-events.ndjson"]).not.toContain("old redis outage");
-		expect(files["diagnostics/timeline.ndjson"]).toContain("runtime.run");
+		expect(files["diagnostics/timeline.ndjson"]).toContain("agent_v2.run");
 		expect(files["diagnostics/timeline.ndjson"]).toContain("agent.remote_run.queued_timeout");
 		expect(overview.findings).toContainEqual(
 			expect.objectContaining({ code: "run_queued_timeout", severity: "error" }),
@@ -408,4 +464,94 @@ async function collectArchiveChunks(chunks: AsyncIterable<Uint8Array>): Promise<
 		buffers.push(Buffer.from(chunk));
 	}
 	return buffers;
+}
+
+function createAgentV2Run(input: { runId: string; sessionId: string }): AgentV2RunSnapshot {
+	return {
+		clientId: "client-a",
+		runId: input.runId,
+		status: "running",
+		phase: "intake",
+		attempt: 1,
+		input: {
+			sessionId: input.sessionId,
+			title: "Browser session",
+			prompt: "Build a v2 app",
+		},
+		model: { provider: "test", id: "v2-model" },
+		workerId: "worker-v2",
+		createdAt: "2026-07-08T00:00:00.000Z",
+		updatedAt: "2026-07-08T00:00:03.000Z",
+		startedAt: "2026-07-08T00:00:01.000Z",
+	};
+}
+
+function createV2OnlyRuntimeStore(
+	options: {
+		runs?: AgentV2RunSnapshot[];
+		runEventsByRunId?: Record<string, AgentV2RunEventRecord[]>;
+		diagnosticsByRunId?: Record<string, AgentV2DiagnosticEvent[]>;
+	} = {},
+): RuntimeStore {
+	const runs = options.runs ?? [];
+	const runEventsByRunId = options.runEventsByRunId ?? {};
+	const diagnosticsByRunId = options.diagnosticsByRunId ?? {};
+	const legacy = (name: string) => () => {
+		throw new Error(`legacy runtime method called: ${name}`);
+	};
+	return {
+		ensureSchema: legacy("ensureSchema"),
+		ensureAgentV2Schema: () => undefined,
+		close: () => undefined,
+		upsertClient: () => undefined,
+		createSession: legacy("createSession"),
+		listSessions: legacy("listSessions"),
+		getSession: legacy("getSession"),
+		updateSessionTitle: legacy("updateSessionTitle"),
+		appendMessage: legacy("appendMessage"),
+		listMessages: legacy("listMessages"),
+		getSessionMessageStats: legacy("getSessionMessageStats"),
+		iterateMessages: legacy("iterateMessages"),
+		getRun: legacy("getRun"),
+		getRunById: legacy("getRunById"),
+		listRuns: legacy("listRuns"),
+		listRunsForSession: legacy("listRunsForSession"),
+		listRunsByStatus: legacy("listRunsByStatus"),
+		listRunningRunsByWorker: legacy("listRunningRunsByWorker"),
+		createRun: legacy("createRun"),
+		createContinuationRun: legacy("createContinuationRun"),
+		createRunWithMessage: legacy("createRunWithMessage"),
+		updateRunStatus: legacy("updateRunStatus"),
+		appendRunEvent: legacy("appendRunEvent"),
+		listRunEvents: legacy("listRunEvents"),
+		iterateRunEvents: legacy("iterateRunEvents"),
+		getLatestRunCheckpoint: legacy("getLatestRunCheckpoint"),
+		upsertAppPreviewGoal: legacy("upsertAppPreviewGoal"),
+		getAppPreviewGoal: legacy("getAppPreviewGoal"),
+		updateAppPreviewGoal: legacy("updateAppPreviewGoal"),
+		appendAppPreviewGoalEvent: legacy("appendAppPreviewGoalEvent"),
+		listAppPreviewGoalEvents: legacy("listAppPreviewGoalEvents"),
+		createAgentV2Run: legacy("createAgentV2Run"),
+		getAgentV2Run: (_clientId: string, runId: string) => runs.find((run) => run.runId === runId),
+		listAgentV2Runs: () => runs,
+		listAgentV2RunsByWorker: legacy("listAgentV2RunsByWorker"),
+		updateAgentV2Run: legacy("updateAgentV2Run"),
+		updateAgentV2RunWithResult: legacy("updateAgentV2RunWithResult"),
+		appendAgentV2RunEvent: legacy("appendAgentV2RunEvent"),
+		listAgentV2RunEvents: (_clientId: string, runId: string, afterSeq: number) =>
+			(runEventsByRunId[runId] ?? []).filter((event) => event.seq > afterSeq),
+		upsertAgentV2Task: legacy("upsertAgentV2Task"),
+		listAgentV2Tasks: legacy("listAgentV2Tasks"),
+		upsertAgentV2Artifact: legacy("upsertAgentV2Artifact"),
+		listAgentV2Artifacts: legacy("listAgentV2Artifacts"),
+		upsertAgentV2Document: legacy("upsertAgentV2Document"),
+		listAgentV2Documents: legacy("listAgentV2Documents"),
+		upsertAgentV2Validation: legacy("upsertAgentV2Validation"),
+		listAgentV2Validations: legacy("listAgentV2Validations"),
+		getAgentV2Document: legacy("getAgentV2Document"),
+		appendAgentV2Diagnostic: legacy("appendAgentV2Diagnostic"),
+		listAgentV2Diagnostics: (_clientId: string, runId: string) => diagnosticsByRunId[runId] ?? [],
+		resetAgentV2RuntimeData: legacy("resetAgentV2RuntimeData"),
+		deleteSession: legacy("deleteSession"),
+	} as unknown as RuntimeStore;
 }

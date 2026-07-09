@@ -28,8 +28,8 @@ const allowedLegacyFiles = new Set<string>();
 const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts";
 
 describe("agent v2 production import boundary", () => {
-	it("does not expose legacy v1 product services through the root package barrel", async () => {
-		const rootExports = await import("../src/index.js");
+	it("does not expose legacy v1 product services through the root package barrel", () => {
+		const rootExports = readRootBarrelExportNames();
 		for (const legacyExport of [
 			"AppPreviewGoalService",
 			"AppPreviewGoalSupervisor",
@@ -42,7 +42,7 @@ describe("agent v2 production import boundary", () => {
 			"WorkspaceRunWorkerServiceOptions",
 			"RunWorkerDiagnostics",
 		]) {
-			expect(rootExports, `root barrel must not export ${legacyExport}`).not.toHaveProperty(legacyExport);
+			expect(rootExports, `root barrel must not export ${legacyExport}`).not.toContain(legacyExport);
 		}
 	});
 
@@ -149,6 +149,22 @@ describe("agent v2 production import boundary", () => {
 			}
 		}
 	});
+
+	it("keeps product browser/runtime paths from calling the legacy pi-sessions API", () => {
+		const browserFiles = [
+			join(repoRoot, "apps", "pi-coding-web", "src", "app", "bootstrap.ts"),
+			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "run-client.ts"),
+			join(repoRoot, "apps", "pi-coding-web", "src", "diagnostics", "DiagnosticLogsTab.ts"),
+			join(repoRoot, "apps", "pi-coding-web", "src", "diagnostics", "diagnostic-export-client.ts"),
+		];
+
+		for (const file of browserFiles) {
+			const source = readFileSync(file, "utf8");
+			expect(source, `${toRepoPath(file)} must not reference /api/pi-sessions`).not.toContain("/api/pi-sessions");
+			expect(source, `${toRepoPath(file)} must not import legacy deleteSession`).not.toContain("deleteRuntimeSession");
+			expect(source, `${toRepoPath(file)} must not import legacy renameSession`).not.toContain("renameRuntimeSession");
+		}
+	});
 });
 
 function productionV2Files(): string[] {
@@ -184,6 +200,22 @@ function collectTsFiles(dir: string): string[] {
 		}
 	}
 	return out;
+}
+
+function readRootBarrelExportNames(): string[] {
+	const source = readFileSync(join(repoRoot, "packages", "web-workspace", "src", "index.ts"), "utf8");
+	const names = new Set<string>();
+	for (const match of source.matchAll(/export\s+(?:type\s+)?\{([\s\S]*?)\}\s+from\s+["'][^"']+["'];/g)) {
+		for (const rawPart of match[1].split(",")) {
+			const withoutComment = rawPart.replace(/\/\/.*$/gm, "").trim();
+			if (!withoutComment) continue;
+			const cleaned = withoutComment.replace(/^type\s+/, "").trim();
+			if (!cleaned) continue;
+			const aliasParts = cleaned.split(/\s+as\s+/);
+			names.add((aliasParts.at(-1) || cleaned).trim());
+		}
+	}
+	return [...names].sort();
 }
 
 function extractFunctionSource(source: string, functionName: string): string {

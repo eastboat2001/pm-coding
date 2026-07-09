@@ -36,7 +36,10 @@ export function diagnosticExportDownloadName(session: RuntimeSessionRecord): str
 
 export async function downloadDiagnosticSessionExport(session: RuntimeSessionRecord): Promise<void> {
 	const clientId = getOrCreatePiClientId();
-	const endpoint = buildDiagnosticExportEndpoint({ sessionId: session.sessionId, clientId });
+	const endpoint = buildDiagnosticExportEndpoint({
+		...(session.lastRunId ? { runId: session.lastRunId } : { sessionId: session.sessionId }),
+		clientId,
+	});
 	const url = new URL(endpoint, window.location.origin).toString();
 	const response = await fetch(url, {
 		method: "HEAD",

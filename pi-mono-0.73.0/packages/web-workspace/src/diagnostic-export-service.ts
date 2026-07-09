@@ -1,13 +1,12 @@
+import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
+import type { AgentV2RunSnapshot } from "./agent-v2-types.js";
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import type { MaybeAsyncIterable, RuntimeStore } from "./runtime-store.js";
 import type {
 	DiagnosticLogEventRecord,
 	DiagnosticLogExportQuery,
 	JsonObject,
-	RuntimeMessageRecord,
-	RuntimeRunEventRecord,
-	RuntimeRunRecord,
-	RuntimeSessionRecord,
 } from "./types.js";
 import type { WorkspaceSessionService } from "./workspace-session-service.js";
 
@@ -46,26 +45,28 @@ export interface DiagnosticArchiveExport {
 interface DiagnosticExportContext {
 	clientId: string;
 	sessionId: string;
-	session: RuntimeSessionRecord | undefined;
-	runs: RuntimeRunRecord[];
+	session: null;
+	runs: AgentV2RunSnapshot[];
 }
 
-interface RuntimeRunOverview extends JsonObject {
+interface AgentV2RunOverview extends JsonObject {
 	runId: string;
-	sessionId: string;
 	status: string;
+	phase: string;
+	attempt: number;
 	workerId: string | null;
 	startedAt: string | null;
 	updatedAt: string;
 	endedAt: string | null;
-	error: string | null;
-	model: JsonObject;
-	thinkingLevel: string;
+	error: JsonObject | null;
+	input: JsonObject;
+	model: unknown;
 	eventCount: number;
 	eventTypes: Record<string, number>;
 	firstEventAt: string | null;
 	lastEventAt: string | null;
 	diagnosticEventTypes: Record<string, number>;
+	agentV2DiagnosticCodes: Record<string, number>;
 }
 
 type DiagnosticFindingSeverity = "info" | "warn" | "error";
@@ -94,42 +95,35 @@ export class WorkspaceDiagnosticExportService {
 	) {}
 
 	async export(request: DiagnosticExportRequest): Promise<DiagnosticExportResult> {
-		const clientId = stringField(request.clientId);
-		if (!clientId) throw new Error("Client id is required.");
-		if (!request.sessionId && !request.runId) throw new Error("Query parameter `sessionId` or `runId` is required.");
-
-		const requestedRun = request.runId ? await this.runtimeDb.getRun(clientId, request.runId) : undefined;
-		if (request.runId && !requestedRun) throw new Error("Runtime run not found.");
-		const sessionId = stringField(request.sessionId) ?? requestedRun?.sessionId;
-		if (!sessionId) throw new Error("Runtime session id could not be resolved.");
-		if (requestedRun && requestedRun.sessionId !== sessionId)
-			throw new Error("Run does not belong to requested session.");
-
-		const session = await this.runtimeDb.getSession(clientId, sessionId);
-		const runs = requestedRun ? [requestedRun] : await this.runtimeDb.listRunsForSession(clientId, sessionId);
+		const context = await this.resolveContext(request);
 		const diagnosticEvents = this.diagnostics.exportEvents({
-			clientId,
-			sessionId,
+			clientId: context.clientId,
+			sessionId: context.sessionId,
 			maxEvents: request.maxDiagnosticEvents,
 		});
 		const includeSettings = request.includeSettings !== false;
-		const settings = includeSettings ? (this.sessions.readSettings(clientId) ?? {}) : undefined;
+		const settings = includeSettings ? (this.sessions.readSettings(context.clientId) ?? {}) : undefined;
 
 		return {
 			version: 1,
 			exportedAt: new Date().toISOString(),
 			query: {
-				clientId,
-				sessionId,
+				clientId: context.clientId,
+				sessionId: context.sessionId,
 				...(request.runId ? { runId: request.runId } : {}),
 				includeSettings,
 				maxDiagnosticEvents: diagnosticEvents.limit,
 			},
 			runtime: {
-				session: session ?? null,
-				messages: session ? await this.runtimeDb.listMessages(clientId, sessionId) : [],
-				runs,
-				runEventsByRunId: await collectRunEvents(this.runtimeDb, clientId, runs),
+				session: context.session,
+				messages: [],
+				runs: context.runs,
+				runEventsByRunId: await collectAgentV2RunEvents(this.runtimeDb, context.clientId, context.runs),
+				agentV2DiagnosticsByRunId: await collectAgentV2Diagnostics(
+					this.runtimeDb,
+					context.clientId,
+					context.runs,
+				),
 				sessionFile: null,
 			},
 			diagnostics: {
@@ -150,23 +144,29 @@ export class WorkspaceDiagnosticExportService {
 			return entry;
 		};
 
-		add(jsonEntry("runtime/session.json", "runtime-session", () => context.session ?? null));
-		add(
-			ndjsonEntry("runtime/messages.ndjson", "runtime-messages", () =>
-				context.session ? this.runtimeDb.iterateMessages(context.clientId, context.sessionId) : [],
-			),
-		);
-		add(jsonEntry("runtime/runs.json", "runtime-runs", () => context.runs));
+		add(jsonEntry("runtime/session.json", "runtime-session", () => context.session));
+		add(ndjsonEntry("runtime/messages.ndjson", "runtime-messages", () => []));
+		add(jsonEntry("runtime/runs.json", "agent-v2-runs", () => context.runs));
 		for (const run of context.runs) {
 			const runId = safeFilenamePart(run.runId);
 			add(
-				jsonEntry(`runtime/run-events/${runId}.summary.json`, "runtime-run-events-summary", async () =>
-					summarizeRunEvents(run.runId, await this.runtimeDb.iterateRunEvents(context.clientId, run.runId, 0)),
+				jsonEntry(`runtime/run-events/${runId}.summary.json`, "agent-v2-run-events-summary", async () =>
+					summarizeRunEvents(run.runId, await this.runtimeDb.listAgentV2RunEvents(context.clientId, run.runId, 0)),
 				),
 			);
 			add(
-				ndjsonEntry(`runtime/run-events/${runId}.events.ndjson`, "runtime-run-events", () =>
-					this.runtimeDb.iterateRunEvents(context.clientId, run.runId, 0),
+				ndjsonEntry(`runtime/run-events/${runId}.events.ndjson`, "agent-v2-run-events", () =>
+					this.runtimeDb.listAgentV2RunEvents(context.clientId, run.runId, 0),
+				),
+			);
+			add(
+				jsonEntry(`agent-v2/diagnostics/${runId}.summary.json`, "agent-v2-diagnostics-summary", async () =>
+					summarizeAgentV2Diagnostics(run.runId, await this.runtimeDb.listAgentV2Diagnostics(context.clientId, run.runId)),
+				),
+			);
+			add(
+				ndjsonEntry(`agent-v2/diagnostics/${runId}.diagnostics.ndjson`, "agent-v2-diagnostics", () =>
+					this.runtimeDb.listAgentV2Diagnostics(context.clientId, run.runId),
 				),
 			);
 		}
@@ -250,31 +250,46 @@ export class WorkspaceDiagnosticExportService {
 		const clientId = stringField(request.clientId);
 		if (!clientId) throw new Error("Client id is required.");
 		if (!request.sessionId && !request.runId) throw new Error("Query parameter `sessionId` or `runId` is required.");
-		const requestedRun = request.runId ? await this.runtimeDb.getRun(clientId, request.runId) : undefined;
-		if (request.runId && !requestedRun) throw new Error("Runtime run not found.");
-		const sessionId = stringField(request.sessionId) ?? requestedRun?.sessionId;
+		const requestedRun = request.runId ? await this.runtimeDb.getAgentV2Run(clientId, request.runId) : undefined;
+		if (request.runId && !requestedRun) throw new Error("Agent v2 run not found.");
+		const sessionId = stringField(request.sessionId) ?? agentV2RunSessionId(requestedRun);
 		if (!sessionId) throw new Error("Runtime session id could not be resolved.");
-		if (requestedRun && requestedRun.sessionId !== sessionId)
+		if (requestedRun && agentV2RunSessionId(requestedRun) !== sessionId)
 			throw new Error("Run does not belong to requested session.");
+		const runs = requestedRun
+			? [requestedRun]
+			: (await this.runtimeDb.listAgentV2Runs(clientId)).filter((run) => agentV2RunSessionId(run) === sessionId);
 		return {
 			clientId,
 			sessionId,
-			session: await this.runtimeDb.getSession(clientId, sessionId),
-			runs: requestedRun ? [requestedRun] : await this.runtimeDb.listRunsForSession(clientId, sessionId),
+			session: null,
+			runs,
 		};
 	}
 }
 
-async function collectRunEvents(
+async function collectAgentV2RunEvents(
 	runtimeDb: RuntimeStore,
 	clientId: string,
-	runs: RuntimeRunRecord[],
-): Promise<Record<string, RuntimeRunEventRecord[]>> {
-	const eventsByRunId: Record<string, RuntimeRunEventRecord[]> = {};
+	runs: AgentV2RunSnapshot[],
+): Promise<Record<string, AgentV2RunEventRecord[]>> {
+	const eventsByRunId: Record<string, AgentV2RunEventRecord[]> = {};
 	for (const run of runs) {
-		eventsByRunId[run.runId] = await runtimeDb.listRunEvents(clientId, run.runId, 0);
+		eventsByRunId[run.runId] = await runtimeDb.listAgentV2RunEvents(clientId, run.runId, 0);
 	}
 	return eventsByRunId;
+}
+
+async function collectAgentV2Diagnostics(
+	runtimeDb: RuntimeStore,
+	clientId: string,
+	runs: AgentV2RunSnapshot[],
+): Promise<Record<string, AgentV2DiagnosticEvent[]>> {
+	const diagnosticsByRunId: Record<string, AgentV2DiagnosticEvent[]> = {};
+	for (const run of runs) {
+		diagnosticsByRunId[run.runId] = await runtimeDb.listAgentV2Diagnostics(clientId, run.runId);
+	}
+	return diagnosticsByRunId;
 }
 
 async function buildDiagnosticOverview(input: {
@@ -284,7 +299,6 @@ async function buildDiagnosticOverview(input: {
 	maxDiagnosticEvents?: number;
 	runtimeDb: RuntimeStore;
 }): Promise<JsonObject> {
-	const messages = await collectMessages(input.runtimeDb, input.context);
 	const allDiagnostics = Array.from(
 		input.diagnostics.iterateExportEvents(diagnosticContextQuery(input.context, input.maxDiagnosticEvents)),
 	);
@@ -294,33 +308,34 @@ async function buildDiagnosticOverview(input: {
 	);
 	const sessionDiagnostics = allDiagnostics.filter((event) => event.sessionId === input.context.sessionId);
 	const globalDiagnostics = allDiagnostics.filter((event) => !event.sessionId);
-	const runs = await buildRunOverviews(input.runtimeDb, input.context, relevantDiagnostics);
+	const agentV2DiagnosticsByRunId = await collectAgentV2Diagnostics(
+		input.runtimeDb,
+		input.context.clientId,
+		input.context.runs,
+	);
+	const agentV2Diagnostics = Object.values(agentV2DiagnosticsByRunId).flat();
+	const runs = await buildRunOverviews(
+		input.runtimeDb,
+		input.context,
+		relevantDiagnostics,
+		agentV2DiagnosticsByRunId,
+	);
 	const findings = buildDiagnosticFindings({
 		context: input.context,
 		globalDiagnostics,
+		agentV2Diagnostics,
 		relevantDiagnostics,
 		runs,
 	});
 	return {
 		version: 1,
 		exportedAt: input.exportedAt,
-		session: input.context.session
-			? {
-					sessionId: input.context.session.sessionId,
-					clientId: input.context.session.clientId,
-					title: input.context.session.title,
-					model: input.context.session.model,
-					thinkingLevel: input.context.session.thinkingLevel,
-					createdAt: input.context.session.createdAt,
-					updatedAt: input.context.session.updatedAt,
-					lastRunStatus: input.context.session.lastRunStatus ?? null,
-					lastRunId: input.context.session.lastRunId ?? null,
-				}
-			: null,
+		session: null,
 		counts: {
-			messages: messages.length,
+			messages: 0,
 			runs: input.context.runs.length,
 			runtimeRunEvents: runs.reduce((total, run) => total + run.eventCount, 0),
+			agentV2Diagnostics: agentV2Diagnostics.length,
 			diagnosticEvents: relevantDiagnostics.length,
 			sessionDiagnosticEvents: sessionDiagnostics.length,
 			globalDiagnosticEvents: globalDiagnostics.length,
@@ -332,41 +347,37 @@ async function buildDiagnosticOverview(input: {
 	};
 }
 
-async function collectMessages(
-	runtimeDb: RuntimeStore,
-	context: DiagnosticExportContext,
-): Promise<RuntimeMessageRecord[]> {
-	if (!context.session) return [];
-	return await arrayFromMaybeAsync(await runtimeDb.iterateMessages(context.clientId, context.sessionId));
-}
-
 async function buildRunOverviews(
 	runtimeDb: RuntimeStore,
 	context: DiagnosticExportContext,
 	diagnosticEvents: DiagnosticLogEventRecord[],
-): Promise<RuntimeRunOverview[]> {
-	const overviews: RuntimeRunOverview[] = [];
+	agentV2DiagnosticsByRunId: Record<string, AgentV2DiagnosticEvent[]>,
+): Promise<AgentV2RunOverview[]> {
+	const overviews: AgentV2RunOverview[] = [];
 	for (const run of context.runs) {
-		const events = await arrayFromMaybeAsync(await runtimeDb.iterateRunEvents(context.clientId, run.runId, 0));
+		const events = await arrayFromMaybeAsync(await runtimeDb.listAgentV2RunEvents(context.clientId, run.runId, 0));
 		const diagnosticsForRun = diagnosticEvents.filter((event) => diagnosticEventRunId(event) === run.runId);
+		const agentV2DiagnosticsForRun = agentV2DiagnosticsByRunId[run.runId] ?? [];
 		const firstEventAt = events[0]?.createdAt ?? null;
 		const lastEventAt = events.at(-1)?.createdAt ?? null;
 		overviews.push({
 			runId: run.runId,
-			sessionId: run.sessionId,
 			status: run.status,
+			phase: run.phase,
+			attempt: run.attempt,
 			workerId: run.workerId ?? null,
 			startedAt: run.startedAt ?? null,
 			updatedAt: run.updatedAt,
 			endedAt: run.endedAt ?? null,
-			error: run.error ?? null,
+			error: run.error ? { ...run.error } : null,
+			input: run.input,
 			model: run.model,
-			thinkingLevel: run.thinkingLevel,
 			eventCount: events.length,
 			eventTypes: countRunEventTypes(events),
 			firstEventAt,
 			lastEventAt,
 			diagnosticEventTypes: countDiagnosticEventTypes(diagnosticsForRun),
+			agentV2DiagnosticCodes: countAgentV2DiagnosticCodes(agentV2DiagnosticsForRun),
 		});
 	}
 	return overviews;
@@ -375,8 +386,9 @@ async function buildRunOverviews(
 function buildDiagnosticFindings(input: {
 	context: DiagnosticExportContext;
 	globalDiagnostics: DiagnosticLogEventRecord[];
+	agentV2Diagnostics: AgentV2DiagnosticEvent[];
 	relevantDiagnostics: DiagnosticLogEventRecord[];
-	runs: RuntimeRunOverview[];
+	runs: AgentV2RunOverview[];
 }): DiagnosticFinding[] {
 	const findings: DiagnosticFinding[] = [];
 	const addFinding = (
@@ -387,12 +399,6 @@ function buildDiagnosticFindings(input: {
 	): void => {
 		findings.push({ severity, code, message, evidence });
 	};
-
-	if (!input.context.session) {
-		addFinding("error", "session_missing", "Runtime session metadata was not found for the requested session.", {
-			sessionId: input.context.sessionId,
-		});
-	}
 
 	const queuedTimeout = input.relevantDiagnostics.find(
 		(event) => event.eventType === "agent.remote_run.queued_timeout",
@@ -529,8 +535,9 @@ function buildDiagnosticFindings(input: {
 			event.eventType.startsWith("provider.") ||
 			event.eventType.startsWith("model."),
 	);
+	const agentV2DiagnosticsObserved = input.agentV2Diagnostics.length > 0;
 	const hasRuntimeRunEvents = input.runs.some((run) => run.eventCount > 0);
-	if (input.runs.length > 0 && !hasRuntimeRunEvents && !providerOrModelDiagnosticsObserved) {
+	if (input.runs.length > 0 && !hasRuntimeRunEvents && !providerOrModelDiagnosticsObserved && !agentV2DiagnosticsObserved) {
 		addFinding(
 			"warn",
 			"model_request_not_observed",
@@ -554,7 +561,19 @@ function buildDiagnosticFindings(input: {
 		);
 	}
 
-	if (input.relevantDiagnostics.length === 0) {
+	const agentV2Error = input.agentV2Diagnostics.find((event) => event.severity === "error");
+	if (agentV2Error) {
+		addFinding("error", "agent_v2_diagnostic_error", "Agent v2 diagnostic error was recorded for this run.", {
+			diagnosticId: agentV2Error.diagnosticId,
+			runId: agentV2Error.runId,
+			category: agentV2Error.category,
+			code: agentV2Error.code,
+			message: agentV2Error.message,
+			data: agentV2Error.data,
+		});
+	}
+
+	if (input.relevantDiagnostics.length === 0 && input.agentV2Diagnostics.length === 0) {
 		addFinding("warn", "no_relevant_diagnostic_events", "No relevant diagnostic events were found in this export.", {
 			sessionId: input.context.sessionId,
 			runIds: input.runs.map((run) => run.runId),
@@ -572,56 +591,52 @@ async function buildDiagnosticTimeline(input: {
 }): Promise<TimelineRecord[]> {
 	const records: TimelineRecord[] = [];
 	let order = 0;
-	if (input.context.session) {
-		records.push({
-			timestamp: input.context.session.createdAt,
-			source: "runtime",
-			kind: "runtime.session",
-			order: order++,
-			sessionId: input.context.session.sessionId,
-			title: input.context.session.title,
-			model: input.context.session.model,
-			thinkingLevel: input.context.session.thinkingLevel,
-		});
-	}
-	for (const message of await collectMessages(input.runtimeDb, input.context)) {
-		records.push({
-			timestamp: message.createdAt,
-			source: "runtime",
-			kind: "runtime.message",
-			order: order++,
-			sessionId: message.sessionId,
-			messageId: message.messageId,
-			role: message.role,
-			payload: message.payload,
-		});
-	}
 	for (const run of input.context.runs) {
 		records.push({
-			timestamp: run.startedAt ?? run.updatedAt,
-			source: "runtime",
-			kind: "runtime.run",
+			timestamp: run.startedAt ?? run.createdAt,
+			source: "agent_v2",
+			kind: "agent_v2.run",
 			order: order++,
 			runId: run.runId,
-			sessionId: run.sessionId,
+			sessionId: agentV2RunSessionId(run) ?? null,
 			status: run.status,
+			phase: run.phase,
+			attempt: run.attempt,
 			workerId: run.workerId ?? null,
+			createdAt: run.createdAt,
 			startedAt: run.startedAt ?? null,
 			updatedAt: run.updatedAt,
 			endedAt: run.endedAt ?? null,
-			error: run.error ?? null,
+			error: run.error ? { ...run.error } : null,
 		});
-		for await (const event of await input.runtimeDb.iterateRunEvents(input.context.clientId, run.runId, 0)) {
+		for (const event of await input.runtimeDb.listAgentV2RunEvents(input.context.clientId, run.runId, 0)) {
 			records.push({
 				timestamp: event.createdAt,
-				source: "runtime",
-				kind: "runtime.run_event",
+				source: "agent_v2",
+				kind: "agent_v2.run_event",
 				order: order++,
 				runId: event.runId,
-				sessionId: event.sessionId,
+				sessionId: agentV2RunSessionId(run) ?? null,
 				seq: event.seq,
 				type: event.type,
 				payload: event.payload,
+			});
+		}
+		for (const diagnostic of await input.runtimeDb.listAgentV2Diagnostics(input.context.clientId, run.runId)) {
+			records.push({
+				timestamp: diagnostic.createdAt,
+				source: "agent_v2",
+				kind: "agent_v2.diagnostic",
+				order: order++,
+				runId: diagnostic.runId,
+				sessionId: agentV2RunSessionId(run) ?? null,
+				diagnosticId: diagnostic.diagnosticId,
+				severity: diagnostic.severity,
+				category: diagnostic.category,
+				code: diagnostic.code,
+				phase: diagnostic.phase ?? null,
+				message: diagnostic.message,
+				data: diagnostic.data,
 			});
 		}
 	}
@@ -685,9 +700,8 @@ function diagnosticContextQuery(
 
 function diagnosticContextWindow(context: DiagnosticExportContext): Pick<DiagnosticLogExportQuery, "since" | "until"> {
 	const timestamps: number[] = [];
-	addTimestampMillis(timestamps, context.session?.createdAt);
-	addTimestampMillis(timestamps, context.session?.updatedAt);
 	for (const run of context.runs) {
+		addTimestampMillis(timestamps, run.createdAt);
 		addTimestampMillis(timestamps, run.startedAt);
 		addTimestampMillis(timestamps, run.updatedAt);
 		addTimestampMillis(timestamps, run.endedAt);
@@ -741,7 +755,7 @@ function diagnosticEventSeriesEvidence(events: DiagnosticLogEventRecord[]): Json
 	};
 }
 
-function countRunEventTypes(events: Iterable<RuntimeRunEventRecord>): Record<string, number> {
+function countRunEventTypes(events: Iterable<AgentV2RunEventRecord>): Record<string, number> {
 	const counts: Record<string, number> = {};
 	for (const event of events) {
 		counts[event.type] = (counts[event.type] ?? 0) + 1;
@@ -753,6 +767,14 @@ function countDiagnosticEventTypes(events: Iterable<DiagnosticLogEventRecord>): 
 	const counts: Record<string, number> = {};
 	for (const event of events) {
 		counts[event.eventType] = (counts[event.eventType] ?? 0) + 1;
+	}
+	return counts;
+}
+
+function countAgentV2DiagnosticCodes(events: Iterable<AgentV2DiagnosticEvent>): Record<string, number> {
+	const counts: Record<string, number> = {};
+	for (const event of events) {
+		counts[event.code] = (counts[event.code] ?? 0) + 1;
 	}
 	return counts;
 }
@@ -778,6 +800,10 @@ function compareTimelineRecords(left: TimelineRecord, right: TimelineRecord): nu
 
 function stringField(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function agentV2RunSessionId(run: AgentV2RunSnapshot | undefined): string | undefined {
+	return stringField(run?.input.sessionId);
 }
 
 function jsonEntry(path: string, kind: string, value: () => unknown | Promise<unknown>): DiagnosticArchiveEntry {
@@ -808,7 +834,7 @@ function ndjsonEntry<T>(
 
 async function summarizeRunEvents(
 	runId: string,
-	events: MaybeAsyncIterable<RuntimeRunEventRecord>,
+	events: MaybeAsyncIterable<AgentV2RunEventRecord>,
 ): Promise<JsonObject> {
 	let totalEvents = 0;
 	let payloadBytes = 0;
@@ -833,6 +859,29 @@ async function summarizeRunEvents(
 		lastSeq,
 		payloadBytes,
 		largestPayloadBytes,
+	};
+}
+
+async function summarizeAgentV2Diagnostics(
+	runId: string,
+	diagnostics: MaybeAsyncIterable<AgentV2DiagnosticEvent>,
+): Promise<JsonObject> {
+	let totalDiagnostics = 0;
+	const severities: Record<string, number> = {};
+	const categories: Record<string, number> = {};
+	const codes: Record<string, number> = {};
+	for await (const diagnostic of diagnostics) {
+		totalDiagnostics += 1;
+		severities[diagnostic.severity] = (severities[diagnostic.severity] ?? 0) + 1;
+		categories[diagnostic.category] = (categories[diagnostic.category] ?? 0) + 1;
+		codes[diagnostic.code] = (codes[diagnostic.code] ?? 0) + 1;
+	}
+	return {
+		runId,
+		totalDiagnostics,
+		severities,
+		categories,
+		codes,
 	};
 }
 

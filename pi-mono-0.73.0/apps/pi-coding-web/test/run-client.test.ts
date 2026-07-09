@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DeleteSessionResult, RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import * as runClient from "../src/runtime/run-client.js";
 
-const { buildRunRequestHeaders, deleteSession, renameSession } = runClient;
+const { buildRunRequestHeaders } = runClient;
 
 describe("run client", () => {
 	const clientId = "550e8400-e29b-41d4-a716-446655440000";
@@ -16,48 +15,6 @@ describe("run client", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
-	});
-
-	it("sends X-PI-Client-ID on rename requests", async () => {
-		const requests: Array<{ url: string; init?: RequestInit }> = [];
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-				requests.push({ url: String(input), init });
-				if (String(input).includes("/api/pi-sessions/session-1") && init?.method === "PUT") {
-					return jsonResponse(createSessionRecord({ title: "Renamed" }));
-				}
-				throw new Error(`Unexpected URL ${String(input)}`);
-			}),
-		);
-
-		await renameSession("session-1", "Renamed");
-
-		expect(requests).toHaveLength(1);
-		expect(requests[0]?.url).toBe("http://localhost:5173/api/pi-sessions/session-1");
-		expect(requests[0]?.init?.body).toBe(JSON.stringify({ title: "Renamed" }));
-		for (const request of requests) {
-			expect(request.init?.headers).toMatchObject({ "X-PI-Client-ID": clientId });
-		}
-		expect(requests[0]?.init?.method).toBe("PUT");
-	});
-
-	it("deletes runtime sessions with X-PI-Client-ID", async () => {
-		const requests: Array<{ url: string; init?: RequestInit }> = [];
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-				requests.push({ url: String(input), init });
-				return jsonResponse({ deleted: true, sessionId: "session-1" } satisfies DeleteSessionResult);
-			}),
-		);
-
-		await expect(deleteSession("session-1")).resolves.toEqual({ deleted: true, sessionId: "session-1" });
-
-		expect(requests).toHaveLength(1);
-		expect(requests[0]?.url).toBe("http://localhost:5173/api/pi-sessions/session-1");
-		expect(requests[0]?.init?.method).toBe("DELETE");
-		expect(requests[0]?.init?.headers).toMatchObject({ "X-PI-Client-ID": clientId });
 	});
 
 	it("preserves lowercase content-type and normalizes tuple-array headers", () => {
@@ -83,6 +40,8 @@ describe("run client", () => {
 		expect(runClient).not.toHaveProperty("connectRunEvents");
 		expect(runClient).not.toHaveProperty("getSession");
 		expect(runClient).not.toHaveProperty("listSessions");
+		expect(runClient).not.toHaveProperty("renameSession");
+		expect(runClient).not.toHaveProperty("deleteSession");
 		expect(runClient).not.toHaveProperty("buildAppPreviewGoalStartRequest");
 		expect(runClient).not.toHaveProperty("getAppPreviewGoal");
 		expect(runClient).not.toHaveProperty("enableAppPreviewGoal");
@@ -103,6 +62,7 @@ describe("run client", () => {
 			"enableAppPreviewGoal",
 			"disableAppPreviewGoal",
 			"/goals/app-preview",
+			"/api/pi-sessions",
 		];
 
 		for (const entry of forbidden) {
@@ -157,6 +117,22 @@ describe("run client", () => {
 			expect(bootstrapSource, `bootstrap.ts must not reference ${entry}`).not.toContain(entry);
 		}
 	});
+
+	it("keeps generated app rename/delete on browser session storage instead of legacy runtime sessions", () => {
+		const bootstrapSource = readFileSync(join(import.meta.dirname, "../src/app/bootstrap.ts"), "utf8");
+		const renameStart = bootstrapSource.indexOf("const renameSessionProject = async");
+		const renameEnd = bootstrapSource.indexOf("const deleteSessionEverywhere = async");
+		const deleteEnd = bootstrapSource.indexOf("const handleAgentEvent = async");
+		const renameSource = bootstrapSource.slice(renameStart, renameEnd);
+		const deleteSource = bootstrapSource.slice(renameEnd, deleteEnd);
+
+		expect(bootstrapSource).not.toContain("renameRuntimeSession");
+		expect(bootstrapSource).not.toContain("deleteRuntimeSession");
+		expect(renameSource).toContain("await storage.sessions.updateTitle(sessionId, title);");
+		expect(deleteSource).toContain("await storage.sessions.deleteSession(sessionId);");
+		expect(renameSource).not.toContain("/api/pi-sessions");
+		expect(deleteSource).not.toContain("/api/pi-sessions");
+	});
 });
 
 function createStorage(clientId: string): Storage {
@@ -180,25 +156,5 @@ function createStorage(clientId: string): Storage {
 		setItem(key, value) {
 			values.set(key, value);
 		},
-	};
-}
-
-function jsonResponse(body: unknown): Response {
-	return new Response(JSON.stringify(body), {
-		status: 200,
-		headers: { "Content-Type": "application/json" },
-	});
-}
-
-function createSessionRecord(overrides: Partial<RuntimeSessionRecord> = {}): RuntimeSessionRecord {
-	return {
-		sessionId: "session-1",
-		clientId: "550e8400-e29b-41d4-a716-446655440000",
-		title: "Session",
-		model: {},
-		thinkingLevel: "high",
-		createdAt: "2026-06-09T00:00:00.000Z",
-		updatedAt: "2026-06-09T00:00:00.000Z",
-		...overrides,
 	};
 }

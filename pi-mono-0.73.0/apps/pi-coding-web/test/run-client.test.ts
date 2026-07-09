@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DeleteSessionResult, RuntimeSessionDetail, RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
+import type { DeleteSessionResult, RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import * as runClient from "../src/runtime/run-client.js";
 
-const { buildRunRequestHeaders, deleteSession, getSession, listSessions, renameSession } = runClient;
+const { buildRunRequestHeaders, deleteSession, renameSession } = runClient;
 
 describe("run client", () => {
 	const clientId = "550e8400-e29b-41d4-a716-446655440000";
@@ -18,18 +18,12 @@ describe("run client", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("sends X-PI-Client-ID on session fetches and rename requests", async () => {
+	it("sends X-PI-Client-ID on rename requests", async () => {
 		const requests: Array<{ url: string; init?: RequestInit }> = [];
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 				requests.push({ url: String(input), init });
-				if (String(input).endsWith("/api/pi-sessions")) {
-					return jsonResponse({ sessions: [createSessionRecord()] });
-				}
-				if (String(input).includes("/api/pi-sessions/session-1") && init?.method === "GET") {
-					return jsonResponse(createSessionDetail());
-				}
 				if (String(input).includes("/api/pi-sessions/session-1") && init?.method === "PUT") {
 					return jsonResponse(createSessionRecord({ title: "Renamed" }));
 				}
@@ -37,21 +31,15 @@ describe("run client", () => {
 			}),
 		);
 
-		await listSessions();
-		await getSession("session-1");
 		await renameSession("session-1", "Renamed");
 
-		expect(requests).toHaveLength(3);
-		expect(requests[0]?.url).toBe("http://localhost:5173/api/pi-sessions");
-		expect(requests[1]?.url).toBe("http://localhost:5173/api/pi-sessions/session-1");
-		expect(requests[2]?.url).toBe("http://localhost:5173/api/pi-sessions/session-1");
-		expect(requests[2]?.init?.body).toBe(JSON.stringify({ title: "Renamed" }));
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe("http://localhost:5173/api/pi-sessions/session-1");
+		expect(requests[0]?.init?.body).toBe(JSON.stringify({ title: "Renamed" }));
 		for (const request of requests) {
 			expect(request.init?.headers).toMatchObject({ "X-PI-Client-ID": clientId });
 		}
-		expect(requests[0]?.init?.method).toBe("GET");
-		expect(requests[1]?.init?.method).toBe("GET");
-		expect(requests[2]?.init?.method).toBe("PUT");
+		expect(requests[0]?.init?.method).toBe("PUT");
 	});
 
 	it("deletes runtime sessions with X-PI-Client-ID", async () => {
@@ -93,6 +81,8 @@ describe("run client", () => {
 		expect(runClient).not.toHaveProperty("cancelRun");
 		expect(runClient).not.toHaveProperty("listRunEvents");
 		expect(runClient).not.toHaveProperty("connectRunEvents");
+		expect(runClient).not.toHaveProperty("getSession");
+		expect(runClient).not.toHaveProperty("listSessions");
 		expect(runClient).not.toHaveProperty("buildAppPreviewGoalStartRequest");
 		expect(runClient).not.toHaveProperty("getAppPreviewGoal");
 		expect(runClient).not.toHaveProperty("enableAppPreviewGoal");
@@ -102,6 +92,10 @@ describe("run client", () => {
 	it("does not keep legacy app preview goal browser helpers or routes", () => {
 		const source = readFileSync(join(import.meta.dirname, "../src/runtime/run-client.ts"), "utf8");
 		const forbidden = [
+			"RuntimeSessionDetail",
+			"RuntimeSessionListResult",
+			"getSession(",
+			"listSessions(",
 			"AppPreviewGoalRecord",
 			"AppPreviewGoalEventRecord",
 			"AppPreviewGoalSource",
@@ -129,6 +123,21 @@ describe("run client", () => {
 		expect(syncSource).not.toContain("const run = detail.runs.find((candidate) => candidate.runId === runId);");
 		expect(bootstrapSource).not.toContain("tryDrainRemoteRunEvents");
 		expect(bootstrapSource).toContain("controller.markRunEventSeen(event);");
+	});
+
+	it("restores sessions from local storage and v2 run APIs instead of the legacy session detail API", () => {
+		const bootstrapSource = readFileSync(join(import.meta.dirname, "../src/app/bootstrap.ts"), "utf8");
+		const loadSessionStart = bootstrapSource.indexOf("const loadSession = async");
+		const loadSessionEnd = bootstrapSource.indexOf("const startFreshSession = async");
+		const loadSessionSource = bootstrapSource.slice(loadSessionStart, loadSessionEnd);
+
+		expect(loadSessionSource).toContain("const sessionData = await storage.sessions.get(sessionId);");
+		expect(loadSessionSource).toContain("const sessionMetadata = (await storage.sessions.getMetadata(sessionId))");
+		expect(bootstrapSource).toContain("getAgentV2Run(activeRunId)");
+		expect(bootstrapSource).toContain("listAgentV2RunEvents(activeRunId, 0)");
+		expect(loadSessionSource).not.toContain("await runClient.getSession(sessionId)");
+		expect(bootstrapSource).not.toContain("runClient.getSession");
+		expect(bootstrapSource).not.toContain("runClient.listSessions");
 	});
 
 	it("does not keep legacy spec artifact orchestration in bootstrap", () => {
@@ -191,13 +200,5 @@ function createSessionRecord(overrides: Partial<RuntimeSessionRecord> = {}): Run
 		createdAt: "2026-06-09T00:00:00.000Z",
 		updatedAt: "2026-06-09T00:00:00.000Z",
 		...overrides,
-	};
-}
-
-function createSessionDetail(): RuntimeSessionDetail {
-	return {
-		session: createSessionRecord(),
-		messages: [],
-		runs: [],
 	};
 }

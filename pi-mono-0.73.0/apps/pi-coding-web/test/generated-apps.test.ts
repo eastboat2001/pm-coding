@@ -74,7 +74,6 @@ describe("generated apps state", () => {
 					],
 				});
 			}
-			if (url.endsWith("/api/pi-sessions")) return jsonResponse({ sessions: [] });
 			return jsonResponse({}, 404);
 		};
 
@@ -87,7 +86,7 @@ describe("generated apps state", () => {
 		expect(projects[0].runStatus).toBeUndefined();
 	});
 
-	it("loads runtime sessions as app panel records through batch project summaries", async () => {
+	it("loads browser session metadata as app panel records through batch project summaries", async () => {
 		const calls: Array<{ url: string; init?: RequestInit }> = [];
 		const fetchImpl: typeof fetch = async (input, init) => {
 			const url = String(input);
@@ -108,28 +107,6 @@ describe("generated apps state", () => {
 					],
 				});
 			}
-			if (url.endsWith("/api/pi-sessions")) {
-				return jsonResponse({
-					sessions: [
-						{
-							sessionId: "session-1",
-							title: "Plain Chat",
-							createdAt: "2026-06-12T06:30:00.000Z",
-							updatedAt: "2026-06-12T06:31:00.000Z",
-							lastRunStatus: "completed",
-							lastRunId: "run-1",
-						},
-						{
-							sessionId: "session-2",
-							title: "Preview App",
-							createdAt: "2026-06-12T06:35:00.000Z",
-							updatedAt: "2026-06-12T06:41:00.000Z",
-							lastRunStatus: "running",
-							lastRunId: "run-2",
-						},
-					],
-				});
-			}
 			if (url.endsWith("/api/pi-projects/batch-summary")) {
 				const body = JSON.parse(String(init?.body || "{}")) as { sessions?: Array<{ sessionId: string }> };
 				return jsonResponse({
@@ -144,7 +121,28 @@ describe("generated apps state", () => {
 			return jsonResponse({}, 404);
 		};
 
-		const projects = await loadGeneratedApps(fetchImpl, "http://localhost:5173");
+		const projects = await loadSessionProjectApps(
+			[
+				{
+					id: "session-1",
+					title: "Plain Chat",
+					createdAt: "2026-06-12T06:30:00.000Z",
+					lastModified: "2026-06-12T06:31:00.000Z",
+					runStatus: "completed",
+				},
+				{
+					id: "session-2",
+					title: "Preview App",
+					createdAt: "2026-06-12T06:35:00.000Z",
+					lastModified: "2026-06-12T06:41:00.000Z",
+					runStatus: "running",
+					activeRunId: "run-2",
+					runUpdatedAt: "2026-06-12T06:41:00.000Z",
+				},
+			],
+			fetchImpl,
+			"http://localhost:5173",
+		);
 
 		expect(projects.map((project) => project.sessionId)).toEqual(["session-2", "session-1"]);
 		expect(projects[0]).toMatchObject({
@@ -179,10 +177,17 @@ describe("generated apps state", () => {
 				{ sessionId: "session-2", title: "Preview App" },
 			],
 		});
-		expect(calls.map((call) => `${call.init?.method || "GET"} ${call.url}`)).toContain(
+		expect(calls.map((call) => `${call.init?.method || "GET"} ${call.url}`)).not.toContain(
 			"GET http://localhost:5173/api/pi-sessions",
 		);
 		expect(calls.some((call) => call.url.endsWith("/api/pi-projects/workspace/files"))).toBe(false);
+	});
+
+	it("does not keep the legacy session list route in the generated apps source", async () => {
+		const source = await import("node:fs/promises").then((fs) =>
+			fs.readFile(new URL("../src/app/generated-apps-state.ts", import.meta.url), "utf8"),
+		);
+		expect(source).not.toContain("/api/pi-sessions");
 	});
 
 	it("merges browser-only sessions into app panel records", async () => {

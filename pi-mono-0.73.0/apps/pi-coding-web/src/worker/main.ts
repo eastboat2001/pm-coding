@@ -26,9 +26,8 @@ import {
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 
 export async function ensureRuntimeSchemas(
-	runtimeDb: Pick<RuntimeStore, "ensureSchema" | "ensureAgentV2Schema">,
+	runtimeDb: Pick<RuntimeStore, "ensureAgentV2Schema">,
 ): Promise<void> {
-	await runtimeDb.ensureSchema();
 	await runtimeDb.ensureAgentV2Schema();
 }
 

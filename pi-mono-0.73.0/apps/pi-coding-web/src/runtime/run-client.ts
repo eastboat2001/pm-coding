@@ -1,9 +1,4 @@
-import type {
-	DeleteSessionResult,
-	RuntimeSessionDetail,
-	RuntimeSessionListResult,
-	RuntimeSessionRecord,
-} from "@mariozechner/pi-web-workspace";
+import type { DeleteSessionResult, RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "./client-id.js";
 
 const SESSIONS_API_PREFIX = "/api/pi-sessions";
@@ -15,17 +10,6 @@ export function buildRunRequestHeaders(initHeaders?: HeadersInit, hasBody = fals
 		headers["Content-Type"] = "application/json";
 	}
 	return headers;
-}
-
-export async function listSessions(): Promise<RuntimeSessionRecord[]> {
-	const result = await requestRunApi<RuntimeSessionListResult>(SESSIONS_API_PREFIX, { method: "GET" });
-	return result.sessions;
-}
-
-export async function getSession(sessionId: string): Promise<RuntimeSessionDetail> {
-	return requestRunApi<RuntimeSessionDetail>(`${SESSIONS_API_PREFIX}/${encodeURIComponent(sessionId)}`, {
-		method: "GET",
-	});
 }
 
 export async function deleteSession(

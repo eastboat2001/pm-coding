@@ -1,5 +1,6 @@
 import type { DeleteSessionResult } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "../runtime/client-id.js";
+import { getBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { formatSessionUpdatedAt } from "../storage/session-timestamps.js";
 
 export const GENERATED_APPS_PANEL_WIDTH_KEY = "pi-generated-apps-panel-width";
@@ -23,10 +24,6 @@ export type GeneratedAppRecord = {
 
 type GeneratedAppsResponse = {
 	projects?: unknown;
-};
-
-type RuntimeSessionsResponse = {
-	sessions?: unknown;
 };
 
 type BatchProjectSummaryResponse = {
@@ -66,7 +63,7 @@ export async function loadGeneratedApps(
 ): Promise<GeneratedAppRecord[]> {
 	const [projects, sessions] = await Promise.all([
 		loadPreviewProjects(fetchImpl, origin),
-		loadRuntimeSessionSources(fetchImpl, origin).catch(() => []),
+		loadBrowserSessionSources(),
 	]);
 	if (sessions.length === 0) return projects;
 	return mergeSessionProjectRecords(sessions, projects, fetchImpl, origin, options);
@@ -103,20 +100,25 @@ async function loadPreviewProjects(fetchImpl: typeof fetch, origin: string): Pro
 	});
 }
 
-async function loadRuntimeSessionSources(fetchImpl: typeof fetch, origin: string): Promise<SessionProjectSource[]> {
-	const endpoint = new URL("/api/pi-sessions", origin).toString();
-	const response = await fetchImpl(endpoint, {
-		method: "GET",
-		headers: { Accept: "application/json", ...piClientHeaders() },
-	});
-	const result = (await response.json().catch(() => ({}))) as RuntimeSessionsResponse & { error?: unknown };
-	if (!response.ok)
-		throw new Error(result.error ? String(result.error) : `Runtime sessions API failed with HTTP ${response.status}`);
-	const sessions = Array.isArray(result.sessions) ? result.sessions : [];
-	return sessions.flatMap((session) => {
-		const source = toRuntimeSessionProjectSource(session);
-		return source ? [source] : [];
-	});
+async function loadBrowserSessionSources(): Promise<SessionProjectSource[]> {
+	try {
+		const storage = getBrowserAppStorage();
+		const sessions = (await storage.sessions.getAllMetadata()) as Array<
+			SessionProjectSource & { lastRunId?: string }
+		>;
+		return sessions.map((session) => ({
+			id: session.id,
+			title: session.title,
+			createdAt: session.createdAt,
+			lastModified: session.lastModified,
+			messageCount: session.messageCount,
+			...(session.runStatus ? { runStatus: session.runStatus } : {}),
+			...(session.activeRunId ? { activeRunId: session.activeRunId } : {}),
+			...(session.runUpdatedAt ? { runUpdatedAt: session.runUpdatedAt } : {}),
+		}));
+	} catch {
+		return [];
+	}
 }
 
 async function mergeSessionProjectRecords(
@@ -349,26 +351,6 @@ function toGeneratedAppRecord(value: unknown): GeneratedAppRecord | undefined {
 		previewUrl,
 		fileCount,
 		updatedAt,
-	};
-}
-
-function toRuntimeSessionProjectSource(value: unknown): SessionProjectSource | undefined {
-	if (!isRecord(value)) return undefined;
-	const id = stringValue(value.sessionId);
-	const title = stringValue(value.title);
-	const createdAt = stringValue(value.createdAt);
-	const lastModified = stringValue(value.updatedAt);
-	if (!id || !title || !createdAt || !lastModified) return undefined;
-	const runStatus = stringValue(value.lastRunStatus);
-	const activeRunId = isActiveRunStatus(runStatus) ? stringValue(value.lastRunId) : "";
-	return {
-		id,
-		title,
-		createdAt,
-		lastModified,
-		...(runStatus ? { runStatus } : {}),
-		...(activeRunId ? { activeRunId } : {}),
-		runUpdatedAt: lastModified,
 	};
 }
 

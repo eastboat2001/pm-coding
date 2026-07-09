@@ -141,6 +141,60 @@ describe("PostgresRuntimeStore", () => {
 		);
 	});
 
+	it("resets Agent v2 data without creating legacy tables on a fresh schema-only Postgres store", async () => {
+		const queryable = new RecordingQueryable()
+			.on((query) => {
+				const sql = normalizeSql(query.sql);
+				if (/^(CREATE TABLE|CREATE INDEX|ALTER TABLE|BEGIN|COMMIT)/i.test(sql)) return { rowCount: 0 };
+				if (/^INSERT INTO agent_v2_schema_metadata/i.test(sql)) return { rowCount: 1 };
+				if (/^SELECT EXISTS \( SELECT 1 FROM information_schema\.tables/i.test(sql)) {
+					const table = String(query.values[0] ?? "");
+					return {
+						rows: [
+							{
+								present: [
+									"clients",
+									"agent_v2_schema_metadata",
+									"agent_v2_runs",
+									"agent_v2_run_events",
+									"agent_v2_tasks",
+									"agent_v2_artifacts",
+									"agent_v2_documents",
+									"agent_v2_validations",
+									"agent_v2_diagnostics",
+								].includes(table),
+							},
+						],
+					};
+				}
+				if (/^DELETE FROM /i.test(sql)) return { rowCount: 0 };
+				return undefined;
+			});
+		const store = new PostgresRuntimeStore({ queryable });
+
+		const result = await store.resetAgentV2RuntimeData({
+			now: () => "2026-07-09T10:00:00.000Z",
+		});
+
+		const statements = queryable.queries.map((query) => normalizeSql(query.sql));
+		expect(result.legacyRowsDeleted).toMatchObject({
+			sessions: 0,
+			messages: 0,
+			runs: 0,
+			run_events: 0,
+			app_preview_goals: 0,
+			app_preview_goal_events: 0,
+			clients: 0,
+		});
+		for (const table of ["sessions", "messages", "runs", "run_events", "app_preview_goals", "app_preview_goal_events"]) {
+			expect(statements.some((statement) => statement.includes(`CREATE TABLE IF NOT EXISTS ${table}`)), table).toBe(false);
+			expect(statements.some((statement) => statement === `DELETE FROM ${table}`), table).toBe(false);
+		}
+		expect(statements.some((statement) => statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_runs"))).toBe(true);
+		expect(statements.some((statement) => statement === "DELETE FROM agent_v2_runs")).toBe(true);
+		expect(statements.some((statement) => statement === "DELETE FROM agent_v2_schema_metadata")).toBe(true);
+	});
+
 	it("rejects createRun when the session already has an active run before inserting", async () => {
 		const queryable = new RecordingQueryable().on((query) => {
 			const sql = normalizeSql(query.sql);

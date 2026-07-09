@@ -28,6 +28,19 @@ describe("InMemoryRunQueue", () => {
 		await expect(queue.isCancelRequested("r1")).resolves.toBe(true);
 	});
 
+	it("clears cancellation markers when a claimed run completes", async () => {
+		const queue = new InMemoryRunQueue();
+		const run = { clientId: "client-a", runId: "run-1" };
+
+		await queue.enqueue(run);
+		await expect(queue.claim("worker-a", 0)).resolves.toEqual(run);
+		await queue.requestCancel(run);
+
+		await queue.complete(run, "worker-a");
+
+		await expect(queue.isCancelRequested(run)).resolves.toBe(false);
+	});
+
 	it("clears queued, active, and cancel state", async () => {
 		const queue = new InMemoryRunQueue();
 		await queue.enqueue({ clientId: "client-a", runId: "run-queued" });

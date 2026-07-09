@@ -211,13 +211,6 @@ export {
 	type AgentV2WorkerServiceOptions,
 	type AgentV2WorkerStore,
 } from "./agent-v2-worker-service.js";
-export {
-	AppPreviewGoalService,
-	budgetForSource,
-	type DisableAppPreviewGoalInput,
-	type EnableAppPreviewGoalInput,
-} from "./app-preview-goal-service.js";
-export { AppPreviewGoalSupervisor, type AppPreviewGoalSupervisorOptions } from "./app-preview-goal-supervisor.js";
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
 export { loadStorageConfig } from "./config.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
@@ -232,7 +225,6 @@ export {
 	type PreviewReadinessResult,
 } from "./preview-readiness-checker.js";
 export { type RetryClassification, RetryPolicy, type RetryPolicyOptions } from "./retry-policy.js";
-export { RunApiError, WorkspaceRunApiService } from "./run-api-service.js";
 export {
 	InMemoryRunEventBus,
 	type LiveRunEvent,
@@ -258,13 +250,6 @@ export {
 	type RunRetryControllerOptions,
 	type RunRetryExecutionInput,
 } from "./run-retry-controller.js";
-export type {
-	RunWorkerDiagnostics,
-	WorkerAgent,
-	WorkerAgentEvent,
-	WorkspaceRunWorkerServiceOptions,
-} from "./run-worker-service.js";
-export { WorkspaceRunWorkerService } from "./run-worker-service.js";
 export { RuntimeDbStore } from "./runtime-db.js";
 export type { RuntimeStore } from "./runtime-store.js";
 export { createRuntimeStore } from "./runtime-store-factory.js";

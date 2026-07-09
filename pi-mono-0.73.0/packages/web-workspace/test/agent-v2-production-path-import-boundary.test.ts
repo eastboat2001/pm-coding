@@ -28,6 +28,24 @@ const allowedLegacyFiles = new Set<string>();
 const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts";
 
 describe("agent v2 production import boundary", () => {
+	it("does not expose legacy v1 product services through the root package barrel", async () => {
+		const rootExports = await import("../src/index.js");
+		for (const legacyExport of [
+			"AppPreviewGoalService",
+			"AppPreviewGoalSupervisor",
+			"WorkspaceRunApiService",
+			"WorkspaceRunWorkerService",
+			"RunApiError",
+			"budgetForSource",
+			"WorkerAgent",
+			"WorkerAgentEvent",
+			"WorkspaceRunWorkerServiceOptions",
+			"RunWorkerDiagnostics",
+		]) {
+			expect(rootExports, `root barrel must not export ${legacyExport}`).not.toHaveProperty(legacyExport);
+		}
+	});
+
 	it("publishes explicit v2 worker package subpaths", () => {
 		const packageJson = JSON.parse(
 			readFileSync(join(repoRoot, "packages", "web-workspace", "package.json"), "utf8"),

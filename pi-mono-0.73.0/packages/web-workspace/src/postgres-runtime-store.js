@@ -1119,7 +1119,6 @@ export class PostgresRuntimeStore {
         return rows.map(toAgentV2DiagnosticRecord);
     }
     async resetAgentV2RuntimeData(options = {}) {
-        await this.ensureSchema();
         await this.ensureAgentV2Schema();
         const appliedAt = options.now?.() ?? now();
         return this.withTransaction(async (tx) => {
@@ -1212,8 +1211,19 @@ export class PostgresRuntimeStore {
         return counts;
     }
     async deleteTableRows(queryable, table) {
+        if (!(await this.tableExists(queryable, table)))
+            return 0;
         const result = await this.query(queryable, `DELETE FROM ${table}`);
         return Number(result.rowCount ?? 0);
+    }
+    async tableExists(queryable, table) {
+        const rows = await this.queryRows(queryable, `SELECT EXISTS (
+				SELECT 1
+				FROM information_schema.tables
+				WHERE table_schema = current_schema()
+					AND table_name = $1
+			) AS present`, [table]);
+        return rows[0]?.present === true;
     }
     async withTransaction(callback) {
         const client = await this.connect();

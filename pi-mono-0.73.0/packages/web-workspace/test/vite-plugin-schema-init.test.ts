@@ -16,7 +16,7 @@ describe("configured storage plugin schema init", () => {
 		root = undefined;
 	});
 
-	it("initializes legacy and agent v2 schemas before handling API routes", async () => {
+	it("initializes only the agent v2 schema before handling API routes", async () => {
 		root = mkdtempSync(join(tmpdir(), "pi-vite-plugin-schema-init-"));
 		const calls: string[] = [];
 		const middleware = createMiddleware(testConfig(root), calls);
@@ -24,7 +24,7 @@ describe("configured storage plugin schema init", () => {
 		const response = await dispatch(middleware, "/api/pi-skills/unknown");
 
 		expect(response.statusCode).toBe(404);
-		expect(calls).toEqual(["ensureSchema", "ensureAgentV2Schema"]);
+		expect(calls).toEqual(["ensureAgentV2Schema"]);
 	});
 });
 
@@ -55,9 +55,6 @@ function createMiddleware(config: StorageConfig, calls: string[]): Middleware {
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
 		runtimeDb: {
-			async ensureSchema() {
-				calls.push("ensureSchema");
-			},
 			async ensureAgentV2Schema() {
 				calls.push("ensureAgentV2Schema");
 			},

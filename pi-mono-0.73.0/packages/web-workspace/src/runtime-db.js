@@ -982,7 +982,6 @@ export class RuntimeDbStore {
         return rows.map(toAgentV2DiagnosticRecord);
     }
     resetAgentV2RuntimeData(options = {}) {
-        this.ensureSchema();
         this.ensureAgentV2Schema();
         const db = this.open();
         const appliedAt = options.now?.() ?? now();
@@ -1208,10 +1207,20 @@ function requiredRecord(record, label) {
 function deleteAllRows(db, tables) {
     const counts = {};
     for (const table of tables) {
+        if (!sqliteTableExists(db, table)) {
+            counts[table] = 0;
+            continue;
+        }
         const result = db.prepare(`DELETE FROM ${table}`).run();
         counts[table] = Number(result.changes);
     }
     return counts;
+}
+function sqliteTableExists(db, table) {
+    const row = db
+        .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
+        .get(table);
+    return row?.present === 1;
 }
 function ensureSqliteColumn(db, table, column, definition) {
     const columns = db.prepare(`PRAGMA table_info(${table})`).all();

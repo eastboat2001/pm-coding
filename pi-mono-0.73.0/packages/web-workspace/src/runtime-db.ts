@@ -1493,7 +1493,6 @@ export class RuntimeDbStore implements RuntimeStore {
 	}
 
 	resetAgentV2RuntimeData(options: ResetAgentV2RuntimeDataOptions = {}): ResetAgentV2RuntimeDataResult {
-		this.ensureSchema();
 		this.ensureAgentV2Schema();
 
 		const db = this.open();
@@ -1767,10 +1766,21 @@ function deleteAllRows<TableName extends string>(
 ): Record<TableName, number> {
 	const counts = {} as Record<TableName, number>;
 	for (const table of tables) {
+		if (!sqliteTableExists(db, table)) {
+			counts[table] = 0;
+			continue;
+		}
 		const result = db.prepare(`DELETE FROM ${table}`).run();
 		counts[table] = Number(result.changes);
 	}
 	return counts;
+}
+
+function sqliteTableExists(db: DatabaseSync, table: string): boolean {
+	const row = db
+		.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
+		.get(table) as { present?: number } | undefined;
+	return row?.present === 1;
 }
 
 function ensureSqliteColumn(db: DatabaseSync, table: string, column: string, definition: string): void {

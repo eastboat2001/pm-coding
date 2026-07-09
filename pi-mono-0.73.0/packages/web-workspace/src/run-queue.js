@@ -14,6 +14,7 @@ if string.sub(raw, 1, 1) == "{" then
 	end
 end
 if owner == ARGV[2] then
+	redis.call("DEL", KEYS[2])
 	return redis.call("HDEL", KEYS[1], ARGV[1])
 end
 return 0
@@ -108,6 +109,7 @@ export class InMemoryRunQueue {
         const key = runKey(run);
         if (this.active.get(key)?.workerId === workerId) {
             this.active.delete(key);
+            this.cancelRequests.delete(key);
         }
     }
     async requeueActive(workerId) {
@@ -330,7 +332,7 @@ export class RedisRunQueue {
     }
     async completeClaimedRun(client, run, workerId) {
         await client.eval(COMPLETE_IF_OWNER_SCRIPT, {
-            keys: [this.activeKey],
+            keys: [this.activeKey, this.cancelKey(run)],
             arguments: [runKey(run), workerId],
         });
     }

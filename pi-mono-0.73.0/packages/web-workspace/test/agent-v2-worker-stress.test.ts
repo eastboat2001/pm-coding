@@ -13,7 +13,7 @@ import {
 	type CreateAgentV2RunInput,
 	type UpdateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
-import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
+import type { AgentV2RunSnapshot } from "../src/agent-v2-types.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
 import { InMemoryRunQueue, type RunQueueClearResult } from "../src/run-queue.js";
 
@@ -23,88 +23,131 @@ describe("agent v2 worker stress", () => {
 	});
 
 	it(
-		"stops while runs are still in flight and leaves no stranded active claims after mixed cancellation",
+		"drains 20 queued runs at concurrency 4 and leaves no queued, running, cancelling, or claimed state after mixed cancellation",
 		async () => {
-		const store = new MemoryStressStore();
-		const queue = new TrackingQueue(createAgentV2RunQueue(new InMemoryRunQueue()));
-		const events = new RecordingEventLog();
-		const now = createTimestampSequence("2026-07-09T10:00:00.000Z");
-		const fastCancelTargets = new Set(["run-03", "run-04"]);
-		const slowCancelTargets = new Set(["run-01", "run-02"]);
-		const service = new AgentV2RunApiService({ store, queue, events, now });
-		const execution = new StressExecution({ fastCancelTargets, slowCancelTargets });
-		const worker = new AgentV2WorkerService({
-			store,
-			queue,
-			events,
-			execution,
-			workerId: "worker-stress",
-			concurrency: 4,
-			claimTimeoutMs: 1,
-			idleSleepMs: 1,
-			cancelPollIntervalMs: 5,
-			leaseHeartbeatIntervalMs: 10,
-			now,
-		});
-
-		for (let index = 1; index <= 20; index += 1) {
-			const runId = `run-${String(index).padStart(2, "0")}`;
-			await service.startRun("client-a", {
-				runId,
-				input: { prompt: `Prompt ${runId}`, sessionId: `session-${runId}`, title: `Session ${runId}` },
-				model: { provider: "test", id: "local" },
+			const store = new MemoryStressStore();
+			const queue = new TrackingQueue(createAgentV2RunQueue(new InMemoryRunQueue()));
+			const events = new RecordingEventLog();
+			const now = createTimestampSequence("2026-07-09T10:00:00.000Z");
+			const fastCancelTargets = new Set(["run-03", "run-04", "run-11"]);
+			const slowCancelTargets = new Set(["run-01", "run-02", "run-12"]);
+			const cancelledTargets = new Set([...fastCancelTargets, ...slowCancelTargets]);
+			const service = new AgentV2RunApiService({ store, queue, events, now });
+			const execution = new StressExecution({ fastCancelTargets, slowCancelTargets });
+			const worker = new AgentV2WorkerService({
+				store,
+				queue,
+				events,
+				execution,
+				workerId: "worker-stress",
+				concurrency: 4,
+				claimTimeoutMs: 1,
+				idleSleepMs: 1,
+				cancelPollIntervalMs: 5,
+				leaseHeartbeatIntervalMs: 10,
+				now,
 			});
-		}
 
-		await worker.start();
-		await cancelRunsWhenRunning(service, store, fastCancelTargets);
-		await waitFor(async () => {
+			for (let index = 1; index <= 20; index += 1) {
+				const runId = `run-${String(index).padStart(2, "0")}`;
+				await service.startRun("client-a", {
+					runId,
+					input: { prompt: `Prompt ${runId}`, sessionId: `session-${runId}`, title: `Session ${runId}` },
+					model: { provider: "test", id: "local" },
+				});
+			}
+
+			await worker.start();
+			await cancelRunsWhenRunning(service, store, fastCancelTargets);
+			await cancelRunsWhenRunning(service, store, slowCancelTargets);
+			await waitFor(async () => {
+				const runs = await store.listAgentV2Runs("client-a");
+				if (runs.length !== 20) return false;
+				const byRunId = new Map(runs.map((run) => [run.runId, run]));
+				return (
+					runs.every((run) => run.status === "succeeded" || run.status === "cancelled") &&
+					[...cancelledTargets].every((runId) => byRunId.get(runId)?.status === "cancelled")
+				);
+			}, 15_000);
+
+			const runsBeforeStop = await store.listAgentV2Runs("client-a");
+			expect(runsBeforeStop.filter((run) => run.status === "queued" || run.status === "running" || run.status === "cancelling")).toEqual([]);
+			expect(await store.listAgentV2RunsByWorker("worker-stress")).toEqual([]);
+			expect(execution.activeCount()).toBe(0);
+
+			await worker.stop();
+
 			const runs = await store.listAgentV2Runs("client-a");
-			const byRunId = new Map(runs.map((run) => [run.runId, run]));
-			return (
-				[...fastCancelTargets].every((runId) => byRunId.get(runId)?.status === "cancelled") &&
-				execution.activeCount() > 0 &&
-				[...slowCancelTargets].every((runId) => byRunId.get(runId)?.status === "running")
+			const closeDrainResult = queue.closeDrainResult();
+			expect(runs).toHaveLength(20);
+			expect(execution.maxActive).toBeLessThanOrEqual(4);
+			expect(execution.abortCount).toBeGreaterThan(0);
+			expect(runs.every((run) => run.status === "succeeded" || run.status === "cancelled")).toBe(true);
+			expect(runs.filter((run) => run.status === "cancelled").map((run) => run.runId)).toEqual(
+				expect.arrayContaining([...cancelledTargets]),
 			);
-		}, 10_000);
-		await cancelRunsWhenRunning(service, store, slowCancelTargets);
-		await waitFor(async () => {
-			if (execution.activeCount() === 0) return false;
-			const runs = await store.listAgentV2Runs("client-a");
-			const byRunId = new Map(runs.map((run) => [run.runId, run]));
-			return [...slowCancelTargets].every((runId) => byRunId.get(runId)?.status === "cancelling");
-		}, 10_000);
-		expect(execution.activeCount()).toBeGreaterThan(0);
-		expect(await store.listAgentV2RunsByWorker("worker-stress")).not.toEqual([]);
-		await worker.stop();
+			expect(runs.filter((run) => run.status === "queued" || run.status === "running" || run.status === "cancelling")).toEqual([]);
+			expect(await store.listAgentV2RunsByWorker("worker-stress")).toEqual([]);
+			expect(queue.activeClaimCount()).toBe(0);
+			expect(closeDrainResult).toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 });
+			expect(queue.completedRuns()).toHaveLength(20);
+			expect(events.appendCalls.filter((event) => event.type === "agent_v2.phase_changed")).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ payload: expect.objectContaining({ status: "running" }) }),
+					expect.objectContaining({ payload: expect.objectContaining({ status: "cancelled" }) }),
+					expect.objectContaining({ payload: expect.objectContaining({ status: "succeeded" }) }),
+				]),
+			);
+		},
+		15_000,
+	);
 
-		const runs = await store.listAgentV2Runs("client-a");
-		const closeDrainResult = queue.closeDrainResult();
-		expect(runs).toHaveLength(20);
-		expect(execution.maxActive).toBeLessThanOrEqual(4);
-		expect(execution.abortCount).toBeGreaterThan(0);
-		expect(runs.some((run) => run.status === "interrupted")).toBe(true);
-		expect(runs.filter((run) => run.status === "cancelled").map((run) => run.runId)).toEqual(
-			expect.arrayContaining([...fastCancelTargets]),
-		);
-		expect(
-			runs.filter(
-				(run) => run.workerId === "worker-stress" && (run.status === "running" || run.status === "queued" || run.status === "cancelling"),
-			),
-		).toEqual([]);
-		expect(await store.listAgentV2RunsByWorker("worker-stress")).toEqual([]);
-		expect(queue.activeClaimCount()).toBe(0);
-		expect(closeDrainResult).toBeDefined();
-		expect(closeDrainResult?.activeClaimsDeleted).toBe(0);
-		expect(closeDrainResult?.queueItemsDeleted).toBeGreaterThan(0);
-		expect(queue.completedRuns().length).toBeLessThan(20);
-		expect(events.appendCalls.filter((event) => event.type === "agent_v2.phase_changed")).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({ payload: expect.objectContaining({ status: "running" }) }),
-				expect.objectContaining({ payload: expect.objectContaining({ status: "cancelled" }) }),
-				expect.objectContaining({ payload: expect.objectContaining({ status: "interrupted" }) }),
-			]),
-		);
+	it(
+		"still interrupts in-flight runs when the worker is stopped early",
+		async () => {
+			const store = new MemoryStressStore();
+			const queue = new TrackingQueue(createAgentV2RunQueue(new InMemoryRunQueue()));
+			const events = new RecordingEventLog();
+			const now = createTimestampSequence("2026-07-09T10:30:00.000Z");
+			const service = new AgentV2RunApiService({ store, queue, events, now });
+			const execution = new StressExecution({
+				fastCancelTargets: new Set(),
+				slowCancelTargets: new Set(["run-01", "run-02", "run-03", "run-04"]),
+			});
+			const worker = new AgentV2WorkerService({
+				store,
+				queue,
+				events,
+				execution,
+				workerId: "worker-stop-early",
+				concurrency: 4,
+				claimTimeoutMs: 1,
+				idleSleepMs: 1,
+				cancelPollIntervalMs: 5,
+				leaseHeartbeatIntervalMs: 10,
+				now,
+			});
+
+			for (let index = 1; index <= 8; index += 1) {
+				const runId = `run-${String(index).padStart(2, "0")}`;
+				await service.startRun("client-a", {
+					runId,
+					input: { prompt: `Prompt ${runId}`, sessionId: `session-${runId}`, title: `Session ${runId}` },
+					model: { provider: "test", id: "local" },
+				});
+			}
+
+			await worker.start();
+			await waitFor(async () => execution.activeCount() > 0 && (await store.listAgentV2RunsByWorker("worker-stop-early")).length > 0, 10_000);
+			await worker.stop();
+
+			const runs = await store.listAgentV2Runs("client-a");
+			expect(runs.some((run) => run.status === "interrupted")).toBe(true);
+			expect(runs.filter((run) => run.status === "running" || run.status === "cancelling")).toEqual([]);
+			expect(runs.filter((run) => run.status === "queued").length).toBeGreaterThan(0);
+			expect(await store.listAgentV2RunsByWorker("worker-stop-early")).toEqual([]);
+			expect(queue.activeClaimCount()).toBe(0);
+			expect(queue.closeDrainResult()).toBeDefined();
 		},
 		15_000,
 	);
@@ -329,10 +372,6 @@ function createTimestampSequence(startIso: string): () => string {
 		tick += 1;
 		return value;
 	};
-}
-
-function isTerminalRun(status: AgentV2RunStatus): boolean {
-	return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
 }
 
 function runKey(clientId: string, runId: string): string {

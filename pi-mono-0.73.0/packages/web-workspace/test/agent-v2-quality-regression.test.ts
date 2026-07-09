@@ -433,6 +433,52 @@ describe("agent v2 quality regression", () => {
 		]);
 	});
 
+	it("resets a fresh sqlite runtime with only the Agent v2 schema and without creating legacy tables", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-reset-schema-only-"));
+		const dbFile = join(root, "runtime.sqlite");
+		const store = new RuntimeDbStore(dbFile);
+		cleanupRoots.push(root);
+		cleanupStores.push(store);
+
+		const result = store.resetAgentV2RuntimeData({
+			now: () => "2026-07-09T10:00:00.000Z",
+		});
+
+		expect(result.schemaVersion).toBeGreaterThan(0);
+		expect(result.legacyRowsDeleted).toMatchObject({
+			sessions: 0,
+			messages: 0,
+			runs: 0,
+			run_events: 0,
+			app_preview_goals: 0,
+			app_preview_goal_events: 0,
+			clients: 0,
+		});
+		for (const table of [
+			"clients",
+			"agent_v2_runs",
+			"agent_v2_tasks",
+			"agent_v2_artifacts",
+			"agent_v2_documents",
+			"agent_v2_validations",
+			"agent_v2_diagnostics",
+			"agent_v2_run_events",
+			"agent_v2_schema_metadata",
+		]) {
+			expect(tableExists(dbFile, table), table).toBe(true);
+		}
+		for (const table of [
+			"sessions",
+			"messages",
+			"runs",
+			"run_events",
+			"app_preview_goals",
+			"app_preview_goal_events",
+		]) {
+			expect(tableExists(dbFile, table), table).toBe(false);
+		}
+	});
+
 	it("rejects runtime-switch strategy wording in product docs and records the reset procedure", () => {
 		const envFiles = [
 			join(repoRoot, "apps", "pi-coding-web", ".env.example"),

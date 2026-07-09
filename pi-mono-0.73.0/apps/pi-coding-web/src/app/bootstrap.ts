@@ -34,7 +34,6 @@ import type {
 	AgentV2RunSnapshot,
 	DeleteSessionResult,
 	RunStatus,
-	RuntimeMessageRecord,
 	RuntimeRunEventRecord,
 	RuntimeRunRecord,
 } from "@mariozechner/pi-web-workspace";
@@ -76,7 +75,7 @@ import {
 	RemoteAgentController,
 	type RemoteRunEventDrainResult,
 } from "../runtime/remote-agent-controller.js";
-import { resolveActiveRunRestore, resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
+import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import {
 	cancelAgentV2Run,
 	connectAgentV2RunEvents,
@@ -87,8 +86,6 @@ import {
 } from "../runtime/agent-v2-run-client.js";
 import {
 	deleteSession as deleteRuntimeSession,
-	getSession as getRuntimeSession,
-	listSessions as listRuntimeSessions,
 	renameSession as renameRuntimeSession,
 } from "../runtime/run-client.js";
 import { runConnectionStatusText } from "../runtime/run-connection-status.js";
@@ -107,7 +104,6 @@ import {
 	shouldClearProviderStallStatusForRunEvent,
 	shouldScheduleProviderStallStatusAfterRunEvent,
 } from "../runtime/run-transient-status.js";
-import { trimRecoverableProviderStallErrors } from "../runtime/runtime-message-conversion.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
@@ -115,9 +111,10 @@ import type { SkillListDetails, SkillSummary } from "../skill-tools/schemas.js";
 import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
 import { createServerSkillTools } from "../skill-tools/tools.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
-import { type MergedSessionEntry, mergeRuntimeSessionMetadata } from "../storage/merged-session-index.js";
+import { type MergedSessionEntry } from "../storage/merged-session-index.js";
 import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
+import { setBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { sessionLastMessageModifiedAt } from "../storage/session-timestamps.js";
 import "./CurrentProjectFilesPanel.js";
 import type { CurrentProjectFilesPanel } from "./CurrentProjectFilesPanel.js";
@@ -262,10 +259,8 @@ const runClient = {
 		const run = await getAgentV2Run(runId);
 		return run ? toTrackedRemoteRun(run, currentSessionId ?? "") : undefined;
 	},
-	getSession: getRuntimeSession,
 	listRunEvents: async (runId: string, afterSeq = 0) =>
 		(await listAgentV2RunEvents(runId, afterSeq)).map((event) => toRuntimeRunEventRecord(event, currentSessionId ?? "")),
-	listSessions: listRuntimeSessions,
 	startRun: startAgentV2Run,
 };
 
@@ -330,6 +325,7 @@ sessions.setBackend(backend);
 
 const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 setAppStorage(storage);
+setBrowserAppStorage(storage);
 const modelController = new ModelController(storage, configuredStorage);
 const diagnosticClient = createDiagnosticClient({ headers: piClientHeaders });
 
@@ -552,20 +548,6 @@ const markRemoteRunSettled = (runId: string, status: RunStatus, updatedAt?: stri
 	clearRemoteRunTransientStatusTexts();
 };
 
-const runtimeMessageToAgentMessage = (message: RuntimeMessageRecord): AgentMessage => {
-	const payload = isRecord(message.payload) ? message.payload : {};
-	return {
-		...payload,
-		role: typeof payload.role === "string" ? payload.role : message.role,
-	} as AgentMessage;
-};
-
-const trimMessagesForActiveRunReplay = (
-	messages: RuntimeMessageRecord[],
-	options: { hideRecoverableProviderStallErrors?: boolean } = {},
-): RuntimeMessageRecord[] =>
-	options.hideRecoverableProviderStallErrors ? trimRecoverableProviderStallErrors(messages) : messages;
-
 const buildSessionMetadata = (
 	state: AgentState,
 	createdAt: string,
@@ -771,12 +753,14 @@ const saveSession = async () => {
 
 const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
 	const browserSessions = (await storage.sessions.getAllMetadata()) as SessionMetadataWithRunState[];
-	try {
-		const runtimeSessions = await runClient.listSessions();
-		return mergeRuntimeSessionMetadata(runtimeSessions, browserSessions, []);
-	} catch {
-		return mergeRuntimeSessionMetadata([], browserSessions, []);
-	}
+	return browserSessions
+		.filter((session) => session.messageCount > 0 || Boolean(session.activeRunId) || isActiveRunStatus(session.runStatus))
+		.map((session) => ({
+			...session,
+			browser: session,
+			preferredSource: "browser" as const,
+		}))
+		.sort((left, right) => right.lastModified.localeCompare(left.lastModified));
 };
 
 const loadGeneratedAppsForSessions = async (options: { force?: boolean } = {}) => {
@@ -1727,61 +1711,82 @@ function writeProjectContextPacketDiagnostic(decision: ContextOrchestratorDecisi
 	});
 }
 
+function restoredRunStatusFromEvents(events: RuntimeRunEventRecord[]): RunStatus | undefined {
+	for (let index = events.length - 1; index >= 0; index -= 1) {
+		const event = events[index];
+		const lifecycleStatus = runStatusFromAgentV2LifecycleEvent(event);
+		if (lifecycleStatus) return lifecycleStatus;
+		if (runEventPayloadType(event) === "agent_end") return "completed";
+	}
+	return undefined;
+}
+
+const restoreActiveRemoteRunFromMetadata = async (
+	sessionId: string,
+	sessionData: { lastModified: string },
+	sessionMetadata: SessionMetadataWithRunState | null,
+): Promise<boolean> => {
+	const activeRunId = sessionMetadata?.activeRunId;
+	if (!activeRunId || !isActiveRunStatus(sessionMetadata?.runStatus)) return false;
+
+	let run = await getAgentV2Run(activeRunId).catch((error) => {
+		writeDiagnosticEvent({
+			level: "warn",
+			category: "agent",
+			eventType: "agent.remote_run.restore.snapshot_error",
+			data: errorDiagnosticData(error, { runId: activeRunId, sessionId }),
+		});
+		return undefined;
+	});
+
+	let replayedEvents: RuntimeRunEventRecord[] = [];
+	try {
+		replayedEvents = (await listAgentV2RunEvents(activeRunId, 0)).map((event) => toRuntimeRunEventRecord(event, sessionId));
+	} catch (error) {
+		writeDiagnosticEvent({
+			level: "warn",
+			category: "agent",
+			eventType: "agent.remote_run.restore.replay_error",
+			data: errorDiagnosticData(error, { runId: activeRunId, sessionId }),
+		});
+	}
+
+	const restoredStatus =
+		restoredRunStatusFromEvents(replayedEvents) ??
+		(run ? agentV2StatusToRunStatus(run.status) : sessionMetadata?.runStatus);
+	if (!restoredStatus || !isActiveRunStatus(restoredStatus)) {
+		currentActiveRunId = undefined;
+		currentLastRunId = run?.runId ?? sessionMetadata?.lastRunId ?? activeRunId;
+		currentRunStatus = restoredStatus;
+		currentRunUpdatedAt = run?.updatedAt ?? sessionMetadata?.runUpdatedAt ?? sessionData.lastModified;
+		return false;
+	}
+
+	const controller = new RemoteAgentController(agent);
+	controller.startRemoteRun(activeRunId);
+	if (replayedEvents.length > 0) {
+		controller.hydrateRunEvents(replayedEvents);
+	}
+	remoteAgentController = controller;
+	clearRemoteRunTransientStatusTexts();
+	const trackedRun: TrackedRemoteRun = run
+		? toTrackedRemoteRun(run, sessionId)
+		: {
+				runId: activeRunId,
+				sessionId,
+				clientId: piClientHeaders()["X-PI-Client-ID"] || "",
+				status: restoredStatus,
+				updatedAt: sessionMetadata?.runUpdatedAt ?? sessionData.lastModified,
+			};
+	trackRemoteRun({ ...trackedRun, status: restoredStatus });
+	connectToRemoteRun({ ...trackedRun, status: restoredStatus }, controller);
+	return true;
+};
+
 const loadSession = async (sessionId: string): Promise<boolean> => {
 	pendingHandoffModelContext = undefined;
 	currentCapabilityPlan = undefined;
 	if (!storage.sessions) return false;
-
-	try {
-		const runtimeDetail = await runClient.getSession(sessionId);
-		const activeRun = resolveActiveRunRestore(runtimeDetail);
-		const runtimeMessages = trimMessagesForActiveRunReplay(runtimeDetail.messages, {
-			hideRecoverableProviderStallErrors: Boolean(activeRun),
-		}).map(runtimeMessageToAgentMessage);
-
-		await setCurrentSessionId(sessionId);
-		currentSessionCreatedAt = runtimeDetail.session.createdAt;
-		currentTitle = isDefaultNewSessionTitle(runtimeDetail.session.title) ? "" : runtimeDetail.session.title || "";
-
-		const sessionModel = await modelController.resolveCustomModel(
-			runtimeDetail.session.model as unknown as Model<any>,
-		);
-		if (sessionModel) {
-			await modelController.persistSelectedModel(sessionModel);
-		}
-
-		await createAgent({
-			...(sessionModel
-				? { model: sessionModel }
-				: {
-						model: (runtimeDetail.session.model as unknown as Model<any>) || undefined,
-					}),
-			thinkingLevel: normalizeThinkingLevel(runtimeDetail.session.thinkingLevel),
-			messages: runtimeMessages,
-			tools: [],
-		});
-
-		if (activeRun) {
-			trackRemoteRun(activeRun.run);
-			const controller = new RemoteAgentController(agent);
-			controller.startRemoteRun(activeRun.run.runId);
-			controller.hydrateCheckpoint(activeRun.checkpointEvent, activeRun.afterSeq);
-			remoteAgentController = controller;
-			connectToRemoteRun(activeRun.run, controller);
-		} else {
-			currentActiveRunId = undefined;
-			currentLastRunId = runtimeDetail.session.lastRunId;
-			currentRunStatus = runtimeDetail.session.lastRunStatus;
-			currentRunUpdatedAt = runtimeDetail.session.updatedAt;
-		}
-
-		await saveSession();
-		renderApp();
-		if (!activeRun) {
-			resumeInterruptedSessionIfNeeded();
-		}
-		return true;
-	} catch {}
 
 	const sessionData = await storage.sessions.get(sessionId);
 	if (!sessionData) {
@@ -1810,13 +1815,18 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		messages: sessionData.messages,
 		tools: [],
 	});
-	currentActiveRunId = sessionMetadata?.activeRunId;
+	currentActiveRunId = undefined;
 	currentLastRunId = sessionMetadata?.lastRunId ?? sessionMetadata?.activeRunId;
 	currentRunStatus = sessionMetadata?.runStatus;
 	currentRunUpdatedAt = sessionMetadata?.runUpdatedAt;
 
+	const restoredActiveRun = await restoreActiveRemoteRunFromMetadata(sessionId, sessionData, sessionMetadata);
+
+	await saveSession();
 	renderApp();
-	resumeInterruptedSessionIfNeeded();
+	if (!restoredActiveRun) {
+		resumeInterruptedSessionIfNeeded();
+	}
 	return true;
 };
 

@@ -1,11 +1,11 @@
 import { icon } from "@mariozechner/mini-lit";
-import { i18n, SettingsTab } from "@mariozechner/pi-web-ui";
+import { i18n, SettingsTab, type SessionMetadata } from "@mariozechner/pi-web-ui";
 import type { RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import { html, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { Download, RefreshCw, TriangleAlert } from "lucide";
-import { listSessions } from "../runtime/run-client.js";
 import { diagnosticSessionTitle, downloadDiagnosticSessionExport } from "./diagnostic-export-client.js";
+import { getBrowserAppStorage } from "../storage/browser-app-storage.js";
 
 const t = (message: string) => i18n(message as Parameters<typeof i18n>[0]);
 
@@ -102,7 +102,21 @@ export class DiagnosticLogsTab extends SettingsTab {
 		this.loading = true;
 		this.error = "";
 		try {
-			this.sessions = await listSessions();
+			const storage = getBrowserAppStorage();
+			const metadata = (await storage.sessions.getAllMetadata()) as Array<
+				SessionMetadata & { runStatus?: RuntimeSessionRecord["lastRunStatus"]; lastRunId?: string }
+			>;
+			this.sessions = metadata.map((session) => ({
+				sessionId: session.id,
+				clientId: "",
+				title: session.title,
+				model: {},
+				thinkingLevel: session.thinkingLevel,
+				createdAt: session.createdAt,
+				updatedAt: session.lastModified,
+				...(session.runStatus ? { lastRunStatus: session.runStatus } : {}),
+				...(session.lastRunId ? { lastRunId: session.lastRunId } : {}),
+			}));
 		} catch (error) {
 			this.sessions = [];
 			this.error = errorMessage(error);

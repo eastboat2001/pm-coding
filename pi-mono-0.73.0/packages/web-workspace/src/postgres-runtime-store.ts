@@ -1665,7 +1665,6 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	async resetAgentV2RuntimeData(options: ResetAgentV2RuntimeDataOptions = {}): Promise<ResetAgentV2RuntimeDataResult> {
-		await this.ensureSchema();
 		await this.ensureAgentV2Schema();
 
 		const appliedAt = options.now?.() ?? now();
@@ -1826,8 +1825,23 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	private async deleteTableRows(queryable: Queryable, table: string): Promise<number> {
+		if (!(await this.tableExists(queryable, table))) return 0;
 		const result = await this.query(queryable, `DELETE FROM ${table}`);
 		return Number(result.rowCount ?? 0);
+	}
+
+	private async tableExists(queryable: Queryable, table: string): Promise<boolean> {
+		const rows = await this.queryRows<{ present: boolean }>(
+			queryable,
+			`SELECT EXISTS (
+				SELECT 1
+				FROM information_schema.tables
+				WHERE table_schema = current_schema()
+					AND table_name = $1
+			) AS present`,
+			[table],
+		);
+		return rows[0]?.present === true;
 	}
 
 	private async withTransaction<T>(callback: (queryable: Queryable) => Promise<T>): Promise<T> {

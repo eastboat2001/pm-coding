@@ -4,7 +4,7 @@ import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Connect } from "vite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StorageConfig } from "../src/types.js";
 import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 
@@ -26,6 +26,23 @@ describe("configured storage plugin schema init", () => {
 		expect(response.statusCode).toBe(404);
 		expect(calls).toEqual(["ensureAgentV2Schema"]);
 	});
+
+	it("initializes the v2 schema on every configured plugin startup without legacy runtime services", () => {
+		root = mkdtempSync(join(tmpdir(), "pi-vite-plugin-schema-init-"));
+		const runtimeDb = { ensureAgentV2Schema: vi.fn() };
+		const services = createSchemaInitServices(testConfig(root), runtimeDb);
+		const firstConfigureServer = createConfiguredStoragePluginForTest(services).configureServer as (server: {
+			middlewares: { use(handler: Middleware): void };
+		}) => void;
+		const secondConfigureServer = createConfiguredStoragePluginForTest(services).configureServer as (server: {
+			middlewares: { use(handler: Middleware): void };
+		}) => void;
+
+		firstConfigureServer(createFakeServer());
+		secondConfigureServer(createFakeServer());
+
+		expect(runtimeDb.ensureAgentV2Schema).toHaveBeenCalledTimes(2);
+	});
 });
 
 type TestServices = Parameters<typeof createConfiguredStoragePluginForTest>[0];
@@ -37,7 +54,28 @@ type Middleware = (
 
 function createMiddleware(config: StorageConfig, calls: string[]): Middleware {
 	let middleware: Middleware | undefined;
-	const plugin = createConfiguredStoragePluginForTest({
+	const plugin = createConfiguredStoragePluginForTest(
+		createSchemaInitServices(config, {
+			async ensureAgentV2Schema() {
+				calls.push("ensureAgentV2Schema");
+			},
+		}),
+	);
+	const configureServer = plugin.configureServer as (server: {
+		middlewares: { use(handler: Middleware): void };
+	}) => void;
+	configureServer(createFakeServer((handler) => {
+		middleware = handler;
+	}));
+	if (!middleware) throw new Error("configured storage plugin did not register middleware");
+	return middleware;
+}
+
+function createSchemaInitServices(
+	config: StorageConfig,
+	runtimeDb: Pick<TestServices["runtimeDb"], "ensureAgentV2Schema">,
+): TestServices {
+	return {
 		config,
 		diagnostics: {
 			ensureDirs() {},
@@ -54,25 +92,21 @@ function createMiddleware(config: StorageConfig, calls: string[]): Middleware {
 		} as unknown as TestServices["previews"],
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
-		runtimeDb: {
-			async ensureAgentV2Schema() {
-				calls.push("ensureAgentV2Schema");
-			},
-		} as unknown as TestServices["runtimeDb"],
+		runtimeDb: runtimeDb as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
-	});
-	const configureServer = plugin.configureServer as (server: {
-		middlewares: { use(handler: Middleware): void };
-	}) => void;
-	configureServer({
+	};
+}
+
+function createFakeServer(onUse?: (handler: Middleware) => void): {
+	middlewares: { use(handler: Middleware): void };
+} {
+	return {
 		middlewares: {
 			use(handler) {
-				middleware = handler;
+				onUse?.(handler);
 			},
 		},
-	});
-	if (!middleware) throw new Error("configured storage plugin did not register middleware");
-	return middleware;
+	};
 }
 
 async function dispatch(middleware: Middleware, url: string): Promise<FakeResponse> {

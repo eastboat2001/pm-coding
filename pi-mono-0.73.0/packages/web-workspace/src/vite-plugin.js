@@ -194,6 +194,9 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             void closeRunEventBusOnce();
         });
     };
+    const startStorageInitialization = () => {
+        void ensureStorageDirs().catch(() => undefined);
+    };
     return {
         name: "pi-web-ui-configured-storage",
         config() {
@@ -207,10 +210,12 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
         },
         configureServer(server) {
             registerRunEventBusCleanup(server);
+            startStorageInitialization();
             server.middlewares.use(handler);
         },
         configurePreviewServer(server) {
             registerRunEventBusCleanup(server);
+            startStorageInitialization();
             server.middlewares.use(handler);
         },
     };

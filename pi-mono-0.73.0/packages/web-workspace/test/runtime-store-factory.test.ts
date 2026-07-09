@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Connect } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AGENT_V2_RESET_CONFIRMATION, resetAgentV2RuntimeData } from "../src/agent-v2-reset.js";
+import { loadStorageConfig } from "../src/config.js";
 import { API_PREFIX, PREVIEW_PREFIX } from "../src/constants.js";
 import { PostgresRuntimeStore } from "../src/postgres-runtime-store.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
@@ -37,6 +39,33 @@ describe("createRuntimeStore", () => {
 		const store = createRuntimeStore({ ...baseConfig, runtimeStore: "sqlite" });
 
 		expect(store).toBeInstanceOf(RuntimeDbStore);
+	});
+
+	it("resets v2 runtime data without reading stale legacy runtime rows", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-reset-rehearsal-"));
+		let store: RuntimeDbStore | undefined;
+		try {
+			const config = { ...loadStorageConfig(root), runtimeStore: "sqlite" as const };
+			const createdStore = createRuntimeStore(config);
+			if (!(createdStore instanceof RuntimeDbStore)) throw new Error("expected SQLite runtime store");
+			store = createdStore;
+			store.ensureAgentV2Schema();
+			store.createAgentV2Run({
+				clientId: "client-a",
+				runId: "run-reset-rehearsal",
+				input: { prompt: "reset me", sessionId: "session-a", title: "Reset" },
+				model: { provider: "test" },
+				createdAt: "2026-07-09T02:00:00.000Z",
+			});
+
+			const result = resetAgentV2RuntimeData(store, { confirmation: AGENT_V2_RESET_CONFIRMATION });
+
+			expect(result.runsDeleted).toBe(1);
+			expect(store.listAgentV2Runs("client-a")).toEqual([]);
+		} finally {
+			store?.close();
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

@@ -11,7 +11,6 @@ import { API_PREFIX, LOGS_API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, RUNS_
 import { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
-import { RunApiError } from "./run-api-service.js";
 import { RedisRunQueue } from "./run-queue.js";
 import { createRuntimeStore } from "./runtime-store-factory.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
@@ -788,10 +787,6 @@ function redactConnectionUrl(value) {
 }
 function sendRuntimeApiError(res, error) {
     if (error instanceof AgentV2RunApiError) {
-        sendJson(res, { error: error.message }, error.statusCode);
-        return;
-    }
-    if (error instanceof RunApiError) {
         sendJson(res, { error: error.message }, error.statusCode);
         return;
     }

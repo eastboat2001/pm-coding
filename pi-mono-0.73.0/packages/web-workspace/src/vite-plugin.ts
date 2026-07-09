@@ -22,7 +22,6 @@ import {
 import { type DiagnosticArchiveExport, WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
-import { RunApiError } from "./run-api-service.js";
 import type { RuntimeStore } from "./runtime-store.js";
 import { createRuntimeStore } from "./runtime-store-factory.js";
 import type {
@@ -971,10 +970,6 @@ function redactConnectionUrl(value: string): string {
 
 function sendRuntimeApiError(res: ServerResponse, error: unknown): void {
 	if (error instanceof AgentV2RunApiError) {
-		sendJson(res, { error: error.message }, error.statusCode);
-		return;
-	}
-	if (error instanceof RunApiError) {
 		sendJson(res, { error: error.message }, error.statusCode);
 		return;
 	}

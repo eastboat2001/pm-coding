@@ -89,6 +89,16 @@ const legacyRootRuntimeExports = [
 
 const allowedLegacyFiles = new Set<string>();
 const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts";
+const deletedLegacyGenerationFiles = [
+	"packages/web-workspace/src/app-preview-goal-service.ts",
+	"packages/web-workspace/src/app-preview-goal-supervisor.ts",
+	"packages/web-workspace/src/run-api-service.ts",
+	"packages/web-workspace/src/run-worker-service.ts",
+	"packages/web-workspace/test/app-preview-goal-service.test.ts",
+	"packages/web-workspace/test/app-preview-goal-supervisor.test.ts",
+	"packages/web-workspace/test/run-api-service.test.ts",
+	"packages/web-workspace/test/run-worker-service.test.ts",
+];
 const allowedRuntimeStoreImportFiles = new Set([
 	"packages/web-workspace/src/runtime-db.ts",
 	"packages/web-workspace/src/postgres-runtime-store.ts",
@@ -193,6 +203,12 @@ describe("agent v2 production import boundary", () => {
 
 	it("deletes the legacy v1 worker entry", () => {
 		expect(existsSync(join(repoRoot, "apps", "pi-coding-web", "src", "worker", "legacy-v1-main.ts"))).toBe(false);
+	});
+
+	it("removes legacy v1 generation services and their dedicated tests", () => {
+		for (const file of deletedLegacyGenerationFiles) {
+			expect(existsSync(join(repoRoot, file)), `${file} must be deleted`).toBe(false);
+		}
 	});
 
 	it("keeps browser-side v2 entrypoints free of legacy spec artifact and worker/api orchestration symbols", () => {

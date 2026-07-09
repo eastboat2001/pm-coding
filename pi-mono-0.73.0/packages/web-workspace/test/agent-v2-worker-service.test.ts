@@ -609,6 +609,70 @@ describe("AgentV2WorkerService", () => {
 			workerId: "worker-a",
 		});
 	});
+
+	it("interrupts a run and avoids stale success when lease renewal is lost during execution", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-lease-lost");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-lease-lost" }]);
+		queue.failNextRenewLease = true;
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: {
+				executeNextTask: async () => {
+					await new Promise((resolve) => setTimeout(resolve, 40));
+					return { status: "complete", diagnosticIds: [] };
+				},
+			},
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-09T01:00:00.000Z", "2026-07-09T01:00:01.000Z"),
+			leaseHeartbeatIntervalMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(45);
+		await expect(processing).resolves.toBe(true);
+
+		expect(store.getRunSnapshot("client-a", "run-lease-lost")).toMatchObject({
+			status: "interrupted",
+		});
+		expect(queue.completeCalls).toEqual([{ clientId: "client-a", runId: "run-lease-lost", workerId: "worker-a" }]);
+	});
+
+	it("lets a replacement worker reclaim an expired queued claim after the first worker disappears", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-reclaimed-by-replacement");
+		const queue = new RecordingQueue();
+		queue.expiredClaims = [
+			{
+				clientId: "client-a",
+				runId: "run-reclaimed-by-replacement",
+				workerId: "worker-crashed",
+				claimedAtMs: 1,
+				heartbeatAtMs: 2,
+				leaseExpiresAtMs: 3,
+			},
+		];
+		const replacement = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-replacement",
+			now: timestampSequence("2026-07-09T01:01:00.000Z", "2026-07-09T01:01:01.000Z"),
+		});
+
+		await replacement.recoverOwnedRuns();
+		await expect(replacement.processOne()).resolves.toBe(true);
+
+		expect(queue.enqueuedClaims).toEqual([{ clientId: "client-a", runId: "run-reclaimed-by-replacement" }]);
+		expect(store.getRunSnapshot("client-a", "run-reclaimed-by-replacement")).toMatchObject({
+			status: "succeeded",
+			workerId: "worker-replacement",
+		});
+	});
 });
 
 class MemoryWorkerStore {
@@ -784,6 +848,7 @@ class RecordingQueue implements AgentV2RunQueue {
 	readonly requeueActiveCalls: string[] = [];
 	readonly renewLeaseCalls: Array<{ clientId: string; runId: string; workerId: string }> = [];
 	expiredClaims: AgentV2ActiveRunClaim[] = [];
+	failNextRenewLease = false;
 	releaseExpiredClaimsCalls = 0;
 	private readonly cancelRequested = new Set<string>();
 	private closed = false;
@@ -818,6 +883,10 @@ class RecordingQueue implements AgentV2RunQueue {
 
 	async renewLease(run: { clientId: string; runId: string }, workerId: string): Promise<boolean> {
 		this.renewLeaseCalls.push({ ...run, workerId });
+		if (this.failNextRenewLease) {
+			this.failNextRenewLease = false;
+			return false;
+		}
 		return true;
 	}
 

@@ -48,11 +48,7 @@ export class RemoteAgentController {
 		}
 
 		const payload = event.payload as AgentEvent;
-		if (
-			isRemoteRunStatusEvent(payload) ||
-			isInternalContinuationPromptEvent(payload) ||
-			this.isLocalPromptEcho(payload)
-		) {
+		if (isRemoteRunStatusEvent(payload) || this.isLocalPromptEcho(payload)) {
 			this._lastSeq = Math.max(this._lastSeq, event.seq);
 			return;
 		}
@@ -77,7 +73,7 @@ export class RemoteAgentController {
 				throw new Error(`Remote run event ${event.runId} does not match active run ${this._activeRunId}.`);
 			}
 			const payload = event.payload as AgentEvent;
-			if (isRemoteRunStatusEvent(payload) || isInternalContinuationPromptEvent(payload)) {
+			if (isRemoteRunStatusEvent(payload)) {
 				this._lastSeq = Math.max(this._lastSeq, event.seq);
 				continue;
 			}
@@ -345,17 +341,4 @@ function hasCancelledAssistantMessage(messages: readonly unknown[]): boolean {
 		if (!isRecord(message) || message.role !== "assistant") return false;
 		return message.stopReason === "aborted" || message.errorMessage === "Request was aborted.";
 	});
-}
-
-function isInternalContinuationPromptEvent(event: AgentEvent): boolean {
-	if (event.type !== "message_start" && event.type !== "message_update" && event.type !== "message_end") {
-		return false;
-	}
-	return isInternalContinuationPromptMessage(event.message);
-}
-
-function isInternalContinuationPromptMessage(message: unknown): boolean {
-	if (!isRecord(message)) return false;
-	const metadata = message.piInternal;
-	return isRecord(metadata) && metadata.kind === "app_preview_continuation";
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 import type { RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
@@ -146,22 +148,10 @@ describe("RemoteAgentController", () => {
 		expect(agent.state.isStreaming).toBe(true);
 	});
 
-	it("ignores internal continuation prompt events while advancing the remote event checkpoint", async () => {
-		const agent = createFakeRemoteAgent();
-		const controller = new RemoteAgentController(agent as never);
-		const internalPrompt = {
-			role: "user",
-			content: "Continue from the previous assistant response and complete the original request.",
-			piInternal: { kind: "app_preview_continuation" },
-		};
-
-		controller.startRemoteRun("r1");
-		await controller.applyRunEvent(createRunEventRecord(4, "r1", { type: "message_start", message: internalPrompt }));
-		await controller.applyRunEvent(createRunEventRecord(5, "r1", { type: "message_end", message: internalPrompt }));
-
-		expect(controller.lastSeq).toBe(5);
-		expect(agent.appliedEvents).toEqual([]);
-		expect(agent.state.messages).toEqual([]);
+	it("does not keep legacy app preview continuation filtering", () => {
+		const source = readFileSync(join(import.meta.dirname, "../src/runtime/remote-agent-controller.ts"), "utf8");
+		expect(source).not.toContain("app_preview_continuation");
+		expect(source).not.toContain("isInternalContinuationPromptEvent");
 	});
 
 	it("ignores remote prompt echo events when a handoff attachment message is replayed as a user message", async () => {

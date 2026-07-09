@@ -32,8 +32,6 @@ import {
 import type {
 	AgentV2RunEventRecord,
 	AgentV2RunSnapshot,
-	AppPreviewGoalRecord,
-	AppPreviewGoalSource,
 	DeleteSessionResult,
 	RunStatus,
 	RuntimeMessageRecord,
@@ -41,7 +39,7 @@ import type {
 	RuntimeRunRecord,
 } from "@mariozechner/pi-web-workspace";
 import { html, render } from "lit";
-import { Eye, Folder, PanelsTopLeft, Plus, Settings } from "lucide";
+import { Folder, PanelsTopLeft, Plus, Settings } from "lucide";
 import "../app.css";
 import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
@@ -89,9 +87,6 @@ import {
 } from "../runtime/agent-v2-run-client.js";
 import {
 	deleteSession as deleteRuntimeSession,
-	disableAppPreviewGoal,
-	enableAppPreviewGoal,
-	getAppPreviewGoal,
 	getSession as getRuntimeSession,
 	listSessions as listRuntimeSessions,
 	renameSession as renameRuntimeSession,
@@ -125,16 +120,6 @@ import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custo
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
 import { sessionLastMessageModifiedAt } from "../storage/session-timestamps.js";
 import "./CurrentProjectFilesPanel.js";
-import {
-	appPreviewGoalActionState,
-	appPreviewGoalContinuationProgress,
-	appPreviewGoalContinuationRunId,
-	appPreviewGoalStageDetailLabel,
-	appPreviewGoalStageLabel,
-	appPreviewGoalToggleLabel,
-	isAppPreviewGoalEnabled,
-	isAppPreviewGoalSettledForRun,
-} from "./app-preview-goal-state.js";
 import type { CurrentProjectFilesPanel } from "./CurrentProjectFilesPanel.js";
 import {
 	CURRENT_PROJECT_FILE_PREVIEW_DRAWER_DEFAULT_WIDTH,
@@ -199,9 +184,6 @@ const piRuntimeConfig = {
 };
 
 let pendingHandoffModelContext: { documentFiles: HandoffDocumentFile[] } | undefined;
-let currentAppPreviewGoal: AppPreviewGoalRecord | undefined;
-let pendingHandoffAppPreviewGoal = false;
-let manualAppPreviewGoalEnabled = false;
 
 type TrackedRemoteRun = Pick<RuntimeRunRecord, "runId" | "sessionId" | "clientId" | "status" | "updatedAt">;
 
@@ -281,27 +263,10 @@ const runClient = {
 		return run ? toTrackedRemoteRun(run, currentSessionId ?? "") : undefined;
 	},
 	getSession: getRuntimeSession,
-	disableAppPreviewGoal,
-	enableAppPreviewGoal,
-	getAppPreviewGoal,
 	listRunEvents: async (runId: string, afterSeq = 0) =>
 		(await listAgentV2RunEvents(runId, afterSeq)).map((event) => toRuntimeRunEventRecord(event, currentSessionId ?? "")),
 	listSessions: listRuntimeSessions,
 	startRun: startAgentV2Run,
-};
-
-type AppPreviewGoalExtensionAction = {
-	id: string;
-	label: string;
-	detail?: string;
-	active?: boolean;
-	disabled?: boolean;
-	icon?: unknown;
-	onSelect: () => void | Promise<void>;
-};
-type ExtensionActionHost = {
-	extensionActions: AppPreviewGoalExtensionAction[];
-	requestUpdate?: () => void;
 };
 
 type SkillSlashSuggestion = {
@@ -559,20 +524,6 @@ const syncActiveRunStatusOnce = (): void => {
 	});
 };
 
-const setAppPreviewGoalStatusText = (goal = currentAppPreviewGoal): void => {
-	const agentInterface = chatPanel?.agentInterface;
-	if (!agentInterface) return;
-	const previewPending = manualAppPreviewGoalEnabled || pendingHandoffAppPreviewGoal;
-	const stageLabel = appPreviewGoalStageLabel(goal, previewPending);
-	const detailLabel = appPreviewGoalStageDetailLabel(goal);
-	const continuationProgress = appPreviewGoalContinuationProgress(goal);
-	agentInterface.appPreviewGoalStatusText = stageLabel
-		? `${i18nText(stageLabel)}${continuationProgress ? ` (${continuationProgress.used}/${continuationProgress.max})` : ""}`
-		: "";
-	agentInterface.appPreviewGoalStatusDetail = detailLabel ? i18nText(detailLabel) : "";
-	agentInterface.requestUpdate();
-};
-
 const resetRemoteRunState = (): void => {
 	closeRemoteRunConnection();
 	clearProviderStallStatusTimer();
@@ -589,141 +540,6 @@ const requestChatPanelUpdate = (): void => {
 };
 
 const i18nText = (key: string): string => i18n(key as Parameters<typeof i18n>[0]);
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-function buildAppPreviewGoalExtensionActions(): AppPreviewGoalExtensionAction[] {
-	const previewPending = manualAppPreviewGoalEnabled || pendingHandoffAppPreviewGoal;
-	const actionState = appPreviewGoalActionState(currentAppPreviewGoal, previewPending);
-	return [
-		{
-			id: "app-preview-goal",
-			label: i18nText("Automatic preview"),
-			detail: i18nText(appPreviewGoalToggleLabel(currentAppPreviewGoal, previewPending)),
-			active: actionState.active,
-			disabled: actionState.disabled,
-			icon: icon(Eye, "sm"),
-			onSelect: async () => {
-				await setManualAppPreviewGoal(actionState.nextAction === "enable");
-			},
-		},
-	];
-}
-
-function updateAppPreviewGoalExtensionActions(): void {
-	const agentInterface = chatPanel?.agentInterface as unknown as ExtensionActionHost | undefined;
-	if (!agentInterface) return;
-	agentInterface.extensionActions = buildAppPreviewGoalExtensionActions();
-	agentInterface.requestUpdate?.();
-}
-
-function applyAppPreviewGoal(goal: AppPreviewGoalRecord | undefined): void {
-	currentAppPreviewGoal = goal;
-	manualAppPreviewGoalEnabled = isAppPreviewGoalEnabled(currentAppPreviewGoal);
-	updateAppPreviewGoalExtensionActions();
-	setAppPreviewGoalStatusText(currentAppPreviewGoal);
-	renderApp();
-	requestChatPanelUpdate();
-}
-
-async function refreshAppPreviewGoal(): Promise<AppPreviewGoalRecord | undefined> {
-	if (!currentSessionId) {
-		applyAppPreviewGoal(undefined);
-		return undefined;
-	}
-	try {
-		const result = await runClient.getAppPreviewGoal(currentSessionId);
-		applyAppPreviewGoal(result.goal ?? undefined);
-	} catch (error) {
-		console.error("Failed to refresh app preview goal:", error);
-	}
-	return currentAppPreviewGoal;
-}
-
-function refreshAppPreviewGoalInBackground(): void {
-	void refreshAppPreviewGoal().catch((error) => {
-		console.error("Failed to refresh app preview goal:", error);
-	});
-}
-
-async function refreshAppPreviewGoalAfterTerminalRun(runId: string, attempts = 20, intervalMs = 100): Promise<void> {
-	for (let attempt = 0; attempt < attempts; attempt++) {
-		const goal = await refreshAppPreviewGoal();
-		const continuationRunId = appPreviewGoalContinuationRunId(goal, runId);
-		if (continuationRunId && (await attachAppPreviewGoalContinuationRun(continuationRunId))) return;
-		if (isAppPreviewGoalSettledForRun(goal, runId)) return;
-		if (attempt < attempts - 1) await sleep(intervalMs);
-	}
-}
-
-async function attachAppPreviewGoalContinuationRun(runId: string): Promise<boolean> {
-	if (!currentSessionId) return false;
-	if (runId === currentActiveRunId && remoteAgentController?.activeRunId === runId) return true;
-
-	const detail = await runClient.getSession(currentSessionId);
-	const activeRun = resolveActiveRunRestore(detail, runId);
-	if (!activeRun) return false;
-
-	const runtimeMessages = trimMessagesForActiveRunReplay(detail.messages, {
-		hideRecoverableProviderStallErrors: true,
-	}).map(runtimeMessageToAgentMessage);
-	const sessionModel = await modelController.resolveCustomModel(detail.session.model as unknown as Model<any>);
-	await createAgent({
-		...(sessionModel
-			? { model: sessionModel }
-			: {
-					model: (detail.session.model as unknown as Model<any>) || undefined,
-				}),
-		thinkingLevel: normalizeThinkingLevel(detail.session.thinkingLevel),
-		messages: runtimeMessages,
-		tools: [],
-	});
-
-	const controller = new RemoteAgentController(agent);
-	controller.startRemoteRun(activeRun.run.runId);
-	controller.hydrateCheckpoint(activeRun.checkpointEvent, activeRun.afterSeq);
-	remoteAgentController = controller;
-	connectToRemoteRun(activeRun.run, controller);
-	renderApp();
-	requestChatPanelUpdate();
-	await saveSession();
-	return true;
-}
-
-function refreshAppPreviewGoalAfterTerminalRunInBackground(runId: string): void {
-	void refreshAppPreviewGoalAfterTerminalRun(runId).catch((error) => {
-		console.error("Failed to refresh app preview goal after run terminal:", error);
-	});
-}
-
-async function setManualAppPreviewGoal(enabled: boolean): Promise<void> {
-	if (!enabled) pendingHandoffAppPreviewGoal = false;
-	manualAppPreviewGoalEnabled = enabled;
-	if (!currentSessionId) {
-		updateAppPreviewGoalExtensionActions();
-		setAppPreviewGoalStatusText();
-		renderApp();
-		requestChatPanelUpdate();
-		return;
-	}
-	try {
-		const result = enabled
-			? await runClient.enableAppPreviewGoal(currentSessionId, "manual")
-			: await runClient.disableAppPreviewGoal(currentSessionId);
-		applyAppPreviewGoal(result.goal ?? undefined);
-	} catch (error) {
-		if (enabled && error instanceof Error && error.message === "Runtime session not found") {
-			currentAppPreviewGoal = undefined;
-			manualAppPreviewGoalEnabled = true;
-			updateAppPreviewGoalExtensionActions();
-			setAppPreviewGoalStatusText();
-			renderApp();
-			requestChatPanelUpdate();
-			return;
-		}
-		throw error;
-	}
-}
 
 const markRemoteRunSettled = (runId: string, status: RunStatus, updatedAt?: string): void => {
 	closeRemoteRunConnection();
@@ -1731,11 +1547,6 @@ const startRemotePrompt = async (
 		agent.state.messages = previousMessages;
 		currentCapabilityPlan = previousCapabilityPlan;
 		agent.state.systemPrompt = previousSystemPrompt;
-		if (pendingHandoffAppPreviewGoal) {
-			pendingHandoffAppPreviewGoal = false;
-			updateAppPreviewGoalExtensionActions();
-			setAppPreviewGoalStatusText();
-		}
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
@@ -1743,7 +1554,6 @@ const startRemotePrompt = async (
 	}
 
 	pendingHandoffModelContext = undefined;
-	pendingHandoffAppPreviewGoal = false;
 
 	const controller = new RemoteAgentController(agent);
 	controller.startRemoteRun(runResult.runId);
@@ -1885,8 +1695,6 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			})),
 		],
 	});
-	updateAppPreviewGoalExtensionActions();
-	setAppPreviewGoalStatusText();
 	applySkillSlashSuggestions();
 };
 
@@ -1922,8 +1730,6 @@ function writeProjectContextPacketDiagnostic(decision: ContextOrchestratorDecisi
 const loadSession = async (sessionId: string): Promise<boolean> => {
 	pendingHandoffModelContext = undefined;
 	currentCapabilityPlan = undefined;
-	pendingHandoffAppPreviewGoal = false;
-	manualAppPreviewGoalEnabled = false;
 	if (!storage.sessions) return false;
 
 	try {
@@ -1970,7 +1776,6 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 		}
 
 		await saveSession();
-		await refreshAppPreviewGoal();
 		renderApp();
 		if (!activeRun) {
 			resumeInterruptedSessionIfNeeded();
@@ -2010,7 +1815,6 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 	currentRunStatus = sessionMetadata?.runStatus;
 	currentRunUpdatedAt = sessionMetadata?.runUpdatedAt;
 
-	await refreshAppPreviewGoal();
 	renderApp();
 	resumeInterruptedSessionIfNeeded();
 	return true;
@@ -2019,9 +1823,6 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 const startFreshSession = async (persistImmediately = false) => {
 	pendingHandoffModelContext = undefined;
 	currentCapabilityPlan = undefined;
-	currentAppPreviewGoal = undefined;
-	pendingHandoffAppPreviewGoal = false;
-	manualAppPreviewGoalEnabled = false;
 	currentTitle = "";
 	currentSessionCreatedAt = undefined;
 	resetRemoteRunState();
@@ -2089,11 +1890,6 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 		documentFiles.length > 0 ? markHandoffAttachmentsUiOnly(attachments, documentFiles) : attachments;
 	await applyHandoffDefaultThinkingLevel();
 	pendingHandoffModelContext = { documentFiles };
-	pendingHandoffAppPreviewGoal = true;
-	manualAppPreviewGoalEnabled = false;
-	currentAppPreviewGoal = undefined;
-	updateAppPreviewGoalExtensionActions();
-	setAppPreviewGoalStatusText();
 	chatPanel.agentInterface?.setInput(buildVisibleCodingHandoffPrompt(payload), inputAttachments);
 	if (currentSessionId) {
 		await saveSession();
@@ -2408,8 +2204,6 @@ const renderApp = () => {
 
 window.addEventListener(LANGUAGE_CHANGE_EVENT, () => {
 	document.documentElement.lang = getCurrentLanguage();
-	updateAppPreviewGoalExtensionActions();
-	setAppPreviewGoalStatusText();
 	chatPanel?.requestUpdate();
 	chatPanel?.agentInterface?.requestUpdate();
 	(

@@ -1,7 +1,4 @@
 import type {
-	AppPreviewGoalEventRecord,
-	AppPreviewGoalRecord,
-	AppPreviewGoalSource,
 	DeleteSessionResult,
 	RuntimeSessionDetail,
 	RuntimeSessionListResult,
@@ -9,7 +6,6 @@ import type {
 } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "./client-id.js";
 
-const RUNS_API_PREFIX = "/api/pi-runs";
 const SESSIONS_API_PREFIX = "/api/pi-sessions";
 
 export function buildRunRequestHeaders(initHeaders?: HeadersInit, hasBody = false): Record<string, string> {
@@ -46,32 +42,6 @@ export async function renameSession(sessionId: string, title: string): Promise<R
 	return requestRunApi<RuntimeSessionRecord>(`${SESSIONS_API_PREFIX}/${encodeURIComponent(sessionId)}`, {
 		method: "PUT",
 		body: JSON.stringify({ title }),
-	});
-}
-
-export async function getAppPreviewGoal(
-	sessionId: string,
-): Promise<{ goal: AppPreviewGoalRecord | null; events: AppPreviewGoalEventRecord[] }> {
-	return requestRunApi<{ goal: AppPreviewGoalRecord | null; events: AppPreviewGoalEventRecord[] }>(
-		`${RUNS_API_PREFIX}/goals/app-preview?sessionId=${encodeURIComponent(sessionId)}`,
-		{ method: "GET" },
-	);
-}
-
-export async function enableAppPreviewGoal(
-	sessionId: string,
-	source: AppPreviewGoalSource,
-): Promise<{ goal: AppPreviewGoalRecord | null }> {
-	return requestRunApi<{ goal: AppPreviewGoalRecord | null }>(`${RUNS_API_PREFIX}/goals/app-preview`, {
-		method: "POST",
-		body: JSON.stringify({ sessionId, source, enabled: true }),
-	});
-}
-
-export async function disableAppPreviewGoal(sessionId: string): Promise<{ goal: AppPreviewGoalRecord | null }> {
-	return requestRunApi<{ goal: AppPreviewGoalRecord | null }>(`${RUNS_API_PREFIX}/goals/app-preview/disable`, {
-		method: "POST",
-		body: JSON.stringify({ sessionId }),
 	});
 }
 

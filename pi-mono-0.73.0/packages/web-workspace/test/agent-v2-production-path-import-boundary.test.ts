@@ -104,6 +104,8 @@ describe("agent v2 production import boundary", () => {
 		const browserFiles = [
 			join(repoRoot, "apps", "pi-coding-web", "src", "app", "bootstrap.ts"),
 			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "agent-v2-run-client.ts"),
+			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "run-client.ts"),
+			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "remote-agent-controller.ts"),
 		];
 		const forbidden = [
 			"PI_APP_AGENT_VERSION",
@@ -111,6 +113,11 @@ describe("agent v2 production import boundary", () => {
 			"buildSpecArtifact",
 			"SPEC_ARTIFACT_PROJECT_FILES",
 			"AppPreviewGoalSupervisor",
+			"app-preview-goal",
+			"getAppPreviewGoal",
+			"enableAppPreviewGoal",
+			"disableAppPreviewGoal",
+			"app_preview_continuation",
 			"createRunAgent",
 			"WorkspaceRunWorkerService",
 			"WorkspaceRunApiService",

@@ -94,6 +94,26 @@ describe("run client", () => {
 		expect(runClient).not.toHaveProperty("listRunEvents");
 		expect(runClient).not.toHaveProperty("connectRunEvents");
 		expect(runClient).not.toHaveProperty("buildAppPreviewGoalStartRequest");
+		expect(runClient).not.toHaveProperty("getAppPreviewGoal");
+		expect(runClient).not.toHaveProperty("enableAppPreviewGoal");
+		expect(runClient).not.toHaveProperty("disableAppPreviewGoal");
+	});
+
+	it("does not keep legacy app preview goal browser helpers or routes", () => {
+		const source = readFileSync(join(import.meta.dirname, "../src/runtime/run-client.ts"), "utf8");
+		const forbidden = [
+			"AppPreviewGoalRecord",
+			"AppPreviewGoalEventRecord",
+			"AppPreviewGoalSource",
+			"getAppPreviewGoal",
+			"enableAppPreviewGoal",
+			"disableAppPreviewGoal",
+			"/goals/app-preview",
+		];
+
+		for (const entry of forbidden) {
+			expect(source, `run-client.ts must not reference ${entry}`).not.toContain(entry);
+		}
 	});
 
 	it("uses v2 getRun rather than legacy session detail for active-run status settling", () => {

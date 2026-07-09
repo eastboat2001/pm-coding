@@ -22,7 +22,7 @@ import {
 import { type DiagnosticArchiveExport, WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
-import type { RuntimeStore } from "./runtime-store.js";
+import type { AgentV2SchemaStore } from "./agent-v2-runtime-store.js";
 import { createRuntimeStore } from "./runtime-store-factory.js";
 import type {
 	DiagnosticLogEventInput,
@@ -62,7 +62,7 @@ export interface ConfiguredStoragePluginTestServices {
 	previews: WorkspacePreviewService;
 	tasks: WorkspaceTaskService;
 	skills: WorkspaceSkillService;
-	runtimeDb: RuntimeStore;
+	runtimeDb: AgentV2SchemaStore;
 	diagnosticExports: WorkspaceDiagnosticExportService;
 	agentV2RunApi?: AgentV2RunApiService;
 	agentV2RunEventBus?: AgentV2RunEventBus;
@@ -306,7 +306,7 @@ export function createStartupDiagnosticEvents(config: StorageConfig): Diagnostic
 				envFileExists: config.envFileExists,
 				runsEnabled: config.runsEnabled,
 				redisUrl: redactConnectionUrl(config.redisUrl),
-				runQueueName: config.runQueueName,
+				agentV2RunQueueName: config.agentV2RunQueueName,
 				runtimeDbFile: config.runtimeDbFile,
 				clientsRootDir: config.clientsRootDir,
 				workerId: config.workerId,
@@ -514,7 +514,7 @@ async function handleStorageApi(
 			redisUrl: redactConnectionUrl(config.redisUrl),
 			workerId: config.workerId,
 			workerConcurrency: config.workerConcurrency,
-			runQueueName: config.runQueueName,
+			agentV2RunQueueName: config.agentV2RunQueueName,
 			runEventRetentionDays: config.runEventRetentionDays,
 			runRetryMaxAttempts: config.runRetryMaxAttempts,
 			runRetryBaseDelayMs: config.runRetryBaseDelayMs,

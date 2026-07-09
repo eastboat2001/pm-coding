@@ -104,6 +104,10 @@ const allowedRuntimeStoreImportFiles = new Set([
 	"packages/web-workspace/src/postgres-runtime-store.ts",
 	"packages/web-workspace/src/runtime-store-factory.ts",
 ]);
+const explicitV2BoundaryFiles = [
+	"packages/web-workspace/src/vite-plugin.ts",
+	"apps/pi-coding-web/src/worker/main.ts",
+];
 
 describe("agent v2 production import boundary", () => {
 	it("does not expose legacy v1 product services through the root package barrel", () => {
@@ -190,7 +194,7 @@ describe("agent v2 production import boundary", () => {
 	});
 
 	it("keeps v2 production contracts independent from the legacy RuntimeStore interface", () => {
-		const violations = productionV2Files()
+		const violations = [...productionV2Files(), ...explicitV2BoundaryFiles.map((file) => join(repoRoot, file))]
 			.map(toRepoPath)
 			.filter((file) => !allowedRuntimeStoreImportFiles.has(file))
 			.filter((file) => {

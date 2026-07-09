@@ -70,7 +70,10 @@ import { InMemoryAgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "../src/agent-v2-run-queue.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
-import { resetAgentV2RuntimeData } from "../src/agent-v2-reset.js";
+import {
+	AGENT_V2_RESET_CONFIRMATION,
+	resetAgentV2RuntimeData,
+} from "../src/agent-v2-reset.js";
 import { loadStorageConfig } from "../src/config.js";
 import { WorkspaceDiagnosticExportService } from "../src/diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "../src/diagnostic-log-service.js";
@@ -156,7 +159,7 @@ describe("agent v2 production chain rehearsal", () => {
 		expect(exported.runtime.runEventsByRunId["run-production-chain"]).toHaveLength(3);
 
 		const reset = await resetAgentV2RuntimeData(runtimeDb, {
-			confirmation: "RESET_AGENT_V2_RUNTIME_DATA",
+			confirmation: AGENT_V2_RESET_CONFIRMATION,
 			includeDiagnostics: true,
 		});
 		expect(reset.runsDeleted).toBe(1);
@@ -575,10 +578,7 @@ it("resets v2 runtime data without reading stale legacy runtime rows", () => {
 			createdAt: "2026-07-09T02:00:00.000Z",
 		});
 
-		const result = store.resetAgentV2RuntimeData({
-			confirmation: "RESET_AGENT_V2_RUNTIME_DATA",
-			includeDiagnostics: true,
-		});
+		const result = store.resetAgentV2RuntimeData();
 
 		expect(result.runsDeleted).toBe(1);
 		expect(store.listAgentV2Runs("client-a")).toEqual([]);

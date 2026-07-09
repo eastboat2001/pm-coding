@@ -49,13 +49,7 @@ export class PostgresRuntimeStore {
         };
     }
     async ensureSchema() {
-        await this.query(this.queryable, `
-			CREATE TABLE IF NOT EXISTS clients (
-				client_id TEXT PRIMARY KEY,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			)
-		`);
+        await this.ensureClientIdentitySchema();
         await this.query(this.queryable, `
 			CREATE TABLE IF NOT EXISTS sessions (
 				session_id TEXT NOT NULL,
@@ -163,6 +157,7 @@ export class PostgresRuntimeStore {
         await this.query(this.queryable, "CREATE INDEX IF NOT EXISTS idx_app_preview_goal_events_goal ON app_preview_goal_events(client_id, session_id, id)");
     }
     async ensureAgentV2Schema() {
+        await this.ensureClientIdentitySchema();
         await this.query(this.queryable, `
 			CREATE TABLE IF NOT EXISTS agent_v2_schema_metadata (
 				schema_version INTEGER PRIMARY KEY,
@@ -302,6 +297,15 @@ export class PostgresRuntimeStore {
         await this.query(this.queryable, `INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
 			VALUES ($1, $2)
 			ON CONFLICT(schema_version) DO NOTHING`, [AGENT_V2_SCHEMA_VERSION, now()]);
+    }
+    async ensureClientIdentitySchema() {
+        await this.query(this.queryable, `
+			CREATE TABLE IF NOT EXISTS clients (
+				client_id TEXT PRIMARY KEY,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)
+		`);
     }
     async close() {
         await this.pool?.end();

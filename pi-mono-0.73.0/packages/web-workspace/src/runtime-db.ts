@@ -193,15 +193,9 @@ export class RuntimeDbStore implements RuntimeStore {
 
 	ensureSchema(): void {
 		mkdirSync(dirname(this.dbFile), { recursive: true });
-		this.open().exec(`
-			PRAGMA foreign_keys = ON;
-
-			CREATE TABLE IF NOT EXISTS clients (
-				client_id TEXT PRIMARY KEY,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			);
-
+		const db = this.open();
+		this.ensureClientIdentitySchema(db);
+		db.exec(`
 			CREATE TABLE IF NOT EXISTS sessions (
 				session_id TEXT NOT NULL,
 				client_id TEXT NOT NULL,
@@ -300,6 +294,7 @@ export class RuntimeDbStore implements RuntimeStore {
 	ensureAgentV2Schema(): void {
 		mkdirSync(dirname(this.dbFile), { recursive: true });
 		const db = this.open();
+		this.ensureClientIdentitySchema(db);
 		db.exec(`
 			CREATE TABLE IF NOT EXISTS agent_v2_schema_metadata (
 				schema_version INTEGER PRIMARY KEY,
@@ -1552,6 +1547,16 @@ export class RuntimeDbStore implements RuntimeStore {
 			`);
 		}
 		return this.database;
+	}
+
+	private ensureClientIdentitySchema(db: DatabaseSync): void {
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS clients (
+				client_id TEXT PRIMARY KEY,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+		`);
 	}
 
 	private getMessage(clientId: string, messageId: number): RuntimeMessageRecord | undefined {

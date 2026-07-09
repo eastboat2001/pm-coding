@@ -241,7 +241,7 @@ describe("agent v2 quality regression", () => {
 		]);
 	});
 
-	it("records the current schema-only Agent v2 initialization limitation without forcing production changes", () => {
+	it("initializes the Agent v2 schema independently with shared client identity rows only", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-schema-only-"));
 		const dbFile = join(root, "runtime.sqlite");
 		const store = new RuntimeDbStore(dbFile);
@@ -250,18 +250,187 @@ describe("agent v2 quality regression", () => {
 
 		store.ensureAgentV2Schema();
 
-		expect(tableExists(dbFile, "agent_v2_runs")).toBe(true);
-		expect(tableExists(dbFile, "agent_v2_schema_metadata")).toBe(true);
-		expect(tableExists(dbFile, "clients")).toBe(false);
-		expect(() =>
-			store.createAgentV2Run({
+		for (const table of [
+			"clients",
+			"agent_v2_runs",
+			"agent_v2_tasks",
+			"agent_v2_artifacts",
+			"agent_v2_documents",
+			"agent_v2_validations",
+			"agent_v2_diagnostics",
+			"agent_v2_run_events",
+			"agent_v2_schema_metadata",
+		]) {
+			expect(tableExists(dbFile, table), table).toBe(true);
+		}
+		for (const table of [
+			"sessions",
+			"messages",
+			"runs",
+			"run_events",
+			"app_preview_goals",
+			"app_preview_goal_events",
+		]) {
+			expect(tableExists(dbFile, table), table).toBe(false);
+		}
+
+		const createdRun = store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "schema-only-run",
+			input: { prompt: "schema only" },
+			model: { provider: "test" },
+			createdAt: "2026-07-09T09:30:00.000Z",
+		});
+		await store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "schema-only-run",
+			taskId: "task-1",
+			kind: "implementation",
+			title: "Build schema-only app",
+			status: "running",
+			dependsOn: [],
+			acceptanceCriteria: ["Task state persists without legacy runtime tables."],
+			input: { documentId: "spec-1" },
+			output: {},
+			createdAt: "2026-07-09T09:31:00.000Z",
+			updatedAt: "2026-07-09T09:31:01.000Z",
+			startedAt: "2026-07-09T09:31:01.000Z",
+		});
+		await store.upsertAgentV2Artifact({
+			clientId: "client-a",
+			runId: "schema-only-run",
+			artifactId: "artifact-1",
+			kind: "file",
+			path: "src/app.ts",
+			mediaType: "text/typescript",
+			checksum: "sha256:schema-only",
+			version: "v1",
+			sourceTaskId: "task-1",
+			validationStatus: "pending",
+			metadataJson: { language: "ts" },
+			createdAt: "2026-07-09T09:31:02.000Z",
+			updatedAt: "2026-07-09T09:31:02.000Z",
+		});
+		await store.upsertAgentV2Document({
+			clientId: "client-a",
+			runId: "schema-only-run",
+			documentId: "spec-1",
+			kind: "spec",
+			version: "v1",
+			contentMarkdown: "# Spec",
+			contentJson: {
+				kind: "spec",
+				title: "Schema-only spec",
+				objective: "Prove Agent v2 schema-only initialization works.",
+				summary: "Schema-only bootstrap stores Agent v2 state without legacy runtime tables.",
+				scope: [],
+				goals: [],
+				nonGoals: [],
+				assumptions: [],
+				requirements: [],
+				capabilityBoundaries: [],
+				acceptanceCriteria: [],
+				platformContract: {
+					runtime: "web",
+					framework: "vite",
+					deliveryMode: "static_app",
+					entrypoints: ["src/main.ts"],
+					deliverables: ["dist"],
+					constraints: [],
+				},
+			},
+			sourceTaskId: "task-1",
+			createdAt: "2026-07-09T09:31:03.000Z",
+			updatedAt: "2026-07-09T09:31:03.000Z",
+		});
+		await store.upsertAgentV2Validation({
+			clientId: "client-a",
+			runId: "schema-only-run",
+			validationId: "validation-1",
+			taskId: "task-1",
+			artifactId: "artifact-1",
+			status: "passed",
+			summary: "Schema-only validation passed",
+			details: { command: "npm run build" },
+			createdAt: "2026-07-09T09:31:04.000Z",
+			updatedAt: "2026-07-09T09:31:04.000Z",
+		});
+		await store.appendAgentV2Diagnostic(
+			createAgentV2DiagnosticEvent({
+				diagnosticId: "diag-1",
 				clientId: "client-a",
 				runId: "schema-only-run",
-				input: { prompt: "schema only" },
-				model: { provider: "test" },
-				createdAt: "2026-07-09T09:30:00.000Z",
+				severity: "info",
+				category: "task_graph",
+				code: "schema_only_ready",
+				phase: "intake",
+				taskId: "task-1",
+				message: "Agent v2 schema initialized without legacy runtime tables.",
+				data: { tableCount: 9 },
+				createdAt: "2026-07-09T09:31:05.000Z",
 			}),
-		).toThrow(/no such table: clients/i);
+		);
+		await store.appendAgentV2RunEvent({
+			clientId: "client-a",
+			runId: "schema-only-run",
+			type: "agent_v2.run_created",
+			payload: { status: "queued", phase: "intake" },
+			createdAt: "2026-07-09T09:31:06.000Z",
+		});
+
+		expect(tableExists(dbFile, "agent_v2_runs")).toBe(true);
+		expect(tableExists(dbFile, "agent_v2_schema_metadata")).toBe(true);
+		expect(tableExists(dbFile, "clients")).toBe(true);
+		expect(createdRun).toMatchObject({
+			clientId: "client-a",
+			runId: "schema-only-run",
+			status: "queued",
+			phase: "intake",
+		});
+		expect(store.getAgentV2Run("client-a", "schema-only-run")).toMatchObject({
+			clientId: "client-a",
+			runId: "schema-only-run",
+			status: "queued",
+		});
+		expect(await store.listAgentV2Tasks("client-a", "schema-only-run")).toEqual([
+			expect.objectContaining({
+				taskId: "task-1",
+				status: "running",
+				acceptanceCriteria: ["Task state persists without legacy runtime tables."],
+			}),
+		]);
+		expect(await store.listAgentV2Artifacts("client-a", "schema-only-run")).toEqual([
+			expect.objectContaining({
+				artifactId: "artifact-1",
+				sourceTaskId: "task-1",
+				path: "src/app.ts",
+			}),
+		]);
+		expect(await store.listAgentV2Documents("client-a", "schema-only-run")).toEqual([
+			expect.objectContaining({
+				documentId: "spec-1",
+				kind: "spec",
+				sourceTaskId: "task-1",
+			}),
+		]);
+		expect(await store.listAgentV2Validations("client-a", "schema-only-run")).toEqual([
+			expect.objectContaining({
+				validationId: "validation-1",
+				status: "passed",
+			}),
+		]);
+		expect(await store.listAgentV2Diagnostics("client-a", "schema-only-run")).toEqual([
+			expect.objectContaining({
+				diagnosticId: "diag-1",
+				code: "schema_only_ready",
+			}),
+		]);
+		expect(await store.listAgentV2RunEvents("client-a", "schema-only-run", 0)).toEqual([
+			expect.objectContaining({
+				type: "agent_v2.run_created",
+				payload: { status: "queued", phase: "intake" },
+			}),
+		]);
 	});
 
 	it("rejects runtime-switch strategy wording in product docs and records the reset procedure", () => {

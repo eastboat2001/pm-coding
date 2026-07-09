@@ -231,16 +231,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	async ensureSchema(): Promise<void> {
-		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS clients (
-				client_id TEXT PRIMARY KEY,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			)
-		`,
-		);
+		await this.ensureClientIdentitySchema();
 		await this.query(
 			this.queryable,
 			`
@@ -391,6 +382,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	async ensureAgentV2Schema(): Promise<void> {
+		await this.ensureClientIdentitySchema();
 		await this.query(
 			this.queryable,
 			`
@@ -578,6 +570,19 @@ export class PostgresRuntimeStore implements RuntimeStore {
 			VALUES ($1, $2)
 			ON CONFLICT(schema_version) DO NOTHING`,
 			[AGENT_V2_SCHEMA_VERSION, now()],
+		);
+	}
+
+	private async ensureClientIdentitySchema(): Promise<void> {
+		await this.query(
+			this.queryable,
+			`
+			CREATE TABLE IF NOT EXISTS clients (
+				client_id TEXT PRIMARY KEY,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)
+		`,
 		);
 	}
 

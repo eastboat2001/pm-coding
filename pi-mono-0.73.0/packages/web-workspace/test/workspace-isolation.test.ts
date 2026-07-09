@@ -322,10 +322,8 @@ function createProjectsApiHarness(config: StorageConfig, files: WorkspaceFileSer
 		previews: new WorkspacePreviewService(config),
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
-		runtimeDb: { ensureSchema: async () => undefined } as unknown as TestServices["runtimeDb"],
+		runtimeDb: { ensureAgentV2Schema: async () => undefined } as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
-		runApi: {} as TestServices["runApi"],
-		runEventBus: { close: async () => undefined } as TestServices["runEventBus"],
 	} satisfies TestServices;
 	const plugin = createConfiguredStoragePluginForTest(services);
 	const configureServer = plugin.configureServer as (server: {

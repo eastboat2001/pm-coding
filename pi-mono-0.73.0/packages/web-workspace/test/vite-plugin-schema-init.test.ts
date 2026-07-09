@@ -60,8 +60,6 @@ function createMiddleware(config: StorageConfig, calls: string[]): Middleware {
 			},
 		} as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
-		runApi: {} as TestServices["runApi"],
-		runEventBus: { close: async () => undefined } as TestServices["runEventBus"],
 	});
 	const configureServer = plugin.configureServer as (server: {
 		middlewares: { use(handler: Middleware): void };

@@ -253,10 +253,8 @@ it("does not expose legacy app-preview-goal routes", async () => {
 type ConfiguredTestServices = Parameters<typeof createConfiguredStoragePluginForTest>[0];
 type TestServices = Omit<
 	ConfiguredTestServices,
-	"runApi" | "runEventBus" | "agentV2RunApi" | "agentV2RunEventBus" | "agentV2RunEventLog"
+	"agentV2RunApi" | "agentV2RunEventBus" | "agentV2RunEventLog"
 > & {
-	runApi?: ConfiguredTestServices["runApi"];
-	runEventBus?: ConfiguredTestServices["runEventBus"];
 	agentV2RunApi?: ConfiguredTestServices["agentV2RunApi"] | RecordingAgentV2RunApi;
 	agentV2RunEventBus?: AgentV2RunEventBus;
 	agentV2RunEventLog?: RecordingAgentV2RunEventLog;
@@ -290,16 +288,12 @@ function createHarness(
 		previews: { servePreviewRequest: vi.fn(() => false) } as unknown as TestServices["previews"],
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
-		runtimeDb: { ensureSchema: vi.fn(), ensureAgentV2Schema: vi.fn() } as unknown as TestServices["runtimeDb"],
+		runtimeDb: { ensureAgentV2Schema: vi.fn() } as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
 		agentV2RunApi: overrides.agentV2RunApi ?? new RecordingAgentV2RunApi(),
 		agentV2RunEventBus: overrides.agentV2RunEventBus ?? new ScriptedAgentV2RunEventBus([{ waitForAbort: true }]),
 		agentV2RunEventLog: overrides.agentV2RunEventLog ?? new RecordingAgentV2RunEventLog([]),
 	};
-	if (overrides.includeLegacyRunServices ?? true) {
-		services.runApi = legacyRunApi as unknown as TestServices["runApi"];
-		services.runEventBus = { close: vi.fn(async () => undefined) } as unknown as TestServices["runEventBus"];
-	}
 	const plugin = createConfiguredStoragePluginForTest(services as unknown as ConfiguredTestServices);
 	const configureServer = plugin.configureServer as (server: {
 		httpServer: { once(event: "close", listener: () => void): void };

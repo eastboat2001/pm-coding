@@ -64,8 +64,6 @@ export interface ConfiguredStoragePluginTestServices {
 	skills: WorkspaceSkillService;
 	runtimeDb: RuntimeStore;
 	diagnosticExports: WorkspaceDiagnosticExportService;
-	runApi?: unknown;
-	runEventBus?: { close?: () => Promise<void> | void };
 	agentV2RunApi?: AgentV2RunApiService;
 	agentV2RunEventBus?: AgentV2RunEventBus;
 	agentV2RunEventLog?: Pick<AgentV2RunEventLog, "list">;

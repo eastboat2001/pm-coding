@@ -622,6 +622,7 @@ describe("agent v2 runtime stores", () => {
 				"agent_v2_artifacts",
 				"agent_v2_diagnostics",
 				"agent_v2_documents",
+				"agent_v2_run_events",
 				"agent_v2_runs",
 				"agent_v2_schema_metadata",
 				"agent_v2_tasks",

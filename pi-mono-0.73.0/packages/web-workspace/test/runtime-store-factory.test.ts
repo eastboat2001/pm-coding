@@ -40,16 +40,16 @@ describe("createRuntimeStore", () => {
 	});
 });
 
-describe("configured storage plugin runtime schema initialization", () => {
+describe("configured storage plugin agent v2 schema initialization", () => {
 	it("awaits runtime schema initialization before serving preview requests", async () => {
 		const schemaReady = deferred<void>();
 		const harness = createPluginHarness({
-			ensureSchema: () => schemaReady.promise,
+			ensureAgentV2Schema: () => schemaReady.promise,
 		});
 
 		const request = dispatch(harness.middleware, `${PREVIEW_PREFIX}/project-1/`);
 
-		expect(harness.ensureSchema).toHaveBeenCalledTimes(1);
+		expect(harness.ensureAgentV2Schema).toHaveBeenCalledTimes(1);
 		await flushMicrotasks();
 		expect(harness.servePreviewRequest).not.toHaveBeenCalled();
 		expect(request.response.ended).toBe(false);
@@ -65,12 +65,12 @@ describe("configured storage plugin runtime schema initialization", () => {
 	it("awaits runtime schema initialization before handling storage API requests", async () => {
 		const schemaReady = deferred<void>();
 		const harness = createPluginHarness({
-			ensureSchema: () => schemaReady.promise,
+			ensureAgentV2Schema: () => schemaReady.promise,
 		});
 
 		const request = dispatch(harness.middleware, `${API_PREFIX}/status`);
 
-		expect(harness.ensureSchema).toHaveBeenCalledTimes(1);
+		expect(harness.ensureAgentV2Schema).toHaveBeenCalledTimes(1);
 		await flushMicrotasks();
 		expect(request.response.ended).toBe(false);
 
@@ -85,14 +85,14 @@ describe("configured storage plugin runtime schema initialization", () => {
 	it("retries runtime schema initialization after the cached promise rejects", async () => {
 		const firstSchemaReady = deferred<void>();
 		const secondSchemaReady = deferred<void>();
-		const ensureSchema = vi.fn(() => {
-			const next = ensureSchema.mock.calls.length === 1 ? firstSchemaReady : secondSchemaReady;
+		const ensureAgentV2Schema = vi.fn(() => {
+			const next = ensureAgentV2Schema.mock.calls.length === 1 ? firstSchemaReady : secondSchemaReady;
 			return next.promise;
 		});
-		const harness = createPluginHarness({ ensureSchema });
+		const harness = createPluginHarness({ ensureAgentV2Schema });
 
 		const firstRequest = dispatch(harness.middleware, `${API_PREFIX}/status`);
-		expect(ensureSchema).toHaveBeenCalledTimes(1);
+		expect(ensureAgentV2Schema).toHaveBeenCalledTimes(1);
 		firstSchemaReady.reject(new Error("schema unavailable"));
 		await firstRequest.done;
 		expect(firstRequest.response.statusCode).toBe(500);
@@ -100,7 +100,7 @@ describe("configured storage plugin runtime schema initialization", () => {
 
 		const secondRequest = dispatch(harness.middleware, `${API_PREFIX}/status`);
 
-		expect(ensureSchema).toHaveBeenCalledTimes(2);
+		expect(ensureAgentV2Schema).toHaveBeenCalledTimes(2);
 		await flushMicrotasks();
 		expect(secondRequest.response.ended).toBe(false);
 
@@ -122,7 +122,7 @@ describe("configured storage plugin run event bus lifecycle", () => {
 		server.close();
 		await flushMicrotasks();
 
-		expect(harness.runEventBusClose).toHaveBeenCalledTimes(1);
+		expect(harness.agentV2RunEventBusClose).toHaveBeenCalledTimes(1);
 	});
 
 	it("closes the run event bus once when the preview server closes", async () => {
@@ -134,7 +134,7 @@ describe("configured storage plugin run event bus lifecycle", () => {
 		server.close();
 		await flushMicrotasks();
 
-		expect(harness.runEventBusClose).toHaveBeenCalledTimes(1);
+		expect(harness.agentV2RunEventBusClose).toHaveBeenCalledTimes(1);
 	});
 });
 
@@ -145,9 +145,9 @@ type Middleware = (
 	next: Connect.NextFunction,
 ) => void | Promise<void>;
 
-function createPluginHarness(options: { ensureSchema: () => void | Promise<void> }) {
+function createPluginHarness(options: { ensureAgentV2Schema: () => void | Promise<void> }) {
 	let middleware: Middleware | undefined;
-	const ensureSchema = vi.fn(options.ensureSchema);
+	const ensureAgentV2Schema = vi.fn(options.ensureAgentV2Schema);
 	const servePreviewRequest = vi.fn((_: Connect.IncomingMessage, res: ServerResponse) => {
 		res.statusCode = 204;
 		res.end();
@@ -169,14 +169,13 @@ function createPluginHarness(options: { ensureSchema: () => void | Promise<void>
 		previews: { servePreviewRequest } as unknown as TestServices["previews"],
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
-		runtimeDb: { ensureSchema } as unknown as TestServices["runtimeDb"],
+		runtimeDb: { ensureAgentV2Schema } as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
-		runApi: {} as TestServices["runApi"],
-		runEventBus: {
+		agentV2RunEventBus: {
 			publish: vi.fn(),
 			read: vi.fn(),
 			close: vi.fn(),
-		} as unknown as TestServices["runEventBus"],
+		} as unknown as TestServices["agentV2RunEventBus"],
 	};
 	const plugin = createConfiguredStoragePluginForTest(services);
 	const configureServer = plugin.configureServer as (server: {
@@ -192,20 +191,20 @@ function createPluginHarness(options: { ensureSchema: () => void | Promise<void>
 	});
 
 	if (!middleware) throw new Error("configured storage plugin did not register middleware");
-	return { ensureSchema, middleware, servePreviewRequest };
+	return { ensureAgentV2Schema, middleware, servePreviewRequest };
 }
 
 function createPluginLifecycleHarness() {
-	const services = createPluginServices({ ensureSchema: vi.fn() });
+	const services = createPluginServices({ ensureAgentV2Schema: vi.fn() });
 	const plugin = createConfiguredStoragePluginForTest(services);
 	return {
 		configurePreviewServer: plugin.configurePreviewServer as unknown as (server: FakeViteServer) => void,
 		configureServer: plugin.configureServer as unknown as (server: FakeViteServer) => void,
-		runEventBusClose: services.runEventBus!.close,
+		agentV2RunEventBusClose: services.agentV2RunEventBus!.close,
 	};
 }
 
-function createPluginServices(options: { ensureSchema: () => void | Promise<void> }): TestServices {
+function createPluginServices(options: { ensureAgentV2Schema: () => void | Promise<void> }): TestServices {
 	return {
 		config: createTestConfig(),
 		diagnostics: {
@@ -222,14 +221,13 @@ function createPluginServices(options: { ensureSchema: () => void | Promise<void
 		previews: { servePreviewRequest: vi.fn(() => false) } as unknown as TestServices["previews"],
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
-		runtimeDb: { ensureSchema: options.ensureSchema } as unknown as TestServices["runtimeDb"],
+		runtimeDb: { ensureAgentV2Schema: options.ensureAgentV2Schema } as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
-		runApi: {} as TestServices["runApi"],
-		runEventBus: {
+		agentV2RunEventBus: {
 			publish: vi.fn(),
 			read: vi.fn(),
 			close: vi.fn(),
-		} as unknown as TestServices["runEventBus"],
+		} as unknown as TestServices["agentV2RunEventBus"],
 	};
 }
 

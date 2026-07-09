@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,6 +46,10 @@ describe("worker runtime diagnostics", () => {
 				}),
 			}),
 		);
+	});
+
+	it("does not keep a renamed legacy worker diagnostics entry alongside the v2 worker", () => {
+		expect(existsSync(new URL("../src/worker/worker-diagnostics.ts", import.meta.url))).toBe(false);
 	});
 
 	it("maps agent v2 worker queue and event stream config into Redis options", () => {

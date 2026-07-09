@@ -8,6 +8,7 @@ const denyStrings = [
 	"run-api-service",
 	"run-worker-service",
 	"app-preview-goal-service",
+	"AppPreviewGoalSupervisor",
 	"capability-planner",
 	"spec-artifact",
 	"context-orchestrator",
@@ -16,6 +17,7 @@ const denyStrings = [
 	"RunEventSink",
 	"WorkspaceRunApiService",
 	"WorkspaceRunWorkerService",
+	"legacy-v1-main",
 	"legacy-v1-agent-v2-run-event-bridge",
 ];
 
@@ -104,10 +106,14 @@ function productionV2Files(): string[] {
 	const v2OnlySubpathExports = ["agent-v2-runtime.ts", "runtime-infra.ts"]
 		.map((name) => join(webWorkspaceSrc, name))
 		.filter(existsSync);
+	const workerSrc = join(repoRoot, "apps", "pi-coding-web", "src", "worker");
+	const workerFiles = readdirSync(workerSrc)
+		.filter((name) => name.endsWith(".ts"))
+		.map((name) => join(workerSrc, name));
 	return [
 		...agentV2Files,
 		...v2OnlySubpathExports,
-		join(repoRoot, "apps", "pi-coding-web", "src", "worker", "main.ts"),
+		...workerFiles,
 	];
 }
 

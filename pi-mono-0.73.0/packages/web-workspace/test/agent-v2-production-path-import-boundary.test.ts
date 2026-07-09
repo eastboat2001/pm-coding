@@ -247,7 +247,7 @@ describe("agent v2 production import boundary", () => {
 function productionV2Files(): string[] {
 	const webWorkspaceSrc = join(repoRoot, "packages", "web-workspace", "src");
 	const agentV2Files = collectTsFiles(webWorkspaceSrc).filter((file) => basename(file).startsWith("agent-v2-"));
-	const v2OnlySubpathExports = ["agent-v2-runtime.ts", "runtime-infra.ts"]
+	const v2OnlySubpathExports = ["agent-v2-runtime.ts", "runtime-infra.ts", "diagnostic-export-service.ts"]
 		.map((name) => join(webWorkspaceSrc, name))
 		.filter(existsSync);
 	const workerSrc = join(repoRoot, "apps", "pi-coding-web", "src", "worker");

@@ -23,10 +23,14 @@ function finalizeResetResult(storeResult, options, diagnostics) {
     return withDiagnosticsDeleted(storeResult, diagnosticsDeleted);
 }
 function withDiagnosticsDeleted(storeResult, diagnosticsDeleted) {
-    if (diagnosticsDeleted === undefined)
-        return { ...storeResult };
-    return {
+    const result = {
         ...storeResult,
+        runsDeleted: storeResult.agentV2RowsDeleted.agent_v2_runs ?? 0,
+    };
+    if (diagnosticsDeleted === undefined)
+        return result;
+    return {
+        ...result,
         diagnosticsDeleted,
     };
 }

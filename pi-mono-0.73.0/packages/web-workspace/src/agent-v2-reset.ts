@@ -1,8 +1,8 @@
 import type {
 	AgentV2ResetStore,
+	AgentV2StoreResult,
 	AgentV2ResetStoreOptions as RuntimeStoreResetOptions,
 	AgentV2ResetStoreResult as RuntimeStoreResetResult,
-	AgentV2StoreResult,
 } from "./agent-v2-runtime-store.js";
 
 export const AGENT_V2_RESET_CONFIRMATION = "application-generation-agent-v2";
@@ -14,6 +14,7 @@ export interface AgentV2ResetOptions extends RuntimeStoreResetOptions {
 
 export interface AgentV2ResetResult extends RuntimeStoreResetResult {
 	diagnosticsDeleted?: number;
+	runsDeleted: number;
 }
 
 export interface AgentV2ResetDiagnosticsAdapter {
@@ -79,9 +80,13 @@ function withDiagnosticsDeleted(
 	storeResult: RuntimeStoreResetResult,
 	diagnosticsDeleted: number | undefined,
 ): AgentV2ResetResult {
-	if (diagnosticsDeleted === undefined) return { ...storeResult };
-	return {
+	const result = {
 		...storeResult,
+		runsDeleted: storeResult.agentV2RowsDeleted.agent_v2_runs ?? 0,
+	};
+	if (diagnosticsDeleted === undefined) return result;
+	return {
+		...result,
 		diagnosticsDeleted,
 	};
 }

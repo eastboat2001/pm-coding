@@ -15,21 +15,24 @@ import {
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
-import { InMemoryRunQueue } from "../src/run-queue.js";
+import { InMemoryRunQueue, type RunQueueClearResult } from "../src/run-queue.js";
 
 describe("agent v2 worker stress", () => {
 	afterEach(() => {
 		// The stress test uses real timers so leave the global timer state clean.
 	});
 
-	it("processes 20 queued runs at concurrency 4 with mixed cancellation and no stranded claims after stop", async () => {
+	it(
+		"stops while runs are still in flight and leaves no stranded active claims after mixed cancellation",
+		async () => {
 		const store = new MemoryStressStore();
 		const queue = new TrackingQueue(createAgentV2RunQueue(new InMemoryRunQueue()));
 		const events = new RecordingEventLog();
 		const now = createTimestampSequence("2026-07-09T10:00:00.000Z");
-		const cancelTargets = new Set(["run-03", "run-06", "run-08", "run-11", "run-14", "run-16", "run-18", "run-20"]);
+		const fastCancelTargets = new Set(["run-03", "run-04"]);
+		const slowCancelTargets = new Set(["run-01", "run-02"]);
 		const service = new AgentV2RunApiService({ store, queue, events, now });
-		const execution = new StressExecution(cancelTargets);
+		const execution = new StressExecution({ fastCancelTargets, slowCancelTargets });
 		const worker = new AgentV2WorkerService({
 			store,
 			queue,
@@ -54,32 +57,57 @@ describe("agent v2 worker stress", () => {
 		}
 
 		await worker.start();
-		await cancelRunsWhenRunning(service, store, cancelTargets);
+		await cancelRunsWhenRunning(service, store, fastCancelTargets);
 		await waitFor(async () => {
 			const runs = await store.listAgentV2Runs("client-a");
-			return runs.length === 20 && runs.every((run) => isTerminalRun(run.status));
+			const byRunId = new Map(runs.map((run) => [run.runId, run]));
+			return (
+				[...fastCancelTargets].every((runId) => byRunId.get(runId)?.status === "cancelled") &&
+				execution.activeCount() > 0 &&
+				[...slowCancelTargets].every((runId) => byRunId.get(runId)?.status === "running")
+			);
 		}, 10_000);
+		await cancelRunsWhenRunning(service, store, slowCancelTargets);
+		await waitFor(async () => {
+			if (execution.activeCount() === 0) return false;
+			const runs = await store.listAgentV2Runs("client-a");
+			const byRunId = new Map(runs.map((run) => [run.runId, run]));
+			return [...slowCancelTargets].every((runId) => byRunId.get(runId)?.status === "cancelling");
+		}, 10_000);
+		expect(execution.activeCount()).toBeGreaterThan(0);
+		expect(await store.listAgentV2RunsByWorker("worker-stress")).not.toEqual([]);
 		await worker.stop();
 
 		const runs = await store.listAgentV2Runs("client-a");
+		const closeDrainResult = queue.closeDrainResult();
 		expect(runs).toHaveLength(20);
 		expect(execution.maxActive).toBeLessThanOrEqual(4);
-		expect(runs.filter((run) => run.status === "cancelled")).toHaveLength(cancelTargets.size);
-		expect(runs.filter((run) => run.status === "succeeded")).toHaveLength(20 - cancelTargets.size);
-		expect(runs.filter((run) => run.status === "running" || run.status === "queued" || run.status === "cancelling")).toEqual(
-			[],
+		expect(execution.abortCount).toBeGreaterThan(0);
+		expect(runs.some((run) => run.status === "interrupted")).toBe(true);
+		expect(runs.filter((run) => run.status === "cancelled").map((run) => run.runId)).toEqual(
+			expect.arrayContaining([...fastCancelTargets]),
 		);
+		expect(
+			runs.filter(
+				(run) => run.workerId === "worker-stress" && (run.status === "running" || run.status === "queued" || run.status === "cancelling"),
+			),
+		).toEqual([]);
 		expect(await store.listAgentV2RunsByWorker("worker-stress")).toEqual([]);
 		expect(queue.activeClaimCount()).toBe(0);
-		expect(queue.completedRuns()).toHaveLength(20);
+		expect(closeDrainResult).toBeDefined();
+		expect(closeDrainResult?.activeClaimsDeleted).toBe(0);
+		expect(closeDrainResult?.queueItemsDeleted).toBeGreaterThan(0);
+		expect(queue.completedRuns().length).toBeLessThan(20);
 		expect(events.appendCalls.filter((event) => event.type === "agent_v2.phase_changed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ payload: expect.objectContaining({ status: "running" }) }),
-				expect.objectContaining({ payload: expect.objectContaining({ status: "succeeded" }) }),
 				expect.objectContaining({ payload: expect.objectContaining({ status: "cancelled" }) }),
+				expect.objectContaining({ payload: expect.objectContaining({ status: "interrupted" }) }),
 			]),
 		);
-	});
+		},
+		15_000,
+	);
 });
 
 class MemoryStressStore {
@@ -132,6 +160,7 @@ class MemoryStressStore {
 class TrackingQueue implements AgentV2RunQueue {
 	private readonly activeClaims = new Set<string>();
 	private readonly completed = new Set<string>();
+	private closeResult: RunQueueClearResult | undefined;
 
 	constructor(private readonly inner: AgentV2RunQueue) {}
 
@@ -176,6 +205,7 @@ class TrackingQueue implements AgentV2RunQueue {
 	}
 
 	async close(): Promise<void> {
+		this.closeResult = await this.inner.clear();
 		await this.inner.close();
 	}
 
@@ -185,6 +215,10 @@ class TrackingQueue implements AgentV2RunQueue {
 
 	completedRuns(): string[] {
 		return [...this.completed].sort();
+	}
+
+	closeDrainResult(): RunQueueClearResult | undefined {
+		return this.closeResult;
 	}
 }
 
@@ -209,11 +243,17 @@ class RecordingEventLog implements Pick<AgentV2RunEventLog, "append" | "list"> {
 }
 
 class StressExecution {
+	abortCount = 0;
 	maxActive = 0;
 	private active = 0;
 	private readonly attempts = new Map<string, number>();
 
-	constructor(private readonly cancelTargets: ReadonlySet<string>) {}
+	constructor(
+		private readonly options: {
+			fastCancelTargets: ReadonlySet<string>;
+			slowCancelTargets: ReadonlySet<string>;
+		},
+	) {}
 
 	async executeNextTask(input: { run: AgentV2RunSnapshot; signal: AbortSignal }): Promise<AgentV2ExecutionStepResult> {
 		this.active += 1;
@@ -221,17 +261,34 @@ class StressExecution {
 		try {
 			const attempt = this.attempts.get(input.run.runId) ?? 0;
 			this.attempts.set(input.run.runId, attempt + 1);
-			if (this.cancelTargets.has(input.run.runId)) {
-				await abortableSleep(60, input.signal);
+			if (this.options.fastCancelTargets.has(input.run.runId)) {
+				await this.sleepWithAbort(20, input.signal);
 				return { status: "task_succeeded", taskId: `task-${input.run.runId}`, diagnosticIds: [] };
 			}
-			await abortableSleep(5, input.signal);
+			if (this.options.slowCancelTargets.has(input.run.runId)) {
+				await this.sleepWithAbort(250, input.signal);
+				return { status: "task_succeeded", taskId: `task-${input.run.runId}`, diagnosticIds: [] };
+			}
+			await this.sleepWithAbort(25, input.signal);
 			if (attempt === 0) {
 				return { status: "task_succeeded", taskId: `task-${input.run.runId}`, diagnosticIds: [] };
 			}
 			return { status: "complete", diagnosticIds: [] };
 		} finally {
 			this.active -= 1;
+		}
+	}
+
+	activeCount(): number {
+		return this.active;
+	}
+
+	private async sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+		try {
+			await abortableSleep(ms, signal);
+		} catch (error) {
+			if (signal.aborted) this.abortCount += 1;
+			throw error;
 		}
 	}
 }

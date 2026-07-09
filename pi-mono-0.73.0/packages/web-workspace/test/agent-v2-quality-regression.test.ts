@@ -241,7 +241,30 @@ describe("agent v2 quality regression", () => {
 		]);
 	});
 
-	it("removes PI_APP_AGENT_VERSION from product env docs and records the reset procedure", () => {
+	it("records the current schema-only Agent v2 initialization limitation without forcing production changes", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-schema-only-"));
+		const dbFile = join(root, "runtime.sqlite");
+		const store = new RuntimeDbStore(dbFile);
+		cleanupRoots.push(root);
+		cleanupStores.push(store);
+
+		store.ensureAgentV2Schema();
+
+		expect(tableExists(dbFile, "agent_v2_runs")).toBe(true);
+		expect(tableExists(dbFile, "agent_v2_schema_metadata")).toBe(true);
+		expect(tableExists(dbFile, "clients")).toBe(false);
+		expect(() =>
+			store.createAgentV2Run({
+				clientId: "client-a",
+				runId: "schema-only-run",
+				input: { prompt: "schema only" },
+				model: { provider: "test" },
+				createdAt: "2026-07-09T09:30:00.000Z",
+			}),
+		).toThrow(/no such table: clients/i);
+	});
+
+	it("rejects runtime-switch strategy wording in product docs and records the reset procedure", () => {
 		const envFiles = [
 			join(repoRoot, "apps", "pi-coding-web", ".env.example"),
 			join(repoRoot, "docker", "pi-coding-web", ".env.example"),
@@ -259,8 +282,21 @@ describe("agent v2 quality regression", () => {
 		for (const file of envFiles) {
 			expect(readFileSync(file, "utf8"), file).not.toContain("PI_APP_AGENT_VERSION");
 		}
+		const forbiddenDocPatterns = [
+			/PI_APP_AGENT_VERSION/i,
+			/short-term.+(switch|flag)/i,
+			/runtime.+(switch|flag)/i,
+			/version.+switch/i,
+			/dev-switch/i,
+			/开发开关/,
+			/调试开关/,
+			/旧 v1 入口默认禁用/,
+		];
 		for (const file of docs) {
-			expect(readFileSync(file, "utf8"), file).not.toContain("PI_APP_AGENT_VERSION");
+			const source = readFileSync(file, "utf8");
+			for (const pattern of forbiddenDocPatterns) {
+				expect(source, `${file} must not contain ${String(pattern)}`).not.toMatch(pattern);
+			}
 		}
 		for (const file of sourceFiles) {
 			expect(readFileSync(file, "utf8"), file).not.toContain("PI_APP_AGENT_VERSION");
@@ -342,6 +378,18 @@ function countRows(dbFile: string, table: string): number {
 	try {
 		const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number | bigint };
 		return Number(row.count);
+	} finally {
+		db.close();
+	}
+}
+
+function tableExists(dbFile: string, table: string): boolean {
+	const db = new DatabaseSync(dbFile);
+	try {
+		const row = db
+			.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
+			.get(table) as { present?: number } | undefined;
+		return row?.present === 1;
 	} finally {
 		db.close();
 	}

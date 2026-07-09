@@ -28,7 +28,7 @@ Phase 3 的 `agent-v2-runtime-core.ts` 已经提供 v2 runtime snapshot 和 task
 - 不兼容旧 agent 内部模块接口、旧 prompt 流程、旧 spec/plan/tasks 文件生成逻辑。
 - 不复用旧 preview goal continuation repair 逻辑。
 - 不迁移旧 run/session/message/app preview goal/diagnostic 测试数据。
-- 正式产品路径不存在运行时版本开关；Application Generation Agent v2 是唯一支持的运行时目标。
+- 正式产品路径只有 Application Generation Agent v2；旧 v1 代码不提供可选运行路径，只允许删除、隔离或旁路。
 - v2 correctness、diagnosability、task state machine、validation/repair loop 优先于旧路径兼容。
 - 旧模块如果不适合作为 infra adapter，Phase 4 应重构或新增 v2 adapter，而不是迁就复用。
 
@@ -331,7 +331,7 @@ Phase 5：
 
 - 新增 v2 worker adapter，实现 `WorkerAgent` 契约。
 - 替换 `createRunAgent` 默认路径。
-- 旧 v1 入口默认禁用，只允许极短期开发开关。
+- 旧 v1 入口只允许删除、隔离或停止部署；回滚通过重新部署上一版本并恢复备份完成。
 
 Phase 6：
 

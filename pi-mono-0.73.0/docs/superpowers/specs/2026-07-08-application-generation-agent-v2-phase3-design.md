@@ -15,7 +15,7 @@ Phase 3 does not integrate v2 into the old worker execution loop. It creates a c
   - `apps/pi-coding-web/src/runtime/context-orchestrator.ts`
   - old preview-goal continuation repair logic
 - If old application generation logic conflicts with v2 correctness, later phases may delete, isolate, or replace it. No long-term v1/v2 compatibility target exists.
-- No runtime version flag is part of the product path; Application Generation Agent v2 is the only supported runtime target.
+- Application Generation Agent v2 is the only supported runtime target. Older v1 code is not a selectable product path and may only be deleted, isolated, or bypassed.
 - v2 must not read legacy `sessions`, `messages`, `runs`, `run_events`, `app_preview_goals`, or preview-goal continuation data as v2 state.
 - v2 may reuse infrastructure adapters only through anti-corruption boundaries: RuntimeStore, diagnostics sink, run events, worker lifecycle, queue/cancel/live stream, static build/preview primitives.
 - Phase 3 must stay below execution/tool governance/validation/repair. It prepares the runtime core those later phases will consume.

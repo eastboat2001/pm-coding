@@ -13,12 +13,19 @@ const PHASE4_FILES = [
 ];
 
 const FORBIDDEN = [
+	"PI_APP_AGENT_VERSION",
 	"capability-planner",
 	"spec-artifact",
 	"context-orchestrator",
 	"preview-goal",
 	"app-preview-goal",
+	"buildSpecArtifact",
+	"SPEC_ARTIFACT_PROJECT_FILES",
+	"AppPreviewGoalSupervisor",
 	"createRunAgent",
+	"WorkspaceRunApiService",
+	"WorkspaceRunWorkerService",
+	"legacy-v1-main",
 	"selectApplicationGenerationRuntime",
 	"project_task",
 	"project_file",

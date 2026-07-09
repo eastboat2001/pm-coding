@@ -1,10 +1,5 @@
 import type { CapabilityPlan } from "../runtime/capability-planner.js";
 import type { PlatformContract } from "../runtime/platform-contract.js";
-import {
-	formatSpecArtifactForPrompt,
-	formatSpecExecutionContractForPrompt,
-	type SpecArtifact,
-} from "../runtime/spec-artifact.js";
 
 export type CodingSkillPromptInfo = {
 	name: string;
@@ -21,7 +16,6 @@ export type CodingSkillPromptInfo = {
 export interface CodingSystemPromptOptions {
 	platformContract?: PlatformContract;
 	capabilityPlan?: CapabilityPlan;
-	specArtifact?: SpecArtifact;
 }
 
 const BASE_SYSTEM_PROMPT = `You are a helpful AI coding assistant that creates directly previewable static projects in a configured server workspace.
@@ -55,10 +49,8 @@ export function buildCodingSystemPrompt(
 	options: CodingSystemPromptOptions = {},
 ): string {
 	const capabilitySection = formatCapabilitySection(options);
-	const specSection = options.specArtifact ? formatSpecArtifactForPrompt(options.specArtifact) : "";
-	const specExecutionSection = options.specArtifact ? formatSpecExecutionContractForPrompt(options.specArtifact) : "";
 	const skillsSection = formatSkillsForPrompt(skills);
-	const prompt = `${BASE_SYSTEM_PROMPT}${capabilitySection}${specSection}${specExecutionSection}`;
+	const prompt = `${BASE_SYSTEM_PROMPT}${capabilitySection}`;
 	return skillsSection ? `${prompt}${skillsSection}` : prompt;
 }
 

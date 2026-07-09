@@ -113,7 +113,6 @@ import {
 	shouldScheduleProviderStallStatusAfterRunEvent,
 } from "../runtime/run-transient-status.js";
 import { trimRecoverableProviderStallErrors } from "../runtime/runtime-message-conversion.js";
-import { type SpecArtifact, specArtifactDiagnosticData } from "../runtime/spec-artifact.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
@@ -462,7 +461,6 @@ let currentLastRunId: string | undefined;
 let currentRunStatus: RunStatus | undefined;
 let currentRunUpdatedAt: string | undefined;
 let currentCapabilityPlan: CapabilityPlan | undefined;
-let currentSpecArtifact: SpecArtifact | undefined;
 const remoteRunTransientStatusTexts: RunTransientStatusTexts = {};
 const reportedQueuedRunTimeouts = new Set<string>();
 const resumedInterruptedSessions = new Set<string>();
@@ -851,14 +849,13 @@ const ensureSessionIdentity = async () => {
 	await setCurrentSessionId(crypto.randomUUID());
 };
 
-const buildCurrentSystemPrompt = (capabilityPlan = currentCapabilityPlan, specArtifact = currentSpecArtifact) =>
+const buildCurrentSystemPrompt = (capabilityPlan = currentCapabilityPlan) =>
 	buildCodingSystemPrompt(
 		piRuntimeConfig.globalSkills,
 		capabilityPlan
 			? {
 					platformContract: STATIC_PREVIEW_CONTRACT,
 					capabilityPlan,
-					specArtifact,
 				}
 			: {},
 	);
@@ -1699,7 +1696,6 @@ const startRemotePrompt = async (
 
 	const previousMessages = agent.state.messages.slice();
 	const previousCapabilityPlan = currentCapabilityPlan;
-	const previousSpecArtifact = currentSpecArtifact;
 	const previousSystemPrompt = agent.state.systemPrompt;
 	const capabilityPlan = planCapabilities({
 		messages: [...previousMessages, ...messages],
@@ -1707,7 +1703,6 @@ const startRemotePrompt = async (
 		source: "browser",
 	});
 	currentCapabilityPlan = capabilityPlan;
-	currentSpecArtifact = undefined;
 	agent.state.systemPrompt = buildCurrentSystemPrompt(capabilityPlan);
 	writeCapabilityPlanDiagnostic(capabilityPlan);
 	agent.state.messages = [...previousMessages, message];
@@ -1735,7 +1730,6 @@ const startRemotePrompt = async (
 	} catch (error) {
 		agent.state.messages = previousMessages;
 		currentCapabilityPlan = previousCapabilityPlan;
-		currentSpecArtifact = previousSpecArtifact;
 		agent.state.systemPrompt = previousSystemPrompt;
 		if (pendingHandoffAppPreviewGoal) {
 			pendingHandoffAppPreviewGoal = false;
@@ -1824,7 +1818,6 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 				}),
 				{
 					capabilityPlan: currentCapabilityPlan,
-					specArtifact: currentSpecArtifact,
 					providerPayloadBudgetChars: providerBudget.providerPayloadBudgetChars,
 					providerPayloadFixedOverheadChars: providerBudget.providerPayloadFixedOverheadChars,
 					onCompaction: writeProjectContextCompactionDiagnostic,
@@ -1917,15 +1910,6 @@ function writeCapabilityPlanDiagnostic(capabilityPlan: CapabilityPlan): void {
 	});
 }
 
-function writeSpecArtifactDiagnostic(specArtifact: SpecArtifact): void {
-	writeDiagnosticEvent({
-		level: "info",
-		category: "model",
-		eventType: "model.spec_artifact",
-		data: specArtifactDiagnosticData(specArtifact),
-	});
-}
-
 function writeProjectContextPacketDiagnostic(decision: ContextOrchestratorDecision): void {
 	writeDiagnosticEvent({
 		level: "info",
@@ -1938,7 +1922,6 @@ function writeProjectContextPacketDiagnostic(decision: ContextOrchestratorDecisi
 const loadSession = async (sessionId: string): Promise<boolean> => {
 	pendingHandoffModelContext = undefined;
 	currentCapabilityPlan = undefined;
-	currentSpecArtifact = undefined;
 	pendingHandoffAppPreviewGoal = false;
 	manualAppPreviewGoalEnabled = false;
 	if (!storage.sessions) return false;
@@ -2036,7 +2019,6 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 const startFreshSession = async (persistImmediately = false) => {
 	pendingHandoffModelContext = undefined;
 	currentCapabilityPlan = undefined;
-	currentSpecArtifact = undefined;
 	currentAppPreviewGoal = undefined;
 	pendingHandoffAppPreviewGoal = false;
 	manualAppPreviewGoalEnabled = false;

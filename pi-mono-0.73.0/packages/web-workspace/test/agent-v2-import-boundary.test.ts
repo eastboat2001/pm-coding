@@ -15,12 +15,19 @@ const V2_RUNTIME_FILES = [
 ];
 
 const FORBIDDEN_IMPORT_FRAGMENTS = [
+	"PI_APP_AGENT_VERSION",
 	"capability-planner",
 	"spec-artifact",
 	"context-orchestrator",
 	"preview-goal",
 	"app-preview-goal",
+	"buildSpecArtifact",
+	"SPEC_ARTIFACT_PROJECT_FILES",
+	"AppPreviewGoalSupervisor",
 	"createRunAgent",
+	"WorkspaceRunApiService",
+	"WorkspaceRunWorkerService",
+	"legacy-v1-main",
 	"selectApplicationGenerationRuntime",
 ];
 

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 const denyStrings = [
+	"PI_APP_AGENT_VERSION",
 	"run-api-service",
 	"run-worker-service",
 	"app-preview-goal-service",
@@ -13,6 +14,8 @@ const denyStrings = [
 	"spec-artifact",
 	"context-orchestrator",
 	"preview-goal",
+	"buildSpecArtifact",
+	"SPEC_ARTIFACT_PROJECT_FILES",
 	"createRunAgent",
 	"RunEventSink",
 	"WorkspaceRunApiService",
@@ -95,6 +98,31 @@ describe("agent v2 production import boundary", () => {
 
 	it("deletes the legacy v1 worker entry", () => {
 		expect(existsSync(join(repoRoot, "apps", "pi-coding-web", "src", "worker", "legacy-v1-main.ts"))).toBe(false);
+	});
+
+	it("keeps browser-side v2 entrypoints free of legacy spec artifact and worker/api orchestration symbols", () => {
+		const browserFiles = [
+			join(repoRoot, "apps", "pi-coding-web", "src", "app", "bootstrap.ts"),
+			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "agent-v2-run-client.ts"),
+		];
+		const forbidden = [
+			"PI_APP_AGENT_VERSION",
+			"legacy-v1-main",
+			"buildSpecArtifact",
+			"SPEC_ARTIFACT_PROJECT_FILES",
+			"AppPreviewGoalSupervisor",
+			"createRunAgent",
+			"WorkspaceRunWorkerService",
+			"WorkspaceRunApiService",
+			"spec-artifact",
+		];
+
+		for (const file of browserFiles) {
+			const source = readFileSync(file, "utf8");
+			for (const denyString of forbidden) {
+				expect(source, `${toRepoPath(file)} must not reference ${denyString}`).not.toContain(denyString);
+			}
+		}
 	});
 });
 

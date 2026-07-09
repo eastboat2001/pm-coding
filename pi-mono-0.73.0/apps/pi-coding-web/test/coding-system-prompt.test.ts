@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { planCapabilities } from "../src/runtime/capability-planner.js";
 import { STATIC_PREVIEW_CONTRACT } from "../src/runtime/platform-contract.js";
@@ -125,5 +127,14 @@ describe("coding system prompt", () => {
 
 		expect(prompt).not.toContain("<spec_artifact>");
 		expect(prompt).not.toContain("<spec_execution_contract>");
+	});
+
+	it("does not import legacy spec artifact prompt builders", () => {
+		const source = readFileSync(join(import.meta.dirname, "../src/prompts/coding-system-prompt.ts"), "utf8");
+
+		expect(source).not.toContain("spec-artifact");
+		expect(source).not.toContain("formatSpecArtifactForPrompt");
+		expect(source).not.toContain("formatSpecExecutionContractForPrompt");
+		expect(source).not.toContain("specArtifact?:");
 	});
 });

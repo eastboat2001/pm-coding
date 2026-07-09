@@ -6,7 +6,6 @@ import {
 	prepareProjectContextMessages,
 } from "../project-tools/context-manifest.js";
 import type { CapabilityPlan } from "./capability-planner.js";
-import { buildSpecExecutionContract, type SpecArtifact } from "./spec-artifact.js";
 
 export interface ContextPacket {
 	schemaVersion: 1;
@@ -17,7 +16,6 @@ export interface ContextPacket {
 	openProblems: string[];
 	currentErrors: string[];
 	requiredRereads: string[];
-	specExecution?: ContextSpecExecution;
 	taskState: ContextTaskState;
 	nextBestStep: string;
 	compactedToolHistory: {
@@ -27,16 +25,8 @@ export interface ContextPacket {
 }
 
 export interface ContextTaskState {
-	specChecklist: string[];
 	validationFailures: string[];
 	lastValidationStatus?: string;
-}
-
-export interface ContextSpecExecution {
-	requiredReads: string[];
-	completedReads: string[];
-	missingReads: string[];
-	requiredBeforeImplementation: boolean;
 }
 
 export interface ContextOrchestratorDecision {
@@ -50,7 +40,6 @@ export interface ContextOrchestratorDecision {
 		requirementsSummary: boolean;
 		activeFileSet: boolean;
 		nextBestStep: boolean;
-		specExecution: boolean;
 		taskState: boolean;
 	};
 	compactions: ProjectContextCompactionSummary[];
@@ -65,7 +54,8 @@ export interface ContextOrchestrationResult {
 
 export interface ContextOrchestratorOptions extends ProjectContextPreparationOptions {
 	capabilityPlan?: CapabilityPlan;
-	specArtifact?: SpecArtifact;
+	currentObjective?: string;
+	requirementsSummary?: string[];
 	onDecision?: (decision: ContextOrchestratorDecision) => void;
 }
 
@@ -78,7 +68,7 @@ export async function prepareContextPacket(
 	messages: AgentMessage[],
 	options: ContextOrchestratorOptions = {},
 ): Promise<ContextOrchestrationResult> {
-	const packet = buildContextPacket(messages, options.capabilityPlan, options.specArtifact);
+	const packet = buildContextPacket(messages, options.capabilityPlan, options.currentObjective, options.requirementsSummary);
 	const messagesWithPacket = appendContextPacket(messages, packet);
 	const compactions: ProjectContextCompactionSummary[] = [];
 	const preparedMessages = await prepareProjectContextMessages(messagesWithPacket, {
@@ -99,8 +89,7 @@ export async function prepareContextPacket(
 			requirementsSummary: packet.requirementsSummary.length > 0,
 			activeFileSet: packet.activeFileSet.length > 0,
 			nextBestStep: packet.nextBestStep.length > 0,
-			specExecution: packet.specExecution !== undefined,
-			taskState: packet.taskState.specChecklist.length > 0 || packet.taskState.validationFailures.length > 0,
+			taskState: packet.taskState.validationFailures.length > 0,
 		},
 		compactions,
 		packet,
@@ -125,14 +114,14 @@ export function contextDecisionDiagnosticData(decision: ContextOrchestratorDecis
 function buildContextPacket(
 	messages: AgentMessage[],
 	capabilityPlan?: CapabilityPlan,
-	specArtifact?: SpecArtifact,
+	currentObjectiveOverride?: string,
+	requirementsSummaryOverride?: string[],
 ): ContextPacket {
-	const latestObjective = specArtifact?.objective || latestUserObjective(messages);
+	const latestObjective = normalizeWhitespace(currentObjectiveOverride ?? "") || latestUserObjective(messages);
 	const activeFileSet = collectActiveFiles(messages);
 	const currentErrors = collectCurrentErrors(messages);
 	const requiredRereads = collectRequiredRereads(messages);
-	const specExecution = specArtifact ? buildContextSpecExecution(messages, specArtifact) : undefined;
-	const taskState = buildContextTaskState(messages, specArtifact);
+	const taskState = buildContextTaskState(messages);
 	const designDecisions = capabilityPlan ? [capabilityDecisionText(capabilityPlan)] : [];
 	const openProblems = [
 		...(capabilityPlan?.requiresClarification ? ["Capability request needs clarification before execution."] : []),
@@ -140,25 +129,21 @@ function buildContextPacket(
 		...(taskState.validationFailures.length > 0
 			? ["Validation failures must be resolved before final preview."]
 			: []),
-		...(specExecution && specExecution.missingReads.length > 0
-			? ["Spec execution files must be read before implementation edits."]
-			: []),
 	];
 	return {
 		schemaVersion: 1,
 		currentObjective: latestObjective,
-		requirementsSummary: summarizeRequirements(latestObjective, specArtifact),
+		requirementsSummary: summarizeRequirements(latestObjective, requirementsSummaryOverride),
 		designDecisions,
 		activeFileSet,
 		openProblems,
 		currentErrors,
 		requiredRereads,
-		specExecution,
 		taskState,
-		nextBestStep: nextBestStep(activeFileSet, currentErrors, requiredRereads, taskState, specExecution),
+		nextBestStep: nextBestStep(activeFileSet, currentErrors, requiredRereads, taskState),
 		compactedToolHistory: {
 			strategy: "project_tool_history",
-			requiredRereadsBeforeEdit: requiredRereads.length > 0 || Boolean(specExecution?.missingReads.length),
+			requiredRereadsBeforeEdit: requiredRereads.length > 0,
 		},
 	};
 }
@@ -204,7 +189,6 @@ function formatContextPacket(packet: ContextPacket): string {
 		formatList("open_problems", packet.openProblems),
 		formatList("current_errors", packet.currentErrors),
 		formatList("required_rereads", packet.requiredRereads),
-		formatSpecExecution(packet.specExecution),
 		formatTaskState(packet.taskState),
 		`next_best_step: ${packet.nextBestStep}`,
 		`compacted_tool_history: ${packet.compactedToolHistory.strategy}; required_rereads_before_edit=${packet.compactedToolHistory.requiredRereadsBeforeEdit}`,
@@ -217,23 +201,11 @@ function formatList(label: string, values: string[]): string {
 	return [`${label}:`, ...values.map((value) => `- ${value}`)].join("\n");
 }
 
-function formatSpecExecution(specExecution: ContextSpecExecution | undefined): string {
-	if (!specExecution) return "spec_execution: none";
-	return [
-		"spec_execution:",
-		`required_before_implementation: ${specExecution.requiredBeforeImplementation}`,
-		formatList("required_spec_reads", specExecution.requiredReads),
-		formatList("completed_spec_reads", specExecution.completedReads),
-		formatList("missing_spec_reads", specExecution.missingReads),
-	].join("\n");
-}
-
 function formatTaskState(taskState: ContextTaskState): string {
-	if (taskState.specChecklist.length === 0 && taskState.validationFailures.length === 0) return "task_state: none";
+	if (taskState.validationFailures.length === 0) return "task_state: none";
 	return [
 		"task_state:",
 		taskState.lastValidationStatus ? `last_validation_status: ${taskState.lastValidationStatus}` : undefined,
-		formatList("spec_checklist", taskState.specChecklist),
 		formatList("validation_failures", taskState.validationFailures),
 	]
 		.filter((line): line is string => typeof line === "string")
@@ -250,11 +222,13 @@ function latestUserObjective(messages: AgentMessage[]): string {
 	return "";
 }
 
-function summarizeRequirements(objective: string, specArtifact?: SpecArtifact): string[] {
-	if (specArtifact?.requirements.length) {
-		return specArtifact.requirements
-			.map((requirement) => truncateText(requirement.text, MAX_TEXT_CHARS))
-			.slice(0, MAX_SUMMARY_ITEMS);
+function summarizeRequirements(objective: string, requirementsSummaryOverride?: string[]): string[] {
+	if (requirementsSummaryOverride?.length) {
+		return unique(
+			requirementsSummaryOverride
+				.map((item) => truncateText(normalizeWhitespace(item), MAX_TEXT_CHARS))
+				.filter(Boolean),
+		).slice(0, MAX_SUMMARY_ITEMS);
 	}
 	const parts = objective
 		.split(/(?:\r?\n|[.;])/)
@@ -304,27 +278,10 @@ function collectRequiredRereads(messages: AgentMessage[]): string[] {
 	return unique(rereads).slice(-MAX_ACTIVE_FILES);
 }
 
-function buildContextSpecExecution(messages: AgentMessage[], specArtifact: SpecArtifact): ContextSpecExecution {
-	const contract = buildSpecExecutionContract(specArtifact);
-	const completedReads = collectProjectFileReads(messages).filter((filename) =>
-		contract.requiredReads.some((required) => sameProjectPath(required, filename)),
-	);
-	const missingReads = contract.requiredReads.filter(
-		(required) => !completedReads.some((completed) => sameProjectPath(required, completed)),
-	);
-	return {
-		requiredReads: contract.requiredReads,
-		completedReads: unique(completedReads),
-		missingReads,
-		requiredBeforeImplementation: contract.requiredBeforeImplementation,
-	};
-}
-
-function buildContextTaskState(messages: AgentMessage[], specArtifact?: SpecArtifact): ContextTaskState {
+function buildContextTaskState(messages: AgentMessage[]): ContextTaskState {
 	const validationResults = collectValidationResults(messages);
 	const latestValidation = validationResults.at(-1);
 	return {
-		specChecklist: specArtifact?.taskChecklist ?? [],
 		validationFailures: latestValidation?.status === "failed" ? latestValidation.errors : [],
 		...(latestValidation?.status ? { lastValidationStatus: latestValidation.status } : {}),
 	};
@@ -366,20 +323,6 @@ function collectValidationResults(messages: AgentMessage[]): ValidationResult[] 
 	return results;
 }
 
-function collectProjectFileReads(messages: AgentMessage[]): string[] {
-	const reads: string[] = [];
-	for (const message of messages) {
-		if (message.role !== "assistant") continue;
-		for (const block of (message as AssistantMessage).content) {
-			if (block.type !== "toolCall" || block.name !== "project_file") continue;
-			if (readString(block.arguments, "command") !== "get") continue;
-			const filename = readString(block.arguments, "filename");
-			if (filename) reads.push(filename);
-		}
-	}
-	return unique(reads);
-}
-
 function capabilityDecisionText(plan: CapabilityPlan): string {
 	const unsupported = plan.unsupportedCapabilities.length > 0 ? plan.unsupportedCapabilities.join(",") : "none";
 	return `delivery_mode=${plan.deliveryMode}; unsupported_capabilities=${unsupported}; requires_static_simulation=${plan.requiresSimulation}`;
@@ -390,11 +333,7 @@ function nextBestStep(
 	currentErrors: string[],
 	requiredRereads: string[],
 	taskState: ContextTaskState,
-	specExecution?: ContextSpecExecution,
 ): string {
-	if (specExecution?.missingReads.length) {
-		return `Read spec execution files before implementation edits: ${specExecution.missingReads.join(", ")}`;
-	}
 	if (requiredRereads.length > 0) return `Read required files before editing: ${requiredRereads.join(", ")}`;
 	if (taskState.validationFailures.length > 0) {
 		return `Fix validation failures: ${taskState.validationFailures[0]}`;
@@ -476,10 +415,6 @@ function parseLineValue(text: string, label: string): string | undefined {
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function sameProjectPath(left: string, right: string): boolean {
-	return left.trim().replace(/\\/g, "/").toLowerCase() === right.trim().replace(/\\/g, "/").toLowerCase();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

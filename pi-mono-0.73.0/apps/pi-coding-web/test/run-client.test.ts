@@ -110,6 +110,24 @@ describe("run client", () => {
 		expect(bootstrapSource).not.toContain("tryDrainRemoteRunEvents");
 		expect(bootstrapSource).toContain("controller.markRunEventSeen(event);");
 	});
+
+	it("does not keep legacy spec artifact orchestration in bootstrap", () => {
+		const bootstrapSource = readFileSync(join(import.meta.dirname, "../src/app/bootstrap.ts"), "utf8");
+		const forbidden = [
+			"spec-artifact",
+			"currentSpecArtifact",
+			"writeSpecArtifactDiagnostic",
+			"buildSpecArtifact",
+			"SPEC_ARTIFACT_PROJECT_FILES",
+			"PI_APP_AGENT_VERSION",
+			"legacy-v1-main",
+			"createRunAgent",
+		];
+
+		for (const entry of forbidden) {
+			expect(bootstrapSource, `bootstrap.ts must not reference ${entry}`).not.toContain(entry);
+		}
+	});
 });
 
 function createStorage(clientId: string): Storage {

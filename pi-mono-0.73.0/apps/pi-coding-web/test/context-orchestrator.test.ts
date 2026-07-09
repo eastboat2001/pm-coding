@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { planCapabilities } from "../src/runtime/capability-planner.js";
 import { prepareContextPacket } from "../src/runtime/context-orchestrator.js";
 import { STATIC_PREVIEW_CONTRACT } from "../src/runtime/platform-contract.js";
-import { buildSpecArtifact } from "../src/runtime/spec-artifact.js";
 
 function userMessage(text: string): AgentMessage {
 	return {
@@ -238,13 +237,11 @@ describe("prepareContextPacket", () => {
 		});
 		const packetText = latestUserText(result.messages);
 
-		expect(packetText).toContain("spec_execution: none");
 		expect(packetText).not.toContain("docs/spec.md");
 		expect(packetText).not.toContain("docs/plan.md");
 		expect(packetText).not.toContain("docs/tasks.md");
 		expect(packetText).not.toContain("Read spec execution files before implementation edits");
-		expect(result.packet.specExecution).toBeUndefined();
-		expect(result.decision.retained.specExecution).toBe(false);
+		expect(packetText).not.toContain("spec_execution:");
 	});
 
 	it("keeps validation failures without requiring legacy spec checklist files", async () => {
@@ -274,12 +271,10 @@ describe("prepareContextPacket", () => {
 		const packetText = latestUserText(result.messages);
 
 		expect(packetText).toContain("task_state:");
-		expect(packetText).toContain("spec_checklist:");
 		expect(packetText).toContain("validation_failures:");
 		expect(packetText).toContain("Metric placeholder #kpiLots");
 		expect(packetText).toContain("loading element remained visible");
 		expect(packetText).toContain("next_best_step: Fix validation failures");
-		expect(result.packet.taskState.specChecklist).toEqual([]);
 		expect(result.packet.taskState.validationFailures).toEqual([
 			"Static preview quality gate: Metric placeholder #kpiLots starts as \"--\".",
 			"Static preview smoke gate: Runtime smoke gate: loading element remained visible.",
@@ -302,25 +297,12 @@ Project context:
 			platform: STATIC_PREVIEW_CONTRACT,
 			source: "test",
 		});
-		const specArtifact = {
-			...buildSpecArtifact({
-				messages,
-				capabilityPlan,
-				platform: STATIC_PREVIEW_CONTRACT,
-			}),
-			objective: "QDM Finished Lot Yield Dashboard",
-			requirements: [
-				{
-					id: "REQ-001",
-					kind: "data" as const,
-					text: "Render QDM finished lot yield KPI cards, trend charts, and defect Pareto analysis.",
-				},
-			],
-		};
-
 		const result = await prepareContextPacket(messages, {
 			capabilityPlan,
-			specArtifact,
+			currentObjective: "QDM Finished Lot Yield Dashboard",
+			requirementsSummary: [
+				"Render QDM finished lot yield KPI cards, trend charts, and defect Pareto analysis.",
+			],
 			providerPayloadBudgetChars: 20_000,
 		});
 		const packetText = latestUserText(result.messages);

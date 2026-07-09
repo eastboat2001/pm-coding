@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentV2RunEventRecord, AgentV2RunSnapshot, StartRunProjectFile } from "@mariozechner/pi-web-workspace";
 import {
@@ -192,6 +194,27 @@ describe("agent v2 run client", () => {
 		});
 		expect(requests[0]?.init?.method).toBe("GET");
 		expect(connection.lastSeq).toBe(2);
+	});
+
+	it("does not regress to legacy generation runtime symbols", () => {
+		const source = readFileSync(join(import.meta.dirname, "../src/runtime/agent-v2-run-client.ts"), "utf8");
+		const forbidden = [
+			"PI_APP_AGENT_VERSION",
+			"legacy-v1-main",
+			"buildSpecArtifact",
+			"SPEC_ARTIFACT_PROJECT_FILES",
+			"AppPreviewGoalSupervisor",
+			"createRunAgent",
+			"WorkspaceRunWorkerService",
+			"WorkspaceRunApiService",
+			"spec-artifact",
+			"/api/runtime/runs",
+			"/api/runs",
+		];
+
+		for (const entry of forbidden) {
+			expect(source, `agent-v2-run-client.ts must not reference ${entry}`).not.toContain(entry);
+		}
 	});
 });
 

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { DeleteSessionResult, RuntimeSessionDetail, RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import * as runClient from "../src/runtime/run-client.js";
 
@@ -92,6 +94,19 @@ describe("run client", () => {
 		expect(runClient).not.toHaveProperty("listRunEvents");
 		expect(runClient).not.toHaveProperty("connectRunEvents");
 		expect(runClient).not.toHaveProperty("buildAppPreviewGoalStartRequest");
+	});
+
+	it("uses v2 getRun rather than legacy session detail for active-run status settling", () => {
+		const bootstrapSource = readFileSync(join(import.meta.dirname, "../src/app/bootstrap.ts"), "utf8");
+		const syncStart = bootstrapSource.indexOf("const syncCurrentRunStatusFromServer");
+		const syncEnd = bootstrapSource.indexOf("function reportQueuedRunTimeoutIfNeeded");
+		const syncSource = bootstrapSource.slice(syncStart, syncEnd);
+
+		expect(bootstrapSource).toContain("getRun: async (runId: string) =>");
+		expect(bootstrapSource).toContain("if (isAgentV2LifecycleRunEvent(event)) {");
+		expect(syncSource).toContain("const run = await runClient.getRun(runId);");
+		expect(syncSource).not.toContain("const detail = await runClient.getSession(currentSessionId);");
+		expect(syncSource).not.toContain("const run = detail.runs.find((candidate) => candidate.runId === runId);");
 	});
 });
 

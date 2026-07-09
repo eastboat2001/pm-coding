@@ -14,7 +14,7 @@ import type { JsonObject, StorageConfig } from "../src/types.js";
 import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 
 const CLIENT_ID = "11111111-1111-4111-8111-111111111111";
-const PREFIX = "/api/runtime/agent-v2/runs";
+const PREFIX = "/api/agent-v2/runs";
 const LEGACY_RUN_API_PREFIXES = ["/api/runtime/runs", "/api/pi-runs", "/api/runs"] as const;
 const LEGACY_SESSION_API_PREFIXES = ["/api/pi-sessions"] as const;
 const cleanupRoots: string[] = [];

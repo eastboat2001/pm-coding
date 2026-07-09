@@ -4,6 +4,7 @@ import {
 	AGENT_V2_RUNS_API_PREFIX,
 	cancelAgentV2Run,
 	connectAgentV2RunEvents,
+	getAgentV2Run,
 	listAgentV2RunEvents,
 	startAgentV2Run,
 	type AgentV2RunEventConnection,
@@ -37,6 +38,8 @@ describe("agent v2 run client", () => {
 			startAgentV2Run({
 				sessionId: "session-1",
 				title: "Build dashboard",
+				prompt: "Build dashboard",
+				objective: "Ship a working dashboard",
 				message: { role: "user", content: "build it" },
 				attachments: [{ id: "attachment-1" }],
 				projectFiles,
@@ -52,6 +55,8 @@ describe("agent v2 run client", () => {
 				input: {
 					sessionId: "session-1",
 					title: "Build dashboard",
+					prompt: "Build dashboard",
+					objective: "Ship a working dashboard",
 					message: { role: "user", content: "build it" },
 					attachments: [{ id: "attachment-1" }],
 					projectFiles,
@@ -63,6 +68,26 @@ describe("agent v2 run client", () => {
 			"Content-Type": "application/json",
 			"X-PI-Client-ID": clientId,
 		});
+	});
+
+	it("reads individual runs through the agent v2 run API", async () => {
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				requests.push({ url: String(input), init });
+				return jsonResponse(createRunSnapshot({ status: "running", phase: "implementation" }));
+			}),
+		);
+
+		await expect(getAgentV2Run("run-1")).resolves.toEqual(
+			createRunSnapshot({ status: "running", phase: "implementation" }),
+		);
+
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe(`http://localhost:5173${AGENT_V2_RUNS_API_PREFIX}/run-1`);
+		expect(requests[0]?.init?.method).toBe("GET");
+		expect(requests[0]?.init?.headers).toMatchObject({ "X-PI-Client-ID": clientId });
 	});
 
 	it("cancels runs through the agent v2 run API", async () => {
@@ -224,7 +249,7 @@ function createRunSnapshot(overrides: Partial<AgentV2RunSnapshot> = {}): AgentV2
 		status: "queued",
 		phase: "intake",
 		attempt: 1,
-		input: { sessionId: "session-1", title: "Build dashboard" },
+		input: { sessionId: "session-1", title: "Build dashboard", prompt: "Build dashboard" },
 		model: {},
 		createdAt: "2026-06-09T00:00:00.000Z",
 		updatedAt: "2026-06-09T00:00:00.000Z",

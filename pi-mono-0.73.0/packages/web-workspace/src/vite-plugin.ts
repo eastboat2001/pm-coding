@@ -52,7 +52,7 @@ import { WorkspaceTaskService } from "./workspace-task-service.js";
 const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
 const LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS = 250;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
-const AGENT_V2_RUNS_API_PREFIX = "/api/runtime/agent-v2/runs";
+const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 const LEGACY_RUNTIME_RUNS_API_PREFIX = "/api/runtime/runs";
 const LEGACY_RUNS_API_PREFIX = "/api/runs";
 

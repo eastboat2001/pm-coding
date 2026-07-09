@@ -83,6 +83,7 @@ import { resolveActiveRunRestore, resumeInterruptedToolResultSession } from "../
 import {
 	cancelAgentV2Run,
 	connectAgentV2RunEvents,
+	getAgentV2Run,
 	listAgentV2RunEvents,
 	startAgentV2Run,
 	type AgentV2RunEventConnection as RunEventConnection,
@@ -163,6 +164,7 @@ import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessio
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running", "cancelling"]);
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
+const AGENT_V2_LIFECYCLE_EVENT_PREFIX = "agent_v2.";
 const EMPTY_USAGE: SessionMetadata["usage"] = {
 	input: 0,
 	output: 0,
@@ -214,6 +216,20 @@ function agentV2StatusToRunStatus(status: AgentV2RunSnapshot["status"]): RunStat
 	}
 }
 
+function agentV2LifecycleStatusToRunStatus(status: unknown): RunStatus | undefined {
+	if (status === "succeeded") return "completed";
+	if (status === "queued" || status === "running" || status === "cancelling") return status;
+	if (status === "failed" || status === "cancelled" || status === "interrupted") return status;
+	return undefined;
+}
+
+function agentV2LifecyclePhaseToRunStatus(phase: unknown): RunStatus | undefined {
+	if (phase === "delivery") return "completed";
+	if (phase === "failed") return "failed";
+	if (phase === "cancelled") return "cancelled";
+	return undefined;
+}
+
 function toTrackedRemoteRun(run: AgentV2RunSnapshot, sessionId: string): TrackedRemoteRun {
 	return {
 		runId: run.runId,
@@ -237,6 +253,22 @@ function toRuntimeRunEventRecord(event: AgentV2RunEventRecord, sessionId: string
 	};
 }
 
+function runEventPayloadType(event: RuntimeRunEventRecord): string | undefined {
+	return isRecord(event.payload) && typeof event.payload.type === "string" ? event.payload.type : undefined;
+}
+
+function isAgentV2LifecycleRunEvent(event: RuntimeRunEventRecord): boolean {
+	return (
+		event.type.startsWith(AGENT_V2_LIFECYCLE_EVENT_PREFIX) ||
+		runEventPayloadType(event)?.startsWith(AGENT_V2_LIFECYCLE_EVENT_PREFIX) === true
+	);
+}
+
+function runStatusFromAgentV2LifecycleEvent(event: RuntimeRunEventRecord): RunStatus | undefined {
+	if (!isRecord(event.payload)) return undefined;
+	return agentV2LifecycleStatusToRunStatus(event.payload.status) ?? agentV2LifecyclePhaseToRunStatus(event.payload.phase);
+}
+
 const runClient = {
 	cancelRun: async (runId: string) => toTrackedRemoteRun(await cancelAgentV2Run(runId), currentSessionId ?? ""),
 	connectRunEvents: (
@@ -246,6 +278,10 @@ const runClient = {
 		options = {},
 	) =>
 		connectAgentV2RunEvents(runId, afterSeq, (event) => onEvent(toRuntimeRunEventRecord(event, currentSessionId ?? "")), options),
+	getRun: async (runId: string) => {
+		const run = await getAgentV2Run(runId);
+		return run ? toTrackedRemoteRun(run, currentSessionId ?? "") : undefined;
+	},
 	getSession: getRuntimeSession,
 	disableAppPreviewGoal,
 	enableAppPreviewGoal,
@@ -1349,6 +1385,28 @@ function messageContentText(content: unknown): string {
 	return "";
 }
 
+function nonEmptyText(value: string | undefined): string | undefined {
+	return value?.trim() ? value.trim() : undefined;
+}
+
+function promptTextFromMessage(message: AgentMessage): string | undefined {
+	if (isRecord(message) && typeof message.llmContent === "string") {
+		const llmContent = nonEmptyText(message.llmContent);
+		if (llmContent) return llmContent;
+	}
+	return nonEmptyText(messageContentText((message as { content?: unknown }).content));
+}
+
+function latestPromptTextFromMessages(messages: AgentMessage[]): string | undefined {
+	for (const message of [...messages].reverse()) {
+		const role = (message as { role?: unknown }).role;
+		if (role !== "user" && role !== "user-with-attachments") continue;
+		const prompt = promptTextFromMessage(message);
+		if (prompt) return prompt;
+	}
+	return undefined;
+}
+
 function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
 	if ((message as { role?: unknown }).role !== "user-with-attachments") return message;
 	const attachments = (message as { attachments?: unknown }).attachments;
@@ -1371,8 +1429,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 	if (!currentSessionId) return false;
 
 	for (let attempt = 0; attempt < attempts; attempt++) {
-		const detail = await runClient.getSession(currentSessionId);
-		const run = detail.runs.find((candidate) => candidate.runId === runId);
+		const run = await runClient.getRun(runId);
 		if (!run) return false;
 
 		trackRemoteRun(run);
@@ -1503,8 +1560,40 @@ const applyConnectedRunEvent = async (event: RuntimeRunEventRecord): Promise<voi
 		setRemoteRunTransientStatusText("retry");
 	}
 
-	const payloadType =
-		isRecord(event.payload) && typeof event.payload.type === "string" ? event.payload.type : undefined;
+	const payloadType = runEventPayloadType(event);
+	if (isAgentV2LifecycleRunEvent(event)) {
+		const runStatus = runStatusFromAgentV2LifecycleEvent(event);
+		trackRemoteRun({
+			runId: event.runId,
+			status: runStatus ?? currentRunStatus ?? "running",
+			updatedAt: event.createdAt,
+		});
+		clearProviderStallStatusTimer();
+		setRemoteRunTransientStatusText("providerStalled");
+		if (!runStatus || !isTerminalRunStatus(runStatus)) {
+			scheduleProviderStallStatus(event.runId);
+		}
+		scheduleRemoteRunRender();
+		requestChatPanelUpdate();
+		refreshGeneratedAppsPanel();
+		if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+		if (runStatus && isTerminalRunStatus(runStatus)) {
+			const syncedTerminalStatus = await syncCurrentRunStatusFromServer(event.runId);
+			if (!syncedTerminalStatus) {
+				if (remoteAgentController?.activeRunId === event.runId) {
+					await remoteAgentController.settleRemoteRun(runStatus);
+				}
+				markRemoteRunSettled(event.runId, runStatus, event.createdAt);
+				await saveSession();
+				scheduleRemoteRunRender();
+				requestChatPanelUpdate();
+				refreshGeneratedAppsPanel({ force: true });
+				if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+			}
+		}
+		return;
+	}
+
 	await remoteAgentController.applyRunEvent(event);
 	if (shouldClearProviderStallStatusForRunEvent(payloadType)) {
 		clearProviderStallStatusTimer();
@@ -1619,9 +1708,12 @@ const startRemotePrompt = async (
 		const attachments = Array.isArray((message as { attachments?: unknown }).attachments)
 			? ((message as { attachments?: unknown[] }).attachments ?? [])
 			: undefined;
+		const title = sessionTitle(currentTitle, agent.state.messages);
+		const prompt = promptTextFromMessage(message) ?? title;
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId!,
-			title: sessionTitle(currentTitle, agent.state.messages),
+			title,
+			prompt,
 			message: message as Record<string, unknown>,
 			...(attachments ? { attachments } : {}),
 			model: agent.state.model as unknown as Record<string, unknown>,
@@ -1661,11 +1753,14 @@ const startRemotePrompt = async (
 const startRemoteContinuationRun = async (_parentRunId: string): Promise<void> => {
 	await ensureSessionIdentity();
 	const projectFiles = collectProjectFilesFromMessages(agent.state.messages);
+	const title = sessionTitle(currentTitle, agent.state.messages);
+	const prompt = latestPromptTextFromMessages(agent.state.messages) ?? title;
 	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
 	try {
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId!,
-			title: sessionTitle(currentTitle, agent.state.messages),
+			title,
+			prompt,
 			model: agent.state.model as unknown as Record<string, unknown>,
 			...(projectFiles.length > 0 ? { projectFiles } : {}),
 		});

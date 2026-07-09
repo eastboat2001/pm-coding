@@ -16,6 +16,8 @@ const RUN_EVENT_STREAM_RECONNECT_MS = 1000;
 export interface AgentV2BrowserStartRunRequest {
 	sessionId: string;
 	title: string;
+	prompt: string;
+	objective?: string;
 	message?: JsonObject;
 	attachments?: unknown[];
 	projectFiles?: StartRunProjectFile[];
@@ -42,6 +44,8 @@ export async function startAgentV2Run(request: AgentV2BrowserStartRunRequest): P
 	const input: Record<string, unknown> = {
 		sessionId: request.sessionId,
 		title: request.title,
+		prompt: request.prompt,
+		...(request.objective ? { objective: request.objective } : {}),
 		...(request.message ? { message: request.message } : {}),
 		...(request.attachments ? { attachments: request.attachments } : {}),
 		...(request.projectFiles ? { projectFiles: request.projectFiles } : {}),
@@ -53,6 +57,19 @@ export async function startAgentV2Run(request: AgentV2BrowserStartRunRequest): P
 			...(request.model !== undefined ? { model: request.model } : {}),
 		}),
 	});
+}
+
+export async function getAgentV2Run(runId: string): Promise<AgentV2RunSnapshot | undefined> {
+	try {
+		return await requestAgentV2RunApi<AgentV2RunSnapshot>(`${AGENT_V2_RUNS_API_PREFIX}/${encodeURIComponent(runId)}`, {
+			method: "GET",
+		});
+	} catch (error) {
+		if (error instanceof Error && error.message === "Agent v2 run not found.") {
+			return undefined;
+		}
+		throw error;
+	}
 }
 
 export async function cancelAgentV2Run(runId: string): Promise<AgentV2RunSnapshot> {

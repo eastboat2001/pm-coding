@@ -46,6 +46,7 @@ describe("InMemoryAgentV2RunEventBus", () => {
 
 		await expect(bus.publish(event(2))).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.read({ ...identity, afterSeq: 0 })).rejects.toThrow("Agent v2 run event bus is closed");
+		await expect(bus.purge({ clientId: "client-a" })).rejects.toThrow("Agent v2 run event bus is closed");
 	});
 
 	it("purges streams by client id", async () => {
@@ -108,6 +109,7 @@ describe("RedisAgentV2RunEventBus", () => {
 
 		await expect(bus.publish(event(1))).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.read({ ...identity, afterSeq: 0 })).rejects.toThrow("Agent v2 run event bus is closed");
+		await expect(bus.purge({ clientId: "client-a" })).rejects.toThrow("Agent v2 run event bus is closed");
 	});
 
 	it("purges a specific Redis stream without scanning", async () => {

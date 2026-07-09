@@ -142,6 +142,7 @@ describe("InMemoryRunQueue", () => {
 
 		await expect(queue.enqueue("r1")).rejects.toThrow("Run queue is closed");
 		await expect(queue.claim("w1", 1)).rejects.toThrow("Run queue is closed");
+		await expect(queue.clear()).rejects.toThrow("Run queue is closed");
 	});
 });
 
@@ -164,6 +165,16 @@ describe("RedisRunQueue", () => {
 			["pi:agent-v2:runs:active"],
 			["pi:agent-v2:runs:cancel:run-a", "pi:agent-v2:runs:cancel:run-b"],
 		]);
+	});
+
+	it("rejects clear after close", async () => {
+		const fake = new FakeRedisRunQueueClient();
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = new RedisRunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+
+		await queue.close();
+
+		await expect(queue.clear()).rejects.toThrow("Run queue is closed");
 	});
 });
 

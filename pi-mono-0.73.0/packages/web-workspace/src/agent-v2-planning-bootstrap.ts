@@ -22,7 +22,7 @@ import type {
 	AgentV2SpecDocument,
 	AgentV2TaskGraph,
 } from "./agent-v2-types.js";
-import type { RuntimeStore } from "./runtime-store.js";
+import type { AgentV2PlanningStore } from "./agent-v2-runtime-store.js";
 
 type TimestampFactory = () => string;
 
@@ -208,14 +208,7 @@ export function buildAgentV2PlanningBootstrap(input: {
 }
 
 export async function persistAgentV2PlanningBootstrap(
-	store: Pick<
-		RuntimeStore,
-		| "upsertAgentV2Document"
-		| "upsertAgentV2Task"
-		| "upsertAgentV2Artifact"
-		| "appendAgentV2Diagnostic"
-		| "listAgentV2Diagnostics"
-	>,
+	store: AgentV2PlanningStore,
 	bootstrap: AgentV2PlanningBootstrap,
 ): Promise<{
 	documents: AgentV2DocumentRecord[];

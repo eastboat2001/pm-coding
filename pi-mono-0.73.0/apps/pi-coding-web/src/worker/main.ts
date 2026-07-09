@@ -14,6 +14,8 @@ import {
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
 import {
 	createRuntimeStore,
+	type AgentV2SchemaStore,
+	type AgentV2WorkerStore,
 	type DiagnosticLogEventInput,
 	type JsonObject,
 	loadStorageConfig,
@@ -22,10 +24,11 @@ import {
 } from "@mariozechner/pi-web-workspace/runtime-infra";
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
-type WorkerRuntimeStore = ReturnType<typeof createRuntimeStore>;
+type WorkerV2Db = ReturnType<typeof createRuntimeStore>;
+type WorkerV2ExecutionStore = AgentV2SchemaStore & AgentV2WorkerStore & WorkerV2Db;
 
 export async function ensureRuntimeSchemas(
-	runtimeDb: Pick<WorkerRuntimeStore, "ensureAgentV2Schema">,
+	runtimeDb: AgentV2SchemaStore,
 ): Promise<void> {
 	await runtimeDb.ensureAgentV2Schema();
 }
@@ -53,7 +56,7 @@ export function createAgentV2WorkerExecution(config: StorageConfig): AgentV2Work
 			input: AgentV2WorkerExecutionInput,
 		): Promise<Awaited<ReturnType<typeof executeAgentV2NextTask>>> {
 			return await executeAgentV2NextTask({
-				store: input.store as WorkerRuntimeStore,
+				store: input.store as WorkerV2ExecutionStore,
 				config,
 				context: agentV2ContextFromRunInput(input.run),
 				runId: input.run.runId,
@@ -93,11 +96,11 @@ async function main(): Promise<void> {
 		],
 	});
 
-	let runtimeDb: WorkerRuntimeStore | undefined;
+	let runtimeDb: WorkerV2ExecutionStore | undefined;
 	let runEventBus: RedisAgentV2RunEventBus | undefined;
 	let worker: AgentV2WorkerService | undefined;
 	try {
-		runtimeDb = createRuntimeStore(config);
+		runtimeDb = createRuntimeStore(config) as WorkerV2ExecutionStore;
 		await ensureRuntimeSchemas(runtimeDb);
 
 		const options = createAgentV2WorkerRunEventOptions(config);
@@ -158,7 +161,7 @@ async function main(): Promise<void> {
 async function stopWorkerRuntime(input: {
 	worker?: AgentV2WorkerService;
 	runEventBus?: RedisAgentV2RunEventBus;
-	runtimeDb?: WorkerRuntimeStore;
+	runtimeDb?: WorkerV2Db;
 	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse">;
 }): Promise<number> {
 	let exitCode = 0;

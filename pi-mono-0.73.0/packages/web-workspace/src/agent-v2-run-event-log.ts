@@ -1,16 +1,16 @@
 import type { AgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import type { AgentV2RunEventReadRequest } from "./agent-v2-run-events.js";
+import type { AgentV2RunEventLogStore } from "./agent-v2-runtime-store.js";
 import type { AgentV2RunEventRecord, AppendAgentV2RunEventInput } from "./agent-v2-store.js";
-import type { RuntimeStore } from "./runtime-store.js";
 
 export interface AgentV2RunEventLogOptions {
-	store: Pick<RuntimeStore, "appendAgentV2RunEvent" | "listAgentV2RunEvents">;
+	store: AgentV2RunEventLogStore;
 	bus: AgentV2RunEventBus;
 }
 
 export class AgentV2RunEventLog {
 	private readonly bus: AgentV2RunEventBus;
-	private readonly store: Pick<RuntimeStore, "appendAgentV2RunEvent" | "listAgentV2RunEvents">;
+	private readonly store: AgentV2RunEventLogStore;
 
 	constructor(options: AgentV2RunEventLogOptions) {
 		this.store = options.store;

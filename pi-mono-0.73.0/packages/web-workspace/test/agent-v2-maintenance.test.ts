@@ -7,7 +7,7 @@ import {
 	clearAgentV2GeneratedProjectWorkspaces,
 	resetAgentV2Runtime,
 } from "../src/agent-v2-maintenance.js";
-import type { RuntimeStore } from "../src/runtime-store.js";
+import type { AgentV2ResetStore } from "../src/agent-v2-runtime-store.js";
 
 const STORE_RESULT = {
 	legacyRowsDeleted: { runs: 1 },
@@ -140,12 +140,12 @@ describe("agent v2 runtime reset maintenance", () => {
 });
 
 function createStore(): {
-	store: RuntimeStore;
+	store: AgentV2ResetStore;
 	resetAgentV2RuntimeData: ReturnType<typeof vi.fn>;
 } {
 	const resetAgentV2RuntimeData = vi.fn(async () => STORE_RESULT);
 	return {
-		store: { resetAgentV2RuntimeData } as unknown as RuntimeStore,
+		store: { resetAgentV2RuntimeData } as AgentV2ResetStore,
 		resetAgentV2RuntimeData,
 	};
 }

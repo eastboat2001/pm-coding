@@ -1,9 +1,9 @@
 import type {
-	MaybePromise,
-	RuntimeStore,
-	ResetAgentV2RuntimeDataOptions as RuntimeStoreResetOptions,
-	ResetAgentV2RuntimeDataResult as RuntimeStoreResetResult,
-} from "./runtime-store.js";
+	AgentV2ResetStore,
+	AgentV2ResetStoreOptions as RuntimeStoreResetOptions,
+	AgentV2ResetStoreResult as RuntimeStoreResetResult,
+	AgentV2StoreResult,
+} from "./agent-v2-runtime-store.js";
 
 export const AGENT_V2_RESET_CONFIRMATION = "application-generation-agent-v2";
 
@@ -17,10 +17,10 @@ export interface AgentV2ResetResult extends RuntimeStoreResetResult {
 }
 
 export interface AgentV2ResetDiagnosticsAdapter {
-	clearAgentV2Diagnostics?(): MaybePromise<number>;
+	clearAgentV2Diagnostics?(): AgentV2StoreResult<number>;
 }
 
-type SyncResetCapableStore = RuntimeStore & {
+type SyncResetCapableStore = AgentV2ResetStore & {
 	resetAgentV2RuntimeData(options?: RuntimeStoreResetOptions): RuntimeStoreResetResult;
 };
 
@@ -40,15 +40,15 @@ export function resetAgentV2RuntimeData(
 	diagnostics?: AgentV2ResetDiagnosticsAdapter,
 ): AgentV2ResetResult;
 export function resetAgentV2RuntimeData(
-	store: RuntimeStore,
+	store: AgentV2ResetStore,
 	options?: AgentV2ResetOptions,
 	diagnostics?: AgentV2ResetDiagnosticsAdapter,
-): MaybePromise<AgentV2ResetResult>;
+): AgentV2StoreResult<AgentV2ResetResult>;
 export function resetAgentV2RuntimeData(
-	store: RuntimeStore,
+	store: AgentV2ResetStore,
 	options: AgentV2ResetOptions = {},
 	diagnostics?: AgentV2ResetDiagnosticsAdapter,
-): MaybePromise<AgentV2ResetResult> {
+): AgentV2StoreResult<AgentV2ResetResult> {
 	assertAgentV2ResetConfirmation(options.confirmation);
 
 	const storeResult = store.resetAgentV2RuntimeData({
@@ -67,7 +67,7 @@ function finalizeResetResult(
 	storeResult: RuntimeStoreResetResult,
 	options: AgentV2ResetOptions,
 	diagnostics?: AgentV2ResetDiagnosticsAdapter,
-): MaybePromise<AgentV2ResetResult> {
+): AgentV2StoreResult<AgentV2ResetResult> {
 	const diagnosticsDeleted = options.includeDiagnostics ? diagnostics?.clearAgentV2Diagnostics?.() : undefined;
 	if (isPromiseLike(diagnosticsDeleted)) {
 		return diagnosticsDeleted.then((deleted) => withDiagnosticsDeleted(storeResult, deleted));
@@ -86,6 +86,6 @@ function withDiagnosticsDeleted(
 	};
 }
 
-function isPromiseLike<T>(value: MaybePromise<T> | undefined): value is Promise<T> {
+function isPromiseLike<T>(value: AgentV2StoreResult<T> | undefined): value is Promise<T> {
 	return typeof (value as { then?: unknown } | undefined)?.then === "function";
 }

@@ -7,13 +7,13 @@ import {
 	type AgentV2ResetDiagnosticsAdapter,
 	assertAgentV2ResetConfirmation,
 } from "./agent-v2-reset.js";
+import type { AgentV2ResetStore, AgentV2ResetStoreResult } from "./agent-v2-runtime-store.js";
 import type { RunQueueClearResult } from "./run-queue.js";
-import type { RuntimeStore, ResetAgentV2RuntimeDataResult } from "./runtime-store.js";
 
 export { AGENT_V2_RESET_CONFIRMATION };
 
 export interface AgentV2RuntimeResetOptions {
-	store: RuntimeStore;
+	store: AgentV2ResetStore;
 	queue?: Pick<AgentV2RunQueue, "clear">;
 	eventBus?: Pick<AgentV2RunEventBus, "purge">;
 	diagnostics?: AgentV2ResetDiagnosticsAdapter;
@@ -32,7 +32,7 @@ export interface AgentV2GeneratedProjectCleanupResult {
 }
 
 export interface AgentV2RuntimeResetResult {
-	store: ResetAgentV2RuntimeDataResult;
+	store: AgentV2ResetStoreResult;
 	queue?: RunQueueClearResult;
 	liveEvents?: AgentV2RunEventBusPurgeResult;
 	diagnosticsDeleted?: number;

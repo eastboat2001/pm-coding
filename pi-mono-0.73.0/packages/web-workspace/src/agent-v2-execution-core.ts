@@ -8,9 +8,9 @@ import {
 	assertAgentV2ToolAllowed,
 	createAgentV2ToolRegistry,
 } from "./agent-v2-tool-governance.js";
+import type { AgentV2ExecutionStore } from "./agent-v2-runtime-store.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "./agent-v2-types.js";
 import { type AgentV2ValidationGateContext, runAgentV2StaticValidationGate } from "./agent-v2-validation-gate.js";
-import type { RuntimeStore } from "./runtime-store.js";
 import type { StorageConfig } from "./types.js";
 
 export type AgentV2ExecutionStepStatus = "task_succeeded" | "task_failed" | "task_blocked" | "complete" | "no_task";
@@ -22,11 +22,7 @@ export interface AgentV2ExecutionStepResult {
 }
 
 export interface ExecuteAgentV2NextTaskInput {
-	store: AgentV2RuntimeStore &
-		Pick<
-			RuntimeStore,
-			"upsertAgentV2Artifact" | "upsertAgentV2Validation" | "appendAgentV2Diagnostic" | "upsertAgentV2Task"
-		>;
+	store: AgentV2RuntimeStore & AgentV2ExecutionStore;
 	config: StorageConfig;
 	context: AgentV2ValidationGateContext;
 	runId: string;

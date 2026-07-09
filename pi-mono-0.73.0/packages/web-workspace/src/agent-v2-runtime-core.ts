@@ -5,18 +5,9 @@ import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type { AgentV2ArtifactRecord, AgentV2DocumentRecord, UpsertAgentV2TaskInput } from "./agent-v2-store.js";
 import { type AgentV2TaskTransitionInput, transitionAgentV2Task } from "./agent-v2-task-engine.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "./agent-v2-types.js";
-import type { RuntimeStore } from "./runtime-store.js";
+import type { AgentV2RuntimeSnapshotStore } from "./agent-v2-runtime-store.js";
 
-export type AgentV2RuntimeStore = Pick<
-	RuntimeStore,
-	| "getAgentV2Run"
-	| "listAgentV2Tasks"
-	| "listAgentV2Artifacts"
-	| "listAgentV2Documents"
-	| "listAgentV2Diagnostics"
-	| "upsertAgentV2Task"
-	| "appendAgentV2Diagnostic"
->;
+export type AgentV2RuntimeStore = AgentV2RuntimeSnapshotStore;
 
 export interface AgentV2RuntimeSnapshot {
 	run: AgentV2RunSnapshot;

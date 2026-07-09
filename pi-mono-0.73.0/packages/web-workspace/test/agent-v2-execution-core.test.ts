@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { executeAgentV2NextTask } from "../src/agent-v2-execution-core.js";
 import { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap } from "../src/agent-v2-planning-bootstrap.js";
+import type { AgentV2ExecutionStore } from "../src/agent-v2-runtime-store.js";
 import { createAgentV2ToolRegistry } from "../src/agent-v2-tool-governance.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
-import type { RuntimeStore } from "../src/runtime-store.js";
 import type { StorageConfig } from "../src/types.js";
 
 const cleanupRoots: string[] = [];
@@ -484,7 +484,7 @@ function projectFile(root: string, relativePath: string): string {
 	return join(root, "data", "clients", "client-a", "sessions", "session-a", "project", ...relativePath.split("/"));
 }
 
-function forbidLegacyRuntimeReads(store: RuntimeDbStore): RuntimeStore {
+function forbidLegacyRuntimeReads(store: RuntimeDbStore): AgentV2ExecutionStore {
 	const legacyReadMethods = new Set([
 		"getSession",
 		"listSessions",
@@ -523,7 +523,7 @@ function forbidLegacyRuntimeReads(store: RuntimeDbStore): RuntimeStore {
 			}
 			return Reflect.get(target, property, receiver);
 		},
-	}) as RuntimeStore;
+	}) as AgentV2ExecutionStore;
 }
 
 function testConfig(root: string): StorageConfig {

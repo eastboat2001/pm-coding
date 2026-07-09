@@ -3,9 +3,9 @@ import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "./agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "./agent-v2-run-queue.js";
+import type { AgentV2WorkerStore } from "./agent-v2-runtime-store.js";
 import type { AgentV2RunUpdateResult } from "./agent-v2-store.js";
 import type { AgentV2Phase, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
-import type { RuntimeStore } from "./runtime-store.js";
 
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 50;
@@ -13,14 +13,7 @@ const DEFAULT_IDLE_SLEEP_MS = 25;
 const DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_STEPS_PER_RUN = 256;
 
-export type AgentV2WorkerStore = Pick<
-	RuntimeStore,
-	| "getAgentV2Run"
-	| "updateAgentV2Run"
-	| "updateAgentV2RunWithResult"
-	| "appendAgentV2Diagnostic"
-	| "listAgentV2RunsByWorker"
->;
+export type { AgentV2WorkerStore } from "./agent-v2-runtime-store.js";
 
 export interface AgentV2WorkerExecutionInput {
 	store: AgentV2WorkerStore;

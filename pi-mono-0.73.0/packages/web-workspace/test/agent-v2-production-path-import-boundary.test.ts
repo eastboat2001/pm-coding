@@ -89,6 +89,11 @@ const legacyRootRuntimeExports = [
 
 const allowedLegacyFiles = new Set<string>();
 const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts";
+const allowedRuntimeStoreImportFiles = new Set([
+	"packages/web-workspace/src/runtime-db.ts",
+	"packages/web-workspace/src/postgres-runtime-store.ts",
+	"packages/web-workspace/src/runtime-store-factory.ts",
+]);
 
 describe("agent v2 production import boundary", () => {
 	it("does not expose legacy v1 product services through the root package barrel", () => {
@@ -131,6 +136,18 @@ describe("agent v2 production import boundary", () => {
 		expect(source).not.toMatch(/\bRuntimeStore\b/);
 		expect(source).not.toContain("./runtime-store.js");
 		expect(source).toContain("createRedisAgentV2RunQueue");
+	});
+
+	it("keeps v2 production contracts independent from the legacy RuntimeStore interface", () => {
+		const violations = productionV2Files()
+			.map(toRepoPath)
+			.filter((file) => !allowedRuntimeStoreImportFiles.has(file))
+			.filter((file) => {
+				const source = readFileSync(join(repoRoot, file), "utf8");
+				return source.includes("./runtime-store.js") || /\bRuntimeStore\b/.test(source);
+			});
+
+		expect(violations).toEqual([]);
 	});
 
 	it("keeps production v2 files independent from legacy v1 generation internals", () => {

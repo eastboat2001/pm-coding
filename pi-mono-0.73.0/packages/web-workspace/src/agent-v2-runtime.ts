@@ -4,6 +4,21 @@ export {
 	type ExecuteAgentV2NextTaskInput,
 	executeAgentV2NextTask,
 } from "./agent-v2-execution-core.js";
+export type {
+	AgentV2DiagnosticExportStore,
+	AgentV2ExecutionStore,
+	AgentV2PlanningStore,
+	AgentV2ResetStore,
+	AgentV2ResetStoreOptions,
+	AgentV2ResetStoreResult,
+	AgentV2RunApiStore,
+	AgentV2RunEventLogStore,
+	AgentV2RuntimeSnapshotStore,
+	AgentV2SchemaStore,
+	AgentV2StoreResult,
+	AgentV2WorkerStore,
+	MaybeAsyncIterable,
+} from "./agent-v2-runtime-store.js";
 export {
 	type AgentV2RunEventBus,
 	agentV2RunEventStreamKey,
@@ -34,5 +49,4 @@ export {
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
 	type AgentV2WorkerServiceOptions,
-	type AgentV2WorkerStore,
 } from "./agent-v2-worker-service.js";

@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
+import type { AgentV2DiagnosticExportStore } from "../src/agent-v2-runtime-store.js";
 import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot } from "../src/agent-v2-types.js";
 import { loadStorageConfig } from "../src/config.js";
 import { WorkspaceDiagnosticExportService } from "../src/diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "../src/diagnostic-log-service.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
-import type { RuntimeStore } from "../src/runtime-store.js";
 import { WorkspaceSessionService } from "../src/workspace-session-service.js";
 
 describe("WorkspaceDiagnosticExportService", () => {
@@ -492,7 +492,7 @@ function createV2OnlyRuntimeStore(
 		runEventsByRunId?: Record<string, AgentV2RunEventRecord[]>;
 		diagnosticsByRunId?: Record<string, AgentV2DiagnosticEvent[]>;
 	} = {},
-): RuntimeStore {
+): AgentV2DiagnosticExportStore {
 	const runs = options.runs ?? [];
 	const runEventsByRunId = options.runEventsByRunId ?? {};
 	const diagnosticsByRunId = options.diagnosticsByRunId ?? {};
@@ -500,58 +500,10 @@ function createV2OnlyRuntimeStore(
 		throw new Error(`legacy runtime method called: ${name}`);
 	};
 	return {
-		ensureSchema: legacy("ensureSchema"),
-		ensureAgentV2Schema: () => undefined,
-		close: () => undefined,
-		upsertClient: () => undefined,
-		createSession: legacy("createSession"),
-		listSessions: legacy("listSessions"),
-		getSession: legacy("getSession"),
-		updateSessionTitle: legacy("updateSessionTitle"),
-		appendMessage: legacy("appendMessage"),
-		listMessages: legacy("listMessages"),
-		getSessionMessageStats: legacy("getSessionMessageStats"),
-		iterateMessages: legacy("iterateMessages"),
-		getRun: legacy("getRun"),
-		getRunById: legacy("getRunById"),
-		listRuns: legacy("listRuns"),
-		listRunsForSession: legacy("listRunsForSession"),
-		listRunsByStatus: legacy("listRunsByStatus"),
-		listRunningRunsByWorker: legacy("listRunningRunsByWorker"),
-		createRun: legacy("createRun"),
-		createContinuationRun: legacy("createContinuationRun"),
-		createRunWithMessage: legacy("createRunWithMessage"),
-		updateRunStatus: legacy("updateRunStatus"),
-		appendRunEvent: legacy("appendRunEvent"),
-		listRunEvents: legacy("listRunEvents"),
-		iterateRunEvents: legacy("iterateRunEvents"),
-		getLatestRunCheckpoint: legacy("getLatestRunCheckpoint"),
-		upsertAppPreviewGoal: legacy("upsertAppPreviewGoal"),
-		getAppPreviewGoal: legacy("getAppPreviewGoal"),
-		updateAppPreviewGoal: legacy("updateAppPreviewGoal"),
-		appendAppPreviewGoalEvent: legacy("appendAppPreviewGoalEvent"),
-		listAppPreviewGoalEvents: legacy("listAppPreviewGoalEvents"),
-		createAgentV2Run: legacy("createAgentV2Run"),
 		getAgentV2Run: (_clientId: string, runId: string) => runs.find((run) => run.runId === runId),
 		listAgentV2Runs: () => runs,
-		listAgentV2RunsByWorker: legacy("listAgentV2RunsByWorker"),
-		updateAgentV2Run: legacy("updateAgentV2Run"),
-		updateAgentV2RunWithResult: legacy("updateAgentV2RunWithResult"),
-		appendAgentV2RunEvent: legacy("appendAgentV2RunEvent"),
 		listAgentV2RunEvents: (_clientId: string, runId: string, afterSeq: number) =>
 			(runEventsByRunId[runId] ?? []).filter((event) => event.seq > afterSeq),
-		upsertAgentV2Task: legacy("upsertAgentV2Task"),
-		listAgentV2Tasks: legacy("listAgentV2Tasks"),
-		upsertAgentV2Artifact: legacy("upsertAgentV2Artifact"),
-		listAgentV2Artifacts: legacy("listAgentV2Artifacts"),
-		upsertAgentV2Document: legacy("upsertAgentV2Document"),
-		listAgentV2Documents: legacy("listAgentV2Documents"),
-		upsertAgentV2Validation: legacy("upsertAgentV2Validation"),
-		listAgentV2Validations: legacy("listAgentV2Validations"),
-		getAgentV2Document: legacy("getAgentV2Document"),
-		appendAgentV2Diagnostic: legacy("appendAgentV2Diagnostic"),
 		listAgentV2Diagnostics: (_clientId: string, runId: string) => diagnosticsByRunId[runId] ?? [],
-		resetAgentV2RuntimeData: legacy("resetAgentV2RuntimeData"),
-		deleteSession: legacy("deleteSession"),
-	} as unknown as RuntimeStore;
+	};
 }

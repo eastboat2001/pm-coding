@@ -1,8 +1,8 @@
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import type { AgentV2DiagnosticExportStore, MaybeAsyncIterable } from "./agent-v2-runtime-store.js";
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
 import type { AgentV2RunSnapshot } from "./agent-v2-types.js";
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
-import type { MaybeAsyncIterable, RuntimeStore } from "./runtime-store.js";
 import type {
 	DiagnosticLogEventRecord,
 	DiagnosticLogExportQuery,
@@ -89,7 +89,7 @@ interface TimelineRecord extends JsonObject {
 
 export class WorkspaceDiagnosticExportService {
 	constructor(
-		private readonly runtimeDb: RuntimeStore,
+		private readonly runtimeDb: AgentV2DiagnosticExportStore,
 		private readonly diagnostics: WorkspaceDiagnosticLogService,
 		private readonly sessions: WorkspaceSessionService,
 	) {}
@@ -269,7 +269,7 @@ export class WorkspaceDiagnosticExportService {
 }
 
 async function collectAgentV2RunEvents(
-	runtimeDb: RuntimeStore,
+	runtimeDb: AgentV2DiagnosticExportStore,
 	clientId: string,
 	runs: AgentV2RunSnapshot[],
 ): Promise<Record<string, AgentV2RunEventRecord[]>> {
@@ -281,7 +281,7 @@ async function collectAgentV2RunEvents(
 }
 
 async function collectAgentV2Diagnostics(
-	runtimeDb: RuntimeStore,
+	runtimeDb: AgentV2DiagnosticExportStore,
 	clientId: string,
 	runs: AgentV2RunSnapshot[],
 ): Promise<Record<string, AgentV2DiagnosticEvent[]>> {
@@ -297,7 +297,7 @@ async function buildDiagnosticOverview(input: {
 	diagnostics: WorkspaceDiagnosticLogService;
 	exportedAt: string;
 	maxDiagnosticEvents?: number;
-	runtimeDb: RuntimeStore;
+	runtimeDb: AgentV2DiagnosticExportStore;
 }): Promise<JsonObject> {
 	const allDiagnostics = Array.from(
 		input.diagnostics.iterateExportEvents(diagnosticContextQuery(input.context, input.maxDiagnosticEvents)),
@@ -348,7 +348,7 @@ async function buildDiagnosticOverview(input: {
 }
 
 async function buildRunOverviews(
-	runtimeDb: RuntimeStore,
+	runtimeDb: AgentV2DiagnosticExportStore,
 	context: DiagnosticExportContext,
 	diagnosticEvents: DiagnosticLogEventRecord[],
 	agentV2DiagnosticsByRunId: Record<string, AgentV2DiagnosticEvent[]>,
@@ -587,7 +587,7 @@ async function buildDiagnosticTimeline(input: {
 	context: DiagnosticExportContext;
 	diagnostics: WorkspaceDiagnosticLogService;
 	maxDiagnosticEvents?: number;
-	runtimeDb: RuntimeStore;
+	runtimeDb: AgentV2DiagnosticExportStore;
 }): Promise<TimelineRecord[]> {
 	const records: TimelineRecord[] = [];
 	let order = 0;

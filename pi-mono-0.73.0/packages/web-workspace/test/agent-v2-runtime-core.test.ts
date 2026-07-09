@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap } from "../src/agent-v2-planning-bootstrap.js";
 import { advanceAgentV2Task, loadAgentV2RuntimeSnapshot } from "../src/agent-v2-runtime-core.js";
+import type { AgentV2RuntimeSnapshotStore } from "../src/agent-v2-runtime-store.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
-import type { RuntimeStore } from "../src/runtime-store.js";
 
 describe("agent v2 runtime core", () => {
 	const cleanupRoots: string[] = [];
@@ -278,7 +278,7 @@ function createTempRuntimeDbStoreWithV2Schema(cleanupRoots: string[], cleanupSto
 function forbidLegacyRuntimeReads(
 	store: RuntimeDbStore,
 	options: { failAgentV2DiagnosticWrites?: boolean } = {},
-): RuntimeStore {
+): AgentV2RuntimeSnapshotStore {
 	const legacyReadMethods = new Set([
 		"getSession",
 		"listSessions",
@@ -322,5 +322,5 @@ function forbidLegacyRuntimeReads(
 			}
 			return Reflect.get(target, property, receiver);
 		},
-	}) as RuntimeStore;
+	}) as AgentV2RuntimeSnapshotStore;
 }

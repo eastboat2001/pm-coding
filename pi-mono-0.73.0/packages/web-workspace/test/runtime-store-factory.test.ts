@@ -41,7 +41,7 @@ describe("createRuntimeStore", () => {
 		expect(store).toBeInstanceOf(RuntimeDbStore);
 	});
 
-	it("resets v2 runtime data without reading stale legacy runtime rows", () => {
+	it("resets v2 runtime data through the SQLite reset rehearsal path", () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-reset-rehearsal-"));
 		let store: RuntimeDbStore | undefined;
 		try {

@@ -162,7 +162,7 @@ async function main(): Promise<void> {
 	}
 }
 
-async function stopWorkerRuntime(input: {
+export async function stopWorkerRuntime(input: {
 	worker?: AgentV2WorkerService;
 	agentV2RunEventBus?: RedisAgentV2RunEventBus;
 	runtimeDb?: WorkerV2Db;
@@ -244,7 +244,7 @@ export function createWorkerStartupDiagnosticEvents(config: StorageConfig): Diag
 	return events;
 }
 
-function installWorkerFatalDiagnostics(
+export function installWorkerFatalDiagnostics(
 	config: StorageConfig,
 	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse" | "writeEvents">,
 ): () => void {

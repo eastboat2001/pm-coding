@@ -312,6 +312,17 @@ describe("RemoteAgentController", () => {
 		expect(agent.state.messages).toEqual([assistantMessage]);
 	});
 
+	it("marks non-agent runtime events as seen without applying them to the agent", async () => {
+		const agent = createFakeRemoteAgent();
+		const controller = new RemoteAgentController(agent as never);
+
+		controller.startRemoteRun("r1");
+		controller.markRunEventSeen(createRunEventRecord(4, "r1", { type: "agent_v2.phase_changed" }));
+
+		expect(controller.lastSeq).toBe(4);
+		expect(agent.appliedEvents).toEqual([]);
+	});
+
 	it("reports missed event drain failures without preventing terminal settle", async () => {
 		const agent = createFakeRemoteAgent();
 		const controller = new RemoteAgentController(agent as never);

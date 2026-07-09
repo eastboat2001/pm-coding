@@ -107,6 +107,8 @@ describe("run client", () => {
 		expect(syncSource).toContain("const run = await runClient.getRun(runId);");
 		expect(syncSource).not.toContain("const detail = await runClient.getSession(currentSessionId);");
 		expect(syncSource).not.toContain("const run = detail.runs.find((candidate) => candidate.runId === runId);");
+		expect(bootstrapSource).not.toContain("tryDrainRemoteRunEvents");
+		expect(bootstrapSource).toContain("controller.markRunEventSeen(event);");
 	});
 });
 

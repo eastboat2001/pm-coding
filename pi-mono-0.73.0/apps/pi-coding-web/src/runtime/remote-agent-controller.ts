@@ -107,6 +107,16 @@ export class RemoteAgentController {
 		this._lastSeq = Math.max(this._lastSeq, afterSeq);
 	}
 
+	markRunEventSeen(event: Pick<RuntimeRunEventRecord, "runId" | "seq">): void {
+		if (!this._activeRunId) {
+			throw new Error("startRemoteRun() must be called before markRunEventSeen().");
+		}
+		if (event.runId !== this._activeRunId) {
+			throw new Error(`Remote run event ${event.runId} does not match active run ${this._activeRunId}.`);
+		}
+		this._lastSeq = Math.max(this._lastSeq, event.seq);
+	}
+
 	async finishRemoteRun(status: RunStatus): Promise<void> {
 		if (!this._activeRunId) throw new Error("No active remote run to finish.");
 		if (!TERMINAL_RUN_STATUSES.has(status)) throw new Error(`Remote run status ${status} is not terminal.`);

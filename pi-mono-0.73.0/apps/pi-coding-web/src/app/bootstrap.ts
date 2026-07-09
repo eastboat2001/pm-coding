@@ -77,7 +77,6 @@ import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } fr
 import {
 	RemoteAgentController,
 	type RemoteRunEventDrainResult,
-	tryDrainRemoteRunEvents,
 } from "../runtime/remote-agent-controller.js";
 import { resolveActiveRunRestore, resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import {
@@ -1422,7 +1421,21 @@ function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
 const drainCurrentRemoteRunEvents = async (runId: string): Promise<RemoteRunEventDrainResult | undefined> => {
 	const controller = remoteAgentController;
 	if (!controller || controller.activeRunId !== runId) return;
-	return await tryDrainRemoteRunEvents(runId, controller, runClient.listRunEvents);
+	const afterSeq = controller.lastSeq;
+	try {
+		const events = await runClient.listRunEvents(runId, controller.lastSeq);
+		for (const event of [...events].sort((left, right) => left.seq - right.seq)) {
+			if (controller.activeRunId !== runId) return { ok: true, afterSeq: controller.lastSeq };
+			if (isAgentV2LifecycleRunEvent(event)) {
+				controller.markRunEventSeen(event);
+				continue;
+			}
+			await controller.applyRunEvent(event);
+		}
+		return { ok: true, afterSeq: controller.lastSeq };
+	} catch (error) {
+		return { ok: false, afterSeq, error };
+	}
 };
 
 const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, intervalMs = 200): Promise<boolean> => {

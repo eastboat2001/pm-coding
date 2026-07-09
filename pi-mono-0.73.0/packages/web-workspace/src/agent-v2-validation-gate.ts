@@ -25,6 +25,7 @@ export interface RunAgentV2StaticValidationGateInput {
 	now: string;
 	tasks?: AgentV2ValidationTaskRunner;
 	toolRegistry?: AgentV2ToolRegistry;
+	signal?: AbortSignal;
 }
 
 export type AgentV2ValidationFailure = AgentV2ToolFailure & {
@@ -46,29 +47,44 @@ export async function runAgentV2StaticValidationGate(
 	assertAgentV2ToolAllowed(registry, "validation.static_quality", "validation");
 	assertAgentV2ToolAllowed(registry, "validation.static_smoke", "validation");
 
-	const initialTaskResult = await tasks.run({
-		clientId: input.context.clientId,
-		sessionId: input.context.sessionId,
-		title: input.context.title,
-		task: "validate",
-	});
+	throwIfAborted(input.signal);
+	const initialTaskResult = await tasks.run(
+		{
+			clientId: input.context.clientId,
+			sessionId: input.context.sessionId,
+			title: input.context.title,
+			task: "validate",
+		},
+		undefined,
+		input.signal,
+	);
 	const initialRawErrors = rawErrorsFor(initialTaskResult);
 	let buildResult: ProjectTaskResult | undefined;
 	let taskResult = initialTaskResult;
 	if (initialRawErrors.some(isBuildRequiredMessage)) {
 		assertAgentV2ToolAllowed(registry, "validation.static_build", "validation");
-		buildResult = await tasks.run({
-			clientId: input.context.clientId,
-			sessionId: input.context.sessionId,
-			title: input.context.title,
-			task: "build_static",
-		});
-		taskResult = await tasks.run({
-			clientId: input.context.clientId,
-			sessionId: input.context.sessionId,
-			title: input.context.title,
-			task: "validate",
-		});
+		throwIfAborted(input.signal);
+		buildResult = await tasks.run(
+			{
+				clientId: input.context.clientId,
+				sessionId: input.context.sessionId,
+				title: input.context.title,
+				task: "build_static",
+			},
+			undefined,
+			input.signal,
+		);
+		throwIfAborted(input.signal);
+		taskResult = await tasks.run(
+			{
+				clientId: input.context.clientId,
+				sessionId: input.context.sessionId,
+				title: input.context.title,
+				task: "validate",
+			},
+			undefined,
+			input.signal,
+		);
 	}
 	const rawErrors = rawErrorsFor(taskResult);
 	const failures = rawErrors.map((message) => classifyStaticValidationFailure(message, input.taskId));
@@ -378,4 +394,9 @@ function scriptPath(value: string): string | undefined {
 
 function normalizePath(value: string): string {
 	return value.replace(/\\/g, "/");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+	if (!signal?.aborted) return;
+	throw signal.reason ?? new Error("Agent v2 validation was aborted.");
 }

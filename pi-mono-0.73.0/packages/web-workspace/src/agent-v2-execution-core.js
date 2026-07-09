@@ -6,12 +6,14 @@ import { advanceAgentV2Task, loadAgentV2RuntimeSnapshot } from "./agent-v2-runti
 import { assertAgentV2ToolAllowed, createAgentV2ToolRegistry, } from "./agent-v2-tool-governance.js";
 import { runAgentV2StaticValidationGate } from "./agent-v2-validation-gate.js";
 export async function executeAgentV2NextTask(input) {
+    throwIfAborted(input.signal);
     const now = input.now?.() ?? new Date().toISOString();
     const snapshot = await loadAgentV2RuntimeSnapshot({
         store: input.store,
         clientId: input.context.clientId,
         runId: input.runId,
     });
+    throwIfAborted(input.signal);
     const selection = snapshot.contextPacket.taskSelection;
     if (!selection.task) {
         if (selection.reason === "complete") {
@@ -110,6 +112,7 @@ async function executeImplementationTask(input, run, task, now) {
 async function executeValidationTask(input, state) {
     const maxAttempts = input.maxRepairAttempts ?? 3;
     const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
+    throwIfAborted(input.signal);
     const result = await runAgentV2StaticValidationGate({
         config: input.config,
         context: input.context,
@@ -117,6 +120,7 @@ async function executeValidationTask(input, state) {
         taskId: state.taskId,
         now: state.now,
         toolRegistry: registry,
+        signal: input.signal,
     });
     await Promise.resolve(input.store.upsertAgentV2Validation(result.validation));
     if (result.status === "passed") {
@@ -247,5 +251,10 @@ function positiveInteger(value) {
 }
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function throwIfAborted(signal) {
+    if (!signal?.aborted)
+        return;
+    throw signal.reason ?? new Error("Agent v2 execution was aborted.");
 }
 //# sourceMappingURL=agent-v2-execution-core.js.map

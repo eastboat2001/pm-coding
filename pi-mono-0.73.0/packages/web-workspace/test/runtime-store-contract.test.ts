@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
-import type { AgentV2ArtifactRecord, AgentV2DocumentRecord, AgentV2ValidationRecord } from "../src/agent-v2-store.js";
+import type {
+	AgentV2ArtifactRecord,
+	AgentV2DocumentRecord,
+	AgentV2RunEventRecord,
+	AgentV2RunUpdateResult,
+	AgentV2ValidationRecord,
+} from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "../src/agent-v2-types.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 import type { RuntimeStore } from "../src/runtime-store.js";
@@ -13,6 +19,17 @@ import type {
 	RuntimeSessionRecord,
 	StartRunResult,
 } from "../src/types.js";
+
+type Expect<T extends true> = T;
+type IsRequiredKey<T, K extends keyof T> = Record<never, never> extends Pick<T, K> ? false : true;
+
+type _RuntimeStoreRequiresAppendAgentV2RunEvent = Expect<IsRequiredKey<RuntimeStore, "appendAgentV2RunEvent">>;
+type _RuntimeStoreRequiresListAgentV2Runs = Expect<IsRequiredKey<RuntimeStore, "listAgentV2Runs">>;
+type _RuntimeStoreRequiresListAgentV2RunsByWorker = Expect<IsRequiredKey<RuntimeStore, "listAgentV2RunsByWorker">>;
+type _RuntimeStoreRequiresUpdateAgentV2RunWithResult = Expect<
+	IsRequiredKey<RuntimeStore, "updateAgentV2RunWithResult">
+>;
+type _RuntimeStoreRequiresListAgentV2RunEvents = Expect<IsRequiredKey<RuntimeStore, "listAgentV2RunEvents">>;
 
 describe("runtime store contract", () => {
 	it("lets RuntimeDbStore satisfy RuntimeStore", () => {
@@ -110,8 +127,23 @@ describe("runtime store contract", () => {
 			async getAgentV2Run() {
 				return undefined;
 			},
+			async listAgentV2Runs() {
+				return [];
+			},
+			async listAgentV2RunsByWorker() {
+				return [];
+			},
 			async updateAgentV2Run() {
 				return {} as AgentV2RunSnapshot;
+			},
+			async updateAgentV2RunWithResult() {
+				return {} as AgentV2RunUpdateResult;
+			},
+			async appendAgentV2RunEvent() {
+				return {} as AgentV2RunEventRecord;
+			},
+			async listAgentV2RunEvents() {
+				return [];
 			},
 			async upsertAgentV2Task() {
 				return {} as AgentV2TaskNode;

@@ -10,13 +10,15 @@ import {
 
 const RUN_TRANSITIONS: Record<AgentV2RunStatus, readonly AgentV2RunStatus[]> = {
 	queued: ["running", "cancelled"],
-	running: ["succeeded", "failed", "cancelled"],
+	running: ["cancelling", "succeeded", "failed", "cancelled", "interrupted"],
+	cancelling: ["cancelled", "interrupted"],
 	succeeded: [],
 	failed: [],
 	cancelled: [],
+	interrupted: [],
 };
 
-const TERMINAL_RUN_STATUSES = new Set<AgentV2RunStatus>(["succeeded", "failed", "cancelled"]);
+const TERMINAL_RUN_STATUSES = new Set<AgentV2RunStatus>(["succeeded", "failed", "cancelled", "interrupted"]);
 const TERMINAL_AGENT_V2_PHASES = new Set<AgentV2Phase>(["delivery", "blocked", "failed", "cancelled"]);
 
 export function assertAgentV2RunTransition(from: AgentV2RunStatus, to: AgentV2RunStatus): void {

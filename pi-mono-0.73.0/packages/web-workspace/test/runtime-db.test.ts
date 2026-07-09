@@ -85,6 +85,110 @@ describe("RuntimeDbStore", () => {
 		expect(store.listRunEvents("client-a", "run-1", 1)).toEqual([]);
 	});
 
+	it("lists agent v2 runs by client in descending updated order", () => {
+		store.ensureAgentV2Schema();
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-older",
+			input: { prompt: "Older run" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:00:00.000Z",
+			updatedAt: "2026-07-08T09:00:00.000Z",
+		});
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-newer",
+			input: { prompt: "Newer run" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:05:00.000Z",
+			updatedAt: "2026-07-08T09:05:00.000Z",
+		});
+		store.createAgentV2Run({
+			clientId: "client-b",
+			runId: "run-other-client",
+			input: { prompt: "Other client" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:10:00.000Z",
+			updatedAt: "2026-07-08T09:10:00.000Z",
+		});
+
+		expect(store.listAgentV2Runs("client-a").map((run) => run.runId)).toEqual(["run-newer", "run-older"]);
+	});
+
+	it("lists owned active agent v2 runs for a worker", () => {
+		store.ensureAgentV2Schema();
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-running",
+			input: { prompt: "Running run" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:00:00.000Z",
+			updatedAt: "2026-07-08T09:00:00.000Z",
+		});
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-cancelling",
+			input: { prompt: "Cancelling run" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:01:00.000Z",
+			updatedAt: "2026-07-08T09:01:00.000Z",
+		});
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-other-worker",
+			input: { prompt: "Other worker" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:02:00.000Z",
+			updatedAt: "2026-07-08T09:02:00.000Z",
+		});
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-queued",
+			input: { prompt: "Queued run" },
+			model: { provider: "openai", id: "gpt-5" },
+			createdAt: "2026-07-08T09:03:00.000Z",
+			updatedAt: "2026-07-08T09:03:00.000Z",
+		});
+		store.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-running",
+			status: "running",
+			phase: "implementation",
+			workerId: "worker-1",
+			startedAt: "2026-07-08T09:00:10.000Z",
+			updatedAt: "2026-07-08T09:00:10.000Z",
+		});
+		store.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-cancelling",
+			status: "running",
+			phase: "implementation",
+			workerId: "worker-1",
+			startedAt: "2026-07-08T09:01:10.000Z",
+			updatedAt: "2026-07-08T09:01:10.000Z",
+		});
+		store.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-cancelling",
+			status: "cancelling",
+			updatedAt: "2026-07-08T09:01:20.000Z",
+		});
+		store.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-other-worker",
+			status: "running",
+			phase: "implementation",
+			workerId: "worker-2",
+			startedAt: "2026-07-08T09:02:10.000Z",
+			updatedAt: "2026-07-08T09:02:10.000Z",
+		});
+
+		expect(store.listAgentV2RunsByWorker("worker-1").map((run) => [run.runId, run.status])).toEqual([
+			["run-running", "running"],
+			["run-cancelling", "cancelling"],
+		]);
+	});
+
 	it("updates run and session timestamps when appending run events", () => {
 		store.upsertClient("client-a");
 		store.createSession({

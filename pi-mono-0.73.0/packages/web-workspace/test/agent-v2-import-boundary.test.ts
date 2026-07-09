@@ -9,6 +9,9 @@ const V2_RUNTIME_FILES = [
 	"agent-v2-artifact-index.ts",
 	"agent-v2-context-packet.ts",
 	"agent-v2-runtime-core.ts",
+	"agent-v2-worker-service.ts",
+	"agent-v2-run-api-service.ts",
+	"agent-v2-run-queue.ts",
 ];
 
 const FORBIDDEN_IMPORT_FRAGMENTS = [

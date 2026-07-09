@@ -1,6 +1,10 @@
 import { once } from "node:events";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { AgentV2RunApiError, AgentV2RunApiService } from "./agent-v2-run-api-service.js";
+import { RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
+import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
+import { createAgentV2RunQueue } from "./agent-v2-run-queue.js";
 import { AppPreviewGoalService } from "./app-preview-goal-service.js";
 import { normalizeClientId, readClientIdHeader } from "./client-id.js";
 import { loadStorageConfig } from "./config.js";
@@ -21,6 +25,9 @@ import { WorkspaceTaskService } from "./workspace-task-service.js";
 const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
 const LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS = 250;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
+const AGENT_V2_RUNS_API_PREFIX = "/api/runtime/agent-v2/runs";
+const LEGACY_RUNTIME_RUNS_API_PREFIX = "/api/runtime/runs";
+const LEGACY_RUNS_API_PREFIX = "/api/runs";
 export function configuredStoragePlugin(envFile) {
     const rootDir = process.cwd();
     const config = loadStorageConfig(rootDir, envFile);
@@ -31,37 +38,54 @@ export function configuredStoragePlugin(envFile) {
     const tasks = new WorkspaceTaskService(config, previews, undefined, diagnostics);
     const skills = new WorkspaceSkillService(config, diagnostics);
     const runtimeDb = createRuntimeStore(config);
-    const appPreviewGoals = new AppPreviewGoalService(runtimeDb);
     const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
-    const runQueue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
-    const runEventBus = new RedisRunEventBus({
+    const agentV2RunQueue = createAgentV2RunQueue(new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.agentV2RunQueueName }));
+    const agentV2RunEventBus = new RedisAgentV2RunEventBus({
         redisUrl: config.redisUrl,
-        maxLen: config.runEventStreamMaxLen,
-        ttlSeconds: config.runEventStreamTtlSeconds,
+        maxLen: config.agentV2RunEventStreamMaxLen,
+        ttlSeconds: config.agentV2RunEventStreamTtlSeconds,
     });
-    const runApi = new WorkspaceRunApiService(runtimeDb, runQueue, diagnostics, {
-        ensureWorkspace(context) {
-            files.ensureProjectWorkspace({
-                clientId: context.clientId,
-                sessionId: context.sessionId,
-                title: context.title,
-            });
-        },
-        writeFile(context, file) {
-            files.handle({
-                clientId: context.clientId,
-                sessionId: context.sessionId,
-                title: context.title,
-                command: "create",
-                filename: file.filename,
-                content: file.content,
-            });
-        },
-    }, {
-        deleteSessionWorkspace(clientId, sessionId) {
-            return deleteSessionWorkspace(config.clientsRootDir, sessionId, clientId);
-        },
-    }, appPreviewGoals, runEventBus);
+    const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
+    const agentV2RunApi = new AgentV2RunApiService({
+        store: runtimeDb,
+        queue: agentV2RunQueue,
+        events: agentV2RunEventLog,
+    });
+    let runApi;
+    let runEventBus;
+    if (config.appAgentVersion === "v1") {
+        const appPreviewGoals = new AppPreviewGoalService(runtimeDb);
+        const runQueue = new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.runQueueName });
+        const legacyRunEventBus = new RedisRunEventBus({
+            redisUrl: config.redisUrl,
+            maxLen: config.runEventStreamMaxLen,
+            ttlSeconds: config.runEventStreamTtlSeconds,
+        });
+        runEventBus = legacyRunEventBus;
+        runApi = new WorkspaceRunApiService(runtimeDb, runQueue, diagnostics, {
+            ensureWorkspace(context) {
+                files.ensureProjectWorkspace({
+                    clientId: context.clientId,
+                    sessionId: context.sessionId,
+                    title: context.title,
+                });
+            },
+            writeFile(context, file) {
+                files.handle({
+                    clientId: context.clientId,
+                    sessionId: context.sessionId,
+                    title: context.title,
+                    command: "create",
+                    filename: file.filename,
+                    content: file.content,
+                });
+            },
+        }, {
+            deleteSessionWorkspace(clientId, sessionId) {
+                return deleteSessionWorkspace(config.clientsRootDir, sessionId, clientId);
+            },
+        }, appPreviewGoals, legacyRunEventBus);
+    }
     return createConfiguredStoragePlugin({
         config,
         diagnostics,
@@ -74,12 +98,16 @@ export function configuredStoragePlugin(envFile) {
         diagnosticExports,
         runApi,
         runEventBus,
+        agentV2RunApi,
+        agentV2RunEventBus,
+        agentV2RunEventLog,
+        agentV2RunQueue,
     });
 }
 export function createConfiguredStoragePluginForTest(services) {
     return createConfiguredStoragePlugin(services);
 }
-function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, previews, tasks, skills, runtimeDb, diagnosticExports, runApi, runEventBus, }) {
+function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, previews, tasks, skills, runtimeDb, diagnosticExports, runApi, runEventBus, agentV2RunApi, agentV2RunEventBus, agentV2RunEventLog, agentV2RunQueue, }) {
     let startupDiagnosticsWritten = false;
     let storageDirsReady = false;
     let storageDirsPromise;
@@ -125,7 +153,10 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             !req.url?.startsWith(SKILLS_API_PREFIX) &&
             !req.url?.startsWith(LOGS_API_PREFIX) &&
             !req.url?.startsWith(SESSIONS_API_PREFIX) &&
-            !req.url?.startsWith(RUNS_API_PREFIX)) {
+            !req.url?.startsWith(RUNS_API_PREFIX) &&
+            !req.url?.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX) &&
+            !req.url?.startsWith(LEGACY_RUNS_API_PREFIX) &&
+            !req.url?.startsWith(AGENT_V2_RUNS_API_PREFIX)) {
             next();
             return;
         }
@@ -136,7 +167,10 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             const isSkillsApi = url.pathname.startsWith(SKILLS_API_PREFIX);
             const isLogsApi = url.pathname.startsWith(LOGS_API_PREFIX);
             const isSessionsApi = url.pathname.startsWith(SESSIONS_API_PREFIX);
-            const isRunsApi = url.pathname.startsWith(RUNS_API_PREFIX);
+            const isAgentV2RunsApi = url.pathname.startsWith(AGENT_V2_RUNS_API_PREFIX);
+            const isRunsApi = url.pathname.startsWith(RUNS_API_PREFIX) ||
+                url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX) ||
+                url.pathname.startsWith(LEGACY_RUNS_API_PREFIX);
             const prefix = isProjectsApi
                 ? PROJECTS_API_PREFIX
                 : isSkillsApi
@@ -145,9 +179,15 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
                         ? LOGS_API_PREFIX
                         : isSessionsApi
                             ? SESSIONS_API_PREFIX
-                            : isRunsApi
-                                ? RUNS_API_PREFIX
-                                : API_PREFIX;
+                            : isAgentV2RunsApi
+                                ? AGENT_V2_RUNS_API_PREFIX
+                                : isRunsApi
+                                    ? url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX)
+                                        ? LEGACY_RUNTIME_RUNS_API_PREFIX
+                                        : url.pathname.startsWith(LEGACY_RUNS_API_PREFIX)
+                                            ? LEGACY_RUNS_API_PREFIX
+                                            : RUNS_API_PREFIX
+                                    : API_PREFIX;
             const route = url.pathname.slice(prefix.length) || "/";
             const method = req.method || "GET";
             if (isProjectsApi) {
@@ -163,11 +203,21 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
                 return;
             }
             if (isSessionsApi) {
-                await handleRuntimeSessionsApi(method, route, url, req, res, runApi);
+                if (config.appAgentVersion === "v2") {
+                    sendJson(res, {
+                        error: "Application Generation Agent v1 runtime session routes are disabled when appAgentVersion is v2.",
+                    }, 410);
+                    return;
+                }
+                await handleRuntimeSessionsApi(method, route, url, req, res, requireWorkspaceRunApi(runApi));
+                return;
+            }
+            if (isAgentV2RunsApi) {
+                await handleAgentV2RuntimeRunsApi(method, route, url, req, res, requireAgentV2RunApi(agentV2RunApi), requireAgentV2RunEventBus(agentV2RunEventBus), requireAgentV2RunEventLog(agentV2RunEventLog));
                 return;
             }
             if (isRunsApi) {
-                await handleRuntimeRunsApi(method, route, url, req, res, runApi, runEventBus);
+                await handleRuntimeRunsApi(method, route, url, req, res, config, runApi, runEventBus);
                 return;
             }
             await handleStorageApi(method, route, req, res, config, sessions);
@@ -178,7 +228,11 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
     };
     let runEventBusClosePromise;
     const closeRunEventBusOnce = () => {
-        runEventBusClosePromise ??= Promise.resolve(runEventBus.close()).catch(() => undefined);
+        runEventBusClosePromise ??= Promise.all([
+            Promise.resolve(runEventBus?.close()).catch(() => undefined),
+            Promise.resolve(agentV2RunEventBus?.close()).catch(() => undefined),
+            Promise.resolve(agentV2RunQueue?.close()).catch(() => undefined),
+        ]).then(() => undefined);
         return runEventBusClosePromise;
     };
     const registerRunEventBusCleanup = (server) => {
@@ -574,16 +628,94 @@ async function handleRuntimeSessionsApi(method, route, url, req, res, runApi) {
         sendRuntimeApiError(res, error);
     }
 }
-async function handleRuntimeRunsApi(method, route, url, req, res, runApi, runEventBus) {
+function requireAgentV2RunApi(agentV2RunApi) {
+    if (!agentV2RunApi)
+        throw new AgentV2RunApiError("Agent v2 run API service is not configured.", 503);
+    return agentV2RunApi;
+}
+function requireAgentV2RunEventBus(agentV2RunEventBus) {
+    if (!agentV2RunEventBus)
+        throw new AgentV2RunApiError("Agent v2 run event bus is not configured.", 503);
+    return agentV2RunEventBus;
+}
+function requireAgentV2RunEventLog(agentV2RunEventLog) {
+    if (!agentV2RunEventLog)
+        throw new AgentV2RunApiError("Agent v2 run event log is not configured.", 503);
+    return agentV2RunEventLog;
+}
+function requireWorkspaceRunApi(runApi) {
+    if (!runApi)
+        throw new RunApiError("Application Generation Agent v1 run API service is not configured.", 503);
+    return runApi;
+}
+function requireRunEventBus(runEventBus) {
+    if (!runEventBus)
+        throw new RunApiError("Application Generation Agent v1 run event bus is not configured.", 503);
+    return runEventBus;
+}
+async function handleAgentV2RuntimeRunsApi(method, route, url, req, res, runApi, runEventBus, runEventLog) {
     try {
         const clientId = readClientIdHeader(req);
-        if (method === "POST" && (route === "/" || route === "" || route === "/start")) {
+        if (method === "POST" && route === "/start") {
             const body = await readJsonBody(req);
-            sendJson(res, await runApi.startRun(clientId, body));
+            sendJson(res, (await runApi.startRun(clientId, body)));
             return;
         }
         if (method === "GET" && (route === "/" || route === "")) {
             sendJson(res, { runs: await runApi.listRuns(clientId) });
+            return;
+        }
+        const eventsMatch = route.match(/^\/([^/]+)\/events$/);
+        if (method === "GET" && eventsMatch) {
+            const runId = decodeURIComponent(eventsMatch[1]);
+            const afterSeq = queryNumber(url, "afterSeq") ?? 0;
+            if (wantsEventStream(req, url)) {
+                await streamAgentV2RunEvents(res, req, runApi, runEventBus, runEventLog, clientId, runId, afterSeq);
+                return;
+            }
+            const run = await runApi.getRun(clientId, runId);
+            if (!run)
+                throw new AgentV2RunApiError("Agent v2 run not found.", 404);
+            sendJson(res, { events: await runApi.listRunEvents(clientId, runId, afterSeq) });
+            return;
+        }
+        const cancelMatch = route.match(/^\/([^/]+)\/cancel$/);
+        if (method === "POST" && cancelMatch) {
+            sendJson(res, (await runApi.cancelRun(clientId, decodeURIComponent(cancelMatch[1]))));
+            return;
+        }
+        const runMatch = route.match(/^\/([^/]+)$/);
+        if (method === "GET" && runMatch) {
+            const run = await runApi.getRun(clientId, decodeURIComponent(runMatch[1]));
+            sendJson(res, (run || { error: "Agent v2 run not found." }), run ? 200 : 404);
+            return;
+        }
+        sendJson(res, { error: "Not found." }, 404);
+    }
+    catch (error) {
+        sendRuntimeApiError(res, error);
+    }
+}
+async function handleRuntimeRunsApi(method, route, url, req, res, config, runApi, runEventBus) {
+    try {
+        const clientId = readClientIdHeader(req);
+        if (config.appAgentVersion === "v2" && route.startsWith("/goals/app-preview")) {
+            sendJson(res, { error: "Legacy app-preview-goal routes are unavailable when appAgentVersion is v2." }, 404);
+            return;
+        }
+        if (config.appAgentVersion === "v2") {
+            sendJson(res, { error: "Application Generation Agent v1 runtime routes are disabled when appAgentVersion is v2." }, 410);
+            return;
+        }
+        const legacyRunApi = requireWorkspaceRunApi(runApi);
+        const legacyRunEventBus = requireRunEventBus(runEventBus);
+        if (method === "POST" && (route === "/" || route === "" || route === "/start")) {
+            const body = await readJsonBody(req);
+            sendJson(res, await legacyRunApi.startRun(clientId, body));
+            return;
+        }
+        if (method === "GET" && (route === "/" || route === "")) {
+            sendJson(res, { runs: await legacyRunApi.listRuns(clientId) });
             return;
         }
         if (method === "GET" && route === "/goals/app-preview") {
@@ -592,8 +724,8 @@ async function handleRuntimeRunsApi(method, route, url, req, res, runApi, runEve
                 throw new RunApiError("sessionId is required", 400);
             const afterEventId = queryNumber(url, "afterEventId") ?? 0;
             sendJson(res, {
-                goal: (await runApi.getAppPreviewGoal(clientId, sessionId)) ?? null,
-                events: await runApi.listAppPreviewGoalEvents(clientId, sessionId, afterEventId),
+                goal: (await legacyRunApi.getAppPreviewGoal(clientId, sessionId)) ?? null,
+                events: await legacyRunApi.listAppPreviewGoalEvents(clientId, sessionId, afterEventId),
             });
             return;
         }
@@ -601,13 +733,13 @@ async function handleRuntimeRunsApi(method, route, url, req, res, runApi, runEve
             const body = await readJsonBody(req);
             const sessionId = normalizeRequiredBodyString(body.sessionId, "sessionId");
             const source = normalizeAppPreviewGoalSource(body.source);
-            sendJson(res, { goal: (await runApi.enableAppPreviewGoal(clientId, sessionId, source)) ?? null });
+            sendJson(res, { goal: (await legacyRunApi.enableAppPreviewGoal(clientId, sessionId, source)) ?? null });
             return;
         }
         if (method === "POST" && route === "/goals/app-preview/disable") {
             const body = await readJsonBody(req);
             const sessionId = normalizeRequiredBodyString(body.sessionId, "sessionId");
-            sendJson(res, { goal: (await runApi.disableAppPreviewGoal(clientId, sessionId)) ?? null });
+            sendJson(res, { goal: (await legacyRunApi.disableAppPreviewGoal(clientId, sessionId)) ?? null });
             return;
         }
         const eventsMatch = route.match(/^\/([^/]+)\/events$/);
@@ -615,28 +747,28 @@ async function handleRuntimeRunsApi(method, route, url, req, res, runApi, runEve
             const runId = decodeURIComponent(eventsMatch[1]);
             const afterSeq = queryNumber(url, "afterSeq") ?? 0;
             if (wantsEventStream(req, url)) {
-                await streamRunEvents(res, req, runApi, runEventBus, clientId, runId, afterSeq);
+                await streamRunEvents(res, req, legacyRunApi, legacyRunEventBus, clientId, runId, afterSeq);
                 return;
             }
             sendJson(res, {
-                events: await runApi.listRunEvents(clientId, runId, afterSeq),
+                events: await legacyRunApi.listRunEvents(clientId, runId, afterSeq),
             });
             return;
         }
         const cancelMatch = route.match(/^\/([^/]+)\/cancel$/);
         if (method === "POST" && cancelMatch) {
-            sendJson(res, await runApi.cancelRun(clientId, decodeURIComponent(cancelMatch[1])));
+            sendJson(res, await legacyRunApi.cancelRun(clientId, decodeURIComponent(cancelMatch[1])));
             return;
         }
         const statusMatch = route.match(/^\/([^/]+)\/status$/);
         if (method === "GET" && statusMatch) {
-            const run = await runApi.getRunStatus(clientId, decodeURIComponent(statusMatch[1]));
+            const run = await legacyRunApi.getRunStatus(clientId, decodeURIComponent(statusMatch[1]));
             sendJson(res, run || { error: "Run not found." }, run ? 200 : 404);
             return;
         }
         const runMatch = route.match(/^\/([^/]+)$/);
         if (method === "GET" && runMatch) {
-            const run = await runApi.getRunStatus(clientId, decodeURIComponent(runMatch[1]));
+            const run = await legacyRunApi.getRunStatus(clientId, decodeURIComponent(runMatch[1]));
             sendJson(res, run || { error: "Run not found." }, run ? 200 : 404);
             return;
         }
@@ -653,6 +785,85 @@ function wantsEventStream(req, url) {
     return Array.isArray(accept)
         ? accept.some((value) => value.includes("text/event-stream"))
         : typeof accept === "string" && accept.includes("text/event-stream");
+}
+async function streamAgentV2RunEvents(res, req, runApi, runEventBus, runEventLog, clientId, runId, afterSeq) {
+    let readSeq = afterSeq;
+    let sentSeq = afterSeq;
+    let closed = false;
+    let heartbeatAt = Date.now();
+    let streamStarted = false;
+    const abortController = new AbortController();
+    const closeStream = () => {
+        if (closed)
+            return;
+        closed = true;
+        if (!abortController.signal.aborted)
+            abortController.abort();
+    };
+    req.on("close", closeStream);
+    const responseWithOn = res;
+    if (typeof responseWithOn.on === "function")
+        responseWithOn.on("close", closeStream);
+    try {
+        const run = await runApi.getRun(clientId, runId);
+        if (!run)
+            throw new AgentV2RunApiError("Agent v2 run not found.", 404);
+        const durableEvents = await runEventLog.list(clientId, runId, afterSeq);
+        if (closed || res.destroyed)
+            return;
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache, no-store, no-transform, must-revalidate");
+        res.setHeader("Connection", "keep-alive");
+        res.setHeader("X-Accel-Buffering", "no");
+        res.flushHeaders?.();
+        streamStarted = true;
+        res.write(": connected\n\n");
+        for (const event of durableEvents) {
+            readSeq = Math.max(readSeq, event.seq);
+            if (!writeRunEventIfFresh(res, event, sentSeq))
+                continue;
+            sentSeq = event.seq;
+        }
+        while (!closed && !res.destroyed) {
+            const events = await runEventBus.read({
+                clientId,
+                runId,
+                afterSeq: readSeq,
+                blockMs: 15000,
+                signal: abortController.signal,
+            });
+            for (const event of events)
+                readSeq = Math.max(readSeq, event.seq);
+            if (closed || res.destroyed)
+                break;
+            if (events.length === 0) {
+                heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
+                await waitForRunEventReadBackoff(abortController.signal, EMPTY_RUN_EVENT_READ_BACKOFF_MS);
+                continue;
+            }
+            for (const event of events) {
+                if (!writeRunEventIfFresh(res, event, sentSeq))
+                    continue;
+                sentSeq = event.seq;
+            }
+            heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
+        }
+    }
+    catch (error) {
+        if (!streamStarted)
+            throw error;
+        if (!closed && !res.destroyed) {
+            writeServerSentError(res, "Agent v2 runtime event stream unavailable.");
+            res.end();
+        }
+        closeStream();
+    }
+    finally {
+        req.off?.("close", closeStream);
+        if (typeof responseWithOn.off === "function")
+            responseWithOn.off("close", closeStream);
+    }
 }
 async function streamRunEvents(res, req, runApi, runEventBus, clientId, runId, afterSeq) {
     let readSeq = afterSeq;
@@ -868,6 +1079,10 @@ function redactConnectionUrl(value) {
     }
 }
 function sendRuntimeApiError(res, error) {
+    if (error instanceof AgentV2RunApiError) {
+        sendJson(res, { error: error.message }, error.statusCode);
+        return;
+    }
     if (error instanceof RunApiError) {
         sendJson(res, { error: error.message }, error.statusCode);
         return;

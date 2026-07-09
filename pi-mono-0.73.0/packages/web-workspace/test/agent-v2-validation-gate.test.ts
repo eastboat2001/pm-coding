@@ -248,6 +248,40 @@ describe("agent v2 validation gate", () => {
 		});
 	});
 
+	it("passes the cancellation signal to every static validation workspace task", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const signal = new AbortController().signal;
+		const sourceMessage =
+			"Static preview found a build source entry at ./src/main.ts. Run build_static before preview so PI can serve browser-ready dist/build output.";
+		const observedSignals: Array<AbortSignal | undefined> = [];
+		const tasks = {
+			calls: [] as ProjectTaskName[],
+			run: async (request: { task: ProjectTaskName }, _req?: unknown, taskSignal?: AbortSignal) => {
+				tasks.calls.push(request.task);
+				observedSignals.push(taskSignal);
+				return taskResult({
+					task: request.task,
+					status: request.task === "build_static" ? "succeeded" : "failed",
+					errors: request.task === "build_static" ? [] : [sourceMessage],
+				});
+			},
+		};
+
+		await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+			tasks,
+			signal,
+		});
+
+		expect(tasks.calls).toEqual(["validate", "build_static", "validate"]);
+		expect(observedSignals).toEqual([signal, signal, signal]);
+	});
+
 	it("blocks static validation through restrictive production tool governance", async () => {
 		const config = testConfig(tempRoot());
 		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
@@ -330,6 +364,7 @@ function testConfig(root: string): StorageConfig {
 		runtimeStore: "postgres",
 		postgresUrl: "postgres://pi:pi@postgres:5432/pi_coding",
 		runsEnabled: false,
+		appAgentVersion: "v2",
 		workerId: "test-worker",
 		workerConcurrency: 2,
 		runMaxAgentTurns: 80,
@@ -339,9 +374,12 @@ function testConfig(root: string): StorageConfig {
 		runRetryMaxDelayMs: 60000,
 		runRetryJitterRatio: 0.2,
 		runQueueName: "pi:runs",
+		agentV2RunQueueName: "pi:agent-v2:runs",
 		runEventRetentionDays: 30,
 		runEventStreamMaxLen: 5000,
 		runEventStreamTtlSeconds: 3600,
+		agentV2RunEventStreamMaxLen: 5000,
+		agentV2RunEventStreamTtlSeconds: 3600,
 		runEventCheckpointIntervalMs: 400,
 		runEventCheckpointMinChars: 256,
 		clientIdRequired: true,
@@ -402,5 +440,25 @@ function mockTaskSequence(results: ProjectTaskResult[]) {
 			if (!result) throw new Error(`No mock result for ${request.task}`);
 			return result;
 		},
+	};
+}
+
+function taskResult(overrides: Partial<ProjectTaskResult> & { task: ProjectTaskName }): ProjectTaskResult {
+	const { task, ...rest } = overrides;
+	return {
+		task,
+		status: "succeeded",
+		projectId: "project-a",
+		sessionId: "session-a",
+		title: "Demo",
+		projectRoot: "C:/demo/project",
+		fileCount: 2,
+		files: ["index.html", "src/main.ts"],
+		hasPackageJson: true,
+		valid: true,
+		errors: [],
+		mode: "static",
+		serveRoot: "C:/demo/project/dist",
+		...rest,
 	};
 }

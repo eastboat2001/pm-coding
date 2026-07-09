@@ -33,15 +33,18 @@ export interface ExecuteAgentV2NextTaskInput {
 	now?: () => string;
 	maxRepairAttempts?: number;
 	toolRegistry?: AgentV2ToolRegistry;
+	signal?: AbortSignal;
 }
 
 export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput): Promise<AgentV2ExecutionStepResult> {
+	throwIfAborted(input.signal);
 	const now = input.now?.() ?? new Date().toISOString();
 	const snapshot = await loadAgentV2RuntimeSnapshot({
 		store: input.store,
 		clientId: input.context.clientId,
 		runId: input.runId,
 	});
+	throwIfAborted(input.signal);
 	const selection = snapshot.contextPacket.taskSelection;
 	if (!selection.task) {
 		if (selection.reason === "complete") {
@@ -158,6 +161,7 @@ async function executeValidationTask(
 ): Promise<AgentV2ExecutionStepResult> {
 	const maxAttempts = input.maxRepairAttempts ?? 3;
 	const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
+	throwIfAborted(input.signal);
 	const result = await runAgentV2StaticValidationGate({
 		config: input.config,
 		context: input.context,
@@ -165,6 +169,7 @@ async function executeValidationTask(
 		taskId: state.taskId,
 		now: state.now,
 		toolRegistry: registry,
+		signal: input.signal,
 	});
 	await Promise.resolve(input.store.upsertAgentV2Validation(result.validation));
 
@@ -311,4 +316,9 @@ function positiveInteger(value: unknown): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+	if (!signal?.aborted) return;
+	throw signal.reason ?? new Error("Agent v2 execution was aborted.");
 }

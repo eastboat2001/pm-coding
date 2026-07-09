@@ -34,6 +34,7 @@ export interface UpdateAgentV2RunInput extends JsonObject {
 	clientId: string;
 	runId: string;
 	status?: AgentV2RunStatus;
+	expectedStatuses?: readonly AgentV2RunStatus[];
 	phase?: AgentV2Phase;
 	attempt?: number;
 	workerId?: string;
@@ -41,6 +42,11 @@ export interface UpdateAgentV2RunInput extends JsonObject {
 	startedAt?: string;
 	endedAt?: string;
 	error?: AgentV2Error;
+}
+
+export interface AgentV2RunUpdateResult {
+	run: AgentV2RunSnapshot;
+	applied: boolean;
 }
 
 export interface UpsertAgentV2TaskInput extends JsonObject {
@@ -118,6 +124,24 @@ export interface UpsertAgentV2DocumentInput extends JsonObject {
 	sourceTaskId?: string;
 	createdAt?: string;
 	updatedAt?: string;
+}
+
+export interface AgentV2RunEventRecord extends JsonObject {
+	clientId: string;
+	runId: string;
+	seq: number;
+	type: string;
+	payload: Record<string, unknown>;
+	createdAt: string;
+}
+
+export interface AppendAgentV2RunEventInput extends JsonObject {
+	clientId: string;
+	runId: string;
+	seq?: number;
+	type: string;
+	payload: Record<string, unknown>;
+	createdAt?: string;
 }
 
 export type AgentV2ValidationStatus = "passed" | "failed" | "blocked" | "warning";
@@ -212,6 +236,15 @@ export interface AgentV2DocumentRow {
 	updated_at: TimestampValue;
 }
 
+export interface AgentV2RunEventRow {
+	client_id: string;
+	run_id: string;
+	seq: number | string;
+	event_type: string;
+	payload_json: unknown;
+	created_at: TimestampValue;
+}
+
 export interface AgentV2DiagnosticRow {
 	client_id: string;
 	run_id: string;
@@ -249,6 +282,7 @@ export const AGENT_V2_ARTIFACT_COLUMNS =
 	"client_id, run_id, artifact_id, kind, path, media_type, checksum, version, source_task_id, validation_status, metadata_json, created_at, updated_at";
 export const AGENT_V2_DOCUMENT_COLUMNS =
 	"client_id, run_id, document_id, kind, version, content_markdown, content_json, source_task_id, created_at, updated_at";
+export const AGENT_V2_RUN_EVENT_COLUMNS = "client_id, run_id, seq, event_type, payload_json, created_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS =
 	"client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
 export const AGENT_V2_VALIDATION_COLUMNS =
@@ -441,6 +475,17 @@ export function toAgentV2DocumentRecord(row: AgentV2DocumentRow): AgentV2Documen
 		...(row.source_task_id ? { sourceTaskId: row.source_task_id } : {}),
 		createdAt: toTimestamp(row.created_at),
 		updatedAt: toTimestamp(row.updated_at),
+	};
+}
+
+export function toAgentV2RunEventRecord(row: AgentV2RunEventRow): AgentV2RunEventRecord {
+	return {
+		clientId: row.client_id,
+		runId: row.run_id,
+		seq: toNumber(row.seq),
+		type: row.event_type,
+		payload: parseJsonObject(row.payload_json),
+		createdAt: toTimestamp(row.created_at),
 	};
 }
 

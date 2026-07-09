@@ -14,10 +14,14 @@ import {
 	type AgentV2DiagnosticRow,
 	type AgentV2DocumentRecord,
 	type AgentV2DocumentRow,
+	type AgentV2RunEventRecord,
+	type AgentV2RunEventRow,
 	type AgentV2RunRow,
+	type AgentV2RunUpdateResult,
 	type AgentV2TaskRow,
 	type AgentV2ValidationRecord,
 	type AgentV2ValidationRow,
+	type AppendAgentV2RunEventInput,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
 	buildAgentV2Document,
@@ -86,9 +90,11 @@ const AGENT_V2_RESET_TABLES = [
 	"agent_v2_documents",
 	"agent_v2_artifacts",
 	"agent_v2_tasks",
+	"agent_v2_run_events",
 	"agent_v2_runs",
 	"agent_v2_schema_metadata",
 ] as const;
+const AGENT_V2_RUN_EVENT_COLUMNS = "client_id, run_id, seq, event_type, payload_json, created_at";
 
 type SessionRow = {
 	session_id: string;
@@ -318,6 +324,17 @@ export class RuntimeDbStore implements RuntimeStore {
 				FOREIGN KEY (client_id) REFERENCES clients(client_id)
 			);
 			CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at);
+
+			CREATE TABLE IF NOT EXISTS agent_v2_run_events (
+				client_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				seq INTEGER NOT NULL,
+				event_type TEXT NOT NULL,
+				payload_json TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (client_id, run_id, seq),
+				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+			);
 
 			CREATE TABLE IF NOT EXISTS agent_v2_tasks (
 				client_id TEXT NOT NULL,
@@ -1052,23 +1069,57 @@ export class RuntimeDbStore implements RuntimeStore {
 		return row ? toAgentV2RunRecord(row) : undefined;
 	}
 
-	updateAgentV2Run(input: UpdateAgentV2RunInput): AgentV2RunSnapshot {
-		const current = requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
-		const next = applyAgentV2RunUpdate(current, input);
-		this.open()
+	listAgentV2Runs(clientId: string): AgentV2RunSnapshot[] {
+		const rows = this.open()
 			.prepare(
-				`UPDATE agent_v2_runs
-				SET status = ?,
-					phase = ?,
-					attempt = ?,
-					worker_id = ?,
-					updated_at = ?,
-					started_at = ?,
-					ended_at = ?,
-					error_json = ?
-				WHERE client_id = ? AND run_id = ?`,
+				`SELECT ${AGENT_V2_RUN_COLUMNS}
+				FROM agent_v2_runs
+				WHERE client_id = ?
+				ORDER BY updated_at DESC, run_id ASC`,
 			)
-			.run(
+			.all(clientId) as unknown as AgentV2RunRow[];
+		return rows.map(toAgentV2RunRecord);
+	}
+
+	listAgentV2RunsByWorker(workerId: string): AgentV2RunSnapshot[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_RUN_COLUMNS}
+				FROM agent_v2_runs
+				WHERE worker_id = ? AND status IN ('running', 'cancelling')
+				ORDER BY updated_at ASC, run_id ASC`,
+			)
+			.all(workerId) as unknown as AgentV2RunRow[];
+		return rows.map(toAgentV2RunRecord);
+	}
+
+	updateAgentV2Run(input: UpdateAgentV2RunInput): AgentV2RunSnapshot {
+		return this.updateAgentV2RunWithResult(input).run;
+	}
+
+	updateAgentV2RunWithResult(input: UpdateAgentV2RunInput): AgentV2RunUpdateResult {
+		const db = this.open();
+		return this.writeTransaction(db, () => {
+			const currentRow = db
+				.prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
+				.get(input.clientId, input.runId) as unknown as AgentV2RunRow | undefined;
+			const current = requiredRecord(currentRow ? toAgentV2RunRecord(currentRow) : undefined, "agent v2 run");
+			if (input.expectedStatuses && !input.expectedStatuses.includes(current.status)) {
+				return { run: current, applied: false };
+			}
+			const next = applyAgentV2RunUpdate(current, input);
+			db.prepare(
+				`UPDATE agent_v2_runs
+					SET status = ?,
+						phase = ?,
+						attempt = ?,
+						worker_id = ?,
+						updated_at = ?,
+						started_at = ?,
+						ended_at = ?,
+						error_json = ?
+					WHERE client_id = ? AND run_id = ?`,
+			).run(
 				next.status,
 				next.phase,
 				next.attempt,
@@ -1080,7 +1131,58 @@ export class RuntimeDbStore implements RuntimeStore {
 				input.clientId,
 				input.runId,
 			);
-		return requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+			const updatedRow = db
+				.prepare(`SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id = ? AND run_id = ?`)
+				.get(input.clientId, input.runId) as unknown as AgentV2RunRow | undefined;
+			return {
+				run: requiredRecord(updatedRow ? toAgentV2RunRecord(updatedRow) : undefined, "agent v2 run"),
+				applied: true,
+			};
+		});
+	}
+
+	appendAgentV2RunEvent(input: AppendAgentV2RunEventInput): AgentV2RunEventRecord {
+		const createdAt = input.createdAt ?? now();
+		const db = this.open();
+		const event = this.writeTransaction(db, () => {
+			requiredRecord(this.getAgentV2Run(input.clientId, input.runId), "agent v2 run");
+			const seq =
+				input.seq ??
+				(
+					db
+						.prepare(
+							"SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM agent_v2_run_events WHERE client_id = ? AND run_id = ?",
+						)
+						.get(input.clientId, input.runId) as SeqRow
+				).seq;
+			db.prepare(
+				`INSERT INTO agent_v2_run_events (
+					client_id,
+					run_id,
+					seq,
+					event_type,
+					payload_json,
+					created_at
+				) VALUES (?, ?, ?, ?, ?, ?)`,
+			).run(input.clientId, input.runId, seq, input.type, stringifyAgentV2Json(input.payload), createdAt);
+			return requiredRecord(
+				this.listAgentV2RunEvents(input.clientId, input.runId, seq - 1).find((record) => record.seq === seq),
+				"agent v2 run event",
+			);
+		});
+		return event;
+	}
+
+	listAgentV2RunEvents(clientId: string, runId: string, afterSeq: number): AgentV2RunEventRecord[] {
+		const rows = this.open()
+			.prepare(
+				`SELECT ${AGENT_V2_RUN_EVENT_COLUMNS}
+				FROM agent_v2_run_events
+				WHERE client_id = ? AND run_id = ? AND seq > ?
+				ORDER BY seq ASC`,
+			)
+			.all(clientId, runId, afterSeq) as unknown as AgentV2RunEventRow[];
+		return rows.map(toAgentV2RunEventRecord);
 	}
 
 	upsertAgentV2Task(input: UpsertAgentV2TaskInput): AgentV2TaskNode {
@@ -1589,6 +1691,17 @@ function toRunEventRecord(row: RunEventRow): RuntimeRunEventRecord {
 		type: row.event_type,
 		payload: parseJsonObject(row.payload_json),
 		createdAt: row.created_at,
+	};
+}
+
+function toAgentV2RunEventRecord(row: AgentV2RunEventRow): AgentV2RunEventRecord {
+	return {
+		clientId: row.client_id,
+		runId: row.run_id,
+		seq: Number(row.seq),
+		type: row.event_type,
+		payload: parseJsonObject(String(row.payload_json)),
+		createdAt: String(row.created_at),
 	};
 }
 

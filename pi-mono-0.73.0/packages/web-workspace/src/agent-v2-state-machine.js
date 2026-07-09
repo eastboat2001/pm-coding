@@ -1,12 +1,14 @@
 import { AGENT_V2_PHASES, AGENT_V2_RUN_STATUSES, } from "./agent-v2-types.js";
 const RUN_TRANSITIONS = {
     queued: ["running", "cancelled"],
-    running: ["succeeded", "failed", "cancelled"],
+    running: ["cancelling", "succeeded", "failed", "cancelled", "interrupted"],
+    cancelling: ["cancelled", "interrupted"],
     succeeded: [],
     failed: [],
     cancelled: [],
+    interrupted: [],
 };
-const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "interrupted"]);
 const TERMINAL_AGENT_V2_PHASES = new Set(["delivery", "blocked", "failed", "cancelled"]);
 export function assertAgentV2RunTransition(from, to) {
     if (!RUN_TRANSITIONS[from].includes(to)) {

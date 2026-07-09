@@ -11,6 +11,16 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./agent-v2-runtime": {
+      "types": "./dist/agent-v2-runtime.d.ts",
+      "import": "./dist/agent-v2-runtime.js",
+      "default": "./dist/agent-v2-runtime.js"
+    },
+    "./runtime-infra": {
+      "types": "./dist/runtime-infra.d.ts",
+      "import": "./dist/runtime-infra.js",
+      "default": "./dist/runtime-infra.js"
+    },
     "./skill-tool-contract": {
       "types": "./dist/skill-tool-contract.d.ts",
       "import": "./dist/skill-tool-contract.js",

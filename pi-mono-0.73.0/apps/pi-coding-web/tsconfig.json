@@ -11,6 +11,12 @@
 			"@mariozechner/pi-tui": ["../../packages/tui/dist/index.d.ts"],
 			"@mariozechner/pi-web-ui": ["../../packages/web-ui/dist/index.d.ts"],
 			"@mariozechner/pi-web-workspace": ["../../packages/web-workspace/src/index.ts"],
+			"@mariozechner/pi-web-workspace/agent-v2-runtime": [
+				"../../packages/web-workspace/src/agent-v2-runtime.ts"
+			],
+			"@mariozechner/pi-web-workspace/runtime-infra": [
+				"../../packages/web-workspace/src/runtime-infra.ts"
+			],
 			"@mariozechner/pi-web-workspace/skill-tool-contract": [
 				"../../packages/web-workspace/src/skill-tool-contract.ts"
 			]

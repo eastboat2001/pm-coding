@@ -1276,6 +1276,14 @@ class FailingRunQueue implements RunQueue {
 		return 0;
 	}
 
+	async renewLease(_run: RunQueueItem | ClaimedRun, _workerId: string): Promise<boolean> {
+		return true;
+	}
+
+	async releaseExpiredClaims(): Promise<[]> {
+		return [];
+	}
+
 	async requestCancel(_run: RunQueueItem | ClaimedRun): Promise<void> {}
 
 	async isCancelRequested(_run: RunQueueItem | ClaimedRun): Promise<boolean> {

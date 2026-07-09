@@ -8,7 +8,15 @@ export const APPLICATION_GENERATION_RUNTIME_V2 = Object.freeze({
 export type ApplicationGenerationRuntimeVersion = (typeof APPLICATION_GENERATION_RUNTIME_V2)["version"];
 export type ApplicationGenerationRuntimeSelection = typeof APPLICATION_GENERATION_RUNTIME_V2;
 
-export const AGENT_V2_RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
+export const AGENT_V2_RUN_STATUSES = [
+	"queued",
+	"running",
+	"cancelling",
+	"succeeded",
+	"failed",
+	"cancelled",
+	"interrupted",
+] as const;
 export type AgentV2RunStatus = (typeof AGENT_V2_RUN_STATUSES)[number];
 
 export const AGENT_V2_PHASES = [

@@ -5,29 +5,32 @@ export async function runAgentV2StaticValidationGate(input) {
     const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
     assertAgentV2ToolAllowed(registry, "validation.static_quality", "validation");
     assertAgentV2ToolAllowed(registry, "validation.static_smoke", "validation");
+    throwIfAborted(input.signal);
     const initialTaskResult = await tasks.run({
         clientId: input.context.clientId,
         sessionId: input.context.sessionId,
         title: input.context.title,
         task: "validate",
-    });
+    }, undefined, input.signal);
     const initialRawErrors = rawErrorsFor(initialTaskResult);
     let buildResult;
     let taskResult = initialTaskResult;
     if (initialRawErrors.some(isBuildRequiredMessage)) {
         assertAgentV2ToolAllowed(registry, "validation.static_build", "validation");
+        throwIfAborted(input.signal);
         buildResult = await tasks.run({
             clientId: input.context.clientId,
             sessionId: input.context.sessionId,
             title: input.context.title,
             task: "build_static",
-        });
+        }, undefined, input.signal);
+        throwIfAborted(input.signal);
         taskResult = await tasks.run({
             clientId: input.context.clientId,
             sessionId: input.context.sessionId,
             title: input.context.title,
             task: "validate",
-        });
+        }, undefined, input.signal);
     }
     const rawErrors = rawErrorsFor(taskResult);
     const failures = rawErrors.map((message) => classifyStaticValidationFailure(message, input.taskId));
@@ -290,5 +293,10 @@ function scriptPath(value) {
 }
 function normalizePath(value) {
     return value.replace(/\\/g, "/");
+}
+function throwIfAborted(signal) {
+    if (!signal?.aborted)
+        return;
+    throw signal.reason ?? new Error("Agent v2 validation was aborted.");
 }
 //# sourceMappingURL=agent-v2-validation-gate.js.map

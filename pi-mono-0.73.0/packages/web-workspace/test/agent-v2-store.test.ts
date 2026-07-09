@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
-import { appendAgentV2RunEvent } from "../src/agent-v2-run-events.js";
 import {
 	AGENT_V2_DOCUMENT_COLUMNS,
 	type AgentV2DocumentRecord,
@@ -22,6 +21,7 @@ import {
 	buildAgentV2Document as publicBuildAgentV2Document,
 	toAgentV2DocumentRecord as publicToAgentV2DocumentRecord,
 } from "../src/index.js";
+import { appendAgentV2RunEvent } from "../src/legacy-v1-agent-v2-run-event-bridge.js";
 import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
 import { InMemoryRunEventBus } from "../src/run-event-bus.js";
 import { RunEventSink } from "../src/run-event-sink.js";
@@ -247,6 +247,97 @@ describe("agent v2 runtime stores", () => {
 		expect(failed.phase).toBe("repair");
 		expect(failed.endedAt).toBe("2026-07-07T00:02:00.000Z");
 		expect(failed.error?.code).toBe("tool_failed");
+	});
+
+	it("does not let stale terminal updates overwrite a cancelling v2 run", () => {
+		for (const [runId, staleStatus] of [
+			["run-stale-succeeded", "succeeded"],
+			["run-stale-failed", "failed"],
+		] as const) {
+			store.createAgentV2Run({
+				clientId: "client-a",
+				runId,
+				input: { prompt: `ship ${runId}` },
+				model: { provider: "test", model: "local" },
+				createdAt: "2026-07-08T00:00:00.000Z",
+			});
+			store.updateAgentV2Run({
+				clientId: "client-a",
+				runId,
+				status: "running",
+				phase: "implementation",
+				workerId: "worker-1",
+				startedAt: "2026-07-08T00:01:00.000Z",
+				updatedAt: "2026-07-08T00:01:00.000Z",
+			});
+			const cancelling = store.updateAgentV2Run({
+				clientId: "client-a",
+				runId,
+				status: "cancelling",
+				updatedAt: "2026-07-08T00:02:00.000Z",
+			});
+			const staleTerminalUpdate = {
+				clientId: "client-a",
+				runId,
+				status: staleStatus,
+				phase: staleStatus === "succeeded" ? ("delivery" as const) : ("failed" as const),
+				endedAt: "2026-07-08T00:03:00.000Z",
+				updatedAt: "2026-07-08T00:03:00.000Z",
+				expectedStatuses: ["running" as const],
+				...(staleStatus === "failed"
+					? {
+							error: {
+								code: "agent_v2.worker_execution_failed",
+								message: "stale failure",
+								retryable: false,
+							},
+						}
+					: {}),
+			};
+
+			const blocked = store.updateAgentV2Run(staleTerminalUpdate);
+
+			expect(blocked).toEqual(cancelling);
+			expect(store.getAgentV2Run("client-a", runId)).toEqual(cancelling);
+		}
+	});
+
+	it("returns applied false when a guarded SQLite v2 run update misses the expected status", () => {
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-update-result-miss",
+			input: { prompt: "ship it" },
+			model: { provider: "test", model: "local" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-update-result-miss",
+			status: "running",
+			phase: "implementation",
+			workerId: "worker-1",
+			startedAt: "2026-07-08T00:01:00.000Z",
+			updatedAt: "2026-07-08T00:01:00.000Z",
+		});
+		const cancelling = store.updateAgentV2Run({
+			clientId: "client-a",
+			runId: "run-update-result-miss",
+			status: "cancelling",
+			updatedAt: "2026-07-08T00:02:00.000Z",
+		});
+
+		const result = store.updateAgentV2RunWithResult({
+			clientId: "client-a",
+			runId: "run-update-result-miss",
+			status: "succeeded",
+			phase: "delivery",
+			endedAt: "2026-07-08T00:03:00.000Z",
+			updatedAt: "2026-07-08T00:03:00.000Z",
+			expectedStatuses: ["running"],
+		});
+
+		expect(result).toEqual({ run: cancelling, applied: false });
+		expect(store.getAgentV2Run("client-a", "run-update-result-miss")).toEqual(cancelling);
 	});
 
 	it("stores and lists v2 tasks, artifacts, and diagnostics by run", () => {

@@ -2,7 +2,10 @@ import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type {
 	AgentV2ArtifactRecord,
 	AgentV2DocumentRecord,
+	AgentV2RunEventRecord,
+	AgentV2RunUpdateResult as AgentV2RunUpdateResultFromStore,
 	AgentV2ValidationRecord,
+	AppendAgentV2RunEventInput as AppendAgentV2RunEventInputFromStore,
 	CreateAgentV2RunInput as CreateAgentV2RunInputFromStore,
 	UpdateAgentV2RunInput as UpdateAgentV2RunInputFromStore,
 	UpsertAgentV2ArtifactInput as UpsertAgentV2ArtifactInputFromStore,
@@ -123,7 +126,12 @@ export interface RuntimeStore {
 	): MaybePromise<AppPreviewGoalEventRecord[]>;
 	createAgentV2Run(input: CreateAgentV2RunInputFromStore): MaybePromise<AgentV2RunSnapshot>;
 	getAgentV2Run(clientId: string, runId: string): MaybePromise<AgentV2RunSnapshot | undefined>;
+	listAgentV2Runs(clientId: string): MaybePromise<AgentV2RunSnapshot[]>;
+	listAgentV2RunsByWorker(workerId: string): MaybePromise<AgentV2RunSnapshot[]>;
 	updateAgentV2Run(input: UpdateAgentV2RunInputFromStore): MaybePromise<AgentV2RunSnapshot>;
+	updateAgentV2RunWithResult(input: UpdateAgentV2RunInputFromStore): MaybePromise<AgentV2RunUpdateResultFromStore>;
+	appendAgentV2RunEvent(input: AppendAgentV2RunEventInputFromStore): MaybePromise<AgentV2RunEventRecord>;
+	listAgentV2RunEvents(clientId: string, runId: string, afterSeq: number): MaybePromise<AgentV2RunEventRecord[]>;
 	upsertAgentV2Task(input: UpsertAgentV2TaskInputFromStore): MaybePromise<AgentV2TaskNode>;
 	listAgentV2Tasks(clientId: string, runId: string): MaybePromise<AgentV2TaskNode[]>;
 	upsertAgentV2Artifact(input: UpsertAgentV2ArtifactInputFromStore): MaybePromise<AgentV2ArtifactRecord>;

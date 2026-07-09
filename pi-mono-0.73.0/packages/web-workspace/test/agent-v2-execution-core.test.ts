@@ -167,6 +167,46 @@ describe("agent v2 execution core", () => {
 		});
 	});
 
+	it("stops before static validation when the execution signal is already aborted", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-validation-aborted",
+			input: { prompt: "Build a static app" },
+			model: { provider: "test" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-validation-aborted",
+			taskId: "validate",
+			kind: "validation",
+			title: "Validate static app",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+		const controller = new AbortController();
+		controller.abort(new Error("stop validation"));
+
+		await expect(
+			executeAgentV2NextTask({
+				store: forbidLegacyRuntimeReads(store),
+				config: testConfig(root),
+				context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+				runId: "run-validation-aborted",
+				now: () => "2026-07-08T00:02:00.000Z",
+				signal: controller.signal,
+			}),
+		).rejects.toThrow("stop validation");
+		expect(store.listAgentV2Validations("client-a", "run-validation-aborted")).toEqual([]);
+	});
+
 	it("uses persisted validation repair attempts to stop retryable failures at max attempts", async () => {
 		const root = tempRoot();
 		const store = createStore(root);
@@ -497,6 +537,7 @@ function testConfig(root: string): StorageConfig {
 		runtimeStore: "postgres",
 		postgresUrl: "postgres://pi:pi@postgres:5432/pi_coding",
 		runsEnabled: false,
+		appAgentVersion: "v2",
 		workerId: "test-worker",
 		workerConcurrency: 2,
 		runMaxAgentTurns: 80,
@@ -506,9 +547,12 @@ function testConfig(root: string): StorageConfig {
 		runRetryMaxDelayMs: 60000,
 		runRetryJitterRatio: 0.2,
 		runQueueName: "pi:runs",
+		agentV2RunQueueName: "pi:agent-v2:runs",
 		runEventRetentionDays: 30,
 		runEventStreamMaxLen: 5000,
 		runEventStreamTtlSeconds: 3600,
+		agentV2RunEventStreamMaxLen: 5000,
+		agentV2RunEventStreamTtlSeconds: 3600,
 		runEventCheckpointIntervalMs: 400,
 		runEventCheckpointMinChars: 256,
 		clientIdRequired: true,

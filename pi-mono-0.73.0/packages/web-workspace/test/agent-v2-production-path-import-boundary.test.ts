@@ -134,10 +134,25 @@ describe("agent v2 production import boundary", () => {
 
 	it("does not let the v2 worker import through the package root barrel", () => {
 		const source = readFileSync(join(repoRoot, "apps", "pi-coding-web", "src", "worker", "main.ts"), "utf8");
+		const agentV2RuntimeImport = source.match(
+			/import\s*\{[\s\S]*?\}\s*from "@mariozechner\/pi-web-workspace\/agent-v2-runtime";/,
+		)?.[0];
+		const runtimeInfraImport = source.match(
+			/import\s*\{[\s\S]*?\}\s*from "@mariozechner\/pi-web-workspace\/runtime-infra";/,
+		)?.[0];
 
 		expect(source).not.toContain('from "@mariozechner/pi-web-workspace"');
+		expect(source).not.toContain("RedisRunQueue");
+		expect(source).not.toMatch(/\bRuntimeStore\b/);
 		expect(source).toContain('from "@mariozechner/pi-web-workspace/agent-v2-runtime"');
 		expect(source).toContain('from "@mariozechner/pi-web-workspace/runtime-infra"');
+		expect(source).toContain("createRedisAgentV2RunQueue");
+		expect(source).toContain("AgentV2SchemaStore");
+		expect(source).toContain("AgentV2WorkerStore");
+		expect(agentV2RuntimeImport).toContain("type AgentV2WorkerStore");
+		expect(agentV2RuntimeImport).toContain("type AgentV2RunQueue");
+		expect(runtimeInfraImport).toContain("createRedisAgentV2RunQueue");
+		expect(runtimeInfraImport).toContain("type AgentV2SchemaStore");
 	});
 
 	it("keeps the runtime-infra subpath limited to v2 queue exports", () => {

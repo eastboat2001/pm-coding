@@ -2,20 +2,21 @@ import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
 	AgentV2RunEventLog,
+	type AgentV2RunQueue,
 	type AgentV2RunSnapshot,
 	type AgentV2WorkerExecution,
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
-	createRedisAgentV2RunQueue,
 	executeAgentV2NextTask,
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
 	type RedisAgentV2RunEventBusOptions,
+	type AgentV2WorkerStore,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
 import {
+	createRedisAgentV2RunQueue,
 	createRuntimeStore,
 	type AgentV2SchemaStore,
-	type AgentV2WorkerStore,
 	type DiagnosticLogEventInput,
 	type JsonObject,
 	loadStorageConfig,
@@ -100,11 +101,14 @@ async function main(): Promise<void> {
 	let runEventBus: RedisAgentV2RunEventBus | undefined;
 	let worker: AgentV2WorkerService | undefined;
 	try {
-		runtimeDb = createRuntimeStore(config) as WorkerV2ExecutionStore;
+		runtimeDb = createRuntimeStore(config) as AgentV2SchemaStore & AgentV2WorkerStore & WorkerV2Db;
 		await ensureRuntimeSchemas(runtimeDb);
 
 		const options = createAgentV2WorkerRunEventOptions(config);
-		const queue = createRedisAgentV2RunQueue(options.queue);
+		const queue: AgentV2RunQueue = createRedisAgentV2RunQueue({
+			redisUrl: config.redisUrl,
+			queueName: config.agentV2RunQueueName,
+		});
 		runEventBus = new RedisAgentV2RunEventBus(options.bus);
 		const events = new AgentV2RunEventLog({ store: runtimeDb, bus: runEventBus });
 		worker = new AgentV2WorkerService({

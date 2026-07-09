@@ -3,5 +3,6 @@ smallcode/
 *.tar.gz
 pi-mono-0.73.0/docker/**/data/
 .codegraph/
+.superpowers/
 .worktrees/
 .npm-cache/

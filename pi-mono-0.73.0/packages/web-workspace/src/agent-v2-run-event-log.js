@@ -1,6 +1,4 @@
 export class AgentV2RunEventLog {
-    bus;
-    store;
     constructor(options) {
         this.store = options.store;
         this.bus = options.bus;

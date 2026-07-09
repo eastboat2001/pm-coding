@@ -163,6 +163,32 @@ describe("agent v2 production import boundary", () => {
 		expect(source).toContain("createRedisAgentV2RunQueue");
 	});
 
+	it("keeps committed source JavaScript mirrors aligned with the v2 public surface", () => {
+		const rootMirror = readFileSync(join(repoRoot, "packages", "web-workspace", "src", "index.js"), "utf8");
+		const runtimeInfraMirror = readFileSync(
+			join(repoRoot, "packages", "web-workspace", "src", "runtime-infra.js"),
+			"utf8",
+		);
+		const agentRuntimeMirror = readFileSync(
+			join(repoRoot, "packages", "web-workspace", "src", "agent-v2-runtime.js"),
+			"utf8",
+		);
+
+		for (const legacyModule of [
+			'"./run-event-bus.js"',
+			'"./run-event-sink.js"',
+			'"./run-queue.js"',
+			'"./run-retry-controller.js"',
+			'"./runtime-store.js"',
+		]) {
+			expect(rootMirror, `index.js must not export ${legacyModule}`).not.toContain(legacyModule);
+			expect(runtimeInfraMirror, `runtime-infra.js must not export ${legacyModule}`).not.toContain(legacyModule);
+		}
+		expect(runtimeInfraMirror).not.toContain("RedisRunQueue");
+		expect(runtimeInfraMirror).toContain("createRedisAgentV2RunQueue");
+		expect(agentRuntimeMirror).toContain("createRedisAgentV2RunQueue");
+	});
+
 	it("keeps v2 production contracts independent from the legacy RuntimeStore interface", () => {
 		const violations = productionV2Files()
 			.map(toRepoPath)

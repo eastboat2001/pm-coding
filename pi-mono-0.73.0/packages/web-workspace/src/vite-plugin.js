@@ -4,14 +4,13 @@ import { dirname } from "node:path";
 import { AgentV2RunApiError, AgentV2RunApiService } from "./agent-v2-run-api-service.js";
 import { RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
-import { createAgentV2RunQueue } from "./agent-v2-run-queue.js";
+import { createRedisAgentV2RunQueue } from "./agent-v2-run-queue.js";
 import { normalizeClientId, readClientIdHeader } from "./client-id.js";
 import { loadStorageConfig } from "./config.js";
 import { API_PREFIX, LOGS_API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, RUNS_API_PREFIX, SESSIONS_API_PREFIX, SKILLS_API_PREFIX, } from "./constants.js";
 import { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
-import { RedisRunQueue } from "./run-queue.js";
 import { createRuntimeStore } from "./runtime-store-factory.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { sanitizePathComponent } from "./workspace-paths.js";
@@ -36,7 +35,10 @@ export function configuredStoragePlugin(envFile) {
     const skills = new WorkspaceSkillService(config, diagnostics);
     const runtimeDb = createRuntimeStore(config);
     const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
-    const agentV2RunQueue = createAgentV2RunQueue(new RedisRunQueue({ redisUrl: config.redisUrl, queueName: config.agentV2RunQueueName }));
+    const agentV2RunQueue = createRedisAgentV2RunQueue({
+        redisUrl: config.redisUrl,
+        queueName: config.agentV2RunQueueName,
+    });
     const agentV2RunEventBus = new RedisAgentV2RunEventBus({
         redisUrl: config.redisUrl,
         maxLen: config.agentV2RunEventStreamMaxLen,

@@ -1,3 +1,7 @@
+import { RedisRunQueue } from "./run-queue.js";
+export function createRedisAgentV2RunQueue(options) {
+    return createAgentV2RunQueue(new RedisRunQueue(options));
+}
 export function createAgentV2RunQueue(queue) {
     return {
         enqueue(run) {

@@ -1,8 +1,5 @@
 const DIAGNOSTIC_CONTEXT_PADDING_MS = 10 * 60 * 1000;
 export class WorkspaceDiagnosticExportService {
-    runtimeDb;
-    diagnostics;
-    sessions;
     constructor(runtimeDb, diagnostics, sessions) {
         this.runtimeDb = runtimeDb;
         this.diagnostics = diagnostics;

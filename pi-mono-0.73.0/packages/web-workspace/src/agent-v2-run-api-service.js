@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AgentV2RunInputContractError, validateAgentV2RunInput } from "./agent-v2-run-input-contract.js";
 export class AgentV2RunApiError extends Error {
+    statusCode;
     constructor(message, statusCode) {
         super(message);
         this.statusCode = statusCode;
@@ -8,6 +9,11 @@ export class AgentV2RunApiError extends Error {
     }
 }
 export class AgentV2RunApiService {
+    createRunId;
+    events;
+    now;
+    queue;
+    store;
     constructor(options) {
         this.store = options.store;
         this.queue = options.queue;

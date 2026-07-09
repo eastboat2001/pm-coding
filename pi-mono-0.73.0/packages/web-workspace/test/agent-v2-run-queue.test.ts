@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import { InMemoryRunQueue } from "../src/run-queue.js";
+import type { RunQueue, RunQueueClearResult } from "../src/run-queue.js";
 
 describe("AgentV2RunQueue", () => {
 	test("claims only structured v2 identities", async () => {
@@ -29,4 +30,64 @@ describe("AgentV2RunQueue", () => {
 		await expect(queue.isCancelRequested(run)).resolves.toBe(true);
 		await expect(queue.claim("worker-a", 0)).resolves.toBeUndefined();
 	});
+
+	test("delegates clear to the wrapped queue", async () => {
+		const result: RunQueueClearResult = {
+			queueItemsDeleted: 4,
+			activeClaimsDeleted: 3,
+			cancelKeysDeleted: 2,
+		};
+		const base = new ClearOnlyRunQueue(result);
+		const queue = createAgentV2RunQueue(base);
+
+		await expect(queue.clear()).resolves.toEqual(result);
+		expect(base.clearCalls).toBe(1);
+	});
 });
+
+class ClearOnlyRunQueue implements RunQueue {
+	clearCalls = 0;
+
+	constructor(private readonly result: RunQueueClearResult) {}
+
+	async enqueue(): Promise<void> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+
+	async claim(): Promise<undefined> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+
+	async complete(): Promise<void> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+
+	async requeueActive(): Promise<number> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+
+	async renewLease(): Promise<boolean> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+
+	async releaseExpiredClaims(): Promise<[]> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+
+	async requestCancel(): Promise<void> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+
+	async isCancelRequested(): Promise<boolean> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+
+	async clear(): Promise<RunQueueClearResult> {
+		this.clearCalls += 1;
+		return this.result;
+	}
+
+	async close(): Promise<void> {
+		throw new Error("wrapper must delegate clear without inferring queue keys");
+	}
+}

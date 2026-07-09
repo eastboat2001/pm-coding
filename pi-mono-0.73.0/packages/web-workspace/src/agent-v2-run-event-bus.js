@@ -27,6 +27,22 @@ export class InMemoryAgentV2RunEventBus {
         const events = this.eventsByStream.get(agentV2RunEventStreamKey(request)) ?? [];
         return events.filter((event) => event.seq > request.afterSeq);
     }
+    async purge(options = {}) {
+        this.assertOpen();
+        if (options.clientId && options.runId) {
+            const deleted = this.eventsByStream.delete(agentV2RunEventStreamKey({ clientId: options.clientId, runId: options.runId }));
+            return { streamsDeleted: deleted ? 1 : 0 };
+        }
+        const keys = [...this.eventsByStream.keys()].filter((key) => {
+            if (!options.clientId)
+                return true;
+            return key.startsWith(`pi:agent-v2:runs:${options.clientId}:`) && key.endsWith(":events");
+        });
+        for (const key of keys) {
+            this.eventsByStream.delete(key);
+        }
+        return { streamsDeleted: keys.length };
+    }
     async close() {
         this.closed = true;
         this.eventsByStream.clear();
@@ -120,6 +136,21 @@ export class RedisAgentV2RunEventBus {
             }
         }
     }
+    async purge(options = {}) {
+        this.assertOpen();
+        if (options.clientId && options.runId) {
+            return this.deleteStreams([agentV2RunEventStreamKey({ clientId: options.clientId, runId: options.runId })]);
+        }
+        const pattern = options.clientId
+            ? `pi:agent-v2:runs:${options.clientId}:*:events`
+            : "pi:agent-v2:runs:*:events";
+        const client = await this.connectedClient();
+        const keys = [];
+        for await (const key of client.scanIterator({ MATCH: pattern, COUNT: 100 })) {
+            keys.push(String(key));
+        }
+        return this.deleteStreams(keys);
+    }
     async close() {
         this.closed = true;
         await Promise.all([...this.activeBlockingClients].map(async (client) => {
@@ -143,6 +174,14 @@ export class RedisAgentV2RunEventBus {
             await blockingClient.connect();
         }
         return blockingClient;
+    }
+    async deleteStreams(keys) {
+        if (keys.length === 0) {
+            return { streamsDeleted: 0 };
+        }
+        const client = await this.connectedClient();
+        const counts = await Promise.all(chunk(keys, 100).map((batch) => client.del(batch)));
+        return { streamsDeleted: counts.reduce((total, count) => total + count, 0) };
     }
     async connectedClient() {
         this.assertOpen();
@@ -227,5 +266,12 @@ function isAgentV2LiveRunEvent(value) {
 }
 function isObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function chunk(items, size) {
+    const chunks = [];
+    for (let index = 0; index < items.length; index += size) {
+        chunks.push(items.slice(index, index + size));
+    }
+    return chunks;
 }
 //# sourceMappingURL=agent-v2-run-event-bus.js.map

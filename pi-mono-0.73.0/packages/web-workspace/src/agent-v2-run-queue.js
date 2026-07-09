@@ -25,6 +25,9 @@ export function createAgentV2RunQueue(queue) {
         isCancelRequested(run) {
             return queue.isCancelRequested(toAgentV2Identity(run));
         },
+        clear() {
+            return queue.clear();
+        },
         close() {
             return queue.close();
         },

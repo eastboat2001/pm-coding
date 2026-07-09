@@ -65,6 +65,8 @@ export {
 export { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
 export {
 	type AgentV2RunEventBus,
+	type AgentV2RunEventBusPurgeOptions,
+	type AgentV2RunEventBusPurgeResult,
 	agentV2RunEventStreamKey,
 	InMemoryAgentV2RunEventBus,
 	RedisAgentV2RunEventBus,
@@ -240,7 +242,7 @@ export {
 	type RunEventSinkOptions,
 	type RunEventSinkStore,
 } from "./run-event-sink.js";
-export type { ClaimedRun, RunQueue, RunQueueIdentity, RunQueueItem } from "./run-queue.js";
+export type { ClaimedRun, RunQueue, RunQueueClearResult, RunQueueIdentity, RunQueueItem } from "./run-queue.js";
 export { InMemoryRunQueue, RedisRunQueue } from "./run-queue.js";
 export {
 	RunRetryController,

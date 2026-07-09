@@ -13,7 +13,17 @@ const DEFAULT_READ_COUNT = 100;
 export interface AgentV2RunEventBus {
 	publish(event: AgentV2LiveRunEvent): Promise<void>;
 	read(request: AgentV2RunEventReadRequest): Promise<AgentV2LiveRunEvent[]>;
+	purge(options?: AgentV2RunEventBusPurgeOptions): Promise<AgentV2RunEventBusPurgeResult>;
 	close(): Promise<void>;
+}
+
+export interface AgentV2RunEventBusPurgeOptions {
+	clientId?: string;
+	runId?: string;
+}
+
+export interface AgentV2RunEventBusPurgeResult {
+	streamsDeleted: number;
 }
 
 export function agentV2RunEventStreamKey(identity: AgentV2RunEventIdentity): string {
@@ -44,6 +54,24 @@ export class InMemoryAgentV2RunEventBus implements AgentV2RunEventBus {
 		return events.filter((event) => event.seq > request.afterSeq);
 	}
 
+	async purge(options: AgentV2RunEventBusPurgeOptions = {}): Promise<AgentV2RunEventBusPurgeResult> {
+		this.assertOpen();
+		if (options.clientId && options.runId) {
+			const deleted = this.eventsByStream.delete(
+				agentV2RunEventStreamKey({ clientId: options.clientId, runId: options.runId }),
+			);
+			return { streamsDeleted: deleted ? 1 : 0 };
+		}
+		const keys = [...this.eventsByStream.keys()].filter((key) => {
+			if (!options.clientId) return true;
+			return key.startsWith(`pi:agent-v2:runs:${options.clientId}:`) && key.endsWith(":events");
+		});
+		for (const key of keys) {
+			this.eventsByStream.delete(key);
+		}
+		return { streamsDeleted: keys.length };
+	}
+
 	async close(): Promise<void> {
 		this.closed = true;
 		this.eventsByStream.clear();
@@ -66,8 +94,10 @@ export interface RedisAgentV2RunEventBusClient {
 	connect(): Promise<unknown>;
 	disconnect(): Promise<unknown> | unknown;
 	duplicate(): RedisAgentV2RunEventBusClient;
+	del(keys: string | string[]): Promise<number>;
 	expire(key: string, seconds: number): Promise<unknown>;
 	quit(): Promise<unknown> | unknown;
+	scanIterator(options: { MATCH: string; COUNT: number }): AsyncIterable<unknown>;
 	xAdd(key: string, id: string, message: Record<string, string>, options?: unknown): Promise<unknown>;
 	xRead(streams: unknown, options?: unknown): Promise<unknown>;
 }
@@ -170,6 +200,23 @@ export class RedisAgentV2RunEventBus implements AgentV2RunEventBus {
 		}
 	}
 
+	async purge(options: AgentV2RunEventBusPurgeOptions = {}): Promise<AgentV2RunEventBusPurgeResult> {
+		this.assertOpen();
+		if (options.clientId && options.runId) {
+			return this.deleteStreams([agentV2RunEventStreamKey({ clientId: options.clientId, runId: options.runId })]);
+		}
+
+		const pattern = options.clientId
+			? `pi:agent-v2:runs:${options.clientId}:*:events`
+			: "pi:agent-v2:runs:*:events";
+		const client = await this.connectedClient();
+		const keys: string[] = [];
+		for await (const key of client.scanIterator({ MATCH: pattern, COUNT: 100 })) {
+			keys.push(String(key));
+		}
+		return this.deleteStreams(keys);
+	}
+
 	async close(): Promise<void> {
 		this.closed = true;
 		await Promise.all(
@@ -198,6 +245,15 @@ export class RedisAgentV2RunEventBus implements AgentV2RunEventBus {
 			await blockingClient.connect();
 		}
 		return blockingClient;
+	}
+
+	private async deleteStreams(keys: readonly string[]): Promise<AgentV2RunEventBusPurgeResult> {
+		if (keys.length === 0) {
+			return { streamsDeleted: 0 };
+		}
+		const client = await this.connectedClient();
+		const counts = await Promise.all(chunk(keys, 100).map((batch) => client.del(batch)));
+		return { streamsDeleted: counts.reduce((total, count) => total + count, 0) };
 	}
 
 	private async connectedClient(): Promise<RedisAgentV2RunEventBusClient> {
@@ -295,4 +351,12 @@ function isAgentV2LiveRunEvent(value: unknown): value is AgentV2LiveRunEvent {
 
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+	const chunks: T[][] = [];
+	for (let index = 0; index < items.length; index += size) {
+		chunks.push(items.slice(index, index + size));
+	}
+	return chunks;
 }

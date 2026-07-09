@@ -162,6 +162,18 @@ export class InMemoryRunQueue {
         this.assertOpen();
         return this.cancelRequests.has(runKey(run));
     }
+    async clear() {
+        this.assertOpen();
+        const result = {
+            queueItemsDeleted: this.queued.length,
+            activeClaimsDeleted: this.active.size,
+            cancelKeysDeleted: this.cancelRequests.size,
+        };
+        this.queued.length = 0;
+        this.active.clear();
+        this.cancelRequests.clear();
+        return result;
+    }
     async close() {
         this.closed = true;
         this.queued.length = 0;
@@ -275,6 +287,24 @@ export class RedisRunQueue {
         this.assertOpen();
         const client = await this.connectedClient();
         return (await client.exists(this.cancelKey(run))) > 0;
+    }
+    async clear() {
+        this.assertOpen();
+        const client = await this.connectedClient();
+        const [queueItemsDeleted, activeClaimsDeleted] = await Promise.all([
+            client.lLen(this.queueName),
+            client.hLen(this.activeKey),
+        ]);
+        const cancelKeys = [];
+        for await (const key of client.scanIterator({ MATCH: `${this.queueName}:cancel:*`, COUNT: 100 })) {
+            cancelKeys.push(String(key));
+        }
+        await Promise.all([
+            client.del(this.queueName),
+            client.del(this.activeKey),
+            ...chunk(cancelKeys, 100).map((keys) => client.del(keys)),
+        ]);
+        return { queueItemsDeleted, activeClaimsDeleted, cancelKeysDeleted: cancelKeys.length };
     }
     async close() {
         this.closed = true;
@@ -474,5 +504,12 @@ function toUtf8String(value) {
         return value;
     }
     return Buffer.isBuffer(value) ? value.toString("utf8") : undefined;
+}
+function chunk(items, size) {
+    const chunks = [];
+    for (let index = 0; index < items.length; index += size) {
+        chunks.push(items.slice(index, index + size));
+    }
+    return chunks;
 }
 //# sourceMappingURL=run-queue.js.map

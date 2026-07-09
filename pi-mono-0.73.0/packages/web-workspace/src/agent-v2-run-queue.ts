@@ -1,4 +1,4 @@
-import type { ActiveRunClaim, ClaimedRun, RunQueue } from "./run-queue.js";
+import type { ActiveRunClaim, ClaimedRun, RunQueue, RunQueueClearResult } from "./run-queue.js";
 
 export interface AgentV2RunQueueIdentity {
 	clientId: string;
@@ -23,6 +23,7 @@ export interface AgentV2RunQueue {
 	releaseExpiredClaims(): Promise<AgentV2ActiveRunClaim[]>;
 	requestCancel(run: AgentV2RunQueueIdentity): Promise<void>;
 	isCancelRequested(run: AgentV2RunQueueIdentity): Promise<boolean>;
+	clear(): Promise<RunQueueClearResult>;
 	close(): Promise<void>;
 }
 
@@ -52,6 +53,9 @@ export function createAgentV2RunQueue(queue: RunQueue): AgentV2RunQueue {
 		},
 		isCancelRequested(run) {
 			return queue.isCancelRequested(toAgentV2Identity(run));
+		},
+		clear() {
+			return queue.clear();
 		},
 		close() {
 			return queue.close();

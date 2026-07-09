@@ -100,6 +100,12 @@ export interface ActiveRunClaim extends ClaimedRun {
 	leaseExpiresAtMs: number;
 }
 
+export interface RunQueueClearResult {
+	queueItemsDeleted: number;
+	activeClaimsDeleted: number;
+	cancelKeysDeleted: number;
+}
+
 export interface RunQueue {
 	enqueue(run: RunQueueItem): Promise<void>;
 	claim(workerId: string, timeoutMs: number): Promise<ClaimedRun | undefined>;
@@ -109,6 +115,7 @@ export interface RunQueue {
 	releaseExpiredClaims(): Promise<ActiveRunClaim[]>;
 	requestCancel(run: RunQueueItem | ClaimedRun): Promise<void>;
 	isCancelRequested(run: RunQueueItem | ClaimedRun): Promise<boolean>;
+	clear(): Promise<RunQueueClearResult>;
 	close(): Promise<void>;
 }
 
@@ -206,6 +213,19 @@ export class InMemoryRunQueue implements RunQueue {
 	async isCancelRequested(run: RunQueueItem | ClaimedRun): Promise<boolean> {
 		this.assertOpen();
 		return this.cancelRequests.has(runKey(run));
+	}
+
+	async clear(): Promise<RunQueueClearResult> {
+		this.assertOpen();
+		const result = {
+			queueItemsDeleted: this.queued.length,
+			activeClaimsDeleted: this.active.size,
+			cancelKeysDeleted: this.cancelRequests.size,
+		};
+		this.queued.length = 0;
+		this.active.clear();
+		this.cancelRequests.clear();
+		return result;
 	}
 
 	async close(): Promise<void> {
@@ -339,6 +359,25 @@ export class RedisRunQueue implements RunQueue {
 		this.assertOpen();
 		const client = await this.connectedClient();
 		return (await client.exists(this.cancelKey(run))) > 0;
+	}
+
+	async clear(): Promise<RunQueueClearResult> {
+		this.assertOpen();
+		const client = await this.connectedClient();
+		const [queueItemsDeleted, activeClaimsDeleted] = await Promise.all([
+			client.lLen(this.queueName),
+			client.hLen(this.activeKey),
+		]);
+		const cancelKeys: string[] = [];
+		for await (const key of client.scanIterator({ MATCH: `${this.queueName}:cancel:*`, COUNT: 100 })) {
+			cancelKeys.push(String(key));
+		}
+		await Promise.all([
+			client.del(this.queueName),
+			client.del(this.activeKey),
+			...chunk(cancelKeys, 100).map((keys) => client.del(keys)),
+		]);
+		return { queueItemsDeleted, activeClaimsDeleted, cancelKeysDeleted: cancelKeys.length };
 	}
 
 	async close(): Promise<void> {
@@ -566,4 +605,12 @@ function toUtf8String(value: unknown): string | undefined {
 		return value;
 	}
 	return Buffer.isBuffer(value) ? value.toString("utf8") : undefined;
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+	const chunks: T[][] = [];
+	for (let index = 0; index < items.length; index += size) {
+		chunks.push(items.slice(index, index + size));
+	}
+	return chunks;
 }

@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { InMemoryRunQueue } from "../src/run-queue.js";
+import { describe, expect, it, vi } from "vitest";
+import { InMemoryRunQueue, RedisRunQueue } from "../src/run-queue.js";
+
+const redisMock = vi.hoisted(() => ({
+	createClient: vi.fn(),
+}));
+
+vi.mock("redis", () => ({
+	createClient: redisMock.createClient,
+}));
 
 describe("InMemoryRunQueue", () => {
 	it("claims queued runs and removes completed runs", async () => {
@@ -18,6 +26,20 @@ describe("InMemoryRunQueue", () => {
 		await queue.requestCancel("r1");
 
 		await expect(queue.isCancelRequested("r1")).resolves.toBe(true);
+	});
+
+	it("clears queued, active, and cancel state", async () => {
+		const queue = new InMemoryRunQueue();
+		await queue.enqueue({ clientId: "client-a", runId: "run-queued" });
+		await queue.enqueue({ clientId: "client-a", runId: "run-active" });
+		expect(await queue.claim("worker-a", 0)).toEqual({ clientId: "client-a", runId: "run-queued" });
+		await queue.requestCancel({ clientId: "client-a", runId: "run-cancelled" });
+
+		const result = await queue.clear();
+
+		expect(result).toEqual({ queueItemsDeleted: 1, activeClaimsDeleted: 1, cancelKeysDeleted: 1 });
+		expect(await queue.claim("worker-a", 0)).toBeUndefined();
+		expect(await queue.isCancelRequested({ clientId: "client-a", runId: "run-cancelled" })).toBe(false);
 	});
 
 	it("removes queued runs when cancellation is requested before claim", async () => {
@@ -122,3 +144,65 @@ describe("InMemoryRunQueue", () => {
 		await expect(queue.claim("w1", 1)).rejects.toThrow("Run queue is closed");
 	});
 });
+
+describe("RedisRunQueue", () => {
+	it("clears queue, active claims, and cancel keys with SCAN", async () => {
+		const fake = new FakeRedisRunQueueClient();
+		fake.queueLengths.set("pi:agent-v2:runs", 3);
+		fake.hashLengths.set("pi:agent-v2:runs:active", 1);
+		fake.scanResults.push("pi:agent-v2:runs:cancel:run-a", "pi:agent-v2:runs:cancel:run-b");
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = new RedisRunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+
+		const result = await queue.clear();
+
+		expect(fake.scanPatterns).toContain("pi:agent-v2:runs:cancel:*");
+		expect(fake.usedKeysCommand).toBe(false);
+		expect(result).toEqual({ queueItemsDeleted: 3, activeClaimsDeleted: 1, cancelKeysDeleted: 2 });
+		expect(fake.delCalls).toEqual([
+			["pi:agent-v2:runs"],
+			["pi:agent-v2:runs:active"],
+			["pi:agent-v2:runs:cancel:run-a", "pi:agent-v2:runs:cancel:run-b"],
+		]);
+	});
+});
+
+class FakeRedisRunQueueClient {
+	isOpen = false;
+	readonly delCalls: string[][] = [];
+	readonly hashLengths = new Map<string, number>();
+	readonly queueLengths = new Map<string, number>();
+	readonly scanPatterns: string[] = [];
+	readonly scanResults: string[] = [];
+	usedKeysCommand = false;
+
+	async connect(): Promise<void> {
+		this.isOpen = true;
+	}
+
+	async lLen(key: string): Promise<number> {
+		return this.queueLengths.get(key) ?? 0;
+	}
+
+	async hLen(key: string): Promise<number> {
+		return this.hashLengths.get(key) ?? 0;
+	}
+
+	async del(...keysOrBatches: Array<string | string[]>): Promise<number> {
+		const keys = keysOrBatches.flat();
+		this.delCalls.push(keys);
+		return keys.length;
+	}
+
+	async *scanIterator(options: { MATCH?: string; COUNT?: number }): AsyncIterable<string> {
+		this.scanPatterns.push(options.MATCH ?? "");
+		for (const key of this.scanResults) {
+			yield key;
+		}
+	}
+
+	async keys(_pattern: string): Promise<string[]> {
+		this.usedKeysCommand = true;
+		return [];
+	}
+}

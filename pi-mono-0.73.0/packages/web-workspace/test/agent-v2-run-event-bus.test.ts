@@ -47,6 +47,20 @@ describe("InMemoryAgentV2RunEventBus", () => {
 		await expect(bus.publish(event(2))).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.read({ ...identity, afterSeq: 0 })).rejects.toThrow("Agent v2 run event bus is closed");
 	});
+
+	it("purges streams by client id", async () => {
+		const bus = new InMemoryAgentV2RunEventBus();
+		await bus.publish(event(1));
+		await bus.publish({ ...event(2), runId: "run-b" });
+		await bus.publish({ ...event(3), clientId: "client-b", runId: "run-c" });
+
+		await expect(bus.purge({ clientId: "client-a" })).resolves.toEqual({ streamsDeleted: 2 });
+		await expect(bus.read({ ...identity, afterSeq: 0 })).resolves.toEqual([]);
+		await expect(bus.read({ clientId: "client-a", runId: "run-b", afterSeq: 0 })).resolves.toEqual([]);
+		await expect(bus.read({ clientId: "client-b", runId: "run-c", afterSeq: 0 })).resolves.toEqual([
+			{ ...event(3), clientId: "client-b", runId: "run-c" },
+		]);
+	});
 });
 
 describe("RedisAgentV2RunEventBus", () => {
@@ -95,6 +109,36 @@ describe("RedisAgentV2RunEventBus", () => {
 		await expect(bus.publish(event(1))).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.read({ ...identity, afterSeq: 0 })).rejects.toThrow("Agent v2 run event bus is closed");
 	});
+
+	it("purges a specific Redis stream without scanning", async () => {
+		const client = new FakeRedisClient();
+		const bus = new RedisAgentV2RunEventBus({
+			redisUrl: "redis://example",
+			createClient: () => client,
+		});
+
+		await expect(bus.purge({ clientId: "client-a", runId: "run-a" })).resolves.toEqual({ streamsDeleted: 1 });
+		expect(client.deletedKeys).toEqual(["pi:agent-v2:runs:client-a:run-a:events"]);
+		expect(client.scanPatterns).toEqual([]);
+		expect(client.usedKeysCommand).toBe(false);
+	});
+
+	it("purges Redis streams by scanning the requested client pattern", async () => {
+		const client = new FakeRedisClient();
+		client.scanResults.push("pi:agent-v2:runs:client-a:run-a:events", "pi:agent-v2:runs:client-a:run-b:events");
+		const bus = new RedisAgentV2RunEventBus({
+			redisUrl: "redis://example",
+			createClient: () => client,
+		});
+
+		await expect(bus.purge({ clientId: "client-a" })).resolves.toEqual({ streamsDeleted: 2 });
+		expect(client.scanPatterns).toContain("pi:agent-v2:runs:client-a:*:events");
+		expect(client.deletedKeys).toEqual([
+			"pi:agent-v2:runs:client-a:run-a:events",
+			"pi:agent-v2:runs:client-a:run-b:events",
+		]);
+		expect(client.usedKeysCommand).toBe(false);
+	});
 });
 
 interface FakeRedisState {
@@ -107,6 +151,10 @@ interface FakeRedisState {
 	}>;
 	readonly xReadCalls: Array<{ streams: unknown; options: unknown }>;
 	readonly xReadResults: unknown[];
+	readonly deletedKeys: string[];
+	readonly scanPatterns: string[];
+	readonly scanResults: string[];
+	usedKeysCommand: boolean;
 }
 
 class FakeRedisClient {
@@ -120,6 +168,10 @@ class FakeRedisClient {
 			xAddCalls: [],
 			xReadCalls: [],
 			xReadResults: [],
+			deletedKeys: [],
+			scanPatterns: [],
+			scanResults: [],
+			usedKeysCommand: false,
 		},
 	) {}
 
@@ -142,6 +194,22 @@ class FakeRedisClient {
 
 	get xReadResults(): unknown[] {
 		return this.state.xReadResults;
+	}
+
+	get deletedKeys(): string[] {
+		return this.state.deletedKeys;
+	}
+
+	get scanPatterns(): string[] {
+		return this.state.scanPatterns;
+	}
+
+	get scanResults(): string[] {
+		return this.state.scanResults;
+	}
+
+	get usedKeysCommand(): boolean {
+		return this.state.usedKeysCommand;
 	}
 
 	async connect(): Promise<void> {
@@ -177,6 +245,24 @@ class FakeRedisClient {
 		this.xReadCalls.push({ streams, options });
 		const result = this.xReadResults.shift() ?? null;
 		return Promise.race([Promise.resolve(result), this.disconnectPromise()]);
+	}
+
+	async del(...keysOrBatches: Array<string | string[]>): Promise<number> {
+		const keys = keysOrBatches.flat();
+		this.deletedKeys.push(...keys);
+		return keys.length;
+	}
+
+	async *scanIterator(options: { MATCH?: string; COUNT?: number }): AsyncIterable<string> {
+		this.scanPatterns.push(options.MATCH ?? "");
+		for (const key of this.scanResults) {
+			yield key;
+		}
+	}
+
+	async keys(_pattern: string): Promise<string[]> {
+		this.state.usedKeysCommand = true;
+		return [];
 	}
 
 	private disconnectPromise(): Promise<never> {

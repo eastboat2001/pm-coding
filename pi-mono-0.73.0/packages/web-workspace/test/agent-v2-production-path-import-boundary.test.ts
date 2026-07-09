@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -100,16 +100,12 @@ describe("agent v2 production import boundary", () => {
 
 function productionV2Files(): string[] {
 	const webWorkspaceSrc = join(repoRoot, "packages", "web-workspace", "src");
-	const agentV2Files = readdirSync(webWorkspaceSrc)
-		.filter((name) => name.startsWith("agent-v2-") && name.endsWith(".ts"))
-		.map((name) => join(webWorkspaceSrc, name));
+	const agentV2Files = collectTsFiles(webWorkspaceSrc).filter((file) => basename(file).startsWith("agent-v2-"));
 	const v2OnlySubpathExports = ["agent-v2-runtime.ts", "runtime-infra.ts"]
 		.map((name) => join(webWorkspaceSrc, name))
 		.filter(existsSync);
 	const workerSrc = join(repoRoot, "apps", "pi-coding-web", "src", "worker");
-	const workerFiles = readdirSync(workerSrc)
-		.filter((name) => name.endsWith(".ts"))
-		.map((name) => join(workerSrc, name));
+	const workerFiles = collectTsFiles(workerSrc);
 	return [
 		...agentV2Files,
 		...v2OnlySubpathExports,
@@ -119,6 +115,22 @@ function productionV2Files(): string[] {
 
 function toRepoPath(file: string): string {
 	return relative(repoRoot, file).replace(/\\/g, "/");
+}
+
+function collectTsFiles(dir: string): string[] {
+	const entries = readdirSync(dir, { withFileTypes: true });
+	const out: string[] = [];
+	for (const entry of entries) {
+		const filePath = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			out.push(...collectTsFiles(filePath));
+			continue;
+		}
+		if (entry.isFile() && entry.name.endsWith(".ts")) {
+			out.push(filePath);
+		}
+	}
+	return out;
 }
 
 function extractFunctionSource(source: string, functionName: string): string {

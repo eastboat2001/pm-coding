@@ -16,6 +16,7 @@ import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 const CLIENT_ID = "11111111-1111-4111-8111-111111111111";
 const PREFIX = "/api/runtime/agent-v2/runs";
 const LEGACY_RUN_API_PREFIXES = ["/api/runtime/runs", "/api/pi-runs", "/api/runs"] as const;
+const LEGACY_SESSION_API_PREFIXES = ["/api/pi-sessions"] as const;
 const cleanupRoots: string[] = [];
 
 afterEach(() => {
@@ -201,6 +202,30 @@ it("returns fixed legacy removal responses without legacy services", async () =>
 		expect(goalResponse.statusCode).toBe(404);
 		expect(JSON.parse(goalResponse.body).error).toBe("Legacy app-preview-goal routes have been removed.");
 		expect(() => harness.closeServer()).not.toThrow();
+		expectLegacyRunApiUnused(harness.legacyRunApi);
+	});
+
+it("returns fixed 410 responses for legacy session routes without calling the legacy service", async () => {
+		const harness = createHarness();
+		const sessionCases = LEGACY_SESSION_API_PREFIXES.flatMap((prefix) => [
+			{ label: `${prefix} get`, method: "GET", url: `${prefix}/session-a` },
+			{ label: `${prefix} list`, method: "GET", url: `${prefix}` },
+			{
+				label: `${prefix} events SSE`,
+				method: "GET",
+				url: `${prefix}/session-a/events`,
+				headers: { accept: "text/event-stream" },
+			},
+		]);
+
+		for (const route of sessionCases) {
+			const response = await dispatch(harness.middleware, route);
+			expect(response.statusCode, route.label).toBe(410);
+			expect(JSON.parse(response.body).error, route.label).toBe(
+				"Application Generation Agent v1 runtime session routes have been removed.",
+			);
+			expect(response.headers.get("Content-Type"), route.label).toBe("application/json; charset=utf-8");
+		}
 		expectLegacyRunApiUnused(harness.legacyRunApi);
 	});
 

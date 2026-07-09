@@ -83,7 +83,7 @@ describe("storage config diagnostics", () => {
 						envFileExists: false,
 						runsEnabled: true,
 						redisUrl: "redis://127.0.0.1:6379",
-						runQueueName: "pi:runs",
+						agentV2RunQueueName: "pi:agent-v2:runs",
 						runMaxAgentTurns: 80,
 						runMaxAgentToolExecutions: 240,
 						runRetryMaxAttempts: 8,

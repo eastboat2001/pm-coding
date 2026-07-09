@@ -30,6 +30,8 @@ import {
 	setLanguage,
 } from "@mariozechner/pi-web-ui";
 import type {
+	AgentV2RunEventRecord,
+	AgentV2RunSnapshot,
 	AppPreviewGoalRecord,
 	AppPreviewGoalSource,
 	DeleteSessionResult,
@@ -79,19 +81,20 @@ import {
 } from "../runtime/remote-agent-controller.js";
 import { resolveActiveRunRestore, resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import {
-	buildAppPreviewGoalStartRequest,
-	cancelRun as cancelRuntimeRun,
-	connectRunEvents,
+	cancelAgentV2Run,
+	connectAgentV2RunEvents,
+	listAgentV2RunEvents,
+	startAgentV2Run,
+	type AgentV2RunEventConnection as RunEventConnection,
+} from "../runtime/agent-v2-run-client.js";
+import {
 	deleteSession as deleteRuntimeSession,
 	disableAppPreviewGoal,
 	enableAppPreviewGoal,
 	getAppPreviewGoal,
 	getSession as getRuntimeSession,
-	listRunEvents as listRuntimeRunEvents,
 	listSessions as listRuntimeSessions,
-	type RunEventConnection,
 	renameSession as renameRuntimeSession,
-	startRun as startRuntimeRun,
 } from "../runtime/run-client.js";
 import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
@@ -110,8 +113,7 @@ import {
 	shouldScheduleProviderStallStatusAfterRunEvent,
 } from "../runtime/run-transient-status.js";
 import { trimRecoverableProviderStallErrors } from "../runtime/runtime-message-conversion.js";
-import { buildSpecArtifact, type SpecArtifact, specArtifactDiagnosticData } from "../runtime/spec-artifact.js";
-import { mergeProjectFileSeeds, specArtifactProjectFileSeeds } from "../runtime/spec-artifact-files.js";
+import { type SpecArtifact, specArtifactDiagnosticData } from "../runtime/spec-artifact.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
@@ -201,16 +203,57 @@ let currentAppPreviewGoal: AppPreviewGoalRecord | undefined;
 let pendingHandoffAppPreviewGoal = false;
 let manualAppPreviewGoalEnabled = false;
 
+type TrackedRemoteRun = Pick<RuntimeRunRecord, "runId" | "sessionId" | "clientId" | "status" | "updatedAt">;
+
+function agentV2StatusToRunStatus(status: AgentV2RunSnapshot["status"]): RunStatus {
+	switch (status) {
+		case "succeeded":
+			return "completed";
+		default:
+			return status;
+	}
+}
+
+function toTrackedRemoteRun(run: AgentV2RunSnapshot, sessionId: string): TrackedRemoteRun {
+	return {
+		runId: run.runId,
+		sessionId,
+		clientId: run.clientId,
+		status: agentV2StatusToRunStatus(run.status),
+		updatedAt: run.updatedAt,
+	};
+}
+
+function toRuntimeRunEventRecord(event: AgentV2RunEventRecord, sessionId: string): RuntimeRunEventRecord {
+	return {
+		eventId: event.seq,
+		runId: event.runId,
+		sessionId,
+		clientId: event.clientId,
+		seq: event.seq,
+		type: event.type,
+		payload: event.payload,
+		createdAt: event.createdAt,
+	};
+}
+
 const runClient = {
-	cancelRun: cancelRuntimeRun,
-	connectRunEvents,
+	cancelRun: async (runId: string) => toTrackedRemoteRun(await cancelAgentV2Run(runId), currentSessionId ?? ""),
+	connectRunEvents: (
+		runId: string,
+		afterSeq: number,
+		onEvent: (event: RuntimeRunEventRecord) => void | Promise<void>,
+		options = {},
+	) =>
+		connectAgentV2RunEvents(runId, afterSeq, (event) => onEvent(toRuntimeRunEventRecord(event, currentSessionId ?? "")), options),
 	getSession: getRuntimeSession,
 	disableAppPreviewGoal,
 	enableAppPreviewGoal,
 	getAppPreviewGoal,
-	listRunEvents: listRuntimeRunEvents,
+	listRunEvents: async (runId: string, afterSeq = 0) =>
+		(await listAgentV2RunEvents(runId, afterSeq)).map((event) => toRuntimeRunEventRecord(event, currentSessionId ?? "")),
 	listSessions: listRuntimeSessions,
-	startRun: startRuntimeRun,
+	startRun: startAgentV2Run,
 };
 
 type AppPreviewGoalExtensionAction = {
@@ -514,9 +557,6 @@ const requestChatPanelUpdate = (): void => {
 
 const i18nText = (key: string): string => i18n(key as Parameters<typeof i18n>[0]);
 
-const currentAppPreviewGoalRequest = (source: AppPreviewGoalSource | undefined) =>
-	buildAppPreviewGoalStartRequest(source);
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 function buildAppPreviewGoalExtensionActions(): AppPreviewGoalExtensionAction[] {
@@ -661,7 +701,6 @@ const markRemoteRunSettled = (runId: string, status: RunStatus, updatedAt?: stri
 	currentRunStatus = status;
 	currentRunUpdatedAt = updatedAt ?? currentRunUpdatedAt;
 	clearRemoteRunTransientStatusTexts();
-	refreshAppPreviewGoalAfterTerminalRunInBackground(runId);
 };
 
 const runtimeMessageToAgentMessage = (message: RuntimeMessageRecord): AgentMessage => {
@@ -1191,7 +1230,7 @@ function closeCurrentProjectFilePreview(): void {
 const handleModelSelect = () => {
 	ModelSelector.open(
 		agent.state.model ?? null,
-		(model) => {
+		(model: Model<any>) => {
 			agent.state.model = model;
 			void (async () => {
 				await modelController.persistSelectedModel(model);
@@ -1316,10 +1355,10 @@ function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
 	if (!Array.isArray(attachments)) return message;
 	const preparedAttachments = prepareAttachmentProjectFileSeeds(attachments);
 	return {
-		...message,
+		...(message as Record<string, unknown>),
 		content: (message as { content?: unknown }).content,
 		attachments: preparedAttachments,
-	} as AgentMessage;
+	} as unknown as AgentMessage;
 }
 
 const drainCurrentRemoteRunEvents = async (runId: string): Promise<RemoteRunEventDrainResult | undefined> => {
@@ -1369,8 +1408,12 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 	return false;
 };
 
-function reportQueuedRunTimeoutIfNeeded(run: RuntimeRunRecord): void {
-	const diagnostic = createQueuedRunTimeoutDiagnostic(run);
+function reportQueuedRunTimeoutIfNeeded(run: TrackedRemoteRun): void {
+	const diagnostic = createQueuedRunTimeoutDiagnostic({
+		...run,
+		model: {},
+		thinkingLevel: agent.state.thinkingLevel,
+	} as RuntimeRunRecord);
 	if (!diagnostic || reportedQueuedRunTimeouts.has(run.runId)) {
 		return;
 	}
@@ -1408,7 +1451,7 @@ const cancelCurrentRemoteRun = async (runId: string): Promise<void> => {
 		refreshGeneratedAppsPanel();
 	}
 
-	let run: RuntimeRunRecord;
+	let run: TrackedRemoteRun;
 	try {
 		run = await runClient.cancelRun(runId);
 	} catch (error) {
@@ -1487,7 +1530,7 @@ const applyConnectedRunEvent = async (event: RuntimeRunEventRecord): Promise<voi
 	}
 };
 
-const connectToRemoteRun = (run: RuntimeRunRecord, controller: RemoteAgentController): void => {
+const connectToRemoteRun = (run: TrackedRemoteRun, controller: RemoteAgentController): void => {
 	closeRemoteRunConnection();
 	trackRemoteRun(run);
 	scheduleRemoteRunStatusPoll(run.runId);
@@ -1515,7 +1558,7 @@ const connectToRemoteRun = (run: RuntimeRunRecord, controller: RemoteAgentContro
 			}
 		},
 		{
-			onStatusChange: (connection) => {
+			onStatusChange: (connection: RunEventConnection) => {
 				if (
 					connection.closed ||
 					run.runId !== currentActiveRunId ||
@@ -1561,48 +1604,35 @@ const startRemotePrompt = async (
 		platform: STATIC_PREVIEW_CONTRACT,
 		source: "browser",
 	});
-	const specArtifact = buildSpecArtifact({
-		messages: [...previousMessages, ...messages],
-		capabilityPlan,
-		platform: STATIC_PREVIEW_CONTRACT,
-	});
 	currentCapabilityPlan = capabilityPlan;
-	currentSpecArtifact = specArtifact;
-	agent.state.systemPrompt = buildCurrentSystemPrompt(capabilityPlan, specArtifact);
+	currentSpecArtifact = undefined;
+	agent.state.systemPrompt = buildCurrentSystemPrompt(capabilityPlan);
 	writeCapabilityPlanDiagnostic(capabilityPlan);
-	writeSpecArtifactDiagnostic(specArtifact);
 	agent.state.messages = [...previousMessages, message];
 	renderApp();
 	requestChatPanelUpdate();
 	void saveSession();
 
 	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
-	const appPreviewGoalSource: AppPreviewGoalSource | undefined = pendingHandoffAppPreviewGoal
-		? "pm_handoff"
-		: manualAppPreviewGoalEnabled
-			? "manual"
-			: undefined;
 	try {
-		const projectFiles = mergeProjectFileSeeds([
-			...specArtifactProjectFileSeeds(specArtifact),
-			...collectProjectFilesFromMessages(messages),
-		]);
-		const appPreviewGoal = currentAppPreviewGoalRequest(appPreviewGoalSource);
+		const projectFiles = collectProjectFilesFromMessages(messages);
+		const attachments = Array.isArray((message as { attachments?: unknown }).attachments)
+			? ((message as { attachments?: unknown[] }).attachments ?? [])
+			: undefined;
 		runResult = await runClient.startRun({
-			sessionId: currentSessionId,
+			sessionId: currentSessionId!,
 			title: sessionTitle(currentTitle, agent.state.messages),
-			message,
+			message: message as Record<string, unknown>,
+			...(attachments ? { attachments } : {}),
 			model: agent.state.model as unknown as Record<string, unknown>,
-			thinkingLevel: agent.state.thinkingLevel,
 			...(projectFiles.length > 0 ? { projectFiles } : {}),
-			...(appPreviewGoal ? { appPreviewGoal } : {}),
 		});
 	} catch (error) {
 		agent.state.messages = previousMessages;
 		currentCapabilityPlan = previousCapabilityPlan;
 		currentSpecArtifact = previousSpecArtifact;
 		agent.state.systemPrompt = previousSystemPrompt;
-		if (appPreviewGoalSource === "pm_handoff") {
+		if (pendingHandoffAppPreviewGoal) {
 			pendingHandoffAppPreviewGoal = false;
 			updateAppPreviewGoalExtensionActions();
 			setAppPreviewGoalStatusText();
@@ -1615,39 +1645,29 @@ const startRemotePrompt = async (
 
 	pendingHandoffModelContext = undefined;
 	pendingHandoffAppPreviewGoal = false;
-	currentSessionCreatedAt = runResult.session.createdAt;
-	await setCurrentSessionId(runResult.session.sessionId);
 
 	const controller = new RemoteAgentController(agent);
-	controller.startRemoteRun(runResult.run.runId);
+	controller.startRemoteRun(runResult.runId);
 	clearRemoteRunTransientStatusTexts();
 	remoteAgentController = controller;
-	connectToRemoteRun(runResult.run, controller);
+	connectToRemoteRun(toTrackedRemoteRun(runResult, currentSessionId!), controller);
 	renderApp();
 	requestChatPanelUpdate();
 	await saveSession();
-	refreshAppPreviewGoalInBackground();
 	refreshGeneratedAppsPanel();
 	await agent.waitForIdle();
 };
 
-const startRemoteContinuationRun = async (parentRunId: string): Promise<void> => {
+const startRemoteContinuationRun = async (_parentRunId: string): Promise<void> => {
 	await ensureSessionIdentity();
 	const projectFiles = collectProjectFilesFromMessages(agent.state.messages);
 	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
 	try {
-		const appPreviewGoal = currentAppPreviewGoalRequest(manualAppPreviewGoalEnabled ? "manual" : undefined);
 		runResult = await runClient.startRun({
-			sessionId: currentSessionId,
+			sessionId: currentSessionId!,
 			title: sessionTitle(currentTitle, agent.state.messages),
 			model: agent.state.model as unknown as Record<string, unknown>,
-			thinkingLevel: agent.state.thinkingLevel,
-			continuation: {
-				source: "interrupted_recovery",
-				parentRunId,
-			},
 			...(projectFiles.length > 0 ? { projectFiles } : {}),
-			...(appPreviewGoal ? { appPreviewGoal } : {}),
 		});
 	} catch (error) {
 		await saveSession();
@@ -1656,18 +1676,14 @@ const startRemoteContinuationRun = async (parentRunId: string): Promise<void> =>
 		throw error;
 	}
 
-	currentSessionCreatedAt = runResult.session.createdAt;
-	await setCurrentSessionId(runResult.session.sessionId);
-
 	const controller = new RemoteAgentController(agent);
-	controller.startRemoteRun(runResult.run.runId);
+	controller.startRemoteRun(runResult.runId);
 	clearRemoteRunTransientStatusTexts();
 	remoteAgentController = controller;
-	connectToRemoteRun(runResult.run, controller);
+	connectToRemoteRun(toTrackedRemoteRun(runResult, currentSessionId!), controller);
 	renderApp();
 	requestChatPanelUpdate();
 	await saveSession();
-	refreshAppPreviewGoalInBackground();
 	refreshGeneratedAppsPanel();
 	await agent.waitForIdle();
 };
@@ -1756,7 +1772,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			await saveSession();
 		},
 		enableArtifacts: false,
-		toolsFactory: (toolAgent) => [
+		toolsFactory: (toolAgent: Agent) => [
 			...createServerSkillTools(),
 			...createServerProjectTools(() => ({
 				sessionId: currentSessionId,

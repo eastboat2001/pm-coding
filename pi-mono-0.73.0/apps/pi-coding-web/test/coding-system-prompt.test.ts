@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { planCapabilities } from "../src/runtime/capability-planner.js";
 import { STATIC_PREVIEW_CONTRACT } from "../src/runtime/platform-contract.js";
-import { buildSpecArtifact } from "../src/runtime/spec-artifact.js";
 import {
 	buildCodingSystemPrompt,
 	DEFAULT_SYSTEM_PROMPT,
@@ -102,75 +101,29 @@ describe("coding system prompt", () => {
 		expect(prompt).toContain("Do not claim that PI created a real backend, database, or server auth runtime.");
 	});
 
-	it("injects a per-run spec artifact as the implementation acceptance source", () => {
-		const messages = [
-			{
-				role: "user",
-				content: "Build a full-stack dashboard with backend APIs, database persistence, auth, KPI cards, and charts.",
-				timestamp: 1,
-			},
-		];
-		const capabilityPlan = planCapabilities({
-			messages,
-			platform: STATIC_PREVIEW_CONTRACT,
-			source: "test",
-		});
-		const specArtifact = buildSpecArtifact({
-			messages,
-			capabilityPlan,
-			platform: STATIC_PREVIEW_CONTRACT,
-		});
+	it("does not include legacy spec artifact instructions in the default generation prompt", () => {
+		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("<spec_artifact>");
+		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("<spec_execution_contract>");
+		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("docs/spec.md");
+		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("docs/plan.md");
+		expect(DEFAULT_SYSTEM_PROMPT).not.toContain("docs/tasks.md");
+
 		const prompt = buildCodingSystemPrompt([], {
 			platformContract: STATIC_PREVIEW_CONTRACT,
-			capabilityPlan,
-			specArtifact,
-		});
-
-		expect(prompt).toContain("<spec_artifact>");
-		expect(prompt).toContain("objective: Build a full-stack dashboard");
-		expect(prompt).toContain("acceptance_criteria:");
-		expect(prompt).toContain("First preview must render meaningful first-screen data");
-		expect(prompt).toContain("project_task validate");
-	});
-
-	it("requires reading persisted spec kit files before implementation edits", () => {
-		const messages = [
-			{
-				role: "user",
-				content: "Build the QDM dashboard from the attached PM handoff.",
-				timestamp: 1,
-				attachments: [
+			capabilityPlan: planCapabilities({
+				messages: [
 					{
-						type: "document",
-						projectFilePath: "docs/Requirements Document.md",
-						extractedText: "Build KPI cards and charts.",
+						role: "user",
+						content: "Build a full-stack dashboard with KPI cards and charts.",
+						timestamp: 1,
 					},
 				],
-			},
-		];
-		const capabilityPlan = planCapabilities({
-			messages,
-			platform: STATIC_PREVIEW_CONTRACT,
-			source: "test",
-		});
-		const specArtifact = buildSpecArtifact({
-			messages,
-			capabilityPlan,
-			platform: STATIC_PREVIEW_CONTRACT,
+				platform: STATIC_PREVIEW_CONTRACT,
+				source: "test",
+			}),
 		});
 
-		const prompt = buildCodingSystemPrompt([], {
-			platformContract: STATIC_PREVIEW_CONTRACT,
-			capabilityPlan,
-			specArtifact,
-		});
-
-		expect(prompt).toContain("<spec_execution_contract>");
-		expect(prompt).toContain("Before creating or editing implementation files");
-		expect(prompt).toContain("project_file get");
-		expect(prompt).toContain("docs/spec.md");
-		expect(prompt).toContain("docs/plan.md");
-		expect(prompt).toContain("docs/tasks.md");
-		expect(prompt).toContain("docs/Requirements Document.md");
+		expect(prompt).not.toContain("<spec_artifact>");
+		expect(prompt).not.toContain("<spec_execution_contract>");
 	});
 });

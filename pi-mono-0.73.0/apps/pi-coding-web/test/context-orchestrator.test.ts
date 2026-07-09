@@ -210,7 +210,7 @@ describe("prepareContextPacket", () => {
 		expect(result.decision.outputMessageCount).toBeLessThan(result.decision.inputMessageCount + 1);
 	});
 
-	it("carries the spec execution contract through context compaction", async () => {
+	it("does not synthesize legacy spec kit reads from PM handoff attachments alone", async () => {
 		const prompt = "Build the QDM Finished Lot Yield Dashboard from the PM handoff.";
 		const messages = [
 			{
@@ -231,45 +231,26 @@ describe("prepareContextPacket", () => {
 			platform: STATIC_PREVIEW_CONTRACT,
 			source: "test",
 		});
-		const specArtifact = buildSpecArtifact({
-			messages,
-			capabilityPlan,
-			platform: STATIC_PREVIEW_CONTRACT,
-		});
 
 		const result = await prepareContextPacket(messages, {
 			capabilityPlan,
-			specArtifact,
 			providerPayloadBudgetChars: 1_000,
 		});
 		const packetText = latestUserText(result.messages);
 
-		expect(packetText).toContain("spec_execution:");
-		expect(packetText).toContain("required_spec_reads:");
-		expect(packetText).toContain("docs/spec.md");
-		expect(packetText).toContain("docs/plan.md");
-		expect(packetText).toContain("docs/tasks.md");
-		expect(packetText).toContain("docs/Requirements Document.md");
-		expect(packetText).toContain("next_best_step: Read spec execution files before implementation edits");
-		expect(result.packet.specExecution.requiredReads).toEqual([
-			"docs/spec.md",
-			"docs/plan.md",
-			"docs/tasks.md",
-			"docs/Requirements Document.md",
-		]);
-		expect(result.decision.retained.specExecution).toBe(true);
+		expect(packetText).toContain("spec_execution: none");
+		expect(packetText).not.toContain("docs/spec.md");
+		expect(packetText).not.toContain("docs/plan.md");
+		expect(packetText).not.toContain("docs/tasks.md");
+		expect(packetText).not.toContain("Read spec execution files before implementation edits");
+		expect(result.packet.specExecution).toBeUndefined();
+		expect(result.decision.retained.specExecution).toBe(false);
 	});
 
-	it("carries dynamic task state and validation failures through the context packet", async () => {
+	it("keeps validation failures without requiring legacy spec checklist files", async () => {
 		const prompt = "Build the QDM dashboard with first-screen KPI data.";
 		const messages = [
 			userMessage(prompt),
-			assistantWithProjectFileRead("docs/spec.md", "read-spec"),
-			projectFileResult("read-spec", "get: docs/spec.md"),
-			assistantWithProjectFileRead("docs/plan.md", "read-plan"),
-			projectFileResult("read-plan", "get: docs/plan.md"),
-			assistantWithProjectFileRead("docs/tasks.md", "read-tasks"),
-			projectFileResult("read-tasks", "get: docs/tasks.md"),
 			assistantWithProjectTask("validate"),
 			projectTaskResult("call-task", {
 				task: "validate",
@@ -285,15 +266,9 @@ describe("prepareContextPacket", () => {
 			platform: STATIC_PREVIEW_CONTRACT,
 			source: "test",
 		});
-		const specArtifact = buildSpecArtifact({
-			messages,
-			capabilityPlan,
-			platform: STATIC_PREVIEW_CONTRACT,
-		});
 
 		const result = await prepareContextPacket(messages, {
 			capabilityPlan,
-			specArtifact,
 			providerPayloadBudgetChars: 20_000,
 		});
 		const packetText = latestUserText(result.messages);
@@ -304,7 +279,7 @@ describe("prepareContextPacket", () => {
 		expect(packetText).toContain("Metric placeholder #kpiLots");
 		expect(packetText).toContain("loading element remained visible");
 		expect(packetText).toContain("next_best_step: Fix validation failures");
-		expect(result.packet.taskState.specChecklist).toEqual(specArtifact.taskChecklist);
+		expect(result.packet.taskState.specChecklist).toEqual([]);
 		expect(result.packet.taskState.validationFailures).toEqual([
 			"Static preview quality gate: Metric placeholder #kpiLots starts as \"--\".",
 			"Static preview smoke gate: Runtime smoke gate: loading element remained visible.",

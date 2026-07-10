@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, isAbsolute, relative, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
@@ -62,6 +62,9 @@ export function auditSourceMirrors(options) {
 function resolveSources({ rootDir, files }) {
 	if (!Array.isArray(files) || files.length === 0) throw new Error("At least one explicit TypeScript file is required.");
 	const srcDir = resolve(rootDir, "src");
+	assertNoLinkedPathComponents(srcDir, srcDir, "src");
+	if (!statSync(srcDir).isDirectory()) throw new Error("Source root is not a directory: src");
+	const canonicalSrcDir = realpathSync.native(srcDir);
 	const seen = new Set();
 	return files.map((name) => {
 		if (typeof name !== "string" || !name || isAbsolute(name) || extname(name) !== ".ts") {
@@ -72,19 +75,73 @@ function resolveSources({ rootDir, files }) {
 		if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
 			throw new Error(`TypeScript source must be inside src: ${name}`);
 		}
-		const key = process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
+		assertNoLinkedPathComponents(srcDir, tsPath, name);
+		if (!existsSync(tsPath) || !statSync(tsPath).isFile()) throw new Error(`TypeScript source does not exist: ${name}`);
+		const canonicalTsPath = realpathSync.native(tsPath);
+		assertCanonicalContainment(canonicalSrcDir, canonicalTsPath, name);
+		const key = comparablePath(canonicalTsPath);
 		if (seen.has(key)) throw new Error(`Duplicate TypeScript source: ${name}`);
 		seen.add(key);
-		if (!existsSync(tsPath) || !statSync(tsPath).isFile()) throw new Error(`TypeScript source does not exist: ${name}`);
 		const stem = tsPath.slice(0, -extname(tsPath).length);
+		const jsPath = `${stem}.js`;
+		const mapPath = `${stem}.js.map`;
+		assertSafeOutputPath(srcDir, canonicalSrcDir, jsPath, name);
+		assertSafeOutputPath(srcDir, canonicalSrcDir, mapPath, name);
 		return {
 			name: relativePath.replaceAll("\\", "/"),
 			tsPath,
-			jsPath: `${stem}.js`,
-			mapPath: `${stem}.js.map`,
+			jsPath,
+			mapPath,
 			content: readFileSync(tsPath, "utf8"),
 		};
 	});
+}
+
+function assertSafeOutputPath(srcDir, canonicalSrcDir, outputPath, sourceName) {
+	assertNoLinkedPathComponents(srcDir, outputPath, sourceName);
+	let existingPath = outputPath;
+	while (!existsSync(existingPath)) {
+		const parent = dirname(existingPath);
+		if (parent === existingPath) throw new Error(`Cannot resolve output path for ${sourceName}`);
+		existingPath = parent;
+	}
+	assertCanonicalContainment(canonicalSrcDir, realpathSync.native(existingPath), sourceName);
+}
+
+function assertNoLinkedPathComponents(srcDir, targetPath, sourceName) {
+	const relativePath = relative(srcDir, targetPath);
+	if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+		throw new Error(`TypeScript source must be inside src: ${sourceName}`);
+	}
+	let currentPath = srcDir;
+	assertSafePathEntry(currentPath, sourceName);
+	for (const component of relativePath.split(/[\\/]+/).filter(Boolean)) {
+		currentPath = join(currentPath, component);
+		try {
+			assertSafePathEntry(currentPath, sourceName);
+		} catch (error) {
+			if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+			throw error;
+		}
+	}
+}
+
+function assertSafePathEntry(path, sourceName) {
+	const stats = lstatSync(path);
+	if (stats.isSymbolicLink()) throw new Error(`Linked paths are not allowed for ${sourceName}`);
+	if (stats.isFile() && stats.nlink > 1) throw new Error(`Linked files are not allowed for ${sourceName}`);
+}
+
+function assertCanonicalContainment(canonicalSrcDir, canonicalPath, sourceName) {
+	const relativePath = relative(comparablePath(canonicalSrcDir), comparablePath(canonicalPath));
+	if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+		throw new Error(`Canonical path escapes src for ${sourceName}`);
+	}
+}
+
+function comparablePath(path) {
+	const absolutePath = resolve(path);
+	return process.platform === "win32" ? absolutePath.toLowerCase() : absolutePath;
 }
 
 /**

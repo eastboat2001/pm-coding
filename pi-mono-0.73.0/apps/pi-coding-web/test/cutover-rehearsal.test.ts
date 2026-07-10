@@ -108,6 +108,24 @@ describe("runAgentV2CutoverRehearsal", () => {
 		expect(signals[0].aborted).toBe(true);
 	});
 
+	it("settles a response body that never completes at the shared deadline", async () => {
+		const startedAt = Date.now();
+		const hangingBodyResponse = {
+			ok: true,
+			status: 200,
+			json: async () => await new Promise<unknown>(() => undefined),
+		} as Response;
+		const report = await runAgentV2CutoverRehearsal({
+			...baseOptions,
+			timeoutMs: 20,
+			fetch: async () => hangingBodyResponse,
+		});
+
+		expect(Date.now() - startedAt).toBeLessThan(500);
+		expect(report.ok).toBe(false);
+		expect(report.checks[1]).toEqual({ name: "v2-run-start", ok: false, detail: "Request timed out." });
+	});
+
 	it("redacts network errors and HTTP response bodies from reports", async () => {
 		const secret = "cutover-secret-sentinel";
 		const networkReport = await runAgentV2CutoverRehearsal({

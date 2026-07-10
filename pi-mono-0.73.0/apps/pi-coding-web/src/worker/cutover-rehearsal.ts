@@ -88,9 +88,18 @@ export async function runAgentV2CutoverRehearsal(
 			model: options.model,
 		}),
 	});
-	const startedRun = started.response?.ok ? await readRunSnapshot(started.response) : undefined;
+	const startedSnapshot = started.response?.ok ? await readRunSnapshot(started.response, deadlineAt, now) : undefined;
+	const startedRun = startedSnapshot?.run;
 	if (!startedRun) {
-		checks.push(failedCheck("v2-run-start", responseDetail(started, "V2 run start failed.")));
+		checks.push(
+			failedCheck(
+				"v2-run-start",
+				responseDetail(
+					startedSnapshot?.timedOut ? { ...started, timedOut: true } : started,
+					"V2 run start failed.",
+				),
+			),
+		);
 		appendSkippedChecks(checks, 2, "V2 run did not start.");
 		return report(checks, runId, finalStatus, lastEventSeq);
 	}
@@ -98,7 +107,7 @@ export async function runAgentV2CutoverRehearsal(
 	finalStatus = startedRun.status;
 	checks.push(passedCheck("v2-run-start", "V2 run started."));
 
-	const initialRead = await readRun(request, headers, runId);
+	const initialRead = await readRun(request, headers, runId, deadlineAt, now);
 	if (initialRead.run) {
 		finalStatus = initialRead.run.status;
 		checks.push(passedCheck("v2-run-read", `V2 run read with status ${finalStatus}.`));
@@ -208,11 +217,16 @@ async function readRun(
 	request: RequestHelper,
 	headers: Record<string, string>,
 	runId: string,
+	deadlineAt: number,
+	now: () => number,
 ): Promise<{ run?: RunSnapshot; detail: string }> {
 	const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}`, { headers });
 	if (!result.response?.ok) return { detail: responseDetail(result, "V2 run read failed.") };
-	const run = await readRunSnapshot(result.response);
-	return run ? { run, detail: "V2 run read." } : { detail: "V2 run read returned an invalid response." };
+	const snapshot = await readRunSnapshot(result.response, deadlineAt, now);
+	if (snapshot.timedOut) return { detail: REQUEST_TIMED_OUT_DETAIL };
+	return snapshot.run
+		? { run: snapshot.run, detail: "V2 run read." }
+		: { detail: "V2 run read returned an invalid response." };
 }
 
 async function waitForEventReplay(
@@ -232,12 +246,14 @@ async function waitForEventReplay(
 		const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}/events?afterSeq=${seq}`, { headers });
 		if (result.timedOut) return eventReplayTimeout(status, seq);
 		if (!result.response?.ok) return { ok: false, detail: responseDetail(result, "V2 event replay failed."), status, seq };
-		const events = await readEvents(result.response);
-		if (events === undefined) return { ok: false, detail: "V2 event replay returned an invalid response.", status, seq };
-		for (const event of events) seq = Math.max(seq, event.seq);
+		const replay = await readEvents(result.response, deadlineAt, now);
+		if (replay.timedOut) return eventReplayTimeout(status, seq);
+		if (replay.events === undefined)
+			return { ok: false, detail: "V2 event replay returned an invalid response.", status, seq };
+		for (const event of replay.events) seq = Math.max(seq, event.seq);
 		if (seq > 0) return { ok: true, detail: `Replayed events through sequence ${seq}.`, status, seq };
 
-		const current = await readRun(request, headers, runId);
+		const current = await readRun(request, headers, runId, deadlineAt, now);
 		if (current.run) status = current.run.status;
 		if (!(await sleepWithinDeadline(sleep, deadlineAt, now, pollIntervalMs))) return eventReplayTimeout(status, seq);
 	}
@@ -256,10 +272,12 @@ async function cancelRun(
 	const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST", headers });
 	if (!result.response?.ok) return { ok: false, detail: responseDetail(result, "V2 run cancel failed."), status: lastStatus };
 
-	let status = (await readRunSnapshot(result.response))?.status ?? lastStatus;
+	const cancellationSnapshot = await readRunSnapshot(result.response, deadlineAt, now);
+	if (cancellationSnapshot.timedOut) return cancellationTimeout(lastStatus);
+	let status = cancellationSnapshot.run?.status ?? lastStatus;
 	while (true) {
 		if (remainingMs(deadlineAt, now) <= 0) return cancellationTimeout(status);
-		const current = await readRun(request, headers, runId);
+		const current = await readRun(request, headers, runId, deadlineAt, now);
 		if (current.run) status = current.run.status;
 		if (status === "cancelled") return { ok: true, detail: "V2 run cancelled.", status };
 		if (!(await sleepWithinDeadline(sleep, deadlineAt, now, pollIntervalMs))) return cancellationTimeout(status);
@@ -288,28 +306,53 @@ async function sleepWithinDeadline(
 	}
 }
 
-async function readRunSnapshot(response: Response): Promise<RunSnapshot | undefined> {
-	const value = await readJson(response);
-	if (!isRecord(value) || typeof value.runId !== "string" || typeof value.status !== "string") return undefined;
-	return { runId: value.runId, status: value.status };
+async function readRunSnapshot(
+	response: Response,
+	deadlineAt: number,
+	now: () => number,
+): Promise<{ run?: RunSnapshot; timedOut?: boolean }> {
+	const result = await readJson(response, deadlineAt, now);
+	if (result.timedOut) return { timedOut: true };
+	const value = result.value;
+	if (!isRecord(value) || typeof value.runId !== "string" || typeof value.status !== "string") return {};
+	return { run: { runId: value.runId, status: value.status } };
 }
 
-async function readEvents(response: Response): Promise<Array<{ seq: number }> | undefined> {
-	const value = await readJson(response);
-	if (!isRecord(value) || !Array.isArray(value.events)) return undefined;
+async function readEvents(
+	response: Response,
+	deadlineAt: number,
+	now: () => number,
+): Promise<{ events?: Array<{ seq: number }>; timedOut?: boolean }> {
+	const result = await readJson(response, deadlineAt, now);
+	if (result.timedOut) return { timedOut: true };
+	const value = result.value;
+	if (!isRecord(value) || !Array.isArray(value.events)) return {};
 	const events: Array<{ seq: number }> = [];
 	for (const event of value.events) {
-		if (!isRecord(event) || typeof event.seq !== "number") return undefined;
+		if (!isRecord(event) || typeof event.seq !== "number") return {};
 		events.push({ seq: event.seq });
 	}
-	return events;
+	return { events };
 }
 
-async function readJson(response: Response): Promise<unknown> {
+async function readJson(
+	response: Response,
+	deadlineAt: number,
+	now: () => number,
+): Promise<{ value?: unknown; timedOut?: boolean }> {
+	const remaining = remainingMs(deadlineAt, now);
+	if (remaining <= 0) return { timedOut: true };
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	const valueResult = Promise.resolve()
+		.then(async () => await response.json())
+		.then((value) => ({ value }), () => ({}));
+	const timeoutResult = new Promise<{ timedOut: true }>((resolve) => {
+		timeoutId = setTimeout(() => resolve({ timedOut: true }), remaining);
+	});
 	try {
-		return await response.json();
-	} catch {
-		return undefined;
+		return await Promise.race([valueResult, timeoutResult]);
+	} finally {
+		if (timeoutId !== undefined) clearTimeout(timeoutId);
 	}
 }
 

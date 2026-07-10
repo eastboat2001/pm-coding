@@ -89,6 +89,18 @@ const legacyRootRuntimeExports = [
 
 const allowedLegacyFiles = new Set<string>();
 const legacyV1RunEventBridge = "packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts";
+const deletedLegacyEventCompatibilityFiles = [
+	"packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.ts",
+	"packages/web-workspace/src/legacy-v1-agent-v2-run-event-bridge.js",
+	"packages/web-workspace/src/run-event-sink.ts",
+	"packages/web-workspace/src/run-event-sink.js",
+	"packages/web-workspace/src/run-event-sink.js.map",
+	"packages/web-workspace/src/run-event-bus.ts",
+	"packages/web-workspace/src/run-event-bus.js",
+	"packages/web-workspace/src/run-event-bus.js.map",
+	"packages/web-workspace/test/run-event-sink.test.ts",
+	"packages/web-workspace/test/run-event-bus.test.ts",
+];
 const deletedLegacyGenerationFiles = [
 	"packages/web-workspace/src/app-preview-goal-service.ts",
 	"packages/web-workspace/src/app-preview-goal-supervisor.ts",
@@ -257,16 +269,22 @@ describe("agent v2 production import boundary", () => {
 		expect(violations).toEqual([]);
 	});
 
-	it("does not expose the legacy v1 run-event bridge through v2 production files", () => {
+	it("deletes legacy event compatibility modules and dedicated tests", () => {
+		for (const file of deletedLegacyEventCompatibilityFiles) {
+			expect(existsSync(join(repoRoot, file)), `${file} must be deleted`).toBe(false);
+		}
 		expect([...allowedLegacyFiles]).not.toContain(legacyV1RunEventBridge);
 		expect(productionV2Files().map(toRepoPath)).not.toContain(legacyV1RunEventBridge);
+	});
 
-		if (existsSync(join(repoRoot, legacyV1RunEventBridge))) {
-			const publicV2Surface = productionV2Files()
-				.map((file) => readFileSync(file, "utf8"))
-				.join("\n");
-			expect(publicV2Surface).not.toContain("legacy-v1-agent-v2-run-event-bridge");
-		}
+	it("keeps retired route handling as a pathname-only classifier", () => {
+		const source = readFileSync(join(repoRoot, "packages", "web-workspace", "src", "vite-plugin.ts"), "utf8");
+		const classifierSource = extractFunctionSource(source, "retiredApplicationGenerationRoute");
+
+		expect(classifierSource).toContain(
+			"function retiredApplicationGenerationRoute(pathname: string): RetiredApplicationGenerationRoute | undefined",
+		);
+		expect(classifierSource).not.toMatch(/retiredApplicationGenerationRoute\([^)]*(?:store|queue|session|eventLog)/);
 	});
 
 	it("does not retain v1 gating or legacy plugin service construction in configured storage plugin", () => {
@@ -396,7 +414,8 @@ function readRootBarrelExportNames(): string[] {
 }
 
 function extractFunctionSource(source: string, functionName: string): string {
-	const start = source.indexOf(`export function ${functionName}`);
+	const exportedStart = source.indexOf(`export function ${functionName}`);
+	const start = exportedStart >= 0 ? exportedStart : source.indexOf(`function ${functionName}`);
 	if (start < 0) throw new Error(`Could not find ${functionName}`);
 	const bodyStart = source.indexOf("{", start);
 	if (bodyStart < 0) throw new Error(`Could not find ${functionName} body`);

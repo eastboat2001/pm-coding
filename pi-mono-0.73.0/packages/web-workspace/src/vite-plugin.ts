@@ -51,8 +51,8 @@ const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
 const LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS = 250;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
-const LEGACY_RUNTIME_RUNS_API_PREFIX = "/api/runtime/runs";
-const LEGACY_RUNS_API_PREFIX = "/api/runs";
+
+type RetiredApplicationGenerationRoute = { status: 404 | 410; error: string };
 
 export interface ConfiguredStoragePluginTestServices {
 	config: StorageConfig;
@@ -161,6 +161,13 @@ function createConfiguredStoragePlugin({
 	};
 
 	const handler: Connect.NextHandleFunction = async (req, res, next) => {
+		const url = new URL(req.url ?? "/", "http://localhost");
+		const retiredRoute = retiredApplicationGenerationRoute(url.pathname);
+		if (retiredRoute) {
+			sendJson(res, { error: retiredRoute.error }, retiredRoute.status);
+			return;
+		}
+
 		if (req.url?.startsWith(PREVIEW_PREFIX)) {
 			try {
 				await ensureStorageDirs();
@@ -178,8 +185,6 @@ function createConfiguredStoragePlugin({
 			!req.url?.startsWith(LOGS_API_PREFIX) &&
 			!req.url?.startsWith(SESSIONS_API_PREFIX) &&
 			!req.url?.startsWith(RUNS_API_PREFIX) &&
-			!req.url?.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX) &&
-			!req.url?.startsWith(LEGACY_RUNS_API_PREFIX) &&
 			!req.url?.startsWith(AGENT_V2_RUNS_API_PREFIX)
 		) {
 			next();
@@ -188,16 +193,12 @@ function createConfiguredStoragePlugin({
 
 		try {
 			await ensureStorageDirs();
-			const url = new URL(req.url, "http://localhost");
 			const isProjectsApi = url.pathname.startsWith(PROJECTS_API_PREFIX);
 			const isSkillsApi = url.pathname.startsWith(SKILLS_API_PREFIX);
 			const isLogsApi = url.pathname.startsWith(LOGS_API_PREFIX);
 			const isSessionsApi = url.pathname.startsWith(SESSIONS_API_PREFIX);
 			const isAgentV2RunsApi = url.pathname.startsWith(AGENT_V2_RUNS_API_PREFIX);
-			const isRunsApi =
-				url.pathname.startsWith(RUNS_API_PREFIX) ||
-				url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX) ||
-				url.pathname.startsWith(LEGACY_RUNS_API_PREFIX);
+			const isRunsApi = url.pathname.startsWith(RUNS_API_PREFIX);
 			const prefix = isProjectsApi
 				? PROJECTS_API_PREFIX
 				: isSkillsApi
@@ -209,11 +210,7 @@ function createConfiguredStoragePlugin({
 							: isAgentV2RunsApi
 								? AGENT_V2_RUNS_API_PREFIX
 								: isRunsApi
-									? url.pathname.startsWith(LEGACY_RUNTIME_RUNS_API_PREFIX)
-										? LEGACY_RUNTIME_RUNS_API_PREFIX
-										: url.pathname.startsWith(LEGACY_RUNS_API_PREFIX)
-											? LEGACY_RUNS_API_PREFIX
-											: RUNS_API_PREFIX
+									? RUNS_API_PREFIX
 									: API_PREFIX;
 			const route = url.pathname.slice(prefix.length) || "/";
 			const method = req.method || "GET";
@@ -247,11 +244,6 @@ function createConfiguredStoragePlugin({
 				);
 				return;
 			}
-			if (isRunsApi) {
-				handleRuntimeRunsApi(route, res);
-				return;
-			}
-
 			await handleStorageApi(method, route, req, res, config, sessions);
 		} catch (error) {
 			sendRuntimeApiError(res, error);
@@ -787,12 +779,17 @@ async function handleAgentV2RuntimeRunsApi(
 	}
 }
 
-function handleRuntimeRunsApi(route: string, res: ServerResponse): void {
-	if (route.startsWith("/goals/app-preview")) {
-		sendJson(res, { error: "Legacy app-preview-goal routes have been removed." }, 404);
-		return;
+function retiredApplicationGenerationRoute(pathname: string): RetiredApplicationGenerationRoute | undefined {
+	if (pathname.startsWith("/api/runtime/runs/goals/app-preview")) {
+		return { status: 404, error: "Legacy app-preview-goal routes have been removed." };
 	}
-	sendJson(res, { error: "Application Generation Agent v1 runtime routes have been removed." }, 410);
+	if (["/api/runtime/runs", "/api/pi-runs", "/api/runs"].some((prefix) => pathname.startsWith(prefix))) {
+		return { status: 410, error: "Application Generation Agent v1 runtime routes have been removed." };
+	}
+	if (pathname.startsWith("/api/pi-sessions")) {
+		return { status: 410, error: "Application Generation Agent v1 runtime session routes have been removed." };
+	}
+	return undefined;
 }
 
 function wantsEventStream(req: Connect.IncomingMessage, url: URL): boolean {

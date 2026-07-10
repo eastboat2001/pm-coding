@@ -21,10 +21,7 @@ import {
 	buildAgentV2Document as publicBuildAgentV2Document,
 	toAgentV2DocumentRecord as publicToAgentV2DocumentRecord,
 } from "../src/index.js";
-import { appendAgentV2RunEvent } from "../src/legacy-v1-agent-v2-run-event-bridge.js";
 import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
-import { InMemoryRunEventBus } from "../src/run-event-bus.js";
-import { RunEventSink } from "../src/run-event-sink.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
 type RecordedQuery = {
@@ -158,7 +155,7 @@ describe("agent v2 runtime stores", () => {
 			model: { provider: "test", id: "legacy" },
 			thinkingLevel: "medium",
 		});
-		const legacyRun = store.createRun({
+		store.createRun({
 			clientId: "client-a",
 			sessionId: "session-transport",
 			runId: "run-v2-transport",
@@ -166,26 +163,33 @@ describe("agent v2 runtime stores", () => {
 			thinkingLevel: "medium",
 			createdAt: "2026-07-07T00:00:00.000Z",
 		});
-		const sink = new RunEventSink({
-			store,
-			bus: new InMemoryRunEventBus(),
-			checkpointIntervalMs: 1_000,
-			checkpointMinChars: 100,
-		});
-
-		await appendAgentV2RunEvent(sink, legacyRun, {
+		store.appendRunEvent({
+			clientId: "client-a",
+			sessionId: "session-transport",
+			runId: "run-v2-transport",
 			type: "agent_v2.run_created",
-			status: "queued",
-			phase: "intake",
-			attempt: 1,
-			at: "2026-07-07T00:00:00.000Z",
+			payload: {
+				type: "agent_v2.run_created",
+				status: "queued",
+				phase: "intake",
+				attempt: 1,
+				at: "2026-07-07T00:00:00.000Z",
+			},
+			createdAt: "2026-07-07T00:00:00.000Z",
 		});
-		await appendAgentV2RunEvent(sink, legacyRun, {
+		store.appendRunEvent({
+			clientId: "client-a",
+			sessionId: "session-transport",
+			runId: "run-v2-transport",
 			type: "agent_v2.validation_recorded",
-			validationId: "validation-1",
-			status: "passed",
-			summary: "Transport replay projection recorded",
-			at: "2026-07-07T00:01:00.000Z",
+			payload: {
+				type: "agent_v2.validation_recorded",
+				validationId: "validation-1",
+				status: "passed",
+				summary: "Transport replay projection recorded",
+				at: "2026-07-07T00:01:00.000Z",
+			},
+			createdAt: "2026-07-07T00:01:00.000Z",
 		});
 
 		expect(store.getRun("client-a", "run-v2-transport")?.runId).toBe("run-v2-transport");

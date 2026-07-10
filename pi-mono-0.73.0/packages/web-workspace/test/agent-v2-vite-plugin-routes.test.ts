@@ -51,7 +51,6 @@ describe("agent v2 Vite runtime routes", () => {
 				model: { id: "test-model" },
 			},
 		});
-		expect(harness.legacyRunApi.startRun).not.toHaveBeenCalled();
 	});
 
 	it("returns 400 when v2 start input lacks executable session context", async () => {
@@ -65,7 +64,6 @@ describe("agent v2 Vite runtime routes", () => {
 
 		expect(response.statusCode).toBe(400);
 		expect(JSON.parse(response.body).error).toContain("sessionId and title");
-		expect(harness.legacyRunApi.startRun).not.toHaveBeenCalled();
 	});
 
 	it("lists, gets, and cancels runs through the v2 service", async () => {
@@ -83,9 +81,6 @@ describe("agent v2 Vite runtime routes", () => {
 		expect(JSON.parse(getResponse.body)).toEqual(api.getRunResult);
 		expect(JSON.parse(cancelResponse.body)).toEqual(api.cancelRunResult);
 		expect(api.calls.map((call) => call.method)).toEqual(["listRuns", "getRun", "cancelRun"]);
-		expect(harness.legacyRunApi.listRuns).not.toHaveBeenCalled();
-		expect(harness.legacyRunApi.getRunStatus).not.toHaveBeenCalled();
-		expect(harness.legacyRunApi.cancelRun).not.toHaveBeenCalled();
 	});
 
 	it("replays durable v2 events as JSON", async () => {
@@ -143,21 +138,17 @@ describe("agent v2 Vite runtime routes", () => {
 		await request.done;
 	});
 
-it("returns 410 for legacy run start after the v1 runtime removal", async () => {
+	it("keeps retired generation routes as data-free tombstones", async () => {
 		const harness = createHarness();
+		const response = await dispatch(harness.middleware, { method: "GET", url: "/api/runtime/runs/old-run/events" });
 
-		const response = await dispatch(harness.middleware, {
-			method: "POST",
-			url: "/api/runtime/runs/start",
-			body: { message: { role: "user", content: "legacy start" } },
+		expect(response.statusCode).toBe(410);
+		expect(JSON.parse(response.body)).toEqual({
+			error: "Application Generation Agent v1 runtime routes have been removed.",
 		});
+	});
 
-	expect(response.statusCode).toBe(410);
-	expect(JSON.parse(response.body).error).toBe("Application Generation Agent v1 runtime routes have been removed.");
-	expect(harness.legacyRunApi.startRun).not.toHaveBeenCalled();
-});
-
-it("returns fixed 410 responses for legacy run routes without calling the legacy service", async () => {
+	it("returns fixed 410 responses for legacy run routes", async () => {
 		const harness = createHarness();
 		const cases = LEGACY_RUN_API_PREFIXES.flatMap((prefix) => [
 			{ label: `${prefix} list`, method: "GET", url: prefix },
@@ -181,11 +172,10 @@ it("returns fixed 410 responses for legacy run routes without calling the legacy
 			);
 			expect(response.headers.get("Content-Type"), route.label).toBe("application/json; charset=utf-8");
 		}
-		expectLegacyRunApiUnused(harness.legacyRunApi);
 	});
 
-it("returns fixed legacy removal responses without legacy services", async () => {
-		const harness = createHarness({ includeLegacyRunServices: false });
+	it("returns fixed legacy removal responses", async () => {
+		const harness = createHarness();
 
 		const runResponse = await dispatch(harness.middleware, {
 			method: "POST",
@@ -202,10 +192,9 @@ it("returns fixed legacy removal responses without legacy services", async () =>
 		expect(goalResponse.statusCode).toBe(404);
 		expect(JSON.parse(goalResponse.body).error).toBe("Legacy app-preview-goal routes have been removed.");
 		expect(() => harness.closeServer()).not.toThrow();
-		expectLegacyRunApiUnused(harness.legacyRunApi);
 	});
 
-it("returns fixed 410 responses for legacy session routes without calling the legacy service", async () => {
+	it("returns fixed 410 responses for legacy session routes", async () => {
 		const harness = createHarness();
 		const sessionCases = LEGACY_SESSION_API_PREFIXES.flatMap((prefix) => [
 			{ label: `${prefix} get`, method: "GET", url: `${prefix}/session-a` },
@@ -226,7 +215,6 @@ it("returns fixed 410 responses for legacy session routes without calling the le
 			);
 			expect(response.headers.get("Content-Type"), route.label).toBe("application/json; charset=utf-8");
 		}
-		expectLegacyRunApiUnused(harness.legacyRunApi);
 	});
 
 it("does not expose legacy app-preview-goal routes", async () => {
@@ -245,8 +233,6 @@ it("does not expose legacy app-preview-goal routes", async () => {
 		expect(getResponse.statusCode).toBe(404);
 		expect(postResponse.statusCode).toBe(404);
 		expect(JSON.parse(getResponse.body).error).toBe("Legacy app-preview-goal routes have been removed.");
-		expect(harness.legacyRunApi.getAppPreviewGoal).not.toHaveBeenCalled();
-		expect(harness.legacyRunApi.enableAppPreviewGoal).not.toHaveBeenCalled();
 	});
 });
 
@@ -267,7 +253,6 @@ type Middleware = (
 
 function createHarness(
 	overrides: {
-		includeLegacyRunServices?: boolean;
 		agentV2RunApi?: ConfiguredTestServices["agentV2RunApi"] | RecordingAgentV2RunApi;
 		agentV2RunEventBus?: AgentV2RunEventBus;
 		agentV2RunEventLog?: RecordingAgentV2RunEventLog;
@@ -275,7 +260,6 @@ function createHarness(
 ) {
 	let middleware: Middleware | undefined;
 	const closeListeners: Array<() => void> = [];
-	const legacyRunApi = legacyRunApiThatMustNotBeCalled();
 	const services: TestServices = {
 		config: createTestConfig(),
 		diagnostics: {
@@ -313,7 +297,6 @@ function createHarness(
 	});
 	if (!middleware) throw new Error("configured storage plugin did not register middleware");
 	return {
-		legacyRunApi,
 		middleware,
 		closeServer() {
 			for (const listener of closeListeners) listener();
@@ -466,50 +449,6 @@ class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
 	}
 
 	async close(): Promise<void> {}
-}
-
-function legacyRunApiThatMustNotBeCalled(): Record<string, ReturnType<typeof vi.fn>> {
-	return {
-		startRun: vi.fn(async () => {
-			throw new Error("legacy startRun should not be called");
-		}),
-		listRuns: vi.fn(async () => {
-			throw new Error("legacy listRuns should not be called");
-		}),
-		getRunStatus: vi.fn(async () => {
-			throw new Error("legacy getRunStatus should not be called");
-		}),
-		cancelRun: vi.fn(async () => {
-			throw new Error("legacy cancelRun should not be called");
-		}),
-		listRunEvents: vi.fn(async () => {
-			throw new Error("legacy listRunEvents should not be called");
-		}),
-		getRunForEvents: vi.fn(async () => {
-			throw new Error("legacy getRunForEvents should not be called");
-		}),
-		listDurableRunEvents: vi.fn(async () => {
-			throw new Error("legacy listDurableRunEvents should not be called");
-		}),
-		getAppPreviewGoal: vi.fn(async () => {
-			throw new Error("legacy getAppPreviewGoal should not be called");
-		}),
-		listAppPreviewGoalEvents: vi.fn(async () => {
-			throw new Error("legacy listAppPreviewGoalEvents should not be called");
-		}),
-		enableAppPreviewGoal: vi.fn(async () => {
-			throw new Error("legacy enableAppPreviewGoal should not be called");
-		}),
-		disableAppPreviewGoal: vi.fn(async () => {
-			throw new Error("legacy disableAppPreviewGoal should not be called");
-		}),
-	};
-}
-
-function expectLegacyRunApiUnused(legacyRunApi: Record<string, ReturnType<typeof vi.fn>>): void {
-	for (const [method, fn] of Object.entries(legacyRunApi)) {
-		expect(fn, method).not.toHaveBeenCalled();
-	}
 }
 
 function runSnapshot(overrides: Partial<AgentV2RunSnapshot>): AgentV2RunSnapshot {

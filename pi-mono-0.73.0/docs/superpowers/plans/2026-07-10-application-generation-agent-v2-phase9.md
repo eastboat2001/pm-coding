@@ -307,6 +307,7 @@ git commit -m "refactor: remove legacy event compatibility"
 - Modify: `packages/web-workspace/src/config.ts`
 - Modify: `packages/web-workspace/src/runtime-store-factory.ts`
 - Modify: `packages/web-workspace/src/runtime-infra.ts`
+- Modify: `packages/web-workspace/src/index.ts`
 - Modify: `packages/web-workspace/src/vite-plugin.ts`
 - Modify: `apps/pi-coding-web/src/worker/main.ts`
 - Modify: `packages/web-workspace/test/workspace.test.mjs`
@@ -340,7 +341,7 @@ Add a `.env` case containing `PI_RUN_QUEUE_NAME=pi:runs` and assert the thrown e
 
 - [ ] **Step 2: Write failing production-store boundary tests**
 
-Require production entries to contain `createAgentV2RuntimeStore` and not contain `createRuntimeStore`, `RuntimeStore`, or casts from the factory result. Require `runtime-store-factory.ts` not to import `./runtime-store.js`.
+Require production entries and the root/runtime-infra barrels to contain `createAgentV2RuntimeStore` and not contain `createRuntimeStore`, `RuntimeStore`, or casts from the factory result. Require `runtime-store-factory.ts` not to import `./runtime-store.js`.
 
 - [ ] **Step 3: Verify RED**
 
@@ -412,7 +413,7 @@ export type AgentV2ProductionStore = AgentV2SchemaStore &
 
 export function createAgentV2RuntimeStore(config: StorageConfig): AgentV2ProductionStore {
   return config.runtimeStore === "postgres"
-    ? new PostgresRuntimeStore(config.postgresUrl)
+    ? new PostgresRuntimeStore({ url: config.postgresUrl })
     : new RuntimeDbStore(config.runtimeDbFile);
 }
 ```

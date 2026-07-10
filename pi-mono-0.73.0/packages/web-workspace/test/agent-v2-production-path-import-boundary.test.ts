@@ -110,6 +110,23 @@ const explicitV2BoundaryFiles = [
 ];
 
 describe("agent v2 production import boundary", () => {
+	it("deletes the legacy queue and retry modules", () => {
+		for (const file of [
+			"packages/web-workspace/src/run-queue.ts",
+			"packages/web-workspace/src/run-retry-controller.ts",
+			"packages/web-workspace/test/run-queue.test.ts",
+			"packages/web-workspace/test/retry-policy.test.ts",
+		]) {
+			expect(existsSync(join(repoRoot, file)), `${file} must be deleted`).toBe(false);
+		}
+
+		const queueSource = readFileSync(join(repoRoot, "packages/web-workspace/src/agent-v2-run-queue.ts"), "utf8");
+		expect(queueSource).not.toContain("./run-queue.js");
+		for (const legacyType of ["RunQueue", "ClaimedRun", "ActiveRunClaim"]) {
+			expect(queueSource).not.toMatch(new RegExp(`\\b${legacyType}\\b`));
+		}
+	});
+
 	it("deletes the retired application generation runtime selector", () => {
 		const deleted = [
 			"apps/pi-coding-web/src/agent-v2/runtime-entry.ts",

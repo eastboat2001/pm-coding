@@ -1,4 +1,86 @@
-import { RedisRunQueue, type ActiveRunClaim, type ClaimedRun, type RunQueue } from "./run-queue.js";
+import { createClient, type RedisClientType } from "redis";
+
+const DEFAULT_CANCEL_TTL_SECONDS = 24 * 60 * 60;
+const DEFAULT_CLAIM_LEASE_TTL_MS = 30_000;
+const COMPLETE_IF_OWNER_SCRIPT = `
+local raw = redis.call("HGET", KEYS[1], ARGV[1])
+if not raw then
+	return 0
+end
+local owner = raw
+if string.sub(raw, 1, 1) == "{" then
+	local ok, decoded = pcall(cjson.decode, raw)
+	if ok and type(decoded) == "table" and type(decoded["workerId"]) == "string" then
+		owner = decoded["workerId"]
+	end
+end
+if owner == ARGV[2] then
+	redis.call("DEL", KEYS[2])
+	return redis.call("HDEL", KEYS[1], ARGV[1])
+end
+return 0
+`;
+const REQUEUE_ACTIVE_BY_OWNER_SCRIPT = `
+local entries = redis.call("HGETALL", KEYS[1])
+local reclaimed = 0
+for i = 1, #entries, 2 do
+	local runKey = entries[i]
+	local raw = entries[i + 1]
+	local owner = raw
+	if string.sub(raw, 1, 1) == "{" then
+		local ok, decoded = pcall(cjson.decode, raw)
+		if ok and type(decoded) == "table" and type(decoded["workerId"]) == "string" then
+			owner = decoded["workerId"]
+		end
+	end
+	if owner == ARGV[1] then
+		redis.call("HDEL", KEYS[1], runKey)
+		redis.call("LPUSH", KEYS[2], runKey)
+		reclaimed = reclaimed + 1
+	end
+end
+return reclaimed
+`;
+const RENEW_LEASE_IF_OWNER_SCRIPT = `
+local raw = redis.call("HGET", KEYS[1], ARGV[1])
+if not raw then
+	return 0
+end
+local owner = raw
+if string.sub(raw, 1, 1) == "{" then
+	local ok, decoded = pcall(cjson.decode, raw)
+	if ok and type(decoded) == "table" and type(decoded["workerId"]) == "string" then
+		owner = decoded["workerId"]
+	end
+end
+if owner ~= ARGV[2] then
+	return 0
+end
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
+return 1
+`;
+const RELEASE_EXPIRED_CLAIMS_SCRIPT = `
+local now = tonumber(ARGV[1])
+local entries = redis.call("HGETALL", KEYS[1])
+local reclaimed = {}
+for i = 1, #entries, 2 do
+	local runKey = entries[i]
+	local raw = entries[i + 1]
+	local leaseExpiresAtMs = nil
+	if string.sub(raw, 1, 1) == "{" then
+		local ok, decoded = pcall(cjson.decode, raw)
+		if ok and type(decoded) == "table" and type(decoded["leaseExpiresAtMs"]) == "number" then
+			leaseExpiresAtMs = decoded["leaseExpiresAtMs"]
+		end
+	end
+	if leaseExpiresAtMs == nil or leaseExpiresAtMs <= now then
+		redis.call("HDEL", KEYS[1], runKey)
+		table.insert(reclaimed, runKey)
+		table.insert(reclaimed, raw)
+	end
+end
+return reclaimed
+`;
 
 export interface AgentV2RunQueueIdentity {
 	clientId: string;
@@ -18,6 +100,12 @@ export interface AgentV2RunQueueClearResult {
 	queueItemsDeleted: number;
 	activeClaimsDeleted: number;
 	cancelKeysDeleted: number;
+}
+
+export interface AgentV2RunQueueOptions {
+	claimLeaseTtlMs?: number;
+	cancelTtlSeconds?: number;
+	now?: () => number;
 }
 
 export interface RedisAgentV2RunQueueOptions {
@@ -40,72 +128,424 @@ export interface AgentV2RunQueue {
 	close(): Promise<void>;
 }
 
+export class InMemoryAgentV2RunQueue implements AgentV2RunQueue {
+	private readonly active = new Map<string, AgentV2ActiveRunClaim>();
+	private readonly cancelRequests = new Map<string, number>();
+	private closed = false;
+	private readonly cancelTtlSeconds: number;
+	private readonly claimLeaseTtlMs: number;
+	private readonly now: () => number;
+	private readonly queued: AgentV2RunQueueIdentity[] = [];
+
+	constructor(options: AgentV2RunQueueOptions = {}) {
+		this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
+		this.cancelTtlSeconds = options.cancelTtlSeconds ?? DEFAULT_CANCEL_TTL_SECONDS;
+		this.now = options.now ?? (() => Date.now());
+	}
+
+	async enqueue(run: AgentV2RunQueueIdentity): Promise<void> {
+		this.assertOpen();
+		this.queued.push(copyIdentity(run));
+	}
+
+	async claim(workerId: string, _timeoutMs: number): Promise<AgentV2ClaimedRun | undefined> {
+		this.assertOpen();
+		const run = this.queued.shift();
+		if (!run) return undefined;
+		const now = this.now();
+		this.active.set(runKey(run), createActiveRunClaim(run, workerId, now, this.claimLeaseTtlMs));
+		return copyIdentity(run);
+	}
+
+	async complete(run: AgentV2RunQueueIdentity, workerId: string): Promise<void> {
+		this.assertOpen();
+		const key = runKey(run);
+		if (this.active.get(key)?.workerId === workerId) {
+			this.active.delete(key);
+			this.cancelRequests.delete(key);
+		}
+	}
+
+	async requeueActive(workerId: string): Promise<number> {
+		this.assertOpen();
+		const reclaimed: AgentV2RunQueueIdentity[] = [];
+		for (const [key, claim] of this.active) {
+			if (claim.workerId !== workerId) continue;
+			this.active.delete(key);
+			reclaimed.push({ clientId: claim.clientId, runId: claim.runId });
+		}
+		this.queued.push(...reclaimed);
+		return reclaimed.length;
+	}
+
+	async renewLease(run: AgentV2RunQueueIdentity, workerId: string): Promise<boolean> {
+		this.assertOpen();
+		const key = runKey(run);
+		const claim = this.active.get(key);
+		if (!claim || claim.workerId !== workerId) return false;
+		const now = this.now();
+		this.active.set(key, { ...claim, heartbeatAtMs: now, leaseExpiresAtMs: now + this.claimLeaseTtlMs });
+		return true;
+	}
+
+	async releaseExpiredClaims(): Promise<AgentV2ActiveRunClaim[]> {
+		this.assertOpen();
+		const now = this.now();
+		const expired: AgentV2ActiveRunClaim[] = [];
+		for (const [key, claim] of this.active) {
+			if (claim.leaseExpiresAtMs > now) continue;
+			this.active.delete(key);
+			expired.push({ ...claim });
+		}
+		return expired;
+	}
+
+	async requestCancel(run: AgentV2RunQueueIdentity): Promise<void> {
+		this.assertOpen();
+		const key = runKey(run);
+		this.cancelRequests.set(key, this.now() + this.cancelTtlSeconds * 1_000);
+		for (let index = this.queued.length - 1; index >= 0; index -= 1) {
+			if (runKey(this.queued[index]) === key) this.queued.splice(index, 1);
+		}
+	}
+
+	async isCancelRequested(run: AgentV2RunQueueIdentity): Promise<boolean> {
+		this.assertOpen();
+		const key = runKey(run);
+		const expiresAt = this.cancelRequests.get(key);
+		if (expiresAt === undefined) return false;
+		if (expiresAt > this.now()) return true;
+		this.cancelRequests.delete(key);
+		return false;
+	}
+
+	async clear(): Promise<AgentV2RunQueueClearResult> {
+		this.assertOpen();
+		this.purgeExpiredCancelRequests();
+		const result = {
+			queueItemsDeleted: this.queued.length,
+			activeClaimsDeleted: this.active.size,
+			cancelKeysDeleted: this.cancelRequests.size,
+		};
+		this.queued.length = 0;
+		this.active.clear();
+		this.cancelRequests.clear();
+		return result;
+	}
+
+	async close(): Promise<void> {
+		if (this.closed) return;
+		this.closed = true;
+		this.queued.length = 0;
+		this.active.clear();
+		this.cancelRequests.clear();
+	}
+
+	private assertOpen(): void {
+		if (this.closed) throw new Error("Run queue is closed");
+	}
+
+	private purgeExpiredCancelRequests(): void {
+		const now = this.now();
+		for (const [key, expiresAt] of this.cancelRequests) {
+			if (expiresAt <= now) this.cancelRequests.delete(key);
+		}
+	}
+}
+
+export class RedisAgentV2RunQueue implements AgentV2RunQueue {
+	private activeClaims = 0;
+	private readonly activeKey: string;
+	private blockingClient?: RedisClientType;
+	private readonly cancelTtlSeconds: number;
+	private client?: RedisClientType;
+	private readonly claimLeaseTtlMs: number;
+	private readonly claimWaiters: Array<() => void> = [];
+	private closed = false;
+	private readonly queueName: string;
+	private readonly redisUrl: string;
+
+	constructor(options: RedisAgentV2RunQueueOptions) {
+		this.redisUrl = options.redisUrl;
+		this.queueName = options.queueName;
+		this.activeKey = `${options.queueName}:active`;
+		this.cancelTtlSeconds = options.cancelTtlSeconds ?? DEFAULT_CANCEL_TTL_SECONDS;
+		this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
+	}
+
+	async enqueue(run: AgentV2RunQueueIdentity): Promise<void> {
+		this.assertOpen();
+		const client = await this.connectedClient();
+		await client.lPush(this.queueName, serializeIdentity(run));
+	}
+
+	async claim(workerId: string, timeoutMs: number): Promise<AgentV2ClaimedRun | undefined> {
+		this.assertOpen();
+		this.activeClaims += 1;
+		try {
+			const client = await this.connectedClient();
+			const run = await this.popRun(timeoutMs, client);
+			if (!run) return undefined;
+			if (this.closed) {
+				await client.rPush(this.queueName, serializeIdentity(run));
+				return undefined;
+			}
+			await client.hSet(
+				this.activeKey,
+				runKey(run),
+				serializeActiveRunClaim(createActiveRunClaim(run, workerId, Date.now(), this.claimLeaseTtlMs)),
+			);
+			if (this.closed) {
+				await this.completeClaimedRun(client, run, workerId);
+				await client.rPush(this.queueName, serializeIdentity(run));
+				return undefined;
+			}
+			return run;
+		} catch (error) {
+			if (this.closed) return undefined;
+			throw error;
+		} finally {
+			this.activeClaims -= 1;
+			if (this.activeClaims === 0) {
+				for (const resolve of this.claimWaiters.splice(0)) resolve();
+			}
+		}
+	}
+
+	async complete(run: AgentV2RunQueueIdentity, workerId: string): Promise<void> {
+		this.assertOpen();
+		await this.completeClaimedRun(await this.connectedClient(), run, workerId);
+	}
+
+	async requeueActive(workerId: string): Promise<number> {
+		this.assertOpen();
+		const result = await (await this.connectedClient()).eval(REQUEUE_ACTIVE_BY_OWNER_SCRIPT, {
+			keys: [this.activeKey, this.queueName],
+			arguments: [workerId],
+		});
+		return toCount(result);
+	}
+
+	async renewLease(run: AgentV2RunQueueIdentity, workerId: string): Promise<boolean> {
+		this.assertOpen();
+		const claim = createActiveRunClaim(run, workerId, Date.now(), this.claimLeaseTtlMs);
+		const result = await (await this.connectedClient()).eval(RENEW_LEASE_IF_OWNER_SCRIPT, {
+			keys: [this.activeKey],
+			arguments: [runKey(run), workerId, serializeActiveRunClaim(claim)],
+		});
+		return toCount(result) > 0;
+	}
+
+	async releaseExpiredClaims(): Promise<AgentV2ActiveRunClaim[]> {
+		this.assertOpen();
+		const result = await (await this.connectedClient()).eval(RELEASE_EXPIRED_CLAIMS_SCRIPT, {
+			keys: [this.activeKey],
+			arguments: [String(Date.now())],
+		});
+		return parseReleasedActiveClaims(result);
+	}
+
+	async requestCancel(run: AgentV2RunQueueIdentity): Promise<void> {
+		this.assertOpen();
+		const client = await this.connectedClient();
+		await Promise.all([
+			client.set(this.cancelKey(run), "1", { EX: this.cancelTtlSeconds }),
+			client.lRem(this.queueName, 0, serializeIdentity(run)),
+			client.lRem(this.queueName, 0, runKey(run)),
+		]);
+	}
+
+	async isCancelRequested(run: AgentV2RunQueueIdentity): Promise<boolean> {
+		this.assertOpen();
+		return (await (await this.connectedClient()).exists(this.cancelKey(run))) > 0;
+	}
+
+	async clear(): Promise<AgentV2RunQueueClearResult> {
+		this.assertOpen();
+		const client = await this.connectedClient();
+		const [queueItemsDeleted, activeClaimsDeleted] = await Promise.all([client.lLen(this.queueName), client.hLen(this.activeKey)]);
+		const cancelKeys: string[] = [];
+		for await (const key of client.scanIterator({ MATCH: `${this.queueName}:cancel:*`, COUNT: 100 })) {
+			cancelKeys.push(String(key));
+		}
+		await Promise.all([
+			client.del(this.queueName),
+			client.del(this.activeKey),
+			...chunk(cancelKeys, 100).map((keys) => client.del(keys)),
+		]);
+		return { queueItemsDeleted, activeClaimsDeleted, cancelKeysDeleted: cancelKeys.length };
+	}
+
+	async close(): Promise<void> {
+		if (this.closed) return;
+		this.closed = true;
+		if (this.blockingClient?.isOpen) await this.blockingClient.disconnect();
+		await this.waitForActiveClaims();
+		const clients = [this.client, this.blockingClient];
+		this.client = undefined;
+		this.blockingClient = undefined;
+		await Promise.all(
+			clients.map(async (client) => {
+				if (!client?.isOpen) return;
+				await client.quit().catch(async () => {
+					if (client.isOpen) await client.disconnect();
+				});
+			}),
+		);
+	}
+
+	private assertOpen(): void {
+		if (this.closed) throw new Error("Run queue is closed");
+	}
+
+	private cancelKey(run: AgentV2RunQueueIdentity): string {
+		return `${this.queueName}:cancel:${encodeURIComponent(runKey(run))}`;
+	}
+
+	private async completeClaimedRun(client: RedisClientType, run: AgentV2RunQueueIdentity, workerId: string): Promise<void> {
+		await client.eval(COMPLETE_IF_OWNER_SCRIPT, {
+			keys: [this.activeKey, this.cancelKey(run)],
+			arguments: [runKey(run), workerId],
+		});
+	}
+
+	private async connectedBlockingClient(sourceClient: RedisClientType): Promise<RedisClientType> {
+		this.blockingClient ??= sourceClient.duplicate();
+		if (!this.blockingClient.isOpen) await this.blockingClient.connect();
+		return this.blockingClient;
+	}
+
+	private async connectedClient(): Promise<RedisClientType> {
+		this.assertOpen();
+		this.client ??= createClient({ url: this.redisUrl });
+		if (!this.client.isOpen) await this.client.connect();
+		return this.client;
+	}
+
+	private async popRun(timeoutMs: number, client: RedisClientType): Promise<AgentV2RunQueueIdentity | undefined> {
+		if (timeoutMs <= 0) return parseIdentity(await client.rPop(this.queueName));
+		const result = await (await this.connectedBlockingClient(client)).brPop(this.queueName, Math.max(1, Math.ceil(timeoutMs / 1000)));
+		return parseIdentity(result?.element);
+	}
+
+	private waitForActiveClaims(): Promise<void> {
+		if (this.activeClaims === 0) return Promise.resolve();
+		return new Promise((resolve) => this.claimWaiters.push(resolve));
+	}
+}
+
+export function createAgentV2RunQueue(options: AgentV2RunQueueOptions = {}): AgentV2RunQueue {
+	return new InMemoryAgentV2RunQueue(options);
+}
+
 export function createRedisAgentV2RunQueue(options: RedisAgentV2RunQueueOptions): AgentV2RunQueue {
-	return createAgentV2RunQueue(new RedisRunQueue(options));
+	return new RedisAgentV2RunQueue(options);
 }
 
-export function createAgentV2RunQueue(queue: RunQueue): AgentV2RunQueue {
-	return {
-		enqueue(run) {
-			return queue.enqueue(toAgentV2Identity(run));
-		},
-		async claim(workerId, timeoutMs) {
-			const run = await queue.claim(workerId, timeoutMs);
-			return run === undefined ? undefined : fromClaimedRun(run);
-		},
-		complete(run, workerId) {
-			return queue.complete(toAgentV2Identity(run), workerId);
-		},
-		requeueActive(workerId) {
-			return queue.requeueActive(workerId);
-		},
-		renewLease(run, workerId) {
-			return queue.renewLease(toAgentV2Identity(run), workerId);
-		},
-		async releaseExpiredClaims() {
-			return (await queue.releaseExpiredClaims()).map(fromActiveClaim);
-		},
-		requestCancel(run) {
-			return queue.requestCancel(toAgentV2Identity(run));
-		},
-		isCancelRequested(run) {
-			return queue.isCancelRequested(toAgentV2Identity(run));
-		},
-		clear() {
-			return queue.clear();
-		},
-		close() {
-			return queue.close();
-		},
-	};
-}
-
-function fromClaimedRun(run: ClaimedRun): AgentV2ClaimedRun {
-	if (typeof run.clientId !== "string" || run.clientId.length === 0) {
-		throw new Error("Agent v2 queue claim is missing clientId");
-	}
-	if (typeof run.runId !== "string" || run.runId.length === 0) {
-		throw new Error("Agent v2 queue claim is missing runId");
-	}
+function copyIdentity(run: AgentV2RunQueueIdentity): AgentV2RunQueueIdentity {
+	if (typeof run.clientId !== "string" || run.clientId.length === 0) throw new Error("Agent v2 queue identity is missing clientId");
+	if (typeof run.runId !== "string" || run.runId.length === 0) throw new Error("Agent v2 queue identity is missing runId");
 	return { clientId: run.clientId, runId: run.runId };
 }
 
-function fromActiveClaim(run: ActiveRunClaim): AgentV2ActiveRunClaim {
-	return {
-		...fromClaimedRun(run),
-		workerId: run.workerId,
-		claimedAtMs: run.claimedAtMs,
-		heartbeatAtMs: run.heartbeatAtMs,
-		leaseExpiresAtMs: run.leaseExpiresAtMs,
-	};
+function createActiveRunClaim(
+	run: AgentV2RunQueueIdentity,
+	workerId: string,
+	now: number,
+	claimLeaseTtlMs: number,
+): AgentV2ActiveRunClaim {
+	return { ...copyIdentity(run), workerId, claimedAtMs: now, heartbeatAtMs: now, leaseExpiresAtMs: now + claimLeaseTtlMs };
 }
 
-function toAgentV2Identity(run: AgentV2RunQueueIdentity): AgentV2RunQueueIdentity {
-	if (typeof run.clientId !== "string" || run.clientId.length === 0) {
-		throw new Error("Agent v2 queue identity is missing clientId");
+function serializeActiveRunClaim(claim: AgentV2ActiveRunClaim): string {
+	return JSON.stringify({
+		workerId: claim.workerId,
+		claimedAtMs: claim.claimedAtMs,
+		heartbeatAtMs: claim.heartbeatAtMs,
+		leaseExpiresAtMs: claim.leaseExpiresAtMs,
+	});
+}
+
+function serializeIdentity(run: AgentV2RunQueueIdentity): string {
+	return JSON.stringify(copyIdentity(run));
+}
+
+function parseIdentity(value: Buffer | string | null | undefined): AgentV2RunQueueIdentity | undefined {
+	if (value === null || value === undefined) return undefined;
+	const raw = Buffer.isBuffer(value) ? value.toString("utf8") : value;
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (Array.isArray(parsed) && parsed.length === 2 && typeof parsed[0] === "string" && typeof parsed[1] === "string") {
+			return { clientId: parsed[0], runId: parsed[1] };
+		}
+		if (
+			parsed &&
+			typeof parsed === "object" &&
+			"clientId" in parsed &&
+			"runId" in parsed &&
+			typeof parsed.clientId === "string" &&
+			typeof parsed.runId === "string"
+		) {
+			return { clientId: parsed.clientId, runId: parsed.runId };
+		}
+	} catch {}
+	return undefined;
+}
+
+function runKey(run: AgentV2RunQueueIdentity): string {
+	const identity = copyIdentity(run);
+	return JSON.stringify([identity.clientId, identity.runId]);
+}
+
+function parseReleasedActiveClaims(result: unknown): AgentV2ActiveRunClaim[] {
+	if (!Array.isArray(result)) return [];
+	const claims: AgentV2ActiveRunClaim[] = [];
+	for (let index = 0; index < result.length; index += 2) {
+		const run = parseIdentity(toUtf8String(result[index]));
+		const claim = parseActiveRunClaim(toUtf8String(result[index + 1]));
+		if (run && claim) claims.push({ ...run, ...claim });
 	}
-	if (typeof run.runId !== "string" || run.runId.length === 0) {
-		throw new Error("Agent v2 queue identity is missing runId");
-	}
-	return { clientId: run.clientId, runId: run.runId };
+	return claims;
+}
+
+function parseActiveRunClaim(value: string | undefined): Omit<AgentV2ActiveRunClaim, "clientId" | "runId"> | undefined {
+	if (!value) return undefined;
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		if (
+			parsed &&
+			typeof parsed === "object" &&
+			"workerId" in parsed &&
+			typeof parsed.workerId === "string" &&
+			"claimedAtMs" in parsed &&
+			typeof parsed.claimedAtMs === "number" &&
+			"heartbeatAtMs" in parsed &&
+			typeof parsed.heartbeatAtMs === "number" &&
+			"leaseExpiresAtMs" in parsed &&
+			typeof parsed.leaseExpiresAtMs === "number"
+		) {
+			return {
+				workerId: parsed.workerId,
+				claimedAtMs: parsed.claimedAtMs,
+				heartbeatAtMs: parsed.heartbeatAtMs,
+				leaseExpiresAtMs: parsed.leaseExpiresAtMs,
+			};
+		}
+	} catch {}
+	return { workerId: value, claimedAtMs: 0, heartbeatAtMs: 0, leaseExpiresAtMs: 0 };
+}
+
+function toUtf8String(value: unknown): string | undefined {
+	if (typeof value === "string") return value;
+	return Buffer.isBuffer(value) ? value.toString("utf8") : undefined;
+}
+
+function toCount(value: unknown): number {
+	return typeof value === "number" ? value : Number(value) || 0;
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+	const chunks: T[][] = [];
+	for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+	return chunks;
 }

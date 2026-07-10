@@ -3,7 +3,12 @@ import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
-import { type AgentV2RunQueue, type AgentV2RunQueueIdentity, createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
+import {
+	type AgentV2RunQueue,
+	type AgentV2RunQueueClearResult,
+	type AgentV2RunQueueIdentity,
+	createAgentV2RunQueue,
+} from "../src/agent-v2-run-queue.js";
 import {
 	type AgentV2RunEventRecord,
 	type AgentV2RunUpdateResult,
@@ -15,7 +20,6 @@ import {
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot } from "../src/agent-v2-types.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
-import { InMemoryRunQueue, type RunQueueClearResult } from "../src/run-queue.js";
 
 describe("agent v2 worker stress", () => {
 	afterEach(() => {
@@ -26,7 +30,7 @@ describe("agent v2 worker stress", () => {
 		"drains 20 queued runs at concurrency 4 and leaves no queued, running, cancelling, or claimed state after mixed cancellation",
 		async () => {
 			const store = new MemoryStressStore();
-			const queue = new TrackingQueue(createAgentV2RunQueue(new InMemoryRunQueue()));
+			const queue = new TrackingQueue(createAgentV2RunQueue());
 			const events = new RecordingEventLog();
 			const now = createTimestampSequence("2026-07-09T10:00:00.000Z");
 			const fastCancelTargets = new Set(["run-03", "run-04", "run-11"]);
@@ -106,7 +110,7 @@ describe("agent v2 worker stress", () => {
 		"still interrupts in-flight runs when the worker is stopped early",
 		async () => {
 			const store = new MemoryStressStore();
-			const queue = new TrackingQueue(createAgentV2RunQueue(new InMemoryRunQueue()));
+			const queue = new TrackingQueue(createAgentV2RunQueue());
 			const events = new RecordingEventLog();
 			const now = createTimestampSequence("2026-07-09T10:30:00.000Z");
 			const service = new AgentV2RunApiService({ store, queue, events, now });
@@ -203,7 +207,7 @@ class MemoryStressStore {
 class TrackingQueue implements AgentV2RunQueue {
 	private readonly activeClaims = new Set<string>();
 	private readonly completed = new Set<string>();
-	private closeResult: RunQueueClearResult | undefined;
+	private closeResult: AgentV2RunQueueClearResult | undefined;
 
 	constructor(private readonly inner: AgentV2RunQueue) {}
 
@@ -260,7 +264,7 @@ class TrackingQueue implements AgentV2RunQueue {
 		return [...this.completed].sort();
 	}
 
-	closeDrainResult(): RunQueueClearResult | undefined {
+	closeDrainResult(): AgentV2RunQueueClearResult | undefined {
 		return this.closeResult;
 	}
 }

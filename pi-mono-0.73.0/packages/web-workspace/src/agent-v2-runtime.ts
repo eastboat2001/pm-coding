@@ -35,10 +35,14 @@ export {
 	validateAgentV2RunInput,
 } from "./agent-v2-run-input-contract.js";
 export {
+	InMemoryAgentV2RunQueue,
+	RedisAgentV2RunQueue,
+	type AgentV2ActiveRunClaim,
 	type AgentV2ClaimedRun,
 	type AgentV2RunQueue,
 	type AgentV2RunQueueClearResult,
 	type AgentV2RunQueueIdentity,
+	type AgentV2RunQueueOptions,
 	type RedisAgentV2RunQueueOptions,
 	createAgentV2RunQueue,
 	createRedisAgentV2RunQueue,

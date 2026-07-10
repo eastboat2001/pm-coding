@@ -13,7 +13,6 @@ import type {
 	UpdateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot } from "../src/agent-v2-types.js";
-import { InMemoryRunQueue } from "../src/run-queue.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
 const cleanupRoots: string[] = [];
@@ -27,7 +26,7 @@ describe("AgentV2RunApiService", () => {
 
 	it("startRun creates a queued v2 run, enqueues the client/run identity, and emits run_created", async () => {
 		const { store } = createSqliteStore();
-		const queue = createAgentV2RunQueue(new InMemoryRunQueue());
+		const queue = createAgentV2RunQueue();
 		const events = new RecordingEventLog();
 		const service = new AgentV2RunApiService({
 			store,
@@ -82,7 +81,7 @@ describe("AgentV2RunApiService", () => {
 
 		for (const input of invalidInputs) {
 			const { store } = createSqliteStore();
-			const queue = createAgentV2RunQueue(new InMemoryRunQueue());
+			const queue = createAgentV2RunQueue();
 			const events = new RecordingEventLog();
 			const service = new AgentV2RunApiService({
 				store,
@@ -162,7 +161,7 @@ describe("AgentV2RunApiService", () => {
 
 	it("cancelRun on a queued run requests queue cancellation, marks the run cancelled, and emits a phase/status event", async () => {
 		const { store } = createSqliteStore();
-		const queue = createAgentV2RunQueue(new InMemoryRunQueue());
+		const queue = createAgentV2RunQueue();
 		const events = new RecordingEventLog();
 		const service = new AgentV2RunApiService({
 			store,
@@ -249,7 +248,7 @@ describe("AgentV2RunApiService", () => {
 
 	it("cancelRun on a running run marks cancellation requested without reading legacy run state", async () => {
 		const { store } = createSqliteStore();
-		const queue = createAgentV2RunQueue(new InMemoryRunQueue());
+		const queue = createAgentV2RunQueue();
 		const events = new RecordingEventLog();
 		const service = new AgentV2RunApiService({
 			store,

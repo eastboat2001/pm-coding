@@ -8,7 +8,6 @@ import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import { createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import { createAgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import { AGENT_V2_RESET_CONFIRMATION, resetAgentV2Runtime } from "../src/agent-v2-maintenance.js";
-import { InMemoryRunQueue } from "../src/run-queue.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
 
@@ -24,7 +23,7 @@ describe("agent v2 quality regression", () => {
 
 	it("keeps v2 runtime state isolated from legacy rows across reset and id collisions", async () => {
 		const { root, store, dbFile } = createSqliteStore();
-		const queue = createAgentV2RunQueue(new InMemoryRunQueue());
+		const queue = createAgentV2RunQueue();
 		const events = new RecordingEventLog();
 		const service = new AgentV2RunApiService({
 			store,

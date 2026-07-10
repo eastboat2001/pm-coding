@@ -1,14 +1,13 @@
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentV2RunEventBus, AgentV2RunEventBusPurgeResult } from "./agent-v2-run-event-bus.js";
-import type { AgentV2RunQueue } from "./agent-v2-run-queue.js";
+import type { AgentV2RunQueue, AgentV2RunQueueClearResult } from "./agent-v2-run-queue.js";
 import {
 	AGENT_V2_RESET_CONFIRMATION,
 	type AgentV2ResetDiagnosticsAdapter,
 	assertAgentV2ResetConfirmation,
 } from "./agent-v2-reset.js";
 import type { AgentV2ResetStore, AgentV2ResetStoreResult } from "./agent-v2-runtime-store.js";
-import type { RunQueueClearResult } from "./run-queue.js";
 
 export { AGENT_V2_RESET_CONFIRMATION };
 
@@ -33,7 +32,7 @@ export interface AgentV2GeneratedProjectCleanupResult {
 
 export interface AgentV2RuntimeResetResult {
 	store: AgentV2ResetStoreResult;
-	queue?: RunQueueClearResult;
+	queue?: AgentV2RunQueueClearResult;
 	liveEvents?: AgentV2RunEventBusPurgeResult;
 	diagnosticsDeleted?: number;
 	generatedProjects?: AgentV2GeneratedProjectCleanupResult;

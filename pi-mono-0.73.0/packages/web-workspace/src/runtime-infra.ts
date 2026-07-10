@@ -1,9 +1,13 @@
 export { loadStorageConfig } from "./config.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export {
+	InMemoryAgentV2RunQueue,
+	RedisAgentV2RunQueue,
+	type AgentV2RunQueueOptions,
 	type AgentV2RunQueue,
 	type AgentV2RunQueueClearResult,
 	type RedisAgentV2RunQueueOptions,
+	createAgentV2RunQueue,
 	createRedisAgentV2RunQueue,
 } from "./agent-v2-run-queue.js";
 export { createRuntimeStore } from "./runtime-store-factory.js";

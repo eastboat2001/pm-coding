@@ -7,6 +7,7 @@ import {
 	buildAgentV2TaskGraph,
 	renderAgentV2DocumentMarkdown,
 } from "./agent-v2-documents.js";
+import type { AgentV2PlanningStore } from "./agent-v2-runtime-store.js";
 import type {
 	AgentV2ArtifactRecord,
 	AgentV2DocumentRecord,
@@ -22,7 +23,6 @@ import type {
 	AgentV2SpecDocument,
 	AgentV2TaskGraph,
 } from "./agent-v2-types.js";
-import type { AgentV2PlanningStore } from "./agent-v2-runtime-store.js";
 
 type TimestampFactory = () => string;
 

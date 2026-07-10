@@ -1,5 +1,5 @@
-import { getOrCreatePiClientId, piClientHeaders } from "../runtime/client-id.js";
 import type { BrowserSessionRecord } from "../runtime/browser-records.js";
+import { getOrCreatePiClientId, piClientHeaders } from "../runtime/client-id.js";
 
 const LOGS_API_PREFIX = "/api/pi-logs";
 const DEFAULT_MAX_DIAGNOSTIC_EVENTS = 200000;

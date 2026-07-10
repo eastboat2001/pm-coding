@@ -66,9 +66,11 @@ function createMiddleware(config: StorageConfig, calls: string[]): Middleware {
 	const configureServer = plugin.configureServer as (server: {
 		middlewares: { use(handler: Middleware): void };
 	}) => void;
-	configureServer(createFakeServer((handler) => {
-		middleware = handler;
-	}));
+	configureServer(
+		createFakeServer((handler) => {
+			middleware = handler;
+		}),
+	);
 	if (!middleware) throw new Error("configured storage plugin did not register middleware");
 	return middleware;
 }

@@ -219,7 +219,7 @@ describe("agent v2 Vite runtime routes", () => {
 		}
 	});
 
-it("does not expose legacy app-preview-goal routes", async () => {
+	it("does not expose legacy app-preview-goal routes", async () => {
 		const harness = createHarness();
 
 		const getResponse = await dispatch(harness.middleware, {
@@ -240,10 +240,7 @@ it("does not expose legacy app-preview-goal routes", async () => {
 });
 
 type ConfiguredTestServices = Parameters<typeof createConfiguredStoragePluginForTest>[0];
-type TestServices = Omit<
-	ConfiguredTestServices,
-	"agentV2RunApi" | "agentV2RunEventBus" | "agentV2RunEventLog"
-> & {
+type TestServices = Omit<ConfiguredTestServices, "agentV2RunApi" | "agentV2RunEventBus" | "agentV2RunEventLog"> & {
 	agentV2RunApi?: ConfiguredTestServices["agentV2RunApi"] | RecordingAgentV2RunApi;
 	agentV2RunEventBus?: AgentV2RunEventBus;
 	agentV2RunEventLog?: RecordingAgentV2RunEventLog;

@@ -1,8 +1,4 @@
-import type {
-	AgentV2RunEventRecord,
-	AgentV2RunSnapshot,
-	JsonObject,
-} from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunEventRecord, AgentV2RunSnapshot, JsonObject } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "./client-id.js";
 
 export const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
@@ -65,9 +61,12 @@ export async function startAgentV2Run(request: AgentV2BrowserStartRunRequest): P
 
 export async function getAgentV2Run(runId: string): Promise<AgentV2RunSnapshot | undefined> {
 	try {
-		return await requestAgentV2RunApi<AgentV2RunSnapshot>(`${AGENT_V2_RUNS_API_PREFIX}/${encodeURIComponent(runId)}`, {
-			method: "GET",
-		});
+		return await requestAgentV2RunApi<AgentV2RunSnapshot>(
+			`${AGENT_V2_RUNS_API_PREFIX}/${encodeURIComponent(runId)}`,
+			{
+				method: "GET",
+			},
+		);
 	} catch (error) {
 		if (error instanceof Error && error.message === "Agent v2 run not found.") {
 			return undefined;

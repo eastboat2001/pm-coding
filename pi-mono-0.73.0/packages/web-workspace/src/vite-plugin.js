@@ -19,7 +19,6 @@ import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
-const LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS = 250;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 export function configuredStoragePlugin(envFile) {

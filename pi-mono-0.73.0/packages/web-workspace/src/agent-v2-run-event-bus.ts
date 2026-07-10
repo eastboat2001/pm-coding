@@ -206,9 +206,7 @@ export class RedisAgentV2RunEventBus implements AgentV2RunEventBus {
 			return this.deleteStreams([agentV2RunEventStreamKey({ clientId: options.clientId, runId: options.runId })]);
 		}
 
-		const pattern = options.clientId
-			? `pi:agent-v2:runs:${options.clientId}:*:events`
-			: "pi:agent-v2:runs:*:events";
+		const pattern = options.clientId ? `pi:agent-v2:runs:${options.clientId}:*:events` : "pi:agent-v2:runs:*:events";
 		const client = await this.connectedClient();
 		const keys: string[] = [];
 		for await (const key of client.scanIterator({ MATCH: pattern, COUNT: 100 })) {

@@ -1,15 +1,15 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
-import { createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import { createAgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import { AGENT_V2_RESET_CONFIRMATION, resetAgentV2Runtime } from "../src/agent-v2-maintenance.js";
-import { RuntimeDbStore } from "../src/runtime-db.js";
+import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
+import { createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
+import { RuntimeDbStore } from "../src/runtime-db.js";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const cleanupRoots: string[] = [];
@@ -140,7 +140,9 @@ describe("agent v2 quality regression", () => {
 			phase: "implementation",
 			workerId: "worker-a",
 		});
-		expect((await store.listAgentV2Tasks("client-a", "shared-run")).map((task) => [task.taskId, task.dependsOn])).toEqual([
+		expect(
+			(await store.listAgentV2Tasks("client-a", "shared-run")).map((task) => [task.taskId, task.dependsOn]),
+		).toEqual([
 			["plan", []],
 			["implement", ["plan"]],
 		]);

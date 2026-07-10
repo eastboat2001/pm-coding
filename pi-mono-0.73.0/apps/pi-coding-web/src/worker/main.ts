@@ -13,10 +13,10 @@ import {
 	type RedisAgentV2RunEventBusOptions,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
 import {
-	createAgentV2RuntimeStore,
-	createRedisAgentV2RunQueue,
 	type AgentV2ProductionStore,
 	type AgentV2SchemaStore,
+	createAgentV2RuntimeStore,
+	createRedisAgentV2RunQueue,
 	type DiagnosticLogEventInput,
 	type JsonObject,
 	loadStorageConfig,
@@ -26,9 +26,7 @@ import {
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 
-export async function ensureRuntimeSchemas(
-	runtimeDb: AgentV2SchemaStore,
-): Promise<void> {
+export async function ensureRuntimeSchemas(runtimeDb: AgentV2SchemaStore): Promise<void> {
 	await runtimeDb.ensureAgentV2Schema();
 }
 

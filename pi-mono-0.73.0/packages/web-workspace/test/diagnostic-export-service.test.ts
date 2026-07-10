@@ -187,7 +187,7 @@ describe("WorkspaceDiagnosticExportService", () => {
 			runEventsByRunId: { "run-v2": [event] },
 			agentV2DiagnosticsByRunId: { "run-v2": [diagnostic] },
 		});
-		expect(JSON.stringify(JSON.parse(files["manifest.json"]))).toContain("\"runId\":\"run-v2\"");
+		expect(JSON.stringify(JSON.parse(files["manifest.json"]))).toContain('"runId":"run-v2"');
 		expect(files["runtime/session.json"].trim()).toBe("null");
 		expect(files["runtime/messages.ndjson"]).toBe("");
 		expect(files["runtime/run-events/run-v2.events.ndjson"]).toContain("agent_v2.phase_changed");
@@ -201,7 +201,9 @@ describe("WorkspaceDiagnosticExportService", () => {
 				runtimeRunEvents: 1,
 				agentV2Diagnostics: 1,
 			},
-			runs: [{ runId: "run-v2", phase: "intake", eventCount: 1, agentV2DiagnosticCodes: { schema_check_failed: 1 } }],
+			runs: [
+				{ runId: "run-v2", phase: "intake", eventCount: 1, agentV2DiagnosticCodes: { schema_check_failed: 1 } },
+			],
 		});
 	});
 
@@ -500,9 +502,6 @@ function createV2OnlyRuntimeStore(
 	const runs = options.runs ?? [];
 	const runEventsByRunId = options.runEventsByRunId ?? {};
 	const diagnosticsByRunId = options.diagnosticsByRunId ?? {};
-	const legacy = (name: string) => () => {
-		throw new Error(`legacy runtime method called: ${name}`);
-	};
 	return {
 		getAgentV2Run: (_clientId: string, runId: string) => runs.find((run) => run.runId === runId),
 		listAgentV2Runs: () => runs,

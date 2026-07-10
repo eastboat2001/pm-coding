@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type {
+	AgentV2DiagnosticExportStore,
+	AgentV2RunApiStore,
+	AgentV2WorkerStore,
+} from "../src/agent-v2-runtime-store.js";
+import type {
 	AgentV2ArtifactRecord,
 	AgentV2DocumentRecord,
 	AgentV2RunEventRecord,
@@ -8,11 +13,6 @@ import type {
 	AgentV2ValidationRecord,
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "../src/agent-v2-types.js";
-import type {
-	AgentV2DiagnosticExportStore,
-	AgentV2RunApiStore,
-	AgentV2WorkerStore,
-} from "../src/agent-v2-runtime-store.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 import type { RuntimeStore } from "../src/runtime-store.js";
 import type {
@@ -26,8 +26,9 @@ import type {
 } from "../src/types.js";
 
 type Expect<T extends true> = T;
-type Equal<Left, Right> =
-	(<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2 ? true : false;
+type Equal<Left, Right> = (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+	? true
+	: false;
 type IsRequiredKey<T, K extends keyof T> = Record<never, never> extends Pick<T, K> ? false : true;
 
 type _AgentV2RunApiStoreListsWithClientIdOnly = Expect<

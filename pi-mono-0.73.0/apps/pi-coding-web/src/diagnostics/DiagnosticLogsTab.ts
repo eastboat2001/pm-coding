@@ -1,11 +1,11 @@
 import { icon } from "@mariozechner/mini-lit";
-import { i18n, SettingsTab, type SessionMetadata } from "@mariozechner/pi-web-ui";
+import { i18n, type SessionMetadata, SettingsTab } from "@mariozechner/pi-web-ui";
 import { html, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { Download, RefreshCw, TriangleAlert } from "lucide";
-import { diagnosticSessionTitle, downloadDiagnosticSessionExport } from "./diagnostic-export-client.js";
-import { getBrowserAppStorage } from "../storage/browser-app-storage.js";
 import type { BrowserSessionRecord } from "../runtime/browser-records.js";
+import { getBrowserAppStorage } from "../storage/browser-app-storage.js";
+import { diagnosticSessionTitle, downloadDiagnosticSessionExport } from "./diagnostic-export-client.js";
 
 const t = (message: string) => i18n(message as Parameters<typeof i18n>[0]);
 

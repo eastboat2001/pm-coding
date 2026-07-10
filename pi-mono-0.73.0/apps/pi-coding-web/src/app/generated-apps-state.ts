@@ -1,6 +1,6 @@
 import type { AgentV2RunStatus } from "@mariozechner/pi-web-workspace";
-import { piClientHeaders } from "../runtime/client-id.js";
 import type { BrowserDeleteSessionResult } from "../runtime/browser-records.js";
+import { piClientHeaders } from "../runtime/client-id.js";
 import { getBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { formatSessionUpdatedAt } from "../storage/session-timestamps.js";
 

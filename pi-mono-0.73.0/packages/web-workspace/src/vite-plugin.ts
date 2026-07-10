@@ -7,6 +7,7 @@ import { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest }
 import { type AgentV2RunEventBus, RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import { type AgentV2RunQueue, createRedisAgentV2RunQueue } from "./agent-v2-run-queue.js";
+import type { AgentV2SchemaStore } from "./agent-v2-runtime-store.js";
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
 import { normalizeClientId, readClientIdHeader } from "./client-id.js";
 import { loadStorageConfig } from "./config.js";
@@ -22,7 +23,6 @@ import {
 import { type DiagnosticArchiveExport, WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
-import type { AgentV2SchemaStore } from "./agent-v2-runtime-store.js";
 import { createAgentV2RuntimeStore } from "./runtime-store-factory.js";
 import type {
 	DiagnosticLogEventInput,
@@ -48,7 +48,6 @@ import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { WorkspaceTaskService } from "./workspace-task-service.js";
 
 const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
-const LIVE_MESSAGE_UPDATE_MIN_INTERVAL_MS = 250;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 
@@ -706,7 +705,10 @@ async function handleAgentV2RuntimeRunsApi(
 			const body = await readJsonBody(req);
 			sendJson(
 				res,
-				(await agentV2RunApi.startRun(clientId, body as unknown as AgentV2StartRunRequest)) as unknown as JsonObject,
+				(await agentV2RunApi.startRun(
+					clientId,
+					body as unknown as AgentV2StartRunRequest,
+				)) as unknown as JsonObject,
 			);
 			return;
 		}

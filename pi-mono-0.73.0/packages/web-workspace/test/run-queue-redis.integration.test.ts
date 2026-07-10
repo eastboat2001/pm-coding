@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { type AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
+import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
-import { createRedisAgentV2RunQueue, type AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
+import { type AgentV2RunQueue, createRedisAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import {
-	applyAgentV2RunUpdate,
-	buildAgentV2Run,
 	type AgentV2RunEventRecord,
 	type AgentV2RunUpdateResult,
 	type AppendAgentV2RunEventInput,
+	applyAgentV2RunUpdate,
+	buildAgentV2Run,
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";

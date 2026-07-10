@@ -283,10 +283,7 @@ class FakeResponse {
 	}
 }
 
-type BusReadStep =
-	| { events: AgentV2RunEventRecord[] }
-	| { error: Error }
-	| { waitForAbort: true };
+type BusReadStep = { events: AgentV2RunEventRecord[] } | { error: Error } | { waitForAbort: true };
 
 class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
 	readonly readCalls: AgentV2RunEventReadRequest[] = [];

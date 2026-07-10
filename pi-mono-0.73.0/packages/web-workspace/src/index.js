@@ -5,9 +5,9 @@ export { AGENT_V2_DIAGNOSTIC_CATEGORIES, createAgentV2DiagnosticEvent, toWorkspa
 export { buildAgentV2PlanDocument, buildAgentV2SpecDocument, buildAgentV2TaskGraph, renderAgentV2DocumentMarkdown, } from "./agent-v2-documents.js";
 export { executeAgentV2NextTask, } from "./agent-v2-execution-core.js";
 export { createAgentV2FileAdapter, } from "./agent-v2-file-adapter.js";
+export { clearAgentV2GeneratedProjectWorkspaces, resetAgentV2Runtime, } from "./agent-v2-maintenance.js";
 export { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap, } from "./agent-v2-planning-bootstrap.js";
 export { planAgentV2RepairActions, } from "./agent-v2-repair-engine.js";
-export { clearAgentV2GeneratedProjectWorkspaces, resetAgentV2Runtime, } from "./agent-v2-maintenance.js";
 export { AGENT_V2_RESET_CONFIRMATION, assertAgentV2ResetConfirmation, resetAgentV2RuntimeData, } from "./agent-v2-reset.js";
 export { AgentV2RunApiError, AgentV2RunApiService } from "./agent-v2-run-api-service.js";
 export { agentV2RunEventStreamKey, InMemoryAgentV2RunEventBus, RedisAgentV2RunEventBus, } from "./agent-v2-run-event-bus.js";

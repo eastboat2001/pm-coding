@@ -60,6 +60,14 @@ import {
 } from "../project-tools/context-manifest.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
+import {
+	cancelAgentV2Run,
+	connectAgentV2RunEvents,
+	getAgentV2Run,
+	listAgentV2RunEvents,
+	type AgentV2RunEventConnection as RunEventConnection,
+	startAgentV2Run,
+} from "../runtime/agent-v2-run-client.js";
 import { type CapabilityPlan, capabilityPlanDiagnosticData, planCapabilities } from "../runtime/capability-planner.js";
 import { piClientHeaders } from "../runtime/client-id.js";
 import {
@@ -69,19 +77,8 @@ import {
 } from "../runtime/context-orchestrator.js";
 import { STATIC_PREVIEW_CONTRACT } from "../runtime/platform-contract.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
-import {
-	RemoteAgentController,
-	type RemoteRunEventDrainResult,
-} from "../runtime/remote-agent-controller.js";
+import { RemoteAgentController, type RemoteRunEventDrainResult } from "../runtime/remote-agent-controller.js";
 import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
-import {
-	cancelAgentV2Run,
-	connectAgentV2RunEvents,
-	getAgentV2Run,
-	listAgentV2RunEvents,
-	startAgentV2Run,
-	type AgentV2RunEventConnection as RunEventConnection,
-} from "../runtime/agent-v2-run-client.js";
 import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
 import {
@@ -104,11 +101,11 @@ import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
 import type { SkillListDetails, SkillSummary } from "../skill-tools/schemas.js";
 import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
 import { createServerSkillTools } from "../skill-tools/tools.js";
+import { setBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
-import { type MergedSessionEntry } from "../storage/merged-session-index.js";
+import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { ServerBackedCustomProvidersStore } from "../storage/server-backed-custom-providers-store.js";
 import { ServerBackedProviderKeysStore } from "../storage/server-backed-provider-keys-store.js";
-import { setBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { sessionLastMessageModifiedAt } from "../storage/session-timestamps.js";
 import "./CurrentProjectFilesPanel.js";
 import type { CurrentProjectFilesPanel } from "./CurrentProjectFilesPanel.js";
@@ -226,8 +223,7 @@ const runClient = {
 		afterSeq: number,
 		onEvent: (event: AgentV2RunEventRecord) => void | Promise<void>,
 		options = {},
-	) =>
-		connectAgentV2RunEvents(runId, afterSeq, onEvent, options),
+	) => connectAgentV2RunEvents(runId, afterSeq, onEvent, options),
 	getRun: async (runId: string) => {
 		const run = await getAgentV2Run(runId);
 		return run ? toTrackedRemoteRun(run, currentSessionId ?? "") : undefined;
@@ -726,7 +722,9 @@ const saveSession = async () => {
 const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
 	const browserSessions = (await storage.sessions.getAllMetadata()) as SessionMetadataWithRunState[];
 	return browserSessions
-		.filter((session) => session.messageCount > 0 || Boolean(session.activeRunId) || isActiveRunStatus(session.runStatus))
+		.filter(
+			(session) => session.messageCount > 0 || Boolean(session.activeRunId) || isActiveRunStatus(session.runStatus),
+		)
 		.map((session) => ({
 			...session,
 			browser: session,
@@ -1663,7 +1661,7 @@ const restoreActiveRemoteRunFromMetadata = async (
 	const activeRunId = sessionMetadata?.activeRunId;
 	if (!activeRunId || !isActiveRunStatus(sessionMetadata?.runStatus)) return false;
 
-	let run = await getAgentV2Run(activeRunId).catch((error) => {
+	const run = await getAgentV2Run(activeRunId).catch((error) => {
 		writeDiagnosticEvent({
 			level: "warn",
 			category: "agent",
@@ -1686,8 +1684,7 @@ const restoreActiveRemoteRunFromMetadata = async (
 	}
 
 	const restoredStatus =
-		restoredRunStatusFromEvents(replayedEvents) ??
-		(run ? run.status : sessionMetadata?.runStatus);
+		restoredRunStatusFromEvents(replayedEvents) ?? (run ? run.status : sessionMetadata?.runStatus);
 	if (!restoredStatus || !isActiveRunStatus(restoredStatus)) {
 		currentActiveRunId = undefined;
 		currentLastRunId = run?.runId ?? sessionMetadata?.lastRunId ?? activeRunId;

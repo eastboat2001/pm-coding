@@ -68,7 +68,12 @@ export async function prepareContextPacket(
 	messages: AgentMessage[],
 	options: ContextOrchestratorOptions = {},
 ): Promise<ContextOrchestrationResult> {
-	const packet = buildContextPacket(messages, options.capabilityPlan, options.currentObjective, options.requirementsSummary);
+	const packet = buildContextPacket(
+		messages,
+		options.capabilityPlan,
+		options.currentObjective,
+		options.requirementsSummary,
+	);
 	const messagesWithPacket = appendContextPacket(messages, packet);
 	const compactions: ProjectContextCompactionSummary[] = [];
 	const preparedMessages = await prepareProjectContextMessages(messagesWithPacket, {

@@ -4,21 +4,6 @@ export {
 	type ExecuteAgentV2NextTaskInput,
 	executeAgentV2NextTask,
 } from "./agent-v2-execution-core.js";
-export type {
-	AgentV2DiagnosticExportStore,
-	AgentV2ExecutionStore,
-	AgentV2PlanningStore,
-	AgentV2ResetStore,
-	AgentV2ResetStoreOptions,
-	AgentV2ResetStoreResult,
-	AgentV2RunApiStore,
-	AgentV2RunEventLogStore,
-	AgentV2RuntimeSnapshotStore,
-	AgentV2SchemaStore,
-	AgentV2StoreResult,
-	AgentV2WorkerStore,
-	MaybeAsyncIterable,
-} from "./agent-v2-runtime-store.js";
 export {
 	type AgentV2RunEventBus,
 	agentV2RunEventStreamKey,
@@ -35,18 +20,33 @@ export {
 	validateAgentV2RunInput,
 } from "./agent-v2-run-input-contract.js";
 export {
-	InMemoryAgentV2RunQueue,
-	RedisAgentV2RunQueue,
 	type AgentV2ActiveRunClaim,
 	type AgentV2ClaimedRun,
 	type AgentV2RunQueue,
 	type AgentV2RunQueueClearResult,
 	type AgentV2RunQueueIdentity,
 	type AgentV2RunQueueOptions,
-	type RedisAgentV2RunQueueOptions,
 	createAgentV2RunQueue,
 	createRedisAgentV2RunQueue,
+	InMemoryAgentV2RunQueue,
+	RedisAgentV2RunQueue,
+	type RedisAgentV2RunQueueOptions,
 } from "./agent-v2-run-queue.js";
+export type {
+	AgentV2DiagnosticExportStore,
+	AgentV2ExecutionStore,
+	AgentV2PlanningStore,
+	AgentV2ResetStore,
+	AgentV2ResetStoreOptions,
+	AgentV2ResetStoreResult,
+	AgentV2RunApiStore,
+	AgentV2RunEventLogStore,
+	AgentV2RuntimeSnapshotStore,
+	AgentV2SchemaStore,
+	AgentV2StoreResult,
+	AgentV2WorkerStore,
+	MaybeAsyncIterable,
+} from "./agent-v2-runtime-store.js";
 export type { AgentV2RunSnapshot } from "./agent-v2-types.js";
 export {
 	type AgentV2WorkerExecution,

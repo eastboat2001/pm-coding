@@ -292,7 +292,10 @@ function buildDiagnosticFindings(input) {
         event.eventType.startsWith("model."));
     const agentV2DiagnosticsObserved = input.agentV2Diagnostics.length > 0;
     const hasRuntimeRunEvents = input.runs.some((run) => run.eventCount > 0);
-    if (input.runs.length > 0 && !hasRuntimeRunEvents && !providerOrModelDiagnosticsObserved && !agentV2DiagnosticsObserved) {
+    if (input.runs.length > 0 &&
+        !hasRuntimeRunEvents &&
+        !providerOrModelDiagnosticsObserved &&
+        !agentV2DiagnosticsObserved) {
         addFinding("warn", "model_request_not_observed", "No provider/model diagnostics or runtime run events were observed; the request likely did not reach the model layer.", {
             runIds: input.runs.map((run) => run.runId),
             diagnosticEventTypes: countDiagnosticEventTypes(input.relevantDiagnostics),

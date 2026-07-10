@@ -3,11 +3,7 @@ import type { AgentV2DiagnosticExportStore, MaybeAsyncIterable } from "./agent-v
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
 import type { AgentV2RunSnapshot } from "./agent-v2-types.js";
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
-import type {
-	DiagnosticLogEventRecord,
-	DiagnosticLogExportQuery,
-	JsonObject,
-} from "./types.js";
+import type { DiagnosticLogEventRecord, DiagnosticLogExportQuery, JsonObject } from "./types.js";
 import type { WorkspaceSessionService } from "./workspace-session-service.js";
 
 export interface DiagnosticExportRequest {
@@ -119,11 +115,7 @@ export class WorkspaceDiagnosticExportService {
 				messages: [],
 				runs: context.runs,
 				runEventsByRunId: await collectAgentV2RunEvents(this.runtimeDb, context.clientId, context.runs),
-				agentV2DiagnosticsByRunId: await collectAgentV2Diagnostics(
-					this.runtimeDb,
-					context.clientId,
-					context.runs,
-				),
+				agentV2DiagnosticsByRunId: await collectAgentV2Diagnostics(this.runtimeDb, context.clientId, context.runs),
 				sessionFile: null,
 			},
 			diagnostics: {
@@ -161,7 +153,10 @@ export class WorkspaceDiagnosticExportService {
 			);
 			add(
 				jsonEntry(`agent-v2/diagnostics/${runId}.summary.json`, "agent-v2-diagnostics-summary", async () =>
-					summarizeAgentV2Diagnostics(run.runId, await this.runtimeDb.listAgentV2Diagnostics(context.clientId, run.runId)),
+					summarizeAgentV2Diagnostics(
+						run.runId,
+						await this.runtimeDb.listAgentV2Diagnostics(context.clientId, run.runId),
+					),
 				),
 			);
 			add(
@@ -314,12 +309,7 @@ async function buildDiagnosticOverview(input: {
 		input.context.runs,
 	);
 	const agentV2Diagnostics = Object.values(agentV2DiagnosticsByRunId).flat();
-	const runs = await buildRunOverviews(
-		input.runtimeDb,
-		input.context,
-		relevantDiagnostics,
-		agentV2DiagnosticsByRunId,
-	);
+	const runs = await buildRunOverviews(input.runtimeDb, input.context, relevantDiagnostics, agentV2DiagnosticsByRunId);
 	const findings = buildDiagnosticFindings({
 		context: input.context,
 		globalDiagnostics,
@@ -537,7 +527,12 @@ function buildDiagnosticFindings(input: {
 	);
 	const agentV2DiagnosticsObserved = input.agentV2Diagnostics.length > 0;
 	const hasRuntimeRunEvents = input.runs.some((run) => run.eventCount > 0);
-	if (input.runs.length > 0 && !hasRuntimeRunEvents && !providerOrModelDiagnosticsObserved && !agentV2DiagnosticsObserved) {
+	if (
+		input.runs.length > 0 &&
+		!hasRuntimeRunEvents &&
+		!providerOrModelDiagnosticsObserved &&
+		!agentV2DiagnosticsObserved
+	) {
 		addFinding(
 			"warn",
 			"model_request_not_observed",

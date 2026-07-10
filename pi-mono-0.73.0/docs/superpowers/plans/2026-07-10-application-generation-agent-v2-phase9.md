@@ -446,6 +446,7 @@ git commit -m "refactor: enforce agent v2 production config"
 - Create: `apps/pi-coding-web/src/worker/cutover-rehearsal.ts`
 - Create: `apps/pi-coding-web/test/cutover-rehearsal.test.ts`
 - Modify: `apps/pi-coding-web/package.json`
+- Modify: `apps/pi-coding-web/.env.example`
 - Modify: `docker/pi-coding-web/.env.example`
 - Modify: `docker/pi-coding-web/docker-compose.yaml`
 - Modify: `docker/pi-coding-web/README.md`
@@ -525,7 +526,7 @@ Add `rehearse:cutover` to the app package:
 "rehearse:cutover": "node dist-worker/worker/cutover-rehearsal.js"
 ```
 
-Replace legacy `.env.example` generation settings with:
+Replace legacy generation settings in both `apps/pi-coding-web/.env.example` and `docker/pi-coding-web/.env.example` with:
 
 ```env
 PI_AGENT_V2_RUN_QUEUE_NAME=pi:agent-v2:runs

@@ -70,6 +70,151 @@ describe("AgentV2WorkerService", () => {
 		]);
 	});
 
+	it("backs off repeated empty queue claims", async () => {
+		vi.useFakeTimers();
+		const queue = new RecordingQueue();
+		const worker = new AgentV2WorkerService({
+			store: new MemoryWorkerStore(),
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+			claimTimeoutMs: 0,
+			idleSleepMs: 10,
+			maxIdleSleepMs: 80,
+		});
+
+		await worker.start();
+		await vi.advanceTimersByTimeAsync(150);
+		const stopping = worker.stop();
+		await vi.runAllTimersAsync();
+		await stopping;
+
+		expect(queue.claimCount).toBeLessThanOrEqual(6);
+	});
+
+	it("periodically reclaims expired claims discovered after startup", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-expired-after-start");
+		const queue = new RecordingQueue();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+			claimTimeoutMs: 0,
+			idleSleepMs: 10,
+			maxIdleSleepMs: 10,
+			expiredClaimRecoveryIntervalMs: 20,
+		});
+
+		await worker.start();
+		queue.expiredClaims = [
+			{
+				clientId: "client-a",
+				runId: "run-expired-after-start",
+				workerId: "worker-crashed",
+				claimedAtMs: 1,
+				heartbeatAtMs: 2,
+				leaseExpiresAtMs: 3,
+			},
+		];
+		await vi.advanceTimersByTimeAsync(25);
+		const stopping = worker.stop();
+		await vi.runAllTimersAsync();
+		await stopping;
+
+		expect(queue.releaseExpiredClaimsCalls).toBeGreaterThanOrEqual(2);
+		expect(queue.enqueuedClaims).toContainEqual({ clientId: "client-a", runId: "run-expired-after-start" });
+	});
+
+	it("continues reclaiming expired claims while a run execution is blocked", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-blocking");
+		store.createQueuedRun("client-a", "run-expired-during-execution");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-blocking" }]);
+		let markExecutionStarted: () => void = () => undefined;
+		let releaseExecution: () => void = () => undefined;
+		const executionStarted = new Promise<void>((resolve) => {
+			markExecutionStarted = resolve;
+		});
+		const executionReleased = new Promise<void>((resolve) => {
+			releaseExecution = resolve;
+		});
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: {
+				executeNextTask: async () => {
+					markExecutionStarted();
+					await executionReleased;
+					return { status: "complete", diagnosticIds: [] };
+				},
+			},
+			workerId: "worker-a",
+			claimTimeoutMs: 0,
+			idleSleepMs: 10,
+			maxIdleSleepMs: 10,
+			expiredClaimRecoveryIntervalMs: 20,
+		});
+
+		await worker.start();
+		await executionStarted;
+		queue.expiredClaims = [
+			{
+				clientId: "client-a",
+				runId: "run-expired-during-execution",
+				workerId: "worker-crashed",
+				claimedAtMs: 1,
+				heartbeatAtMs: 2,
+				leaseExpiresAtMs: 3,
+			},
+		];
+		await vi.advanceTimersByTimeAsync(25);
+
+		expect(queue.releaseExpiredClaimsCalls).toBeGreaterThanOrEqual(2);
+		expect(queue.enqueuedClaims).toContainEqual({
+			clientId: "client-a",
+			runId: "run-expired-during-execution",
+		});
+
+		releaseExecution();
+		await vi.advanceTimersByTimeAsync(1);
+		const stopping = worker.stop();
+		await vi.runAllTimersAsync();
+		await stopping;
+	});
+
+	it("stops while an expired-claim recovery call remains stalled", async () => {
+		const queue = new RecordingQueue();
+		const worker = new AgentV2WorkerService({
+			store: new MemoryWorkerStore(),
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+			claimTimeoutMs: 0,
+			idleSleepMs: 1,
+			maxIdleSleepMs: 1,
+			expiredClaimRecoveryIntervalMs: 1,
+		});
+
+		await worker.start();
+		queue.holdReleaseExpiredClaims = true;
+		await queue.waitForReleaseExpiredClaimsCalls(2);
+		const outcome = await Promise.race([
+			worker.stop().then(() => "stopped" as const),
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 80)),
+		]);
+
+		expect(outcome).toBe("stopped");
+		expect(queue.closeCount).toBe(1);
+	});
+
 	it("stores terminal failures as v2 errors and emits diagnostic events", async () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-failed");
@@ -849,10 +994,12 @@ class RecordingQueue implements AgentV2RunQueue {
 	readonly renewLeaseCalls: Array<{ clientId: string; runId: string; workerId: string }> = [];
 	expiredClaims: AgentV2ActiveRunClaim[] = [];
 	failNextRenewLease = false;
+	holdReleaseExpiredClaims = false;
 	releaseExpiredClaimsCalls = 0;
 	private readonly cancelRequested = new Set<string>();
 	private closed = false;
 	closeCount = 0;
+	claimCount = 0;
 
 	constructor(
 		private readonly claims: Array<{ clientId: string; runId: string }> = [],
@@ -865,6 +1012,7 @@ class RecordingQueue implements AgentV2RunQueue {
 	}
 
 	async claim(): Promise<{ clientId: string; runId: string } | undefined> {
+		this.claimCount += 1;
 		return this.claims.shift();
 	}
 
@@ -892,6 +1040,7 @@ class RecordingQueue implements AgentV2RunQueue {
 
 	async releaseExpiredClaims(): Promise<AgentV2ActiveRunClaim[]> {
 		this.releaseExpiredClaimsCalls += 1;
+		if (this.holdReleaseExpiredClaims) return await new Promise<AgentV2ActiveRunClaim[]>(() => undefined);
 		const expired = [...this.expiredClaims];
 		this.expiredClaims = [];
 		return expired;
@@ -913,6 +1062,12 @@ class RecordingQueue implements AgentV2RunQueue {
 		this.closed = true;
 		this.closeCount += 1;
 		this.operations.push("close");
+	}
+
+	async waitForReleaseExpiredClaimsCalls(count: number): Promise<void> {
+		while (this.releaseExpiredClaimsCalls < count) {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
 	}
 }
 

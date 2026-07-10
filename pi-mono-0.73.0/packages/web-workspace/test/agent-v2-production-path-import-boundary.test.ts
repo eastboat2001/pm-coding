@@ -116,16 +116,16 @@ const allowedRuntimeStoreImportFiles = new Set([
 	"packages/web-workspace/src/postgres-runtime-store.ts",
 	"packages/web-workspace/src/runtime-store-factory.ts",
 ]);
-const explicitV2BoundaryFiles = [
-	"packages/web-workspace/src/vite-plugin.ts",
-	"apps/pi-coding-web/src/worker/main.ts",
-];
+const explicitV2BoundaryFiles = ["packages/web-workspace/src/vite-plugin.ts", "apps/pi-coding-web/src/worker/main.ts"];
 
 describe("agent v2 production import boundary", () => {
 	it("deletes the legacy queue and retry modules", () => {
 		for (const file of [
 			"packages/web-workspace/src/run-queue.ts",
 			"packages/web-workspace/src/run-retry-controller.ts",
+			"packages/web-workspace/src/retry-policy.ts",
+			"packages/web-workspace/src/retry-policy.js",
+			"packages/web-workspace/src/retry-policy.js.map",
 			"packages/web-workspace/test/run-queue.test.ts",
 			"packages/web-workspace/test/retry-policy.test.ts",
 		]) {
@@ -133,7 +133,9 @@ describe("agent v2 production import boundary", () => {
 		}
 
 		const queueSource = readFileSync(join(repoRoot, "packages/web-workspace/src/agent-v2-run-queue.ts"), "utf8");
+		const rootBarrel = readFileSync(join(repoRoot, "packages/web-workspace/src/index.ts"), "utf8");
 		expect(queueSource).not.toContain("./run-queue.js");
+		expect(rootBarrel).not.toContain("RetryPolicy");
 		for (const legacyType of ["RunQueue", "ClaimedRun", "ActiveRunClaim"]) {
 			expect(queueSource).not.toMatch(new RegExp(`\\b${legacyType}\\b`));
 		}
@@ -236,10 +238,7 @@ describe("agent v2 production import boundary", () => {
 			expect(source, file).not.toMatch(/createAgentV2RuntimeStore\([^)]*\)\s+as\b/);
 		}
 
-		const factory = readFileSync(
-			join(repoRoot, "packages/web-workspace/src/runtime-store-factory.ts"),
-			"utf8",
-		);
+		const factory = readFileSync(join(repoRoot, "packages/web-workspace/src/runtime-store-factory.ts"), "utf8");
 		expect(factory).toContain("export type AgentV2ProductionStore");
 		expect(factory).toContain("createAgentV2RuntimeStore");
 		expect(factory).not.toContain("./runtime-store.js");
@@ -422,10 +421,7 @@ describe("agent v2 production import boundary", () => {
 			expect(source, `${toRepoPath(file)} must not use the retired completed status`).not.toContain('"completed"');
 		}
 
-		const bootstrapSource = readFileSync(
-			join(repoRoot, "apps/pi-coding-web/src/app/bootstrap.ts"),
-			"utf8",
-		);
+		const bootstrapSource = readFileSync(join(repoRoot, "apps/pi-coding-web/src/app/bootstrap.ts"), "utf8");
 		const eventHandlerStart = bootstrapSource.indexOf("const applyConnectedRunEvent");
 		const eventHandlerEnd = bootstrapSource.indexOf("const connectToRemoteRun", eventHandlerStart);
 		const eventHandlerSource = bootstrapSource.slice(eventHandlerStart, eventHandlerEnd);
@@ -444,8 +440,12 @@ describe("agent v2 production import boundary", () => {
 		for (const file of browserFiles) {
 			const source = readFileSync(file, "utf8");
 			expect(source, `${toRepoPath(file)} must not reference /api/pi-sessions`).not.toContain("/api/pi-sessions");
-			expect(source, `${toRepoPath(file)} must not import legacy deleteSession`).not.toContain("deleteRuntimeSession");
-			expect(source, `${toRepoPath(file)} must not import legacy renameSession`).not.toContain("renameRuntimeSession");
+			expect(source, `${toRepoPath(file)} must not import legacy deleteSession`).not.toContain(
+				"deleteRuntimeSession",
+			);
+			expect(source, `${toRepoPath(file)} must not import legacy renameSession`).not.toContain(
+				"renameRuntimeSession",
+			);
 		}
 	});
 });
@@ -458,11 +458,7 @@ function productionV2Files(): string[] {
 		.filter(existsSync);
 	const workerSrc = join(repoRoot, "apps", "pi-coding-web", "src", "worker");
 	const workerFiles = collectTsFiles(workerSrc);
-	return [
-		...agentV2Files,
-		...v2OnlySubpathExports,
-		...workerFiles,
-	];
+	return [...agentV2Files, ...v2OnlySubpathExports, ...workerFiles];
 }
 
 function toRepoPath(file: string): string {

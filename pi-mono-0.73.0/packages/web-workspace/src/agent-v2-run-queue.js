@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { createClient } from "redis";
 const DEFAULT_CANCEL_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_CLAIM_LEASE_TTL_MS = 30_000;
+const DEFAULT_CLAIM_COMMAND_TIMEOUT_MS = 5_000;
+const DEFAULT_GRACEFUL_CLOSE_TIMEOUT_MS = 1_000;
+const CLAIM_POLL_MIN_INTERVAL_MS = 25;
+const CLAIM_POLL_MAX_INTERVAL_MS = 250;
 const COMPLETE_IF_OWNER_SCRIPT = `
 local raw = redis.call("HGET", KEYS[1], ARGV[1])
 if not raw then
@@ -39,11 +44,27 @@ for index = 1, maxScans do
 					workerId = ARGV[2],
 					claimedAtMs = now,
 					heartbeatAtMs = now,
-					leaseExpiresAtMs = now + tonumber(ARGV[4])
+					leaseExpiresAtMs = now + tonumber(ARGV[4]),
+					claimToken = ARGV[5]
 				})
 				redis.call("HSET", KEYS[2], runKey, claim)
 				return runKey
 			end
+		end
+	end
+end
+return false
+`;
+const RECOVER_CLAIM_BY_TOKEN_SCRIPT = `
+-- agent-v2-recover-claim-token
+local entries = redis.call("HGETALL", KEYS[1])
+for i = 1, #entries, 2 do
+	local runKey = entries[i]
+	local raw = entries[i + 1]
+	if string.sub(raw, 1, 1) == "{" then
+		local ok, decoded = pcall(cjson.decode, raw)
+		if ok and type(decoded) == "table" and decoded["claimToken"] == ARGV[1] then
+			return runKey
 		end
 	end
 end
@@ -105,16 +126,26 @@ if not raw then
 	return 0
 end
 local owner = raw
+local claimToken = nil
 if string.sub(raw, 1, 1) == "{" then
 	local ok, decoded = pcall(cjson.decode, raw)
 	if ok and type(decoded) == "table" and type(decoded["workerId"]) == "string" then
 		owner = decoded["workerId"]
+		claimToken = decoded["claimToken"]
 	end
 end
 if owner ~= ARGV[2] then
 	return 0
 end
-redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
+local replacement = ARGV[3]
+if type(claimToken) == "string" then
+	local ok, decoded = pcall(cjson.decode, replacement)
+	if ok and type(decoded) == "table" then
+		decoded["claimToken"] = claimToken
+		replacement = cjson.encode(decoded)
+	end
+end
+redis.call("HSET", KEYS[1], ARGV[1], replacement)
 return 1
 `;
 const RELEASE_EXPIRED_CLAIMS_SCRIPT = `
@@ -273,10 +304,13 @@ export class RedisAgentV2RunQueue {
     cancelIndexKey;
     cancelTtlSeconds;
     client;
+    claimClient;
+    claimCommandTimeoutMs;
     claimLeaseTtlMs;
     claimWaiters = [];
     closed = false;
     closePromise;
+    gracefulCloseTimeoutMs;
     idleWaiters = new Set();
     queueName;
     redisUrl;
@@ -287,6 +321,8 @@ export class RedisAgentV2RunQueue {
         this.cancelIndexKey = `${options.queueName}:cancel`;
         this.cancelTtlSeconds = options.cancelTtlSeconds ?? DEFAULT_CANCEL_TTL_SECONDS;
         this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
+        this.claimCommandTimeoutMs = options.claimCommandTimeoutMs ?? DEFAULT_CLAIM_COMMAND_TIMEOUT_MS;
+        this.gracefulCloseTimeoutMs = Math.max(1, options.gracefulCloseTimeoutMs ?? DEFAULT_GRACEFUL_CLOSE_TIMEOUT_MS);
     }
     async enqueue(run) {
         this.assertOpen();
@@ -297,13 +333,20 @@ export class RedisAgentV2RunQueue {
     async claim(workerId, timeoutMs) {
         this.assertOpen();
         this.activeClaims += 1;
+        const claimToken = randomUUID();
         try {
-            const deadline = Date.now() + Math.max(0, timeoutMs);
+            const boundedTimeoutMs = Math.max(0, timeoutMs);
+            const deadline = Date.now() + boundedTimeoutMs;
+            let pollIntervalMs = CLAIM_POLL_MIN_INTERVAL_MS;
             for (;;) {
-                const run = await this.claimOne(workerId);
-                if (run || timeoutMs <= 0 || this.closed || Date.now() >= deadline)
-                    return run;
-                await this.waitForWork(Math.min(10, Math.max(1, deadline - Date.now())));
+                const remainingMs = Math.max(1, deadline - Date.now());
+                const commandTimeoutMs = boundedTimeoutMs > 0 ? Math.min(this.claimCommandTimeoutMs, remainingMs) : this.claimCommandTimeoutMs;
+                const attempt = await this.claimOne(workerId, claimToken, commandTimeoutMs);
+                if (attempt.run || attempt.stop || timeoutMs <= 0 || this.closed || Date.now() >= deadline) {
+                    return attempt.run;
+                }
+                await this.waitForWork(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
+                pollIntervalMs = Math.min(pollIntervalMs * 2, CLAIM_POLL_MAX_INTERVAL_MS);
                 if (this.closed)
                     return undefined;
             }
@@ -380,24 +423,41 @@ export class RedisAgentV2RunQueue {
         return parseClearResult(result);
     }
     close() {
-        return (this.closePromise ??= this.closeInternal());
+        if (!this.closePromise)
+            this.closePromise = this.closeInternal();
+        return this.closePromise;
     }
     async closeInternal() {
         if (this.closed)
             return;
         this.closed = true;
         this.wakeAllIdleWaiters();
+        const claimClient = this.claimClient;
+        this.claimClient = undefined;
+        if (claimClient)
+            await this.disconnectClaimClient(claimClient);
         await this.waitForActiveClaims();
-        const clients = [this.client];
+        const client = this.client;
         this.client = undefined;
-        await Promise.all(clients.map(async (client) => {
-            if (!client?.isOpen)
+        if (!client || !client.isOpen)
+            return;
+        await this.closeCommandClient(client);
+    }
+    async closeCommandClient(client) {
+        let timeoutId;
+        const gracefulResult = client.quit().then(() => true, () => false);
+        const timeoutResult = new Promise((resolve) => {
+            timeoutId = setTimeout(() => resolve(false), this.gracefulCloseTimeoutMs);
+        });
+        try {
+            if (await Promise.race([gracefulResult, timeoutResult]))
                 return;
-            await client.quit().catch(async () => {
-                if (client.isOpen)
-                    await client.disconnect();
-            });
-        }));
+            this.forceDisconnectClient(client);
+        }
+        finally {
+            if (timeoutId !== undefined)
+                clearTimeout(timeoutId);
+        }
     }
     assertOpen() {
         if (this.closed)
@@ -416,12 +476,71 @@ export class RedisAgentV2RunQueue {
             await this.client.connect();
         return this.client;
     }
-    async claimOne(workerId) {
-        const result = await (await this.connectedClient()).eval(CLAIM_SCRIPT, {
+    async claimOne(workerId, claimToken, timeoutMs) {
+        let client = this.claimClient;
+        if (!client) {
+            client = createClient({ url: this.redisUrl });
+            this.claimClient = client;
+        }
+        const result = await this.runClaimOperation(client, timeoutMs, async () => await client.eval(CLAIM_SCRIPT, {
             keys: [this.queueName, this.activeKey],
-            arguments: ["100", workerId, String(Date.now()), String(this.claimLeaseTtlMs)],
+            arguments: ["100", workerId, String(Date.now()), String(this.claimLeaseTtlMs), claimToken],
+        }));
+        if (result.kind === "value") {
+            return { run: parseIdentity(toUtf8String(result.value)), stop: false };
+        }
+        if (this.closed)
+            return { stop: true };
+        const recovered = await this.recoverClaimByToken(client, claimToken, Math.min(timeoutMs, 100));
+        if (recovered)
+            return { run: recovered, stop: true };
+        if (result.kind === "error")
+            throw result.error;
+        return { stop: true };
+    }
+    async recoverClaimByToken(client, claimToken, timeoutMs) {
+        const result = await this.runClaimOperation(client, timeoutMs, async () => await client.eval(RECOVER_CLAIM_BY_TOKEN_SCRIPT, {
+            keys: [this.activeKey],
+            arguments: [claimToken],
+        }));
+        if (result.kind !== "value")
+            return undefined;
+        if (!this.claimClient && client.isOpen && !this.closed)
+            this.claimClient = client;
+        return parseIdentity(toUtf8String(result.value));
+    }
+    async runClaimOperation(client, timeoutMs, operation) {
+        const operationResult = Promise.resolve()
+            .then(async () => {
+            if (!client.isOpen)
+                await client.connect();
+            return await operation();
+        })
+            .then((value) => ({ kind: "value", value }), (error) => ({ kind: "error", error }));
+        let timeoutId;
+        const timeout = new Promise((resolve) => {
+            timeoutId = setTimeout(() => resolve({ kind: "timeout" }), Math.max(1, timeoutMs));
         });
-        return parseIdentity(toUtf8String(result));
+        const result = await Promise.race([operationResult, timeout]);
+        if (timeoutId !== undefined)
+            clearTimeout(timeoutId);
+        if (result.kind !== "value")
+            await this.disconnectClaimClient(client);
+        return result;
+    }
+    async disconnectClaimClient(client) {
+        if (this.claimClient === client)
+            this.claimClient = undefined;
+        if (!client.isOpen)
+            return;
+        await client.disconnect().catch(() => undefined);
+    }
+    forceDisconnectClient(client) {
+        if (this.client === client)
+            this.client = undefined;
+        if (!client.isOpen)
+            return;
+        void client.disconnect().catch(() => undefined);
     }
     waitForActiveClaims() {
         if (this.activeClaims === 0)
@@ -463,7 +582,13 @@ function copyIdentity(run) {
     return { clientId: run.clientId, runId: run.runId };
 }
 function createActiveRunClaim(run, workerId, now, claimLeaseTtlMs) {
-    return { ...copyIdentity(run), workerId, claimedAtMs: now, heartbeatAtMs: now, leaseExpiresAtMs: now + claimLeaseTtlMs };
+    return {
+        ...copyIdentity(run),
+        workerId,
+        claimedAtMs: now,
+        heartbeatAtMs: now,
+        leaseExpiresAtMs: now + claimLeaseTtlMs,
+    };
 }
 function serializeActiveRunClaim(claim) {
     return JSON.stringify({
@@ -471,10 +596,8 @@ function serializeActiveRunClaim(claim) {
         claimedAtMs: claim.claimedAtMs,
         heartbeatAtMs: claim.heartbeatAtMs,
         leaseExpiresAtMs: claim.leaseExpiresAtMs,
+        ...(claim.claimToken ? { claimToken: claim.claimToken } : {}),
     });
-}
-function serializeIdentity(run) {
-    return JSON.stringify(copyIdentity(run));
 }
 function parseIdentity(value) {
     if (value === null || value === undefined)
@@ -482,7 +605,10 @@ function parseIdentity(value) {
     const raw = Buffer.isBuffer(value) ? value.toString("utf8") : value;
     try {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length === 2 && typeof parsed[0] === "string" && typeof parsed[1] === "string") {
+        if (Array.isArray(parsed) &&
+            parsed.length === 2 &&
+            typeof parsed[0] === "string" &&
+            typeof parsed[1] === "string") {
             return { clientId: parsed[0], runId: parsed[1] };
         }
         if (parsed &&
@@ -533,6 +659,9 @@ function parseActiveRunClaim(value) {
                 claimedAtMs: parsed.claimedAtMs,
                 heartbeatAtMs: parsed.heartbeatAtMs,
                 leaseExpiresAtMs: parsed.leaseExpiresAtMs,
+                ...("claimToken" in parsed && typeof parsed.claimToken === "string"
+                    ? { claimToken: parsed.claimToken }
+                    : {}),
             };
         }
     }

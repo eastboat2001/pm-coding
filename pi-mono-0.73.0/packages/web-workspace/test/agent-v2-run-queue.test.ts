@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-	type AgentV2RunQueue,
-	type AgentV2RunQueueClearResult,
-	createAgentV2RunQueue,
-	createRedisAgentV2RunQueue,
-} from "../src/agent-v2-run-queue.js";
+import { createAgentV2RunQueue, createRedisAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 
 const redisMock = vi.hoisted(() => ({
 	createClient: vi.fn(),
@@ -105,7 +100,11 @@ describe("InMemoryAgentV2RunQueue", () => {
 		await queue.claim("worker-a", 0);
 		await queue.requestCancel({ clientId: "client-a", runId: "cancelled" });
 
-		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 1, activeClaimsDeleted: 1, cancelKeysDeleted: 1 });
+		await expect(queue.clear()).resolves.toEqual({
+			queueItemsDeleted: 1,
+			activeClaimsDeleted: 1,
+			cancelKeysDeleted: 1,
+		});
 	});
 
 	it("does not count expired cancellation state during clear", async () => {
@@ -115,11 +114,19 @@ describe("InMemoryAgentV2RunQueue", () => {
 		await queue.requestCancel(expired);
 		now = 2_000;
 		await expect(queue.isCancelRequested(expired)).resolves.toBe(false);
-		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 });
+		await expect(queue.clear()).resolves.toEqual({
+			queueItemsDeleted: 0,
+			activeClaimsDeleted: 0,
+			cancelKeysDeleted: 0,
+		});
 
 		const valid = { clientId: "client-a", runId: "valid" };
 		await queue.requestCancel(valid);
-		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 1 });
+		await expect(queue.clear()).resolves.toEqual({
+			queueItemsDeleted: 0,
+			activeClaimsDeleted: 0,
+			cancelKeysDeleted: 1,
+		});
 	});
 
 	it("rejects operations after idempotent close", async () => {
@@ -164,13 +171,135 @@ describe("RedisAgentV2RunQueue", () => {
 		await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
 	});
 
+	it("bounds a stalled Redis claim by the caller deadline", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		fake.holdClaimEvals = true;
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+
+		const claim = queue.claim("worker-a", 20);
+		await fake.waitForClaimCalls(1);
+		const outcome = await Promise.race([
+			claim.then(() => "settled" as const),
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 80)),
+		]);
+		fake.resolveClaimEvals();
+		await claim;
+		await queue.close();
+
+		expect(outcome).toBe("settled");
+		expect(fake.disconnectCalls).toBeGreaterThan(0);
+	});
+
+	it("bounds a stalled Redis connection by the caller deadline", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		fake.holdConnect = true;
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+
+		const claim = queue.claim("worker-a", 20);
+		await fake.waitForConnect();
+		const outcome = await Promise.race([
+			claim.then(() => "settled" as const),
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 80)),
+		]);
+		fake.resolveConnect();
+		await claim;
+		await queue.close();
+
+		expect(outcome).toBe("settled");
+		expect(fake.disconnectCalls).toBeGreaterThan(0);
+	});
+
+	it("recovers a claim that committed before its Redis response was lost", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		fake.holdClaimEvals = true;
+		fake.claimCommittedWithoutResponse = '["client-a","run-committed"]';
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+
+		await expect(queue.claim("worker-a", 20)).resolves.toEqual({
+			clientId: "client-a",
+			runId: "run-committed",
+		});
+		expect(fake.evalCalls.some((call) => call.script.includes("agent-v2-recover-claim-token"))).toBe(true);
+		await queue.close();
+	});
+
+	it("surfaces a Redis claim error when token recovery does not find a committed claim", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		fake.claimError = new Error("WRONGTYPE claim key");
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+
+		await expect(queue.claim("worker-a", 20)).rejects.toThrow("WRONGTYPE claim key");
+		expect(fake.evalCalls.some((call) => call.script.includes("agent-v2-recover-claim-token"))).toBe(true);
+		await queue.close();
+	});
+
+	it("interrupts a stalled claim before waiting during close", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		fake.holdClaimEvals = true;
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+
+		const claim = queue.claim("worker-a", 10_000);
+		await fake.waitForClaimCalls(1);
+		const closing = queue.close();
+		const outcome = await Promise.race([
+			closing.then(() => "closed" as const),
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 80)),
+		]);
+		fake.resolveClaimEvals();
+		await claim;
+		await closing;
+
+		expect(outcome).toBe("closed");
+		expect(fake.disconnectCalls).toBeGreaterThan(0);
+	});
+
+	it("uses bounded backoff while an empty Redis queue is claimed", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+
+		await expect(queue.claim("worker-a", 120)).resolves.toBeUndefined();
+		const claimCalls = fake.evalCalls.filter((call) => call.script.includes("agent-v2-claim"));
+		expect(claimCalls.length).toBeLessThanOrEqual(4);
+		await queue.close();
+	});
+
+	it("isolates a timed-out claim connection from lease and cancellation commands", async () => {
+		const claimClient = new FakeRedisAgentV2RunQueueClient();
+		claimClient.holdClaimEvals = true;
+		const commandClient = new FakeRedisAgentV2RunQueueClient();
+		redisMock.createClient.mockReturnValueOnce(claimClient).mockReturnValueOnce(commandClient);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+		const run = { clientId: "client-a", runId: "run-a" };
+
+		const claim = queue.claim("worker-a", 20);
+		await claimClient.waitForClaimCalls(1);
+		await expect(queue.renewLease(run, "worker-a")).resolves.toBe(false);
+		await expect(queue.requestCancel(run)).resolves.toBeUndefined();
+		await claim;
+
+		expect(claimClient.disconnectCalls).toBeGreaterThan(0);
+		expect(commandClient.disconnectCalls).toBe(0);
+		await queue.close();
+		expect(commandClient.quitCalls).toBe(1);
+	});
+
 	it("clears queue, active claims, and the cancel index in one atomic script", async () => {
 		const fake = new FakeRedisAgentV2RunQueueClient();
 		fake.clearResult = [3, 1, 2];
 		redisMock.createClient.mockReturnValueOnce(fake);
 		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
 
-		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 3, activeClaimsDeleted: 1, cancelKeysDeleted: 2 });
+		await expect(queue.clear()).resolves.toEqual({
+			queueItemsDeleted: 3,
+			activeClaimsDeleted: 1,
+			cancelKeysDeleted: 2,
+		});
 		expect(fake.evalCalls).toHaveLength(1);
 		expect(fake.evalCalls[0].script).toContain("agent-v2-clear");
 		expect(fake.evalCalls[0].keys).toEqual([
@@ -188,9 +317,15 @@ describe("RedisAgentV2RunQueue", () => {
 		const expired = { clientId: "client-a", runId: "expired" };
 
 		await queue.requestCancel(expired);
-		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 1 });
+		await expect(queue.clear()).resolves.toEqual({
+			queueItemsDeleted: 0,
+			activeClaimsDeleted: 0,
+			cancelKeysDeleted: 1,
+		});
 
-		const requestCancelScript = fake.evalCalls.find((call) => call.script.includes("agent-v2-request-cancel"))?.script;
+		const requestCancelScript = fake.evalCalls.find((call) =>
+			call.script.includes("agent-v2-request-cancel"),
+		)?.script;
 		const clearScript = fake.evalCalls.find((call) => call.script.includes("agent-v2-clear"))?.script;
 		expect(requestCancelScript).toContain("ZADD");
 		expect(requestCancelScript).toContain("EXPIRE");
@@ -208,9 +343,15 @@ describe("RedisAgentV2RunQueue", () => {
 		await queue.requestCancel(valid);
 		expect(fake.cancelMembers.has('["client-a","expired"]')).toBe(false);
 		expect(fake.cancelMembers.has('["client-a","valid"]')).toBe(true);
-		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 1 });
+		await expect(queue.clear()).resolves.toEqual({
+			queueItemsDeleted: 0,
+			activeClaimsDeleted: 0,
+			cancelKeysDeleted: 1,
+		});
 
-		const requestCancelScript = fake.evalCalls.find((call) => call.script.includes("agent-v2-request-cancel"))?.script;
+		const requestCancelScript = fake.evalCalls.find((call) =>
+			call.script.includes("agent-v2-request-cancel"),
+		)?.script;
 		expect(requestCancelScript).toContain("ZREMRANGEBYSCORE");
 	});
 
@@ -219,7 +360,7 @@ describe("RedisAgentV2RunQueue", () => {
 		fake.holdQuit = true;
 		redisMock.createClient.mockReturnValueOnce(fake);
 		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
-		await queue.claim("worker-a", 0);
+		await queue.clear();
 
 		const first = queue.close();
 		const second = queue.close();
@@ -230,6 +371,29 @@ describe("RedisAgentV2RunQueue", () => {
 		fake.resolveQuit();
 		await Promise.all([first, second]);
 	});
+
+	it("forces disconnect when graceful quit stalls behind an active maintenance command", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		fake.holdReleaseExpiredClaimsEvals = true;
+		fake.holdQuit = true;
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({
+			redisUrl: "redis://example",
+			queueName: "pi:agent-v2:runs",
+			gracefulCloseTimeoutMs: 20,
+		});
+
+		const recovery = queue.releaseExpiredClaims();
+		await fake.waitForReleaseExpiredClaimsCalls(1);
+		const outcome = await Promise.race([
+			queue.close().then(() => "closed" as const),
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 80)),
+		]);
+
+		expect(outcome).toBe("closed");
+		expect(fake.disconnectCalls).toBeGreaterThan(0);
+		await expect(recovery).resolves.toEqual([]);
+	});
 });
 
 class FakeRedisAgentV2RunQueueClient {
@@ -237,29 +401,58 @@ class FakeRedisAgentV2RunQueueClient {
 	cancelMembers = new Map<string, number>();
 	clearResult: [number, number, number] | undefined;
 	claimResults: Array<string | undefined> = [];
+	claimCommittedWithoutResponse: string | undefined;
+	claimError: Error | undefined;
 	evalCalls: Array<{ script: string; keys: string[]; arguments: string[] }> = [];
 	holdClaimEvals = false;
+	holdConnect = false;
 	holdQuit = false;
+	holdReleaseExpiredClaimsEvals = false;
+	disconnectCalls = 0;
 	maxConcurrentClaimEvals = 0;
 	quitCalls = 0;
 	private activeClaimEvals = 0;
 	private readonly claimEvalResolvers: Array<() => void> = [];
+	private readonly releaseExpiredClaimsEvalResolvers: Array<() => void> = [];
+	private readonly committedClaims = new Map<string, string>();
+	private connectResolver: (() => void) | undefined;
+	private connectStarted = false;
 	private quitResolver: (() => void) | undefined;
 
 	async connect(): Promise<void> {
 		this.isOpen = true;
+		this.connectStarted = true;
+		if (this.holdConnect) {
+			await new Promise<void>((resolve) => {
+				this.connectResolver = resolve;
+			});
+		}
 	}
 
 	async eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown> {
 		this.evalCalls.push({ script, keys: options.keys, arguments: options.arguments });
 		if (script.includes("agent-v2-claim")) {
+			if (this.claimError) throw this.claimError;
 			this.activeClaimEvals += 1;
 			this.maxConcurrentClaimEvals = Math.max(this.maxConcurrentClaimEvals, this.activeClaimEvals);
 			if (this.holdClaimEvals) {
+				if (this.claimCommittedWithoutResponse) {
+					this.committedClaims.set(options.arguments[4], this.claimCommittedWithoutResponse);
+				}
 				await new Promise<void>((resolve) => this.claimEvalResolvers.push(resolve));
 			}
 			this.activeClaimEvals -= 1;
+			if (this.claimCommittedWithoutResponse) return undefined;
 			return this.claimResults.shift();
+		}
+		if (script.includes("agent-v2-recover-claim-token")) {
+			return this.committedClaims.get(options.arguments[0]);
+		}
+		if (script.includes("local reclaimed = {}")) {
+			if (this.holdReleaseExpiredClaimsEvals) {
+				await new Promise<void>((resolve) => this.releaseExpiredClaimsEvalResolvers.push(resolve));
+			}
+			return [];
 		}
 		if (script.includes("agent-v2-request-cancel")) {
 			this.pruneExpiredCancelMembers(Number(options.arguments[3]));
@@ -279,12 +472,34 @@ class FakeRedisAgentV2RunQueueClient {
 
 	async quit(): Promise<void> {
 		this.quitCalls += 1;
-		if (this.holdQuit) await new Promise<void>((resolve) => (this.quitResolver = resolve));
+		if (this.holdQuit) {
+			await new Promise<void>((resolve) => {
+				this.quitResolver = resolve;
+			});
+		}
 		this.isOpen = false;
+	}
+
+	async disconnect(): Promise<void> {
+		this.disconnectCalls += 1;
+		this.isOpen = false;
+		this.resolveClaimEvals();
+		this.resolveReleaseExpiredClaimsEvals();
+		this.resolveConnect();
 	}
 
 	async waitForClaimCalls(count: number): Promise<void> {
 		while (this.evalCalls.filter((call) => call.script.includes("agent-v2-claim")).length < count) {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
+	}
+
+	async waitForConnect(): Promise<void> {
+		while (!this.connectStarted) await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+
+	async waitForReleaseExpiredClaimsCalls(count: number): Promise<void> {
+		while (this.evalCalls.filter((call) => call.script.includes("local reclaimed = {}")).length < count) {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		}
 	}
@@ -297,6 +512,16 @@ class FakeRedisAgentV2RunQueueClient {
 
 	resolveClaimEvals(): void {
 		for (const resolve of this.claimEvalResolvers.splice(0)) resolve();
+	}
+
+	resolveConnect(): void {
+		this.holdConnect = false;
+		this.connectResolver?.();
+		this.connectResolver = undefined;
+	}
+
+	resolveReleaseExpiredClaimsEvals(): void {
+		for (const resolve of this.releaseExpiredClaimsEvalResolvers.splice(0)) resolve();
 	}
 
 	resolveQuit(): void {

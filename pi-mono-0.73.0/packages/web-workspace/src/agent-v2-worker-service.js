@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 50;
+const DEFAULT_EXPIRED_CLAIM_RECOVERY_INTERVAL_MS = 5_000;
 const DEFAULT_IDLE_SLEEP_MS = 25;
+const DEFAULT_MAX_IDLE_SLEEP_MS = 1_000;
 const DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_STEPS_PER_RUN = 256;
 export class AgentV2WorkerService {
@@ -13,10 +15,14 @@ export class AgentV2WorkerService {
     concurrency;
     events;
     execution;
+    expiredClaimRecoveryIntervalMs;
     idleSleepMs;
     leaseHeartbeatIntervalMs;
     loops = [];
+    maintenanceAbortController;
+    maintenanceLoop;
     maxStepsPerRun;
+    maxIdleSleepMs;
     now;
     queue;
     running = false;
@@ -33,7 +39,9 @@ export class AgentV2WorkerService {
         this.concurrency = options.concurrency ?? 1;
         this.claimTimeoutMs = options.claimTimeoutMs ?? DEFAULT_CLAIM_TIMEOUT_MS;
         this.cancelPollIntervalMs = options.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS;
+        this.expiredClaimRecoveryIntervalMs = Math.max(1, options.expiredClaimRecoveryIntervalMs ?? DEFAULT_EXPIRED_CLAIM_RECOVERY_INTERVAL_MS);
         this.idleSleepMs = options.idleSleepMs ?? DEFAULT_IDLE_SLEEP_MS;
+        this.maxIdleSleepMs = Math.max(this.idleSleepMs, options.maxIdleSleepMs ?? DEFAULT_MAX_IDLE_SLEEP_MS);
         this.leaseHeartbeatIntervalMs = options.leaseHeartbeatIntervalMs ?? DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS;
         this.maxStepsPerRun = options.maxStepsPerRun ?? DEFAULT_MAX_STEPS_PER_RUN;
     }
@@ -44,18 +52,23 @@ export class AgentV2WorkerService {
         await this.recoverOwnedRuns();
         this.running = true;
         this.loops = Array.from({ length: this.concurrency }, () => this.runLoop());
+        this.maintenanceAbortController = new AbortController();
+        this.maintenanceLoop = this.runExpiredClaimMaintenance(this.maintenanceAbortController.signal);
     }
     async stop() {
         this.stopping = true;
         this.running = false;
+        this.maintenanceAbortController?.abort();
         for (const controller of this.activeAbortControllers.values()) {
             controller.abort();
         }
-        await Promise.all(this.loops);
+        await Promise.all([...this.loops, ...(this.maintenanceLoop ? [this.maintenanceLoop] : [])]);
         await this.waitForActiveProcessOneCalls();
         await this.markOwnedRunsInterrupted();
         await this.queue.close();
         this.loops = [];
+        this.maintenanceAbortController = undefined;
+        this.maintenanceLoop = undefined;
     }
     async processOne() {
         if (this.stopping)
@@ -336,9 +349,13 @@ export class AgentV2WorkerService {
             await this.interruptRun(run);
         }
     }
-    async recoverExpiredClaims() {
+    async recoverExpiredClaims(signal) {
         for (const claim of await this.queue.releaseExpiredClaims()) {
+            if (signal?.aborted)
+                return;
             const run = await this.store.getAgentV2Run(claim.clientId, claim.runId);
+            if (signal?.aborted)
+                return;
             if (!run) {
                 continue;
             }
@@ -365,12 +382,28 @@ export class AgentV2WorkerService {
         abortController.abort();
         return true;
     }
+    async runExpiredClaimMaintenance(signal) {
+        while (this.running && !signal.aborted) {
+            await interruptibleSleep(this.expiredClaimRecoveryIntervalMs, signal);
+            if (!this.running || signal.aborted)
+                return;
+            const recovery = this.recoverExpiredClaims(signal).catch(() => undefined);
+            if (!(await settleOrAbort(recovery, signal)))
+                return;
+        }
+    }
     async runLoop() {
+        let idleSleepMs = this.idleSleepMs;
         while (this.running) {
             const processed = await this.processOne();
-            if (!processed && this.running) {
-                await sleep(this.idleSleepMs);
+            if (processed) {
+                idleSleepMs = this.idleSleepMs;
+                continue;
             }
+            if (!this.running)
+                continue;
+            await sleep(idleSleepMs);
+            idleSleepMs = Math.min(Math.max(1, idleSleepMs * 2), this.maxIdleSleepMs);
         }
     }
     async waitForActiveProcessOneCalls() {
@@ -425,6 +458,40 @@ function runKey(run) {
 function sleep(ms) {
     return new Promise((resolve) => {
         setTimeout(resolve, ms);
+    });
+}
+function interruptibleSleep(ms, signal) {
+    if (signal.aborted)
+        return Promise.resolve();
+    return new Promise((resolve) => {
+        const onAbort = () => {
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(() => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        signal.addEventListener("abort", onAbort, { once: true });
+    });
+}
+function settleOrAbort(operation, signal) {
+    if (signal.aborted)
+        return Promise.resolve(false);
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (completed) => {
+            if (settled)
+                return;
+            settled = true;
+            signal.removeEventListener("abort", onAbort);
+            resolve(completed);
+        };
+        const onAbort = () => finish(false);
+        signal.addEventListener("abort", onAbort, { once: true });
+        void operation.then(() => finish(true));
+        if (signal.aborted)
+            onAbort();
     });
 }
 //# sourceMappingURL=agent-v2-worker-service.js.map

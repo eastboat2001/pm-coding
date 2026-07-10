@@ -224,7 +224,6 @@ export {
 	type PreviewReadinessReasonCode,
 	type PreviewReadinessResult,
 } from "./preview-readiness-checker.js";
-export { type RetryClassification, RetryPolicy, type RetryPolicyOptions } from "./retry-policy.js";
 export { RuntimeDbStore } from "./runtime-db.js";
 export { createAgentV2RuntimeStore, type AgentV2ProductionStore } from "./runtime-store-factory.js";
 export type { ServerDirectAgentTool } from "./server-agent-tools.js";

@@ -50,7 +50,7 @@ export interface AgentV2CutoverRehearsalCommandOptions {
 
 type CutoverFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RunSnapshot = { runId: string; status: string };
-type RequestResult = { response?: Response; detail?: string; timedOut?: boolean };
+type RequestResult = { response?: Response; detail?: string; timedOut?: boolean; dispose?: () => void };
 type RequestHelper = (path: string, init?: RequestInit) => Promise<RequestResult>;
 
 export async function runAgentV2CutoverRehearsal(
@@ -69,7 +69,9 @@ export async function runAgentV2CutoverRehearsal(
 	let lastEventSeq: number | undefined;
 
 	const health = await request("/api/pi-storage/status", { headers });
-	if (!health.response?.ok) {
+	const healthOk = health.response?.ok === true;
+	health.dispose?.();
+	if (!healthOk) {
 		checks.push(failedCheck("storage-health", responseDetail(health, "Storage health check failed.")));
 		appendSkippedChecks(checks, 1, "Storage health check did not pass.");
 		return report(checks, runId, finalStatus, lastEventSeq);
@@ -88,7 +90,12 @@ export async function runAgentV2CutoverRehearsal(
 			model: options.model,
 		}),
 	});
-	const startedSnapshot = started.response?.ok ? await readRunSnapshot(started.response, deadlineAt, now) : undefined;
+	let startedSnapshot: { run?: RunSnapshot; timedOut?: boolean } | undefined;
+	if (started.response?.ok) {
+		startedSnapshot = await readRunSnapshot(started.response, deadlineAt, now, started.dispose);
+	} else {
+		started.dispose?.();
+	}
 	const startedRun = startedSnapshot?.run;
 	if (!startedRun) {
 		checks.push(
@@ -120,24 +127,32 @@ export async function runAgentV2CutoverRehearsal(
 		: { ok: false, detail: "V2 run could not be read.", status: finalStatus, seq: 0 };
 	finalStatus = replay.status ?? finalStatus;
 	lastEventSeq = replay.seq;
-	checks.push(replay.ok ? passedCheck("v2-event-replay", replay.detail) : failedCheck("v2-event-replay", replay.detail));
+	checks.push(
+		replay.ok ? passedCheck("v2-event-replay", replay.detail) : failedCheck("v2-event-replay", replay.detail),
+	);
 
 	const cancellation = await cancelRun(request, headers, runId, deadlineAt, now, pollIntervalMs, sleep, finalStatus);
 	finalStatus = cancellation.status ?? finalStatus;
 	checks.push(
-		cancellation.ok ? passedCheck("v2-run-cancel", cancellation.detail) : failedCheck("v2-run-cancel", cancellation.detail),
+		cancellation.ok
+			? passedCheck("v2-run-cancel", cancellation.detail)
+			: failedCheck("v2-run-cancel", cancellation.detail),
 	);
 
 	const retiredRun = await request("/api/runs", { headers });
+	const retiredRunStatus = retiredRun.response?.status;
+	retiredRun.dispose?.();
 	checks.push(
-		retiredRun.response?.status === 410
+		retiredRunStatus === 410
 			? passedCheck("retired-run-route", "Retired run route returned 410.")
 			: failedCheck("retired-run-route", responseDetail(retiredRun, "Retired run route did not return 410.")),
 	);
 
 	const retiredSession = await request("/api/pi-sessions", { headers });
+	const retiredSessionStatus = retiredSession.response?.status;
+	retiredSession.dispose?.();
 	checks.push(
-		retiredSession.response?.status === 410
+		retiredSessionStatus === 410
 			? passedCheck("retired-session-route", "Retired session route returned 410.")
 			: failedCheck(
 					"retired-session-route",
@@ -196,11 +211,26 @@ function createDeadlineBoundRequest(
 
 		const controller = new AbortController();
 		let timeoutId: ReturnType<typeof setTimeout> | undefined;
+		let timedOut = false;
 		const fetchResult: Promise<RequestResult> = Promise.resolve()
-			.then(async () => await fetchFn(new URL(path, options.baseUrl).toString(), { ...init, signal: controller.signal }))
-			.then((response): RequestResult => ({ response }), (): RequestResult => ({ detail: REQUEST_FAILED_DETAIL }));
+			.then(
+				async () =>
+					await fetchFn(new URL(path, options.baseUrl).toString(), { ...init, signal: controller.signal }),
+			)
+			.then(
+				(response): RequestResult => {
+					const dispose = createResponseDisposer(controller, response);
+					if (timedOut) {
+						dispose();
+						return timedOutRequest();
+					}
+					return { response, dispose };
+				},
+				(): RequestResult => ({ detail: REQUEST_FAILED_DETAIL }),
+			);
 		const timeoutResult = new Promise<RequestResult>((resolve) => {
 			timeoutId = setTimeout(() => {
+				timedOut = true;
 				controller.abort();
 				resolve(timedOutRequest());
 			}, remainingMs);
@@ -221,8 +251,11 @@ async function readRun(
 	now: () => number,
 ): Promise<{ run?: RunSnapshot; detail: string }> {
 	const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}`, { headers });
-	if (!result.response?.ok) return { detail: responseDetail(result, "V2 run read failed.") };
-	const snapshot = await readRunSnapshot(result.response, deadlineAt, now);
+	if (!result.response?.ok) {
+		result.dispose?.();
+		return { detail: responseDetail(result, "V2 run read failed.") };
+	}
+	const snapshot = await readRunSnapshot(result.response, deadlineAt, now, result.dispose);
 	if (snapshot.timedOut) return { detail: REQUEST_TIMED_OUT_DETAIL };
 	return snapshot.run
 		? { run: snapshot.run, detail: "V2 run read." }
@@ -243,10 +276,15 @@ async function waitForEventReplay(
 	let seq = 0;
 	while (true) {
 		if (remainingMs(deadlineAt, now) <= 0) return eventReplayTimeout(status, seq);
-		const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}/events?afterSeq=${seq}`, { headers });
+		const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}/events?afterSeq=${seq}`, {
+			headers,
+		});
 		if (result.timedOut) return eventReplayTimeout(status, seq);
-		if (!result.response?.ok) return { ok: false, detail: responseDetail(result, "V2 event replay failed."), status, seq };
-		const replay = await readEvents(result.response, deadlineAt, now);
+		if (!result.response?.ok) {
+			result.dispose?.();
+			return { ok: false, detail: responseDetail(result, "V2 event replay failed."), status, seq };
+		}
+		const replay = await readEvents(result.response, deadlineAt, now, result.dispose);
 		if (replay.timedOut) return eventReplayTimeout(status, seq);
 		if (replay.events === undefined)
 			return { ok: false, detail: "V2 event replay returned an invalid response.", status, seq };
@@ -270,9 +308,12 @@ async function cancelRun(
 	lastStatus: string | undefined,
 ): Promise<{ ok: boolean; detail: string; status?: string }> {
 	const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST", headers });
-	if (!result.response?.ok) return { ok: false, detail: responseDetail(result, "V2 run cancel failed."), status: lastStatus };
+	if (!result.response?.ok) {
+		result.dispose?.();
+		return { ok: false, detail: responseDetail(result, "V2 run cancel failed."), status: lastStatus };
+	}
 
-	const cancellationSnapshot = await readRunSnapshot(result.response, deadlineAt, now);
+	const cancellationSnapshot = await readRunSnapshot(result.response, deadlineAt, now, result.dispose);
 	if (cancellationSnapshot.timedOut) return cancellationTimeout(lastStatus);
 	let status = cancellationSnapshot.run?.status ?? lastStatus;
 	while (true) {
@@ -295,7 +336,10 @@ async function sleepWithinDeadline(
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
 	const sleepResult = Promise.resolve()
 		.then(async () => await sleep(Math.min(pollIntervalMs, remaining)))
-		.then(() => true, () => false);
+		.then(
+			() => true,
+			() => false,
+		);
 	const deadlineResult = new Promise<boolean>((resolve) => {
 		timeoutId = setTimeout(() => resolve(false), remaining);
 	});
@@ -310,8 +354,9 @@ async function readRunSnapshot(
 	response: Response,
 	deadlineAt: number,
 	now: () => number,
+	dispose?: () => void,
 ): Promise<{ run?: RunSnapshot; timedOut?: boolean }> {
-	const result = await readJson(response, deadlineAt, now);
+	const result = await readJson(response, deadlineAt, now, dispose);
 	if (result.timedOut) return { timedOut: true };
 	const value = result.value;
 	if (!isRecord(value) || typeof value.runId !== "string" || typeof value.status !== "string") return {};
@@ -322,8 +367,9 @@ async function readEvents(
 	response: Response,
 	deadlineAt: number,
 	now: () => number,
+	dispose?: () => void,
 ): Promise<{ events?: Array<{ seq: number }>; timedOut?: boolean }> {
-	const result = await readJson(response, deadlineAt, now);
+	const result = await readJson(response, deadlineAt, now, dispose);
 	if (result.timedOut) return { timedOut: true };
 	const value = result.value;
 	if (!isRecord(value) || !Array.isArray(value.events)) return {};
@@ -339,21 +385,41 @@ async function readJson(
 	response: Response,
 	deadlineAt: number,
 	now: () => number,
+	dispose?: () => void,
 ): Promise<{ value?: unknown; timedOut?: boolean }> {
 	const remaining = remainingMs(deadlineAt, now);
-	if (remaining <= 0) return { timedOut: true };
+	if (remaining <= 0) {
+		dispose?.();
+		return { timedOut: true };
+	}
 	let timeoutId: ReturnType<typeof setTimeout> | undefined;
 	const valueResult = Promise.resolve()
 		.then(async () => await response.json())
-		.then((value) => ({ value }), () => ({}));
+		.then(
+			(value) => ({ value }),
+			() => ({}),
+		);
 	const timeoutResult = new Promise<{ timedOut: true }>((resolve) => {
 		timeoutId = setTimeout(() => resolve({ timedOut: true }), remaining);
 	});
 	try {
-		return await Promise.race([valueResult, timeoutResult]);
+		const result = await Promise.race([valueResult, timeoutResult]);
+		if ("timedOut" in result) dispose?.();
+		return result;
 	} finally {
 		if (timeoutId !== undefined) clearTimeout(timeoutId);
 	}
+}
+
+function createResponseDisposer(controller: AbortController, response: Response): () => void {
+	let disposed = false;
+	return () => {
+		if (disposed) return;
+		disposed = true;
+		controller.abort();
+		const cancellation = response.body?.cancel();
+		if (cancellation) void cancellation.catch(() => undefined);
+	};
 }
 
 function eventReplayTimeout(status: string | undefined, seq: number) {

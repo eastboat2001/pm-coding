@@ -1,7 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { createClient, type RedisClientType } from "redis";
 
 const DEFAULT_CANCEL_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_CLAIM_LEASE_TTL_MS = 30_000;
+const DEFAULT_CLAIM_COMMAND_TIMEOUT_MS = 5_000;
+const DEFAULT_GRACEFUL_CLOSE_TIMEOUT_MS = 1_000;
+const CLAIM_POLL_MIN_INTERVAL_MS = 25;
+const CLAIM_POLL_MAX_INTERVAL_MS = 250;
 const COMPLETE_IF_OWNER_SCRIPT = `
 local raw = redis.call("HGET", KEYS[1], ARGV[1])
 if not raw then
@@ -40,11 +45,27 @@ for index = 1, maxScans do
 					workerId = ARGV[2],
 					claimedAtMs = now,
 					heartbeatAtMs = now,
-					leaseExpiresAtMs = now + tonumber(ARGV[4])
+					leaseExpiresAtMs = now + tonumber(ARGV[4]),
+					claimToken = ARGV[5]
 				})
 				redis.call("HSET", KEYS[2], runKey, claim)
 				return runKey
 			end
+		end
+	end
+end
+return false
+`;
+const RECOVER_CLAIM_BY_TOKEN_SCRIPT = `
+-- agent-v2-recover-claim-token
+local entries = redis.call("HGETALL", KEYS[1])
+for i = 1, #entries, 2 do
+	local runKey = entries[i]
+	local raw = entries[i + 1]
+	if string.sub(raw, 1, 1) == "{" then
+		local ok, decoded = pcall(cjson.decode, raw)
+		if ok and type(decoded) == "table" and decoded["claimToken"] == ARGV[1] then
+			return runKey
 		end
 	end
 end
@@ -106,16 +127,26 @@ if not raw then
 	return 0
 end
 local owner = raw
+local claimToken = nil
 if string.sub(raw, 1, 1) == "{" then
 	local ok, decoded = pcall(cjson.decode, raw)
 	if ok and type(decoded) == "table" and type(decoded["workerId"]) == "string" then
 		owner = decoded["workerId"]
+		claimToken = decoded["claimToken"]
 	end
 end
 if owner ~= ARGV[2] then
 	return 0
 end
-redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
+local replacement = ARGV[3]
+if type(claimToken) == "string" then
+	local ok, decoded = pcall(cjson.decode, replacement)
+	if ok and type(decoded) == "table" then
+		decoded["claimToken"] = claimToken
+		replacement = cjson.encode(decoded)
+	end
+end
+redis.call("HSET", KEYS[1], ARGV[1], replacement)
 return 1
 `;
 const RELEASE_EXPIRED_CLAIMS_SCRIPT = `
@@ -153,6 +184,7 @@ export interface AgentV2ActiveRunClaim extends AgentV2RunQueueIdentity {
 	claimedAtMs: number;
 	heartbeatAtMs: number;
 	leaseExpiresAtMs: number;
+	claimToken?: string;
 }
 
 export interface AgentV2RunQueueClearResult {
@@ -171,7 +203,9 @@ export interface RedisAgentV2RunQueueOptions {
 	redisUrl: string;
 	queueName: string;
 	claimLeaseTtlMs?: number;
+	claimCommandTimeoutMs?: number;
 	cancelTtlSeconds?: number;
+	gracefulCloseTimeoutMs?: number;
 }
 
 export interface AgentV2RunQueue {
@@ -324,10 +358,13 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 	private readonly cancelIndexKey: string;
 	private readonly cancelTtlSeconds: number;
 	private client?: RedisClientType;
+	private claimClient?: RedisClientType;
+	private readonly claimCommandTimeoutMs: number;
 	private readonly claimLeaseTtlMs: number;
 	private readonly claimWaiters: Array<() => void> = [];
 	private closed = false;
 	private closePromise: Promise<void> | undefined;
+	private readonly gracefulCloseTimeoutMs: number;
 	private readonly idleWaiters = new Set<() => void>();
 	private readonly queueName: string;
 	private readonly redisUrl: string;
@@ -339,6 +376,8 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 		this.cancelIndexKey = `${options.queueName}:cancel`;
 		this.cancelTtlSeconds = options.cancelTtlSeconds ?? DEFAULT_CANCEL_TTL_SECONDS;
 		this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
+		this.claimCommandTimeoutMs = options.claimCommandTimeoutMs ?? DEFAULT_CLAIM_COMMAND_TIMEOUT_MS;
+		this.gracefulCloseTimeoutMs = Math.max(1, options.gracefulCloseTimeoutMs ?? DEFAULT_GRACEFUL_CLOSE_TIMEOUT_MS);
 	}
 
 	async enqueue(run: AgentV2RunQueueIdentity): Promise<void> {
@@ -351,12 +390,21 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 	async claim(workerId: string, timeoutMs: number): Promise<AgentV2ClaimedRun | undefined> {
 		this.assertOpen();
 		this.activeClaims += 1;
+		const claimToken = randomUUID();
 		try {
-			const deadline = Date.now() + Math.max(0, timeoutMs);
+			const boundedTimeoutMs = Math.max(0, timeoutMs);
+			const deadline = Date.now() + boundedTimeoutMs;
+			let pollIntervalMs = CLAIM_POLL_MIN_INTERVAL_MS;
 			for (;;) {
-				const run = await this.claimOne(workerId);
-				if (run || timeoutMs <= 0 || this.closed || Date.now() >= deadline) return run;
-				await this.waitForWork(Math.min(10, Math.max(1, deadline - Date.now())));
+				const remainingMs = Math.max(1, deadline - Date.now());
+				const commandTimeoutMs =
+					boundedTimeoutMs > 0 ? Math.min(this.claimCommandTimeoutMs, remainingMs) : this.claimCommandTimeoutMs;
+				const attempt = await this.claimOne(workerId, claimToken, commandTimeoutMs);
+				if (attempt.run || attempt.stop || timeoutMs <= 0 || this.closed || Date.now() >= deadline) {
+					return attempt.run;
+				}
+				await this.waitForWork(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
+				pollIntervalMs = Math.min(pollIntervalMs * 2, CLAIM_POLL_MAX_INTERVAL_MS);
 				if (this.closed) return undefined;
 			}
 		} catch (error) {
@@ -436,31 +484,50 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 	}
 
 	close(): Promise<void> {
-		return (this.closePromise ??= this.closeInternal());
+		if (!this.closePromise) this.closePromise = this.closeInternal();
+		return this.closePromise;
 	}
 
 	private async closeInternal(): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
 		this.wakeAllIdleWaiters();
+		const claimClient = this.claimClient;
+		this.claimClient = undefined;
+		if (claimClient) await this.disconnectClaimClient(claimClient);
 		await this.waitForActiveClaims();
-		const clients = [this.client];
+		const client = this.client;
 		this.client = undefined;
-		await Promise.all(
-			clients.map(async (client) => {
-				if (!client?.isOpen) return;
-				await client.quit().catch(async () => {
-					if (client.isOpen) await client.disconnect();
-				});
-			}),
+		if (!client || !client.isOpen) return;
+		await this.closeCommandClient(client);
+	}
+
+	private async closeCommandClient(client: RedisClientType): Promise<void> {
+		let timeoutId: ReturnType<typeof setTimeout> | undefined;
+		const gracefulResult = client.quit().then(
+			() => true,
+			() => false,
 		);
+		const timeoutResult = new Promise<false>((resolve) => {
+			timeoutId = setTimeout(() => resolve(false), this.gracefulCloseTimeoutMs);
+		});
+		try {
+			if (await Promise.race([gracefulResult, timeoutResult])) return;
+			this.forceDisconnectClient(client);
+		} finally {
+			if (timeoutId !== undefined) clearTimeout(timeoutId);
+		}
 	}
 
 	private assertOpen(): void {
 		if (this.closed) throw new Error("Run queue is closed");
 	}
 
-	private async completeClaimedRun(client: RedisClientType, run: AgentV2RunQueueIdentity, workerId: string): Promise<void> {
+	private async completeClaimedRun(
+		client: RedisClientType,
+		run: AgentV2RunQueueIdentity,
+		workerId: string,
+	): Promise<void> {
 		await client.eval(COMPLETE_IF_OWNER_SCRIPT, {
 			keys: [this.activeKey, this.cancelIndexKey],
 			arguments: [runKey(run), workerId],
@@ -474,12 +541,88 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 		return this.client;
 	}
 
-	private async claimOne(workerId: string): Promise<AgentV2RunQueueIdentity | undefined> {
-		const result = await (await this.connectedClient()).eval(CLAIM_SCRIPT, {
-			keys: [this.queueName, this.activeKey],
-			arguments: ["100", workerId, String(Date.now()), String(this.claimLeaseTtlMs)],
+	private async claimOne(
+		workerId: string,
+		claimToken: string,
+		timeoutMs: number,
+	): Promise<{ run?: AgentV2RunQueueIdentity; stop: boolean }> {
+		let client = this.claimClient;
+		if (!client) {
+			client = createClient({ url: this.redisUrl });
+			this.claimClient = client;
+		}
+		const result = await this.runClaimOperation(
+			client,
+			timeoutMs,
+			async () =>
+				await client.eval(CLAIM_SCRIPT, {
+					keys: [this.queueName, this.activeKey],
+					arguments: ["100", workerId, String(Date.now()), String(this.claimLeaseTtlMs), claimToken],
+				}),
+		);
+		if (result.kind === "value") {
+			return { run: parseIdentity(toUtf8String(result.value)), stop: false };
+		}
+		if (this.closed) return { stop: true };
+		const recovered = await this.recoverClaimByToken(client, claimToken, Math.min(timeoutMs, 100));
+		if (recovered) return { run: recovered, stop: true };
+		if (result.kind === "error") throw result.error;
+		return { stop: true };
+	}
+
+	private async recoverClaimByToken(
+		client: RedisClientType,
+		claimToken: string,
+		timeoutMs: number,
+	): Promise<AgentV2RunQueueIdentity | undefined> {
+		const result = await this.runClaimOperation(
+			client,
+			timeoutMs,
+			async () =>
+				await client.eval(RECOVER_CLAIM_BY_TOKEN_SCRIPT, {
+					keys: [this.activeKey],
+					arguments: [claimToken],
+				}),
+		);
+		if (result.kind !== "value") return undefined;
+		if (!this.claimClient && client.isOpen && !this.closed) this.claimClient = client;
+		return parseIdentity(toUtf8String(result.value));
+	}
+
+	private async runClaimOperation(
+		client: RedisClientType,
+		timeoutMs: number,
+		operation: () => Promise<unknown>,
+	): Promise<{ kind: "value"; value: unknown } | { kind: "error"; error: unknown } | { kind: "timeout" }> {
+		const operationResult = Promise.resolve()
+			.then(async () => {
+				if (!client.isOpen) await client.connect();
+				return await operation();
+			})
+			.then(
+				(value) => ({ kind: "value" as const, value }),
+				(error: unknown) => ({ kind: "error" as const, error }),
+			);
+		let timeoutId: ReturnType<typeof setTimeout> | undefined;
+		const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+			timeoutId = setTimeout(() => resolve({ kind: "timeout" }), Math.max(1, timeoutMs));
 		});
-		return parseIdentity(toUtf8String(result));
+		const result = await Promise.race([operationResult, timeout]);
+		if (timeoutId !== undefined) clearTimeout(timeoutId);
+		if (result.kind !== "value") await this.disconnectClaimClient(client);
+		return result;
+	}
+
+	private async disconnectClaimClient(client: RedisClientType): Promise<void> {
+		if (this.claimClient === client) this.claimClient = undefined;
+		if (!client.isOpen) return;
+		await client.disconnect().catch(() => undefined);
+	}
+
+	private forceDisconnectClient(client: RedisClientType): void {
+		if (this.client === client) this.client = undefined;
+		if (!client.isOpen) return;
+		void client.disconnect().catch(() => undefined);
 	}
 
 	private waitForActiveClaims(): Promise<void> {
@@ -518,8 +661,10 @@ export function createRedisAgentV2RunQueue(options: RedisAgentV2RunQueueOptions)
 }
 
 function copyIdentity(run: AgentV2RunQueueIdentity): AgentV2RunQueueIdentity {
-	if (typeof run.clientId !== "string" || run.clientId.length === 0) throw new Error("Agent v2 queue identity is missing clientId");
-	if (typeof run.runId !== "string" || run.runId.length === 0) throw new Error("Agent v2 queue identity is missing runId");
+	if (typeof run.clientId !== "string" || run.clientId.length === 0)
+		throw new Error("Agent v2 queue identity is missing clientId");
+	if (typeof run.runId !== "string" || run.runId.length === 0)
+		throw new Error("Agent v2 queue identity is missing runId");
 	return { clientId: run.clientId, runId: run.runId };
 }
 
@@ -529,7 +674,13 @@ function createActiveRunClaim(
 	now: number,
 	claimLeaseTtlMs: number,
 ): AgentV2ActiveRunClaim {
-	return { ...copyIdentity(run), workerId, claimedAtMs: now, heartbeatAtMs: now, leaseExpiresAtMs: now + claimLeaseTtlMs };
+	return {
+		...copyIdentity(run),
+		workerId,
+		claimedAtMs: now,
+		heartbeatAtMs: now,
+		leaseExpiresAtMs: now + claimLeaseTtlMs,
+	};
 }
 
 function serializeActiveRunClaim(claim: AgentV2ActiveRunClaim): string {
@@ -538,11 +689,8 @@ function serializeActiveRunClaim(claim: AgentV2ActiveRunClaim): string {
 		claimedAtMs: claim.claimedAtMs,
 		heartbeatAtMs: claim.heartbeatAtMs,
 		leaseExpiresAtMs: claim.leaseExpiresAtMs,
+		...(claim.claimToken ? { claimToken: claim.claimToken } : {}),
 	});
-}
-
-function serializeIdentity(run: AgentV2RunQueueIdentity): string {
-	return JSON.stringify(copyIdentity(run));
 }
 
 function parseIdentity(value: Buffer | string | null | undefined): AgentV2RunQueueIdentity | undefined {
@@ -550,7 +698,12 @@ function parseIdentity(value: Buffer | string | null | undefined): AgentV2RunQue
 	const raw = Buffer.isBuffer(value) ? value.toString("utf8") : value;
 	try {
 		const parsed = JSON.parse(raw) as unknown;
-		if (Array.isArray(parsed) && parsed.length === 2 && typeof parsed[0] === "string" && typeof parsed[1] === "string") {
+		if (
+			Array.isArray(parsed) &&
+			parsed.length === 2 &&
+			typeof parsed[0] === "string" &&
+			typeof parsed[1] === "string"
+		) {
 			return { clientId: parsed[0], runId: parsed[1] };
 		}
 		if (
@@ -604,6 +757,9 @@ function parseActiveRunClaim(value: string | undefined): Omit<AgentV2ActiveRunCl
 				claimedAtMs: parsed.claimedAtMs,
 				heartbeatAtMs: parsed.heartbeatAtMs,
 				leaseExpiresAtMs: parsed.leaseExpiresAtMs,
+				...("claimToken" in parsed && typeof parsed.claimToken === "string"
+					? { claimToken: parsed.claimToken }
+					: {}),
 			};
 		}
 	} catch {}

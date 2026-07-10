@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	runAgentV2CutoverRehearsal,
 	runAgentV2CutoverRehearsalCommand,
@@ -55,7 +55,7 @@ describe("runAgentV2CutoverRehearsal", () => {
 			"http://pi.test/api/pi-sessions",
 		]);
 		expect(requests.every((request) => request.clientId === clientId && request.signal !== undefined)).toBe(true);
-		expect(requests.every((request) => !request.signal?.aborted)).toBe(true);
+		expect(requests.every((request) => !request.abortedAtCall)).toBe(true);
 		expect(JSON.parse(requests[1].body ?? "{}")).toMatchObject({
 			input: { prompt: "Production cutover rehearsal. Do not create project files." },
 			model: { provider: "test", id: "test-model" },
@@ -105,25 +105,88 @@ describe("runAgentV2CutoverRehearsal", () => {
 		expect(report.ok).toBe(false);
 		expect(report.checks[0]).toEqual({ name: "storage-health", ok: false, detail: "Request timed out." });
 		expect(signals).toHaveLength(1);
-		expect(signals[0].aborted).toBe(true);
+		expect(signals.at(-1)?.aborted).toBe(true);
+	});
+
+	it("disposes a response that arrives after the request deadline", async () => {
+		const cancelBody = vi.fn(async () => undefined);
+		let resolveFetch: (response: Response) => void = () => undefined;
+		const deferredResponse = new Promise<Response>((resolve) => {
+			resolveFetch = resolve;
+		});
+		const report = await runAgentV2CutoverRehearsal({
+			...baseOptions,
+			timeoutMs: 20,
+			fetch: async () => await deferredResponse,
+		});
+
+		resolveFetch(unreadResponse(200, cancelBody));
+		await vi.waitFor(() => expect(cancelBody).toHaveBeenCalledOnce());
+
+		expect(report.ok).toBe(false);
+		expect(report.checks[0]).toEqual({ name: "storage-health", ok: false, detail: "Request timed out." });
 	});
 
 	it("settles a response body that never completes at the shared deadline", async () => {
 		const startedAt = Date.now();
+		const cancelBody = vi.fn(async () => undefined);
+		const signals: AbortSignal[] = [];
+		let requestCount = 0;
 		const hangingBodyResponse = {
 			ok: true,
 			status: 200,
+			body: { cancel: cancelBody },
 			json: async () => await new Promise<unknown>(() => undefined),
 		} as Response;
 		const report = await runAgentV2CutoverRehearsal({
 			...baseOptions,
 			timeoutMs: 20,
-			fetch: async () => hangingBodyResponse,
+			fetch: async (_input, init) => {
+				signals.push(init?.signal as AbortSignal);
+				return requestCount++ === 0 ? json(200, { ok: true }) : hangingBodyResponse;
+			},
 		});
 
 		expect(Date.now() - startedAt).toBeLessThan(500);
 		expect(report.ok).toBe(false);
 		expect(report.checks[1]).toEqual({ name: "v2-run-start", ok: false, detail: "Request timed out." });
+		expect(signals.at(-1)?.aborted).toBe(true);
+		expect(cancelBody).toHaveBeenCalledOnce();
+	});
+
+	it("disposes successful status-only responses that are not consumed", async () => {
+		const requests: RequestRecord[] = [];
+		const healthCancel = vi.fn(async () => undefined);
+		const retiredRunCancel = vi.fn(async () => undefined);
+		const retiredSessionCancel = vi.fn(async () => undefined);
+		const responses = successfulCutoverResponses();
+		responses[0] = unreadResponse(200, healthCancel);
+		responses[6] = unreadResponse(410, retiredRunCancel);
+		responses[7] = unreadResponse(410, retiredSessionCancel);
+
+		const report = await runAgentV2CutoverRehearsal({
+			...baseOptions,
+			fetch: scriptedFetch(requests, responses),
+		});
+
+		expect(report.ok).toBe(true);
+		expect(healthCancel).toHaveBeenCalledOnce();
+		expect(retiredRunCancel).toHaveBeenCalledOnce();
+		expect(retiredSessionCancel).toHaveBeenCalledOnce();
+		expect([requests[0], requests[6], requests[7]].every((request) => request.signal?.aborted)).toBe(true);
+	});
+
+	it("disposes unread response bodies on non-success status paths", async () => {
+		const requests: RequestRecord[] = [];
+		const startCancel = vi.fn(async () => undefined);
+		const report = await runAgentV2CutoverRehearsal({
+			...baseOptions,
+			fetch: scriptedFetch(requests, [json(200, { ok: true }), unreadResponse(503, startCancel)]),
+		});
+
+		expect(report.ok).toBe(false);
+		expect(startCancel).toHaveBeenCalledOnce();
+		expect(requests[1].signal?.aborted).toBe(true);
 	});
 
 	it("redacts network errors and HTTP response bodies from reports", async () => {
@@ -174,7 +237,14 @@ describe("runAgentV2CutoverRehearsalCommand", () => {
 	});
 });
 
-type RequestRecord = { url: string; method: string; clientId: string | null; body?: string; signal?: AbortSignal };
+type RequestRecord = {
+	url: string;
+	method: string;
+	clientId: string | null;
+	body?: string;
+	signal?: AbortSignal;
+	abortedAtCall: boolean;
+};
 
 function scriptedFetch(
 	requests: RequestRecord[],
@@ -187,6 +257,7 @@ function scriptedFetch(
 			clientId: new Headers(init?.headers).get("X-PI-Client-ID"),
 			body: typeof init?.body === "string" ? init.body : undefined,
 			signal: init?.signal ?? undefined,
+			abortedAtCall: init?.signal?.aborted ?? false,
 		});
 		const response = responses.shift();
 		if (!response) throw new Error("Unexpected cutover rehearsal request");
@@ -220,6 +291,14 @@ function cutoverEnvironment(): NodeJS.ProcessEnv {
 
 function json(status: number, body: unknown): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+function unreadResponse(status: number, cancel: () => Promise<void>): Response {
+	return {
+		ok: status >= 200 && status < 300,
+		status,
+		body: { cancel },
+	} as Response;
 }
 
 function run(status: string) {

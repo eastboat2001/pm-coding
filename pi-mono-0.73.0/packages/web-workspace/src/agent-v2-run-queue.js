@@ -14,10 +14,65 @@ if string.sub(raw, 1, 1) == "{" then
 	end
 end
 if owner == ARGV[2] then
-	redis.call("DEL", KEYS[2])
+	redis.call("HDEL", KEYS[2], ARGV[1])
 	return redis.call("HDEL", KEYS[1], ARGV[1])
 end
 return 0
+`;
+const CLAIM_SCRIPT = `
+-- agent-v2-claim
+local maxScans = tonumber(ARGV[1])
+for index = 1, maxScans do
+	local raw = redis.call("RPOP", KEYS[1])
+	if not raw then
+		return false
+	end
+	local ok, decoded = pcall(cjson.decode, raw)
+	if ok and type(decoded) == "table" then
+		local clientId = decoded[1] or decoded["clientId"]
+		local runId = decoded[2] or decoded["runId"]
+		if type(clientId) == "string" and type(runId) == "string" then
+			local runKey = cjson.encode({ clientId, runId })
+			if redis.call("HEXISTS", KEYS[2], runKey) == 0 then
+				local now = tonumber(ARGV[3])
+				local claim = cjson.encode({
+					workerId = ARGV[2],
+					claimedAtMs = now,
+					heartbeatAtMs = now,
+					leaseExpiresAtMs = now + tonumber(ARGV[4])
+				})
+				redis.call("HSET", KEYS[2], runKey, claim)
+				return runKey
+			end
+		end
+	end
+end
+return false
+`;
+const REQUEST_CANCEL_SCRIPT = `
+-- agent-v2-request-cancel
+redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
+return redis.call("LREM", KEYS[1], 0, ARGV[1])
+`;
+const CHECK_CANCEL_SCRIPT = `
+-- agent-v2-check-cancel
+local expiresAtMs = redis.call("HGET", KEYS[1], ARGV[1])
+if not expiresAtMs then
+	return 0
+end
+if tonumber(expiresAtMs) <= tonumber(ARGV[2]) then
+	redis.call("HDEL", KEYS[1], ARGV[1])
+	return 0
+end
+return 1
+`;
+const CLEAR_SCRIPT = `
+-- agent-v2-clear
+local queueItemsDeleted = redis.call("LLEN", KEYS[1])
+local activeClaimsDeleted = redis.call("HLEN", KEYS[2])
+local cancelKeysDeleted = redis.call("HLEN", KEYS[3])
+redis.call("DEL", KEYS[1], KEYS[2], KEYS[3])
+return { queueItemsDeleted, activeClaimsDeleted, cancelKeysDeleted }
 `;
 const REQUEUE_ACTIVE_BY_OWNER_SCRIPT = `
 local entries = redis.call("HGETALL", KEYS[1])
@@ -204,45 +259,43 @@ export class InMemoryAgentV2RunQueue {
 export class RedisAgentV2RunQueue {
     activeClaims = 0;
     activeKey;
-    blockingClient;
+    cancelIndexKey;
     cancelTtlSeconds;
     client;
     claimLeaseTtlMs;
     claimWaiters = [];
     closed = false;
+    closePromise;
+    idleWaiters = new Set();
     queueName;
     redisUrl;
     constructor(options) {
         this.redisUrl = options.redisUrl;
         this.queueName = options.queueName;
         this.activeKey = `${options.queueName}:active`;
+        this.cancelIndexKey = `${options.queueName}:cancel`;
         this.cancelTtlSeconds = options.cancelTtlSeconds ?? DEFAULT_CANCEL_TTL_SECONDS;
         this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
     }
     async enqueue(run) {
         this.assertOpen();
         const client = await this.connectedClient();
-        await client.lPush(this.queueName, serializeIdentity(run));
+        await client.lPush(this.queueName, runKey(run));
+        this.wakeIdleWaiter();
     }
     async claim(workerId, timeoutMs) {
         this.assertOpen();
         this.activeClaims += 1;
         try {
-            const client = await this.connectedClient();
-            const run = await this.popRun(timeoutMs, client);
-            if (!run)
-                return undefined;
-            if (this.closed) {
-                await client.rPush(this.queueName, serializeIdentity(run));
-                return undefined;
+            const deadline = Date.now() + Math.max(0, timeoutMs);
+            for (;;) {
+                const run = await this.claimOne(workerId);
+                if (run || timeoutMs <= 0 || this.closed || Date.now() >= deadline)
+                    return run;
+                await this.waitForWork(Math.min(10, Math.max(1, deadline - Date.now())));
+                if (this.closed)
+                    return undefined;
             }
-            await client.hSet(this.activeKey, runKey(run), serializeActiveRunClaim(createActiveRunClaim(run, workerId, Date.now(), this.claimLeaseTtlMs)));
-            if (this.closed) {
-                await this.completeClaimedRun(client, run, workerId);
-                await client.rPush(this.queueName, serializeIdentity(run));
-                return undefined;
-            }
-            return run;
         }
         catch (error) {
             if (this.closed)
@@ -288,42 +341,39 @@ export class RedisAgentV2RunQueue {
     }
     async requestCancel(run) {
         this.assertOpen();
-        const client = await this.connectedClient();
-        await Promise.all([
-            client.set(this.cancelKey(run), "1", { EX: this.cancelTtlSeconds }),
-            client.lRem(this.queueName, 0, serializeIdentity(run)),
-            client.lRem(this.queueName, 0, runKey(run)),
-        ]);
+        const key = runKey(run);
+        await (await this.connectedClient()).eval(REQUEST_CANCEL_SCRIPT, {
+            keys: [this.queueName, this.cancelIndexKey],
+            arguments: [key, String(Date.now() + this.cancelTtlSeconds * 1_000)],
+        });
     }
     async isCancelRequested(run) {
         this.assertOpen();
-        return (await (await this.connectedClient()).exists(this.cancelKey(run))) > 0;
+        const result = await (await this.connectedClient()).eval(CHECK_CANCEL_SCRIPT, {
+            keys: [this.cancelIndexKey],
+            arguments: [runKey(run), String(Date.now())],
+        });
+        return toCount(result) > 0;
     }
     async clear() {
         this.assertOpen();
-        const client = await this.connectedClient();
-        const [queueItemsDeleted, activeClaimsDeleted] = await Promise.all([client.lLen(this.queueName), client.hLen(this.activeKey)]);
-        const cancelKeys = [];
-        for await (const key of client.scanIterator({ MATCH: `${this.queueName}:cancel:*`, COUNT: 100 })) {
-            cancelKeys.push(String(key));
-        }
-        await Promise.all([
-            client.del(this.queueName),
-            client.del(this.activeKey),
-            ...chunk(cancelKeys, 100).map((keys) => client.del(keys)),
-        ]);
-        return { queueItemsDeleted, activeClaimsDeleted, cancelKeysDeleted: cancelKeys.length };
+        const result = await (await this.connectedClient()).eval(CLEAR_SCRIPT, {
+            keys: [this.queueName, this.activeKey, this.cancelIndexKey],
+            arguments: [],
+        });
+        return parseClearResult(result);
     }
-    async close() {
+    close() {
+        return (this.closePromise ??= this.closeInternal());
+    }
+    async closeInternal() {
         if (this.closed)
             return;
         this.closed = true;
-        if (this.blockingClient?.isOpen)
-            await this.blockingClient.disconnect();
+        this.wakeAllIdleWaiters();
         await this.waitForActiveClaims();
-        const clients = [this.client, this.blockingClient];
+        const clients = [this.client];
         this.client = undefined;
-        this.blockingClient = undefined;
         await Promise.all(clients.map(async (client) => {
             if (!client?.isOpen)
                 return;
@@ -337,20 +387,11 @@ export class RedisAgentV2RunQueue {
         if (this.closed)
             throw new Error("Run queue is closed");
     }
-    cancelKey(run) {
-        return `${this.queueName}:cancel:${encodeURIComponent(runKey(run))}`;
-    }
     async completeClaimedRun(client, run, workerId) {
         await client.eval(COMPLETE_IF_OWNER_SCRIPT, {
-            keys: [this.activeKey, this.cancelKey(run)],
+            keys: [this.activeKey, this.cancelIndexKey],
             arguments: [runKey(run), workerId],
         });
-    }
-    async connectedBlockingClient(sourceClient) {
-        this.blockingClient ??= sourceClient.duplicate();
-        if (!this.blockingClient.isOpen)
-            await this.blockingClient.connect();
-        return this.blockingClient;
     }
     async connectedClient() {
         this.assertOpen();
@@ -359,16 +400,37 @@ export class RedisAgentV2RunQueue {
             await this.client.connect();
         return this.client;
     }
-    async popRun(timeoutMs, client) {
-        if (timeoutMs <= 0)
-            return parseIdentity(await client.rPop(this.queueName));
-        const result = await (await this.connectedBlockingClient(client)).brPop(this.queueName, Math.max(1, Math.ceil(timeoutMs / 1000)));
-        return parseIdentity(result?.element);
+    async claimOne(workerId) {
+        const result = await (await this.connectedClient()).eval(CLAIM_SCRIPT, {
+            keys: [this.queueName, this.activeKey],
+            arguments: ["100", workerId, String(Date.now()), String(this.claimLeaseTtlMs)],
+        });
+        return parseIdentity(toUtf8String(result));
     }
     waitForActiveClaims() {
         if (this.activeClaims === 0)
             return Promise.resolve();
         return new Promise((resolve) => this.claimWaiters.push(resolve));
+    }
+    waitForWork(timeoutMs) {
+        if (this.closed)
+            return Promise.resolve();
+        return new Promise((resolve) => {
+            const wake = () => {
+                clearTimeout(timer);
+                this.idleWaiters.delete(wake);
+                resolve();
+            };
+            const timer = setTimeout(wake, timeoutMs);
+            this.idleWaiters.add(wake);
+        });
+    }
+    wakeIdleWaiter() {
+        this.idleWaiters.values().next().value?.();
+    }
+    wakeAllIdleWaiters() {
+        for (const wake of [...this.idleWaiters])
+            wake();
     }
 }
 export function createAgentV2RunQueue(options = {}) {
@@ -469,10 +531,13 @@ function toUtf8String(value) {
 function toCount(value) {
     return typeof value === "number" ? value : Number(value) || 0;
 }
-function chunk(items, size) {
-    const chunks = [];
-    for (let index = 0; index < items.length; index += size)
-        chunks.push(items.slice(index, index + size));
-    return chunks;
+function parseClearResult(value) {
+    if (!Array.isArray(value))
+        return { queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 };
+    return {
+        queueItemsDeleted: toCount(value[0]),
+        activeClaimsDeleted: toCount(value[1]),
+        cancelKeysDeleted: toCount(value[2]),
+    };
 }
 //# sourceMappingURL=agent-v2-run-queue.js.map

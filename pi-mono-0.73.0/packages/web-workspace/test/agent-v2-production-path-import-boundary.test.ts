@@ -110,6 +110,28 @@ const explicitV2BoundaryFiles = [
 ];
 
 describe("agent v2 production import boundary", () => {
+	it("deletes the retired application generation runtime selector", () => {
+		const deleted = [
+			"apps/pi-coding-web/src/agent-v2/runtime-entry.ts",
+			"apps/pi-coding-web/src/agent-v2/types.ts",
+			"apps/pi-coding-web/test/agent-v2-runtime-entry.test.ts",
+		];
+		for (const file of deleted) expect(existsSync(join(repoRoot, file)), file).toBe(false);
+
+		const types = readFileSync(join(repoRoot, "packages/web-workspace/src/agent-v2-types.ts"), "utf8");
+		const barrel = readFileSync(join(repoRoot, "packages/web-workspace/src/index.ts"), "utf8");
+		for (const retired of [
+			"APPLICATION_GENERATION_RUNTIME_V2",
+			"ApplicationGenerationRuntimeVersion",
+			"ApplicationGenerationRuntimeSelection",
+			"v1Disabled",
+			"allowDebugV1",
+		]) {
+			expect(types, retired).not.toContain(retired);
+			expect(barrel, retired).not.toContain(retired);
+		}
+	});
+
 	it("does not expose legacy v1 product services through the root package barrel", () => {
 		const rootExports = readRootBarrelExportNames();
 		for (const legacyExport of [...legacyRootServiceExports, ...legacyRootRuntimeExports]) {

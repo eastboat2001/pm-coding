@@ -196,9 +196,6 @@ export {
 	type AgentV2TaskKind,
 	type AgentV2TaskNode,
 	type AgentV2TaskStatus,
-	APPLICATION_GENERATION_RUNTIME_V2,
-	type ApplicationGenerationRuntimeSelection,
-	type ApplicationGenerationRuntimeVersion,
 } from "./agent-v2-types.js";
 export {
 	type AgentV2ValidationFailure,

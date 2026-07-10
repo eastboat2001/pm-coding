@@ -1,9 +1,4 @@
 export const AGENT_V2_SCHEMA_VERSION = 1;
-export const APPLICATION_GENERATION_RUNTIME_V2 = Object.freeze({
-    version: "v2",
-    v1Disabled: true,
-    reason: "Application Generation Agent v2 is the replacement default; v1 is not a compatibility target.",
-});
 export const AGENT_V2_RUN_STATUSES = [
     "queued",
     "running",

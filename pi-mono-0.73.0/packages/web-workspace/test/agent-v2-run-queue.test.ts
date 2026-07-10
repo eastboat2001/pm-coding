@@ -37,6 +37,20 @@ describe("InMemoryAgentV2RunQueue", () => {
 		await expect(queue.claim("worker-a", 0)).resolves.toEqual({ clientId: "client-b", runId: "run-1" });
 	});
 
+	it("does not replace an active owner when a duplicate identity is queued", async () => {
+		const queue = createAgentV2RunQueue();
+		const run = { clientId: "client-a", runId: "run-1" };
+		await queue.enqueue(run);
+		await queue.enqueue(run);
+
+		await expect(queue.claim("worker-a", 0)).resolves.toEqual(run);
+		await expect(queue.claim("worker-b", 0)).resolves.toBeUndefined();
+		await expect(queue.renewLease(run, "worker-a")).resolves.toBe(true);
+		await expect(queue.renewLease(run, "worker-b")).resolves.toBe(false);
+		await queue.complete(run, "worker-a");
+		await expect(queue.claim("worker-b", 0)).resolves.toBeUndefined();
+	});
+
 	it("removes queued runs when cancellation is requested before claim", async () => {
 		const queue = createAgentV2RunQueue();
 		const run = { clientId: "client-a", runId: "run-1" };
@@ -92,6 +106,20 @@ describe("InMemoryAgentV2RunQueue", () => {
 		await queue.requestCancel({ clientId: "client-a", runId: "cancelled" });
 
 		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 1, activeClaimsDeleted: 1, cancelKeysDeleted: 1 });
+	});
+
+	it("does not count expired cancellation state during clear", async () => {
+		let now = 1_000;
+		const queue = createAgentV2RunQueue({ cancelTtlSeconds: 1, now: () => now });
+		const expired = { clientId: "client-a", runId: "expired" };
+		await queue.requestCancel(expired);
+		now = 2_000;
+		await expect(queue.isCancelRequested(expired)).resolves.toBe(false);
+		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 });
+
+		const valid = { clientId: "client-a", runId: "valid" };
+		await queue.requestCancel(valid);
+		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 1 });
 	});
 
 	it("rejects operations after idempotent close", async () => {
@@ -150,6 +178,25 @@ describe("RedisAgentV2RunQueue", () => {
 			"pi:agent-v2:runs:active",
 			"pi:agent-v2:runs:cancel",
 		]);
+	});
+
+	it("uses an expiring cancel index and excludes expired members from clear", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		fake.clearResult = [0, 0, 1];
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+		const expired = { clientId: "client-a", runId: "expired" };
+
+		await queue.requestCancel(expired);
+		await expect(queue.isCancelRequested(expired)).resolves.toBe(false);
+		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 1 });
+
+		const requestCancelScript = fake.evalCalls.find((call) => call.script.includes("agent-v2-request-cancel"))?.script;
+		const clearScript = fake.evalCalls.find((call) => call.script.includes("agent-v2-clear"))?.script;
+		expect(requestCancelScript).toContain("ZADD");
+		expect(requestCancelScript).toContain("EXPIRE");
+		expect(clearScript).toContain("ZREMRANGEBYSCORE");
+		expect(clearScript).toContain("ZCARD");
 	});
 
 	it("shares one in-flight close promise", async () => {

@@ -15,7 +15,7 @@ if string.sub(raw, 1, 1) == "{" then
 	end
 end
 if owner == ARGV[2] then
-	redis.call("HDEL", KEYS[2], ARGV[1])
+	redis.call("ZREM", KEYS[2], ARGV[1])
 	return redis.call("HDEL", KEYS[1], ARGV[1])
 end
 return 0
@@ -52,17 +52,18 @@ return false
 `;
 const REQUEST_CANCEL_SCRIPT = `
 -- agent-v2-request-cancel
-redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
+redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
+redis.call("EXPIRE", KEYS[2], ARGV[3])
 return redis.call("LREM", KEYS[1], 0, ARGV[1])
 `;
 const CHECK_CANCEL_SCRIPT = `
 -- agent-v2-check-cancel
-local expiresAtMs = redis.call("HGET", KEYS[1], ARGV[1])
+local expiresAtMs = redis.call("ZSCORE", KEYS[1], ARGV[1])
 if not expiresAtMs then
 	return 0
 end
 if tonumber(expiresAtMs) <= tonumber(ARGV[2]) then
-	redis.call("HDEL", KEYS[1], ARGV[1])
+	redis.call("ZREM", KEYS[1], ARGV[1])
 	return 0
 end
 return 1
@@ -71,7 +72,8 @@ const CLEAR_SCRIPT = `
 -- agent-v2-clear
 local queueItemsDeleted = redis.call("LLEN", KEYS[1])
 local activeClaimsDeleted = redis.call("HLEN", KEYS[2])
-local cancelKeysDeleted = redis.call("HLEN", KEYS[3])
+redis.call("ZREMRANGEBYSCORE", KEYS[3], "-inf", ARGV[1])
+local cancelKeysDeleted = redis.call("ZCARD", KEYS[3])
 redis.call("DEL", KEYS[1], KEYS[2], KEYS[3])
 return { queueItemsDeleted, activeClaimsDeleted, cancelKeysDeleted }
 `;
@@ -205,11 +207,17 @@ export class InMemoryAgentV2RunQueue implements AgentV2RunQueue {
 
 	async claim(workerId: string, _timeoutMs: number): Promise<AgentV2ClaimedRun | undefined> {
 		this.assertOpen();
-		const run = this.queued.shift();
-		if (!run) return undefined;
-		const now = this.now();
-		this.active.set(runKey(run), createActiveRunClaim(run, workerId, now, this.claimLeaseTtlMs));
-		return copyIdentity(run);
+		const maxScans = this.queued.length;
+		for (let index = 0; index < maxScans; index += 1) {
+			const run = this.queued.shift();
+			if (!run) return undefined;
+			const key = runKey(run);
+			if (this.active.has(key)) continue;
+			const now = this.now();
+			this.active.set(key, createActiveRunClaim(run, workerId, now, this.claimLeaseTtlMs));
+			return copyIdentity(run);
+		}
+		return undefined;
 	}
 
 	async complete(run: AgentV2RunQueueIdentity, workerId: string): Promise<void> {
@@ -398,7 +406,7 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 		const key = runKey(run);
 		await (await this.connectedClient()).eval(REQUEST_CANCEL_SCRIPT, {
 			keys: [this.queueName, this.cancelIndexKey],
-			arguments: [key, String(Date.now() + this.cancelTtlSeconds * 1_000)],
+			arguments: [key, String(Date.now() + this.cancelTtlSeconds * 1_000), String(this.cancelTtlSeconds)],
 		});
 	}
 
@@ -415,7 +423,7 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 		this.assertOpen();
 		const result = await (await this.connectedClient()).eval(CLEAR_SCRIPT, {
 			keys: [this.queueName, this.activeKey, this.cancelIndexKey],
-			arguments: [],
+			arguments: [String(Date.now())],
 		});
 		return parseClearResult(result);
 	}

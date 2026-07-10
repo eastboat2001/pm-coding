@@ -4,7 +4,7 @@ import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Connect } from "vite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { StorageConfig } from "../src/types.js";
 import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 
@@ -27,21 +27,23 @@ describe("configured storage plugin schema init", () => {
 		expect(calls).toEqual(["ensureAgentV2Schema"]);
 	});
 
-	it("initializes the v2 schema on every configured plugin startup without legacy runtime services", () => {
+	it("defers schema initialization until a non-retired API request", async () => {
 		root = mkdtempSync(join(tmpdir(), "pi-vite-plugin-schema-init-"));
-		const runtimeDb = { ensureAgentV2Schema: vi.fn() };
-		const services = createSchemaInitServices(testConfig(root), runtimeDb);
-		const firstConfigureServer = createConfiguredStoragePluginForTest(services).configureServer as (server: {
-			middlewares: { use(handler: Middleware): void };
-		}) => void;
-		const secondConfigureServer = createConfiguredStoragePluginForTest(services).configureServer as (server: {
-			middlewares: { use(handler: Middleware): void };
-		}) => void;
+		const calls: string[] = [];
+		const middleware = createMiddleware(testConfig(root), calls);
 
-		firstConfigureServer(createFakeServer());
-		secondConfigureServer(createFakeServer());
+		expect(calls).toEqual([]);
 
-		expect(runtimeDb.ensureAgentV2Schema).toHaveBeenCalledTimes(2);
+		const retiredResponse = await dispatch(middleware, "/api/runtime/runs/retired-run/events");
+		expect(retiredResponse.statusCode).toBe(410);
+		expect(JSON.parse(retiredResponse.body)).toEqual({
+			error: "Application Generation Agent v1 runtime routes have been removed.",
+		});
+		expect(calls).toEqual([]);
+
+		const activeResponse = await dispatch(middleware, "/api/pi-skills/unknown");
+		expect(activeResponse.statusCode).toBe(404);
+		expect(calls).toEqual(["ensureAgentV2Schema"]);
 	});
 });
 

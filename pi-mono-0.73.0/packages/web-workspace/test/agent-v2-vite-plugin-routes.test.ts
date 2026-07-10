@@ -167,9 +167,9 @@ describe("agent v2 Vite runtime routes", () => {
 		for (const route of cases) {
 			const response = await dispatch(harness.middleware, route);
 			expect(response.statusCode, route.label).toBe(410);
-			expect(JSON.parse(response.body).error, route.label).toBe(
-				"Application Generation Agent v1 runtime routes have been removed.",
-			);
+			expect(JSON.parse(response.body), route.label).toEqual({
+				error: "Application Generation Agent v1 runtime routes have been removed.",
+			});
 			expect(response.headers.get("Content-Type"), route.label).toBe("application/json; charset=utf-8");
 		}
 	});
@@ -188,9 +188,11 @@ describe("agent v2 Vite runtime routes", () => {
 		});
 
 		expect(runResponse.statusCode).toBe(410);
-		expect(JSON.parse(runResponse.body).error).toBe("Application Generation Agent v1 runtime routes have been removed.");
+		expect(JSON.parse(runResponse.body)).toEqual({
+			error: "Application Generation Agent v1 runtime routes have been removed.",
+		});
 		expect(goalResponse.statusCode).toBe(404);
-		expect(JSON.parse(goalResponse.body).error).toBe("Legacy app-preview-goal routes have been removed.");
+		expect(JSON.parse(goalResponse.body)).toEqual({ error: "Legacy app-preview-goal routes have been removed." });
 		expect(() => harness.closeServer()).not.toThrow();
 	});
 
@@ -210,9 +212,9 @@ describe("agent v2 Vite runtime routes", () => {
 		for (const route of sessionCases) {
 			const response = await dispatch(harness.middleware, route);
 			expect(response.statusCode, route.label).toBe(410);
-			expect(JSON.parse(response.body).error, route.label).toBe(
-				"Application Generation Agent v1 runtime session routes have been removed.",
-			);
+			expect(JSON.parse(response.body), route.label).toEqual({
+				error: "Application Generation Agent v1 runtime session routes have been removed.",
+			});
 			expect(response.headers.get("Content-Type"), route.label).toBe("application/json; charset=utf-8");
 		}
 	});
@@ -232,7 +234,8 @@ it("does not expose legacy app-preview-goal routes", async () => {
 
 		expect(getResponse.statusCode).toBe(404);
 		expect(postResponse.statusCode).toBe(404);
-		expect(JSON.parse(getResponse.body).error).toBe("Legacy app-preview-goal routes have been removed.");
+		expect(JSON.parse(getResponse.body)).toEqual({ error: "Legacy app-preview-goal routes have been removed." });
+		expect(JSON.parse(postResponse.body)).toEqual({ error: "Legacy app-preview-goal routes have been removed." });
 	});
 });
 

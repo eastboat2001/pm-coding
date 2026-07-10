@@ -52,12 +52,14 @@ return false
 `;
 const REQUEST_CANCEL_SCRIPT = `
 -- agent-v2-request-cancel
+redis.call("ZREMRANGEBYSCORE", KEYS[2], "-inf", ARGV[4])
 redis.call("ZADD", KEYS[2], ARGV[2], ARGV[1])
 redis.call("EXPIRE", KEYS[2], ARGV[3])
 return redis.call("LREM", KEYS[1], 0, ARGV[1])
 `;
 const CHECK_CANCEL_SCRIPT = `
 -- agent-v2-check-cancel
+redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[2])
 local expiresAtMs = redis.call("ZSCORE", KEYS[1], ARGV[1])
 if not expiresAtMs then
 	return 0
@@ -406,7 +408,12 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 		const key = runKey(run);
 		await (await this.connectedClient()).eval(REQUEST_CANCEL_SCRIPT, {
 			keys: [this.queueName, this.cancelIndexKey],
-			arguments: [key, String(Date.now() + this.cancelTtlSeconds * 1_000), String(this.cancelTtlSeconds)],
+			arguments: [
+				key,
+				String(Date.now() + this.cancelTtlSeconds * 1_000),
+				String(this.cancelTtlSeconds),
+				String(Date.now()),
+			],
 		});
 	}
 

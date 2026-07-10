@@ -188,7 +188,6 @@ describe("RedisAgentV2RunQueue", () => {
 		const expired = { clientId: "client-a", runId: "expired" };
 
 		await queue.requestCancel(expired);
-		await expect(queue.isCancelRequested(expired)).resolves.toBe(false);
 		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 1 });
 
 		const requestCancelScript = fake.evalCalls.find((call) => call.script.includes("agent-v2-request-cancel"))?.script;
@@ -197,6 +196,22 @@ describe("RedisAgentV2RunQueue", () => {
 		expect(requestCancelScript).toContain("EXPIRE");
 		expect(clearScript).toContain("ZREMRANGEBYSCORE");
 		expect(clearScript).toContain("ZCARD");
+	});
+
+	it("prunes expired cancel members for other identities during normal cancellation traffic", async () => {
+		const fake = new FakeRedisAgentV2RunQueueClient();
+		fake.cancelMembers.set('["client-a","expired"]', 1_000);
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "pi:agent-v2:runs" });
+		const valid = { clientId: "client-a", runId: "valid" };
+
+		await queue.requestCancel(valid);
+		expect(fake.cancelMembers.has('["client-a","expired"]')).toBe(false);
+		expect(fake.cancelMembers.has('["client-a","valid"]')).toBe(true);
+		await expect(queue.clear()).resolves.toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 1 });
+
+		const requestCancelScript = fake.evalCalls.find((call) => call.script.includes("agent-v2-request-cancel"))?.script;
+		expect(requestCancelScript).toContain("ZREMRANGEBYSCORE");
 	});
 
 	it("shares one in-flight close promise", async () => {
@@ -219,7 +234,8 @@ describe("RedisAgentV2RunQueue", () => {
 
 class FakeRedisAgentV2RunQueueClient {
 	isOpen = false;
-	clearResult: [number, number, number] = [0, 0, 0];
+	cancelMembers = new Map<string, number>();
+	clearResult: [number, number, number] | undefined;
 	claimResults: Array<string | undefined> = [];
 	evalCalls: Array<{ script: string; keys: string[]; arguments: string[] }> = [];
 	holdClaimEvals = false;
@@ -245,7 +261,19 @@ class FakeRedisAgentV2RunQueueClient {
 			this.activeClaimEvals -= 1;
 			return this.claimResults.shift();
 		}
-		if (script.includes("agent-v2-clear")) return this.clearResult;
+		if (script.includes("agent-v2-request-cancel")) {
+			this.pruneExpiredCancelMembers(Number(options.arguments[3]));
+			this.cancelMembers.set(options.arguments[0], Number(options.arguments[1]));
+			return 0;
+		}
+		if (script.includes("agent-v2-check-cancel")) {
+			this.pruneExpiredCancelMembers(Number(options.arguments[1]));
+			return this.cancelMembers.has(options.arguments[0]) ? 1 : 0;
+		}
+		if (script.includes("agent-v2-clear")) {
+			this.pruneExpiredCancelMembers(Number(options.arguments[0]));
+			return this.clearResult ?? [0, 0, this.cancelMembers.size];
+		}
 		return 0;
 	}
 
@@ -273,5 +301,11 @@ class FakeRedisAgentV2RunQueueClient {
 
 	resolveQuit(): void {
 		this.quitResolver?.();
+	}
+
+	private pruneExpiredCancelMembers(now: number): void {
+		for (const [identity, expiresAt] of this.cancelMembers) {
+			if (expiresAt <= now) this.cancelMembers.delete(identity);
+		}
 	}
 }

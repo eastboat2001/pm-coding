@@ -10,15 +10,9 @@ import { loadStorageConfig } from "../src/config.js";
 import { API_PREFIX, PREVIEW_PREFIX } from "../src/constants.js";
 import { PostgresRuntimeStore } from "../src/postgres-runtime-store.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
-import { createRuntimeStore } from "../src/runtime-store-factory.js";
+import { createAgentV2RuntimeStore } from "../src/runtime-store-factory.js";
 import type { StorageConfig } from "../src/types.js";
 import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
-
-const baseConfig = {
-	runtimeStore: "postgres" as const,
-	postgresUrl: "postgres://user:pass@example.com:5432/pi",
-	runtimeDbFile: "/tmp/pi-runtime.sqlite",
-};
 
 const testRoots: string[] = [];
 
@@ -28,17 +22,46 @@ afterEach(() => {
 	}
 });
 
-describe("createRuntimeStore", () => {
+describe("createAgentV2RuntimeStore", () => {
 	it("creates a Postgres runtime store by default", () => {
-		const store = createRuntimeStore(baseConfig);
+		const store = createAgentV2RuntimeStore(createRuntimeConfig("postgres"));
 
 		expect(store).toBeInstanceOf(PostgresRuntimeStore);
 	});
 
 	it("creates a SQLite runtime store when configured", () => {
-		const store = createRuntimeStore({ ...baseConfig, runtimeStore: "sqlite" });
+		const store = createAgentV2RuntimeStore(createRuntimeConfig("sqlite"));
 
 		expect(store).toBeInstanceOf(RuntimeDbStore);
+		store.close();
+	});
+
+	it("exposes every v2 production capability through the composite store", () => {
+		const store = createAgentV2RuntimeStore(createRuntimeConfig("sqlite"));
+		const capabilities = [
+			"ensureAgentV2Schema",
+			"createAgentV2Run",
+			"getAgentV2Run",
+			"listAgentV2Runs",
+			"updateAgentV2Run",
+			"updateAgentV2RunWithResult",
+			"listAgentV2RunsByWorker",
+			"appendAgentV2RunEvent",
+			"listAgentV2RunEvents",
+			"listAgentV2Tasks",
+			"listAgentV2Artifacts",
+			"listAgentV2Documents",
+			"listAgentV2Diagnostics",
+			"upsertAgentV2Task",
+			"upsertAgentV2Artifact",
+			"upsertAgentV2Validation",
+			"appendAgentV2Diagnostic",
+			"resetAgentV2RuntimeData",
+			"close",
+		] as const;
+
+		for (const capability of capabilities) expect(store[capability], capability).toBeTypeOf("function");
+		store.close();
 	});
 
 	it("resets v2 runtime data through the SQLite reset rehearsal path", () => {
@@ -46,7 +69,7 @@ describe("createRuntimeStore", () => {
 		let store: RuntimeDbStore | undefined;
 		try {
 			const config = { ...loadStorageConfig(root), runtimeStore: "sqlite" as const };
-			const createdStore = createRuntimeStore(config);
+			const createdStore = createAgentV2RuntimeStore(config);
 			if (!(createdStore instanceof RuntimeDbStore)) throw new Error("expected SQLite runtime store");
 			store = createdStore;
 			store.ensureAgentV2Schema();
@@ -68,6 +91,16 @@ describe("createRuntimeStore", () => {
 		}
 	});
 });
+
+function createRuntimeConfig(runtimeStore: "postgres" | "sqlite"): StorageConfig {
+	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-runtime-store-"));
+	testRoots.push(root);
+	return {
+		...loadStorageConfig(root),
+		runtimeStore,
+		postgresUrl: "postgres://user:pass@example.com:5432/pi",
+	};
+}
 
 describe("configured storage plugin agent v2 schema initialization", () => {
 	it("awaits runtime schema initialization before serving preview requests", async () => {
@@ -283,24 +316,13 @@ function createTestConfig(): StorageConfig {
 		redisUrl: "redis://127.0.0.1:6379",
 		runtimeStore: "sqlite",
 		postgresUrl: "postgres://user:pass@example.com:5432/pi",
-		runsEnabled: true,
 		workerId: "test-worker",
 		workerConcurrency: 1,
-		runMaxAgentTurns: 80,
-		runMaxAgentToolExecutions: 240,
-		runRetryMaxAttempts: 8,
-		runRetryBaseDelayMs: 2000,
-		runRetryMaxDelayMs: 60000,
-		runRetryJitterRatio: 0.2,
-		runQueueName: "test-runs",
-		agentV2RunQueueName: "pi:agent-v2:runs",
-		runEventRetentionDays: 30,
-		runEventStreamMaxLen: 100,
-		runEventStreamTtlSeconds: 60,
-		agentV2RunEventStreamMaxLen: 5000,
-		agentV2RunEventStreamTtlSeconds: 3600,
-		runEventCheckpointIntervalMs: 100,
-		runEventCheckpointMinChars: 16,
+		agentV2: {
+			queueName: "pi:agent-v2:runs",
+			eventStreamMaxLen: 5000,
+			eventStreamTtlSeconds: 3600,
+		},
 		clientIdRequired: false,
 		previewBaseUrl: "",
 		projectInstallCommand: "npm install",

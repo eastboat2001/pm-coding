@@ -11,7 +11,7 @@ import { API_PREFIX, LOGS_API_PREFIX, PREVIEW_PREFIX, PROJECTS_API_PREFIX, RUNS_
 import { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 import { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
-import { createRuntimeStore } from "./runtime-store-factory.js";
+import { createAgentV2RuntimeStore } from "./runtime-store-factory.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { sanitizePathComponent } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
@@ -31,16 +31,16 @@ export function configuredStoragePlugin(envFile) {
     const previews = new WorkspacePreviewService(config, diagnostics);
     const tasks = new WorkspaceTaskService(config, previews, undefined, diagnostics);
     const skills = new WorkspaceSkillService(config, diagnostics);
-    const runtimeDb = createRuntimeStore(config);
+    const runtimeDb = createAgentV2RuntimeStore(config);
     const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
     const agentV2RunQueue = createRedisAgentV2RunQueue({
         redisUrl: config.redisUrl,
-        queueName: config.agentV2RunQueueName,
+        queueName: config.agentV2.queueName,
     });
     const agentV2RunEventBus = new RedisAgentV2RunEventBus({
         redisUrl: config.redisUrl,
-        maxLen: config.agentV2RunEventStreamMaxLen,
-        ttlSeconds: config.agentV2RunEventStreamTtlSeconds,
+        maxLen: config.agentV2.eventStreamMaxLen,
+        ttlSeconds: config.agentV2.eventStreamTtlSeconds,
     });
     const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
     const agentV2RunApi = new AgentV2RunApiService({
@@ -215,19 +215,12 @@ export function createStartupDiagnosticEvents(config) {
             data: {
                 envFile: config.envFile,
                 envFileExists: config.envFileExists,
-                runsEnabled: config.runsEnabled,
                 redisUrl: redactConnectionUrl(config.redisUrl),
-                agentV2RunQueueName: config.agentV2RunQueueName,
+                agentV2: config.agentV2,
                 runtimeDbFile: config.runtimeDbFile,
                 clientsRootDir: config.clientsRootDir,
                 workerId: config.workerId,
                 workerConcurrency: config.workerConcurrency,
-                runMaxAgentTurns: config.runMaxAgentTurns,
-                runMaxAgentToolExecutions: config.runMaxAgentToolExecutions,
-                runRetryMaxAttempts: config.runRetryMaxAttempts,
-                runRetryBaseDelayMs: config.runRetryBaseDelayMs,
-                runRetryMaxDelayMs: config.runRetryMaxDelayMs,
-                runRetryJitterRatio: config.runRetryJitterRatio,
                 clientIdRequired: config.clientIdRequired,
                 loggingEnabled: config.loggingEnabled,
                 logStdoutEnabled: config.logStdoutEnabled,
@@ -377,16 +370,10 @@ async function handleStorageApi(method, route, req, res, config, sessions) {
             envFile: config.envFile,
             envFileExists: config.envFileExists,
             runtimeDbFile: config.runtimeDbFile,
-            runsEnabled: config.runsEnabled,
             redisUrl: redactConnectionUrl(config.redisUrl),
             workerId: config.workerId,
             workerConcurrency: config.workerConcurrency,
-            agentV2RunQueueName: config.agentV2RunQueueName,
-            runEventRetentionDays: config.runEventRetentionDays,
-            runRetryMaxAttempts: config.runRetryMaxAttempts,
-            runRetryBaseDelayMs: config.runRetryBaseDelayMs,
-            runRetryMaxDelayMs: config.runRetryMaxDelayMs,
-            runRetryJitterRatio: config.runRetryJitterRatio,
+            agentV2: config.agentV2,
             clientIdRequired: config.clientIdRequired,
             logsDbFile: config.logsDbFile,
             loggingEnabled: config.loggingEnabled,

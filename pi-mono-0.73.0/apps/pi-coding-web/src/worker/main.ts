@@ -11,11 +11,11 @@ import {
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
 	type RedisAgentV2RunEventBusOptions,
-	type AgentV2WorkerStore,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
 import {
+	createAgentV2RuntimeStore,
 	createRedisAgentV2RunQueue,
-	createRuntimeStore,
+	type AgentV2ProductionStore,
 	type AgentV2SchemaStore,
 	type DiagnosticLogEventInput,
 	type JsonObject,
@@ -25,8 +25,6 @@ import {
 } from "@mariozechner/pi-web-workspace/runtime-infra";
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
-type WorkerV2Db = ReturnType<typeof createRuntimeStore>;
-type WorkerV2ExecutionStore = AgentV2SchemaStore & AgentV2WorkerStore & WorkerV2Db;
 
 export async function ensureRuntimeSchemas(
 	runtimeDb: AgentV2SchemaStore,
@@ -41,23 +39,26 @@ export function createAgentV2WorkerRunEventOptions(config: StorageConfig): {
 	return {
 		queue: {
 			redisUrl: config.redisUrl,
-			queueName: config.agentV2RunQueueName,
+			queueName: config.agentV2.queueName,
 		},
 		bus: {
 			redisUrl: config.redisUrl,
-			maxLen: config.agentV2RunEventStreamMaxLen,
-			ttlSeconds: config.agentV2RunEventStreamTtlSeconds,
+			maxLen: config.agentV2.eventStreamMaxLen,
+			ttlSeconds: config.agentV2.eventStreamTtlSeconds,
 		},
 	};
 }
 
-export function createAgentV2WorkerExecution(config: StorageConfig): AgentV2WorkerExecution {
+export function createAgentV2WorkerExecution(
+	config: StorageConfig,
+	store: AgentV2ProductionStore,
+): AgentV2WorkerExecution {
 	return {
 		async executeNextTask(
 			input: AgentV2WorkerExecutionInput,
 		): Promise<Awaited<ReturnType<typeof executeAgentV2NextTask>>> {
 			return await executeAgentV2NextTask({
-				store: input.store as WorkerV2ExecutionStore,
+				store,
 				config,
 				context: agentV2ContextFromRunInput(input.run),
 				runId: input.run.runId,
@@ -91,23 +92,23 @@ async function main(): Promise<void> {
 				data: {
 					workerId: config.workerId,
 					workerConcurrency: config.workerConcurrency,
-					agentV2RunQueueName: config.agentV2RunQueueName,
+					agentV2: config.agentV2,
 				},
 			},
 		],
 	});
 
-	let runtimeDb: WorkerV2ExecutionStore | undefined;
+	let runtimeDb: AgentV2ProductionStore | undefined;
 	let agentV2RunEventBus: RedisAgentV2RunEventBus | undefined;
 	let worker: AgentV2WorkerService | undefined;
 	try {
-		runtimeDb = createRuntimeStore(config) as AgentV2SchemaStore & AgentV2WorkerStore & WorkerV2Db;
+		runtimeDb = createAgentV2RuntimeStore(config);
 		await ensureRuntimeSchemas(runtimeDb);
 
 		const options = createAgentV2WorkerRunEventOptions(config);
 		const queue: AgentV2RunQueue = createRedisAgentV2RunQueue({
 			redisUrl: config.redisUrl,
-			queueName: config.agentV2RunQueueName,
+			queueName: config.agentV2.queueName,
 		});
 		agentV2RunEventBus = new RedisAgentV2RunEventBus(options.bus);
 		const events = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
@@ -115,7 +116,7 @@ async function main(): Promise<void> {
 			store: runtimeDb,
 			queue,
 			events,
-			execution: createAgentV2WorkerExecution(config),
+			execution: createAgentV2WorkerExecution(config, runtimeDb),
 			workerId: config.workerId,
 			concurrency: config.workerConcurrency,
 		});
@@ -148,7 +149,7 @@ async function main(): Promise<void> {
 
 		await worker.start();
 		console.log(
-			`PI agent v2 worker ${config.workerId} started with concurrency ${config.workerConcurrency} on queue ${config.agentV2RunQueueName}.`,
+			`PI agent v2 worker ${config.workerId} started with concurrency ${config.workerConcurrency} on queue ${config.agentV2.queueName}.`,
 		);
 	} catch (error) {
 		writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.start_failed", "error", {
@@ -165,7 +166,7 @@ async function main(): Promise<void> {
 export async function stopWorkerRuntime(input: {
 	worker?: AgentV2WorkerService;
 	agentV2RunEventBus?: RedisAgentV2RunEventBus;
-	runtimeDb?: WorkerV2Db;
+	runtimeDb?: AgentV2ProductionStore;
 	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse">;
 }): Promise<number> {
 	let exitCode = 0;
@@ -206,15 +207,11 @@ export function createWorkerStartupDiagnosticEvents(config: StorageConfig): Diag
 			data: {
 				envFile: config.envFile,
 				envFileExists,
-				runsEnabled: config.runsEnabled,
 				redisUrl: redactConnectionUrl(config.redisUrl),
-				runQueueName: config.runQueueName,
-				agentV2RunQueueName: config.agentV2RunQueueName,
+				agentV2: config.agentV2,
 				runtimeDbFile: config.runtimeDbFile,
 				workerId: config.workerId,
 				workerConcurrency: config.workerConcurrency,
-				agentV2RunEventStreamMaxLen: config.agentV2RunEventStreamMaxLen,
-				agentV2RunEventStreamTtlSeconds: config.agentV2RunEventStreamTtlSeconds,
 				clientIdRequired: config.clientIdRequired,
 				loggingEnabled: config.loggingEnabled,
 				logStdoutEnabled: config.logStdoutEnabled,
@@ -316,7 +313,7 @@ function writeWorkerProcessDiagnostic(
 				data: {
 					workerId: config.workerId,
 					workerConcurrency: config.workerConcurrency,
-					agentV2RunQueueName: config.agentV2RunQueueName,
+					agentV2: config.agentV2,
 					...data,
 				},
 			},

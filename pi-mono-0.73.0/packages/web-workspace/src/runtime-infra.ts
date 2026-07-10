@@ -10,7 +10,7 @@ export {
 	createAgentV2RunQueue,
 	createRedisAgentV2RunQueue,
 } from "./agent-v2-run-queue.js";
-export { createRuntimeStore } from "./runtime-store-factory.js";
+export { createAgentV2RuntimeStore, type AgentV2ProductionStore } from "./runtime-store-factory.js";
 export type {
 	AgentV2DiagnosticExportStore,
 	AgentV2ResetStore,
@@ -19,4 +19,4 @@ export type {
 	AgentV2SchemaStore,
 	AgentV2WorkerStore,
 } from "./agent-v2-runtime-store.js";
-export type { DiagnosticLogEventInput, JsonObject, StorageConfig } from "./types.js";
+export type { AgentV2RuntimeConfig, DiagnosticLogEventInput, JsonObject, StorageConfig } from "./types.js";

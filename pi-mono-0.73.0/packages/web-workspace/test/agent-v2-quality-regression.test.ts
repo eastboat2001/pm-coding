@@ -488,7 +488,6 @@ describe("agent v2 quality regression", () => {
 			join(repoRoot, "docs", "superpowers", "specs", "2026-07-08-application-generation-agent-v2-phase4-design.md"),
 		];
 		const sourceFiles = [
-			join(repoRoot, "apps", "pi-coding-web", "src", "agent-v2", "runtime-entry.ts"),
 			join(repoRoot, "apps", "pi-coding-web", "src", "worker", "main.ts"),
 			join(repoRoot, "packages", "web-workspace", "src", "vite-plugin.ts"),
 		];

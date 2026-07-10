@@ -264,6 +264,12 @@ export interface AppendAppPreviewGoalEventInput extends JsonObject {
 	createdAt?: string;
 }
 
+export interface AgentV2RuntimeConfig {
+	queueName: string;
+	eventStreamMaxLen: number;
+	eventStreamTtlSeconds: number;
+}
+
 export interface StorageConfig {
 	settingsFile: string;
 	clientsRootDir: string;
@@ -273,24 +279,9 @@ export interface StorageConfig {
 	redisUrl: string;
 	runtimeStore: "postgres" | "sqlite";
 	postgresUrl: string;
-	runsEnabled: boolean;
+	agentV2: AgentV2RuntimeConfig;
 	workerId: string;
 	workerConcurrency: number;
-	runMaxAgentTurns: number;
-	runMaxAgentToolExecutions: number;
-	runRetryMaxAttempts: number;
-	runRetryBaseDelayMs: number;
-	runRetryMaxDelayMs: number;
-	runRetryJitterRatio: number;
-	runQueueName: string;
-	agentV2RunQueueName: string;
-	runEventRetentionDays: number;
-	runEventStreamMaxLen: number;
-	runEventStreamTtlSeconds: number;
-	agentV2RunEventStreamMaxLen: number;
-	agentV2RunEventStreamTtlSeconds: number;
-	runEventCheckpointIntervalMs: number;
-	runEventCheckpointMinChars: number;
 	clientIdRequired: boolean;
 	previewBaseUrl: string;
 	projectInstallCommand: string;

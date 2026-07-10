@@ -1,8 +1,35 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { CONFIG_ENV_FILE } from "./constants.js";
+const RETIRED_APPLICATION_GENERATION_ENV = [
+    "PI_APP_AGENT_VERSION",
+    "PI_RUNS_ENABLED",
+    "PI_RUN_QUEUE_NAME",
+    "PI_RUN_EVENT_RETENTION_DAYS",
+    "PI_RUN_EVENT_STREAM_MAXLEN",
+    "PI_RUN_EVENT_STREAM_TTL_SECONDS",
+    "PI_RUN_EVENT_CHECKPOINT_INTERVAL_MS",
+    "PI_RUN_EVENT_CHECKPOINT_MIN_CHARS",
+    "PI_RUN_RETRY_MAX_ATTEMPTS",
+    "PI_RUN_RETRY_BASE_DELAY_MS",
+    "PI_RUN_RETRY_MAX_DELAY_MS",
+    "PI_RUN_RETRY_JITTER_RATIO",
+    "PI_RUN_MAX_AGENT_TURNS",
+    "PI_RUN_MAX_AGENT_TOOL_EXECUTIONS",
+];
+export class RetiredApplicationGenerationConfigError extends Error {
+    variables;
+    constructor(variables) {
+        super(`Retired application generation configuration is not supported: ${variables.join(", ")}`);
+        this.variables = variables;
+        this.name = "RetiredApplicationGenerationConfigError";
+    }
+}
 export function loadStorageConfig(rootDir, envFile = CONFIG_ENV_FILE) {
     const configEnv = loadConfigEnvFile(rootDir, stringValue(process.env.PI_STORAGE_ENV_FILE) || stringValue(envFile) || CONFIG_ENV_FILE);
+    const retiredVariables = RETIRED_APPLICATION_GENERATION_ENV.filter((name) => process.env[name] !== undefined || Object.hasOwn(configEnv.values, name));
+    if (retiredVariables.length > 0)
+        throw new RetiredApplicationGenerationConfigError([...retiredVariables]);
     const env = (name) => envValue(name, configEnv.values);
     const envStorageDir = stringValue(env("PI_STORAGE_DIR"));
     const storageDir = envStorageDir ? resolveConfiguredPath(rootDir, envStorageDir) : undefined;
@@ -18,24 +45,13 @@ export function loadStorageConfig(rootDir, envFile = CONFIG_ENV_FILE) {
         redisUrl: stringValue(env("PI_REDIS_URL")) || "redis://127.0.0.1:6379",
         runtimeStore: stringValue(env("PI_RUNTIME_STORE")) === "sqlite" ? "sqlite" : "postgres",
         postgresUrl: stringValue(env("PI_POSTGRES_URL")) || "postgres://pi:pi@postgres:5432/pi_coding",
-        runsEnabled: envBooleanValue(env("PI_RUNS_ENABLED")) ?? true,
+        agentV2: {
+            queueName: stringValue(env("PI_AGENT_V2_RUN_QUEUE_NAME")) || "pi:agent-v2:runs",
+            eventStreamMaxLen: positiveIntegerValue(env("PI_AGENT_V2_RUN_EVENT_STREAM_MAXLEN"), 5000),
+            eventStreamTtlSeconds: positiveIntegerValue(env("PI_AGENT_V2_RUN_EVENT_STREAM_TTL_SECONDS"), 3600),
+        },
         workerId: stringValue(env("PI_WORKER_ID")) || "pi-worker",
         workerConcurrency: positiveIntegerValue(env("PI_WORKER_CONCURRENCY"), 2),
-        runMaxAgentTurns: nonNegativeIntegerValue(env("PI_RUN_MAX_AGENT_TURNS"), 80),
-        runMaxAgentToolExecutions: nonNegativeIntegerValue(env("PI_RUN_MAX_AGENT_TOOL_EXECUTIONS"), 240),
-        runRetryMaxAttempts: positiveIntegerValue(env("PI_RUN_RETRY_MAX_ATTEMPTS"), 8),
-        runRetryBaseDelayMs: positiveIntegerValue(env("PI_RUN_RETRY_BASE_DELAY_MS"), 2000),
-        runRetryMaxDelayMs: positiveIntegerValue(env("PI_RUN_RETRY_MAX_DELAY_MS"), 60000),
-        runRetryJitterRatio: boundedNumberValue(env("PI_RUN_RETRY_JITTER_RATIO"), 0.2, 0, 1),
-        runQueueName: stringValue(env("PI_RUN_QUEUE_NAME")) || "pi:runs",
-        agentV2RunQueueName: stringValue(env("PI_AGENT_V2_RUN_QUEUE_NAME")) || "pi:agent-v2:runs",
-        runEventRetentionDays: nonNegativeIntegerValue(env("PI_RUN_EVENT_RETENTION_DAYS"), 30),
-        runEventStreamMaxLen: positiveIntegerValue(env("PI_RUN_EVENT_STREAM_MAXLEN"), 5000),
-        runEventStreamTtlSeconds: positiveIntegerValue(env("PI_RUN_EVENT_STREAM_TTL_SECONDS"), 3600),
-        agentV2RunEventStreamMaxLen: positiveIntegerValue(env("PI_AGENT_V2_RUN_EVENT_STREAM_MAXLEN"), 5000),
-        agentV2RunEventStreamTtlSeconds: positiveIntegerValue(env("PI_AGENT_V2_RUN_EVENT_STREAM_TTL_SECONDS"), 3600),
-        runEventCheckpointIntervalMs: positiveIntegerValue(env("PI_RUN_EVENT_CHECKPOINT_INTERVAL_MS"), 400),
-        runEventCheckpointMinChars: positiveIntegerValue(env("PI_RUN_EVENT_CHECKPOINT_MIN_CHARS"), 256),
         clientIdRequired: envBooleanValue(env("PI_CLIENT_ID_REQUIRED")) ?? true,
         previewBaseUrl: normalizedHostValue(stringValue(env("PI_PREVIEW_BASE_URL"))),
         projectInstallCommand: stringValue(env("PI_PROJECT_INSTALL_COMMAND")) || "npm install",
@@ -160,23 +176,11 @@ function nonNegativeIntegerValue(envValue, defaultValue) {
         return envNumber;
     return defaultValue;
 }
-function boundedNumberValue(envValue, defaultValue, min, max) {
-    const envNumber = numberFromString(envValue);
-    if (envNumber !== undefined)
-        return Math.min(Math.max(envNumber, min), max);
-    return defaultValue;
-}
 function integerFromString(value) {
     if (value === undefined)
         return undefined;
     const parsed = Number(value.trim());
     return Number.isFinite(parsed) ? Math.round(parsed) : undefined;
-}
-function numberFromString(value) {
-    if (value === undefined)
-        return undefined;
-    const parsed = Number(value.trim());
-    return Number.isFinite(parsed) ? parsed : undefined;
 }
 function envBooleanValue(value) {
     if (value === undefined)

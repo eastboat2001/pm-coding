@@ -212,7 +212,7 @@ export {
 	type AgentV2WorkerStore,
 } from "./agent-v2-worker-service.js";
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
-export { loadStorageConfig } from "./config.js";
+export { loadStorageConfig, RetiredApplicationGenerationConfigError } from "./config.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export type { LangfuseDiagnosticEvent, LangfuseExporterStatus } from "./langfuse-exporter.js";
@@ -226,7 +226,7 @@ export {
 } from "./preview-readiness-checker.js";
 export { type RetryClassification, RetryPolicy, type RetryPolicyOptions } from "./retry-policy.js";
 export { RuntimeDbStore } from "./runtime-db.js";
-export { createRuntimeStore } from "./runtime-store-factory.js";
+export { createAgentV2RuntimeStore, type AgentV2ProductionStore } from "./runtime-store-factory.js";
 export type { ServerDirectAgentTool } from "./server-agent-tools.js";
 export { createServerDirectProjectTools, createServerDirectSkillTools } from "./server-agent-tools.js";
 export type { SkillLoadParams, SkillResourceParams } from "./skill-tool-contract.js";
@@ -239,6 +239,7 @@ export {
 } from "./skill-tool-contract.js";
 export type {
 	AppendMessageInput,
+	AgentV2RuntimeConfig,
 	AppendRunEventInput,
 	DiagnosticLogCategory,
 	DiagnosticLogEventInput,

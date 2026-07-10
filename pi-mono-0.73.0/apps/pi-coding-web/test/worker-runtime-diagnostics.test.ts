@@ -26,10 +26,11 @@ describe("worker runtime diagnostics", () => {
 		dir = mkdtempSync(join(tmpdir(), "pi-worker-runtime-v2-startup-"));
 		const config = {
 			...loadStorageConfig(dir),
-			runQueueName: "legacy-runs",
-			agentV2RunQueueName: "agent-v2-runs",
-			agentV2RunEventStreamMaxLen: 4321,
-			agentV2RunEventStreamTtlSeconds: 8765,
+			agentV2: {
+				queueName: "agent-v2-runs",
+				eventStreamMaxLen: 4321,
+				eventStreamTtlSeconds: 8765,
+			},
 		};
 
 		const events = createWorkerStartupDiagnosticEvents(config);
@@ -38,10 +39,11 @@ describe("worker runtime diagnostics", () => {
 			expect.objectContaining({
 				eventType: "system.startup.config",
 				data: expect.objectContaining({
-					runQueueName: "legacy-runs",
-					agentV2RunQueueName: "agent-v2-runs",
-					agentV2RunEventStreamMaxLen: 4321,
-					agentV2RunEventStreamTtlSeconds: 8765,
+					agentV2: {
+						queueName: "agent-v2-runs",
+						eventStreamMaxLen: 4321,
+						eventStreamTtlSeconds: 8765,
+					},
 				}),
 			}),
 		);
@@ -50,6 +52,8 @@ describe("worker runtime diagnostics", () => {
 				eventType: "system.startup.config",
 				data: expect.not.objectContaining({
 					appAgentVersion: expect.anything(),
+					runsEnabled: expect.anything(),
+					runQueueName: expect.anything(),
 				}),
 			}),
 		);
@@ -64,9 +68,11 @@ describe("worker runtime diagnostics", () => {
 		const config = {
 			...loadStorageConfig(dir),
 			redisUrl: "redis://127.0.0.1:6381",
-			agentV2RunQueueName: "agent-v2-runs",
-			agentV2RunEventStreamMaxLen: 2222,
-			agentV2RunEventStreamTtlSeconds: 3333,
+			agentV2: {
+				queueName: "agent-v2-runs",
+				eventStreamMaxLen: 2222,
+				eventStreamTtlSeconds: 3333,
+			},
 		};
 
 		const options = createAgentV2WorkerRunEventOptions(config);
@@ -101,7 +107,7 @@ describe("worker runtime diagnostics", () => {
 			controller.abort(new Error("worker cancellation"));
 
 			await expect(
-				createAgentV2WorkerExecution(config).executeNextTask({
+				createAgentV2WorkerExecution(config, db).executeNextTask({
 					store: db,
 					run,
 					workerId: "worker-1",
@@ -190,7 +196,7 @@ describe("worker runtime diagnostics", () => {
 						data: expect.objectContaining({
 							workerId: config.workerId,
 							workerConcurrency: config.workerConcurrency,
-							agentV2RunQueueName: config.agentV2RunQueueName,
+							agentV2: config.agentV2,
 							name: "Error",
 							message: "fatal worker failure",
 						}),

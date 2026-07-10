@@ -26,10 +26,11 @@ function testConfig(root, overrides = {}) {
 		skillsDir: join(root, "data", "skills"),
 		defaultSkillsDir: join(root, "data", "default-skills"),
 		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
-		runRetryMaxAttempts: 8,
-		runRetryBaseDelayMs: 2000,
-		runRetryMaxDelayMs: 60000,
-		runRetryJitterRatio: 0.2,
+		agentV2: {
+			queueName: "pi:agent-v2:runs",
+			eventStreamMaxLen: 5000,
+			eventStreamTtlSeconds: 3600,
+		},
 		previewBaseUrl: "http://localhost:5173",
 		projectInstallCommand: "npm install",
 		projectBuildCommand: "npm run build",
@@ -115,10 +116,11 @@ await test("loadStorageConfig reads .env from the app root and strips preview tr
 	assert.equal(config.modelOutputSnapshotLoggingEnabled, false);
 	assert.equal(config.modelOutputSnapshotMaxChars, 20000);
 	assert.equal(config.modelStreamIdleTimeoutMs, 60000);
-	assert.equal(config.runRetryMaxAttempts, 8);
-	assert.equal(config.runRetryBaseDelayMs, 2000);
-	assert.equal(config.runRetryMaxDelayMs, 60000);
-	assert.equal(config.runRetryJitterRatio, 0.2);
+	assert.deepEqual(config.agentV2, {
+		queueName: "pi:agent-v2:runs",
+		eventStreamMaxLen: 5000,
+		eventStreamTtlSeconds: 3600,
+	});
 	assert.equal(config.modelMaxOutputTokens, 12000);
 	assert.equal(config.contextProviderPayloadBudgetChars, 90000);
 	assert.equal(config.logRetentionDays, 30);
@@ -296,10 +298,6 @@ await test("loadStorageConfig supports diagnostic log and Langfuse env settings"
 			"PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED=true",
 			"PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS=8765",
 			"PI_MODEL_STREAM_IDLE_TIMEOUT_MS=2345",
-			"PI_RUN_RETRY_MAX_ATTEMPTS=10",
-			"PI_RUN_RETRY_BASE_DELAY_MS=1500",
-			"PI_RUN_RETRY_MAX_DELAY_MS=90000",
-			"PI_RUN_RETRY_JITTER_RATIO=0.35",
 			"PI_MODEL_MAX_OUTPUT_TOKENS=6789",
 			"PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS=76543",
 			"PI_LOG_RETENTION_DAYS=7",
@@ -336,10 +334,6 @@ await test("loadStorageConfig supports diagnostic log and Langfuse env settings"
 	assert.equal(config.modelOutputSnapshotLoggingEnabled, true);
 	assert.equal(config.modelOutputSnapshotMaxChars, 8765);
 	assert.equal(config.modelStreamIdleTimeoutMs, 2345);
-	assert.equal(config.runRetryMaxAttempts, 10);
-	assert.equal(config.runRetryBaseDelayMs, 1500);
-	assert.equal(config.runRetryMaxDelayMs, 90000);
-	assert.equal(config.runRetryJitterRatio, 0.35);
 	assert.equal(config.modelMaxOutputTokens, 6789);
 	assert.equal(config.contextProviderPayloadBudgetChars, 76543);
 	assert.equal(config.logRetentionDays, 7);

@@ -22,14 +22,14 @@ export { AGENT_V2_PHASES, AGENT_V2_RUN_EVENT_TYPES, AGENT_V2_RUN_STATUSES, AGENT
 export { runAgentV2StaticValidationGate, } from "./agent-v2-validation-gate.js";
 export { AgentV2WorkerService, } from "./agent-v2-worker-service.js";
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
-export { loadStorageConfig } from "./config.js";
+export { loadStorageConfig, RetiredApplicationGenerationConfigError } from "./config.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export { LangfuseDiagnosticExporter } from "./langfuse-exporter.js";
 export { PreviewReadinessChecker, } from "./preview-readiness-checker.js";
 export { RetryPolicy } from "./retry-policy.js";
 export { RuntimeDbStore } from "./runtime-db.js";
-export { createRuntimeStore } from "./runtime-store-factory.js";
+export { createAgentV2RuntimeStore } from "./runtime-store-factory.js";
 export { createServerDirectProjectTools, createServerDirectSkillTools } from "./server-agent-tools.js";
 export { formatSkillLoadResult, prepareSkillLoadArguments, prepareSkillResourceArguments, skillLoadSchema, skillResourceSchema, } from "./skill-tool-contract.js";
 export { configuredStoragePlugin } from "./vite-plugin.js";

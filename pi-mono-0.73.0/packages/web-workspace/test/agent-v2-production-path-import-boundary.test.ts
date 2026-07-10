@@ -203,10 +203,12 @@ describe("agent v2 production import boundary", () => {
 		expect(source).toContain('from "@mariozechner/pi-web-workspace/runtime-infra"');
 		expect(source).toContain("createRedisAgentV2RunQueue");
 		expect(source).toContain("AgentV2SchemaStore");
-		expect(source).toContain("AgentV2WorkerStore");
-		expect(agentV2RuntimeImport).toContain("type AgentV2WorkerStore");
+		expect(source).toContain("AgentV2ProductionStore");
+		expect(source).not.toContain("AgentV2WorkerStore");
 		expect(agentV2RuntimeImport).toContain("type AgentV2RunQueue");
 		expect(runtimeInfraImport).toContain("createRedisAgentV2RunQueue");
+		expect(runtimeInfraImport).toContain("createAgentV2RuntimeStore");
+		expect(runtimeInfraImport).toContain("type AgentV2ProductionStore");
 		expect(runtimeInfraImport).toContain("type AgentV2SchemaStore");
 	});
 
@@ -216,6 +218,32 @@ describe("agent v2 production import boundary", () => {
 		expect(source).not.toMatch(/\bRuntimeStore\b/);
 		expect(source).not.toContain("./runtime-store.js");
 		expect(source).toContain("createRedisAgentV2RunQueue");
+	});
+
+	it("uses the composite agent v2 store factory across production entrypoints and barrels", () => {
+		const files = [
+			"packages/web-workspace/src/vite-plugin.ts",
+			"apps/pi-coding-web/src/worker/main.ts",
+			"packages/web-workspace/src/runtime-infra.ts",
+			"packages/web-workspace/src/index.ts",
+		];
+
+		for (const file of files) {
+			const source = readFileSync(join(repoRoot, file), "utf8");
+			expect(source, file).toContain("createAgentV2RuntimeStore");
+			expect(source, file).not.toContain("createRuntimeStore");
+			expect(source, file).not.toMatch(/\bRuntimeStore\b/);
+			expect(source, file).not.toMatch(/createAgentV2RuntimeStore\([^)]*\)\s+as\b/);
+		}
+
+		const factory = readFileSync(
+			join(repoRoot, "packages/web-workspace/src/runtime-store-factory.ts"),
+			"utf8",
+		);
+		expect(factory).toContain("export type AgentV2ProductionStore");
+		expect(factory).toContain("createAgentV2RuntimeStore");
+		expect(factory).not.toContain("./runtime-store.js");
+		expect(factory).not.toContain("createRuntimeStore");
 	});
 
 	it("keeps committed source JavaScript mirrors aligned with the v2 public surface", () => {

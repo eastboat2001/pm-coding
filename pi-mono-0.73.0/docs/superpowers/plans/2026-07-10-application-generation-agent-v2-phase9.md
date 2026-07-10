@@ -571,6 +571,136 @@ git add apps/pi-coding-web docker/pi-coding-web packages/web-workspace/test/agen
 git commit -m "feat: add agent v2 cutover rehearsal"
 ```
 
+### Task 6: Remove The Browser Legacy Runtime Type Path
+
+**Files:**
+- Create: `apps/pi-coding-web/src/runtime/browser-records.ts`
+- Modify: `apps/pi-coding-web/src/app/bootstrap.ts`
+- Modify: `apps/pi-coding-web/src/app/generated-apps-state.ts`
+- Modify: `apps/pi-coding-web/src/diagnostics/DiagnosticLogsTab.ts`
+- Modify: `apps/pi-coding-web/src/diagnostics/diagnostic-export-client.ts`
+- Modify: `apps/pi-coding-web/src/dialogs/LocalSessionListDialog.ts`
+- Modify: `apps/pi-coding-web/src/runtime/agent-v2-run-client.ts`
+- Modify: `apps/pi-coding-web/src/runtime/remote-agent-controller.ts`
+- Modify: `apps/pi-coding-web/src/runtime/remote-resume.ts`
+- Modify: `apps/pi-coding-web/src/runtime/run-health.ts`
+- Modify: `apps/pi-coding-web/src/runtime/run-retry-status.ts`
+- Modify: `apps/pi-coding-web/src/runtime/runtime-message-conversion.ts`
+- Modify: `apps/pi-coding-web/src/storage/merged-session-index.ts`
+- Modify relevant tests under `apps/pi-coding-web/test/`
+- Modify: `packages/web-workspace/test/agent-v2-production-path-import-boundary.test.ts`
+
+**Interfaces:**
+- Consumes: `AgentV2RunSnapshot`, `AgentV2RunEventRecord`, `AgentV2RunStatus`, `AgentV2Error`, and browser storage JSON.
+- Produces: direct v2 browser run/event state plus local `BrowserSessionRecord`, `BrowserMessageRecord`, and `BrowserDeleteSessionResult` structural types.
+
+- [ ] **Step 1: Capture the failing browser typecheck and add a boundary test**
+
+Run the current typecheck and record the missing legacy root exports as RED:
+
+```bash
+npm --workspace pi-coding-web run check
+```
+
+Add a production-boundary test that scans browser source and rejects these imports/symbols in application-generation paths:
+
+```ts
+const retiredBrowserRuntimeTypes = [
+  "RunStatus",
+  "RuntimeRunRecord",
+  "RuntimeRunEventRecord",
+  "RuntimeActiveRunRestore",
+  "RuntimeSessionDetail",
+  "StartRunProjectFile",
+] as const;
+```
+
+The test must also assert browser sources do not translate Agent v2 `succeeded` to `completed`.
+
+- [ ] **Step 2: Verify the new boundary test is RED**
+
+Run:
+
+```bash
+npm --workspace @mariozechner/pi-web-workspace exec vitest --run test/agent-v2-production-path-import-boundary.test.ts
+```
+
+Expected: FAIL on current browser imports and the `succeeded` to `completed` compatibility mapping.
+
+- [ ] **Step 3: Define local browser storage records**
+
+Create only the structural fields used by UI/storage consumers:
+
+```ts
+export interface BrowserSessionRecord {
+  sessionId: string;
+  clientId: string;
+  title: string;
+  model: Record<string, unknown>;
+  thinkingLevel: string;
+  createdAt: string;
+  updatedAt: string;
+  lastRunStatus?: AgentV2RunStatus;
+  lastRunId?: string;
+}
+
+export interface BrowserMessageRecord {
+  messageId: number;
+  sessionId: string;
+  clientId: string;
+  role: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface BrowserDeleteSessionResult {
+  deleted: boolean;
+  sessionId: string;
+  cancelledRuns?: number;
+}
+```
+
+Do not mirror the complete legacy `types.ts` surface. Add only fields proven by current call sites and tests.
+
+- [ ] **Step 4: Migrate generation run/event state directly to v2**
+
+Use `AgentV2RunStatus` values unchanged, including terminal `succeeded`. `TrackedRemoteRun` is a local projection of `AgentV2RunSnapshot` and includes the structured optional `AgentV2Error`. `RemoteAgentController`, run health/retry helpers, polling, terminal messages, and event handling consume `AgentV2RunEventRecord` directly; delete `toRuntimeRunEventRecord()` and all `completed` compatibility conversions.
+
+Define a local project file request shape in `agent-v2-run-client.ts`:
+
+```ts
+export interface AgentV2BrowserProjectFile {
+  filename: string;
+  content: string;
+}
+```
+
+Migrate storage/session display modules to `browser-records.ts`. Keep session display behavior, but do not add HTTP calls to retired `/api/pi-sessions` routes.
+
+- [ ] **Step 5: Resolve type narrowing exposed by the v2 migration**
+
+Narrow message unions before reading `llmContent`, capture `remoteAgentController` in a local defined value before asynchronous use, and read failure text from `AgentV2Error.message`. Do not suppress errors with `any`, non-null assertions, or restored legacy exports.
+
+- [ ] **Step 6: Verify GREEN**
+
+Run:
+
+```bash
+npm --workspace pi-coding-web run check
+npm --workspace pi-coding-web test
+npm --workspace @mariozechner/pi-web-workspace exec vitest --run test/agent-v2-production-path-import-boundary.test.ts
+npm --workspace pi-coding-web run build
+```
+
+Expected: all commands PASS and no browser application-generation source imports a retired runtime type from the web-workspace root.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/pi-coding-web packages/web-workspace/test/agent-v2-production-path-import-boundary.test.ts
+git commit -m "refactor: use v2 browser runtime types"
+```
+
 ## Final Verification
 
 - [ ] Run the web-workspace suite:

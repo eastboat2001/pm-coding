@@ -22,6 +22,7 @@ The production run API, worker, state machine, task graph, event log, SSE replay
 2. `agent-v2-run-queue.ts` is a pass-through Adapter over the legacy `RunQueue`. The v2 Interface is sound, but its Implementation and test fixtures still depend on v1-named queue types.
 3. `legacy-v1-agent-v2-run-event-bridge.ts`, `RunEventSink`, and the legacy event bus exist only for old tests. The v2 production path already has `AgentV2RunEventLog` and `AgentV2RunEventBus`.
 4. `StorageConfig` still exposes unused `runsEnabled`, legacy queue/event/checkpoint/retry fields, and `createRuntimeStore()` returns the broad legacy `RuntimeStore` Interface. Production callers compensate with casts.
+5. The browser receives v2 snapshots/events but converts them back into `RunStatus`, `RuntimeRunRecord`, and `RuntimeRunEventRecord`. Those root exports were removed in Phase 7, so the app typecheck exposes the remaining compatibility path instead of a valid v2 browser model.
 
 There is no project `CONTEXT.md` or relevant `docs/adr` decision to preserve. Domain names in this design therefore follow the established Agent v2 state, run, task, artifact, validation, diagnostic, queue, and event vocabulary.
 
@@ -72,6 +73,10 @@ Only `PI_AGENT_V2_RUN_QUEUE_NAME`, `PI_AGENT_V2_RUN_EVENT_STREAM_MAXLEN`, and `P
 ### Production store seam
 
 `createAgentV2RuntimeStore(config)` replaces `createRuntimeStore(config)` in the web and worker production entries. Its return Interface is the exact intersection needed by v2 schema initialization, run API, worker execution, event log, diagnostic export, reset, and close. PostgreSQL and SQLite remain concrete infrastructure Adapters; callers no longer import or cast the legacy `RuntimeStore` Interface.
+
+### Browser runtime seam
+
+The browser consumes `AgentV2RunSnapshot`, `AgentV2RunEventRecord`, and `AgentV2RunStatus` directly. It does not translate `succeeded` back to legacy `completed`, construct `RuntimeRunRecord`, or import legacy run/session/message records from the web-workspace root. Browser-only storage/session display records use a local structural Interface so they cannot become an accidental v1 store contract.
 
 ### Retired HTTP seam
 
@@ -124,6 +129,7 @@ Rollback consists of redeploying the previous image/code version. Phase 9 does n
 - v2 queue production/test code does not import `run-queue.ts`; legacy queue and retry Modules are deleted.
 - legacy event bridge, event sink, event bus, and their dedicated tests are deleted.
 - production web/worker entries use `config.agentV2` and `createAgentV2RuntimeStore()` without legacy store casts.
+- browser application-generation flow uses v2 snapshots/events/statuses directly and the app typecheck passes without restoring legacy root exports.
 - retired generation environment variables fail fast and do not alter v2 behavior.
 - old HTTP prefixes are inert tombstones with no legacy service/store dependency.
 - the live cutover rehearsal command is documented and test-covered.

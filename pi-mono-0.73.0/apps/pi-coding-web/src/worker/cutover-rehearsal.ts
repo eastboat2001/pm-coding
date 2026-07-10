@@ -10,6 +10,11 @@ const CHECK_NAMES = [
 	"retired-session-route",
 ] as const;
 
+const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_POLL_INTERVAL_MS = 1_000;
+const REQUEST_FAILED_DETAIL = "Request failed.";
+const REQUEST_TIMED_OUT_DETAIL = "Request timed out.";
+
 export interface AgentV2CutoverCheck {
 	name: (typeof CHECK_NAMES)[number];
 	ok: boolean;
@@ -30,37 +35,38 @@ export interface AgentV2CutoverRehearsalOptions {
 	model: { provider: string; id: string };
 	fetch?: CutoverFetch;
 	sleep?: (milliseconds: number) => Promise<void>;
+	now?: () => number;
 	timeoutMs?: number;
 	pollIntervalMs?: number;
 }
 
+export interface AgentV2CutoverRehearsalCommandOptions {
+	env?: NodeJS.ProcessEnv;
+	output?: (line: string) => void;
+	fetch?: CutoverFetch;
+	sleep?: (milliseconds: number) => Promise<void>;
+	now?: () => number;
+}
+
 type CutoverFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RunSnapshot = { runId: string; status: string };
-type RequestResult = { response?: Response; detail?: string };
-
-const DEFAULT_TIMEOUT_MS = 60_000;
-const DEFAULT_POLL_INTERVAL_MS = 1_000;
+type RequestResult = { response?: Response; detail?: string; timedOut?: boolean };
+type RequestHelper = (path: string, init?: RequestInit) => Promise<RequestResult>;
 
 export async function runAgentV2CutoverRehearsal(
 	options: AgentV2CutoverRehearsalOptions,
 ): Promise<AgentV2CutoverRehearsalReport> {
 	const checks: AgentV2CutoverCheck[] = [];
-	const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
-	const sleep = options.sleep ?? defaultSleep;
+	const now = options.now ?? Date.now;
 	const timeoutMs = positiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS);
 	const pollIntervalMs = positiveInteger(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
+	const deadlineAt = now() + timeoutMs;
+	const request = createDeadlineBoundRequest(options, deadlineAt, now);
+	const sleep = options.sleep ?? defaultSleep;
+	const headers = { "Content-Type": "application/json", "X-PI-Client-ID": options.clientId };
 	let runId: string | undefined;
 	let finalStatus: string | undefined;
 	let lastEventSeq: number | undefined;
-
-	const request = async (path: string, init?: RequestInit): Promise<RequestResult> => {
-		try {
-			return { response: await fetchFn(new URL(path, options.baseUrl).toString(), init) };
-		} catch {
-			return { detail: "Request failed." };
-		}
-	};
-	const headers = { "Content-Type": "application/json", "X-PI-Client-ID": options.clientId };
 
 	const health = await request("/api/pi-storage/status", { headers });
 	if (!health.response?.ok) {
@@ -76,7 +82,7 @@ export async function runAgentV2CutoverRehearsal(
 		body: JSON.stringify({
 			input: {
 				prompt: "Production cutover rehearsal. Do not create project files.",
-				sessionId: `cutover-rehearsal-${Date.now()}`,
+				sessionId: `cutover-rehearsal-${now()}`,
 				title: "Production cutover rehearsal",
 			},
 			model: options.model,
@@ -101,13 +107,13 @@ export async function runAgentV2CutoverRehearsal(
 	}
 
 	const replay = initialRead.run
-		? await waitForEventReplay(request, headers, runId, timeoutMs, pollIntervalMs, sleep, finalStatus)
+		? await waitForEventReplay(request, headers, runId, deadlineAt, now, pollIntervalMs, sleep, finalStatus)
 		: { ok: false, detail: "V2 run could not be read.", status: finalStatus, seq: 0 };
 	finalStatus = replay.status ?? finalStatus;
 	lastEventSeq = replay.seq;
 	checks.push(replay.ok ? passedCheck("v2-event-replay", replay.detail) : failedCheck("v2-event-replay", replay.detail));
 
-	const cancellation = await cancelRun(request, headers, runId, timeoutMs, pollIntervalMs, sleep, finalStatus);
+	const cancellation = await cancelRun(request, headers, runId, deadlineAt, now, pollIntervalMs, sleep, finalStatus);
 	finalStatus = cancellation.status ?? finalStatus;
 	checks.push(
 		cancellation.ok ? passedCheck("v2-run-cancel", cancellation.detail) : failedCheck("v2-run-cancel", cancellation.detail),
@@ -136,20 +142,70 @@ export async function runAgentV2CutoverRehearsal(
 export async function runAgentV2CutoverRehearsalCli(
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<AgentV2CutoverRehearsalReport> {
+	return await runCutoverRehearsalFromEnvironment({ env });
+}
+
+export async function runAgentV2CutoverRehearsalCommand(
+	options: AgentV2CutoverRehearsalCommandOptions = {},
+): Promise<number> {
+	const report = await runCutoverRehearsalFromEnvironment(options);
+	(options.output ?? console.log)(JSON.stringify(report));
+	return report.ok ? 0 : 1;
+}
+
+async function runCutoverRehearsalFromEnvironment(
+	options: AgentV2CutoverRehearsalCommandOptions,
+): Promise<AgentV2CutoverRehearsalReport> {
+	const env = options.env ?? process.env;
 	const configurationError = requiredCutoverConfiguration(env);
 	if (configurationError) return configurationFailureReport(configurationError);
+	try {
+		return await runAgentV2CutoverRehearsal({
+			baseUrl: env.PI_CUTOVER_BASE_URL!,
+			clientId: env.PI_CUTOVER_CLIENT_ID!,
+			model: { provider: env.PI_CUTOVER_MODEL_PROVIDER!, id: env.PI_CUTOVER_MODEL_ID! },
+			timeoutMs: environmentPositiveInteger(env.PI_CUTOVER_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
+			pollIntervalMs: environmentPositiveInteger(env.PI_CUTOVER_POLL_INTERVAL_MS, DEFAULT_POLL_INTERVAL_MS),
+			fetch: options.fetch,
+			sleep: options.sleep,
+			now: options.now,
+		});
+	} catch {
+		return { ok: false, checks: [failedCheck("storage-health", "Cutover rehearsal failed.")] };
+	}
+}
 
-	return await runAgentV2CutoverRehearsal({
-		baseUrl: env.PI_CUTOVER_BASE_URL!,
-		clientId: env.PI_CUTOVER_CLIENT_ID!,
-		model: { provider: env.PI_CUTOVER_MODEL_PROVIDER!, id: env.PI_CUTOVER_MODEL_ID! },
-		timeoutMs: environmentPositiveInteger(env.PI_CUTOVER_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
-		pollIntervalMs: environmentPositiveInteger(env.PI_CUTOVER_POLL_INTERVAL_MS, DEFAULT_POLL_INTERVAL_MS),
-	});
+function createDeadlineBoundRequest(
+	options: AgentV2CutoverRehearsalOptions,
+	deadlineAt: number,
+	now: () => number,
+): RequestHelper {
+	const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
+	return async (path, init) => {
+		const remainingMs = deadlineAt - now();
+		if (remainingMs <= 0) return timedOutRequest();
+
+		const controller = new AbortController();
+		let timeoutId: ReturnType<typeof setTimeout> | undefined;
+		const fetchResult: Promise<RequestResult> = Promise.resolve()
+			.then(async () => await fetchFn(new URL(path, options.baseUrl).toString(), { ...init, signal: controller.signal }))
+			.then((response): RequestResult => ({ response }), (): RequestResult => ({ detail: REQUEST_FAILED_DETAIL }));
+		const timeoutResult = new Promise<RequestResult>((resolve) => {
+			timeoutId = setTimeout(() => {
+				controller.abort();
+				resolve(timedOutRequest());
+			}, remainingMs);
+		});
+		try {
+			return await Promise.race([fetchResult, timeoutResult]);
+		} finally {
+			if (timeoutId !== undefined) clearTimeout(timeoutId);
+		}
+	};
 }
 
 async function readRun(
-	request: (path: string, init?: RequestInit) => Promise<RequestResult>,
+	request: RequestHelper,
 	headers: Record<string, string>,
 	runId: string,
 ): Promise<{ run?: RunSnapshot; detail: string }> {
@@ -160,45 +216,39 @@ async function readRun(
 }
 
 async function waitForEventReplay(
-	request: (path: string, init?: RequestInit) => Promise<RequestResult>,
+	request: RequestHelper,
 	headers: Record<string, string>,
 	runId: string,
-	timeoutMs: number,
+	deadlineAt: number,
+	now: () => number,
 	pollIntervalMs: number,
 	sleep: (milliseconds: number) => Promise<void>,
 	lastStatus: string | undefined,
 ): Promise<{ ok: boolean; detail: string; status?: string; seq: number }> {
-	const startedAt = Date.now();
 	let status = lastStatus;
 	let seq = 0;
 	while (true) {
+		if (remainingMs(deadlineAt, now) <= 0) return eventReplayTimeout(status, seq);
 		const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}/events?afterSeq=${seq}`, { headers });
-		if (!result.response?.ok) {
-			return { ok: false, detail: responseDetail(result, "V2 event replay failed."), status, seq };
-		}
+		if (result.timedOut) return eventReplayTimeout(status, seq);
+		if (!result.response?.ok) return { ok: false, detail: responseDetail(result, "V2 event replay failed."), status, seq };
 		const events = await readEvents(result.response);
 		if (events === undefined) return { ok: false, detail: "V2 event replay returned an invalid response.", status, seq };
 		for (const event of events) seq = Math.max(seq, event.seq);
 		if (seq > 0) return { ok: true, detail: `Replayed events through sequence ${seq}.`, status, seq };
-		if (Date.now() - startedAt >= timeoutMs) {
-			return {
-				ok: false,
-				detail: `Timed out waiting for event replay; last status: ${status ?? "unknown"}; last event seq: ${seq}.`,
-				status,
-				seq,
-			};
-		}
+
 		const current = await readRun(request, headers, runId);
 		if (current.run) status = current.run.status;
-		await sleep(pollIntervalMs);
+		if (!(await sleepWithinDeadline(sleep, deadlineAt, now, pollIntervalMs))) return eventReplayTimeout(status, seq);
 	}
 }
 
 async function cancelRun(
-	request: (path: string, init?: RequestInit) => Promise<RequestResult>,
+	request: RequestHelper,
 	headers: Record<string, string>,
 	runId: string,
-	timeoutMs: number,
+	deadlineAt: number,
+	now: () => number,
 	pollIntervalMs: number,
 	sleep: (milliseconds: number) => Promise<void>,
 	lastStatus: string | undefined,
@@ -206,16 +256,35 @@ async function cancelRun(
 	const result = await request(`/api/agent-v2/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST", headers });
 	if (!result.response?.ok) return { ok: false, detail: responseDetail(result, "V2 run cancel failed."), status: lastStatus };
 
-	const startedAt = Date.now();
 	let status = (await readRunSnapshot(result.response))?.status ?? lastStatus;
 	while (true) {
+		if (remainingMs(deadlineAt, now) <= 0) return cancellationTimeout(status);
 		const current = await readRun(request, headers, runId);
 		if (current.run) status = current.run.status;
 		if (status === "cancelled") return { ok: true, detail: "V2 run cancelled.", status };
-		if (Date.now() - startedAt >= timeoutMs) {
-			return { ok: false, detail: `Timed out waiting for cancellation; last status: ${status ?? "unknown"}.`, status };
-		}
-		await sleep(pollIntervalMs);
+		if (!(await sleepWithinDeadline(sleep, deadlineAt, now, pollIntervalMs))) return cancellationTimeout(status);
+	}
+}
+
+async function sleepWithinDeadline(
+	sleep: (milliseconds: number) => Promise<void>,
+	deadlineAt: number,
+	now: () => number,
+	pollIntervalMs: number,
+): Promise<boolean> {
+	const remaining = remainingMs(deadlineAt, now);
+	if (remaining <= 0) return false;
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	const sleepResult = Promise.resolve()
+		.then(async () => await sleep(Math.min(pollIntervalMs, remaining)))
+		.then(() => true, () => false);
+	const deadlineResult = new Promise<boolean>((resolve) => {
+		timeoutId = setTimeout(() => resolve(false), remaining);
+	});
+	try {
+		return await Promise.race([sleepResult, deadlineResult]);
+	} finally {
+		if (timeoutId !== undefined) clearTimeout(timeoutId);
 	}
 }
 
@@ -244,9 +313,31 @@ async function readJson(response: Response): Promise<unknown> {
 	}
 }
 
+function eventReplayTimeout(status: string | undefined, seq: number) {
+	return {
+		ok: false,
+		detail: `Timed out waiting for event replay; last status: ${status ?? "unknown"}; last event seq: ${seq}.`,
+		status,
+		seq,
+	};
+}
+
+function cancellationTimeout(status: string | undefined) {
+	return { ok: false, detail: `Timed out waiting for cancellation; last status: ${status ?? "unknown"}.`, status };
+}
+
+function timedOutRequest(): RequestResult {
+	return { detail: REQUEST_TIMED_OUT_DETAIL, timedOut: true };
+}
+
 function responseDetail(result: RequestResult, fallback: string): string {
+	if (result.timedOut) return REQUEST_TIMED_OUT_DETAIL;
 	if (result.response) return `${fallback} HTTP ${result.response.status}.`;
 	return result.detail ?? fallback;
+}
+
+function remainingMs(deadlineAt: number, now: () => number): number {
+	return deadlineAt - now();
 }
 
 function report(
@@ -293,7 +384,7 @@ function requiredCutoverConfiguration(env: NodeJS.ProcessEnv): string | undefine
 }
 
 function configurationFailureReport(detail: string): AgentV2CutoverRehearsalReport {
-	return { ok: false, checks: [{ name: "storage-health", ok: false, detail: `Configuration error: ${detail}` }] };
+	return { ok: false, checks: [failedCheck("storage-health", `Configuration error: ${detail}`)] };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -305,9 +396,8 @@ function defaultSleep(milliseconds: number): Promise<void> {
 }
 
 if (isDirectEntry()) {
-	void runAgentV2CutoverRehearsalCli().then((result) => {
-		console.log(JSON.stringify(result));
-		process.exitCode = result.ok ? 0 : 1;
+	void runAgentV2CutoverRehearsalCommand().then((exitCode) => {
+		process.exitCode = exitCode;
 	});
 }
 

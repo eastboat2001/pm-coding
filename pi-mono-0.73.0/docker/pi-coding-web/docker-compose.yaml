@@ -36,7 +36,8 @@ services:
     init: true
     restart: unless-stopped
     env_file:
-      - ./.env
+      - path: ./.env
+        required: false
     environment:
       NODE_ENV: production
       PI_REDIS_URL: redis://redis:6379
@@ -71,7 +72,8 @@ services:
     restart: unless-stopped
     command: ["node", "dist-worker/worker/main.js"]
     env_file:
-      - ./.env
+      - path: ./.env
+        required: false
     environment:
       NODE_ENV: production
       PI_REDIS_URL: redis://redis:6379
@@ -94,7 +96,8 @@ services:
     profiles: ["cutover"]
     command: ["node", "dist-worker/worker/cutover-rehearsal.js"]
     env_file:
-      - ./.env
+      - path: ./.env
+        required: false
     environment:
       NODE_ENV: production
       PI_REDIS_URL: redis://redis:6379

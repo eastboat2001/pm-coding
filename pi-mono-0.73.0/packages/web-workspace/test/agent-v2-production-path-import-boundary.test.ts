@@ -386,6 +386,53 @@ describe("agent v2 production import boundary", () => {
 		}
 	});
 
+	it("keeps browser application generation state on agent v2 contracts", () => {
+		const browserFiles = [
+			"apps/pi-coding-web/src/app/bootstrap.ts",
+			"apps/pi-coding-web/src/app/generated-apps-state.ts",
+			"apps/pi-coding-web/src/diagnostics/DiagnosticLogsTab.ts",
+			"apps/pi-coding-web/src/diagnostics/diagnostic-export-client.ts",
+			"apps/pi-coding-web/src/runtime/agent-v2-run-client.ts",
+			"apps/pi-coding-web/src/runtime/browser-records.ts",
+			"apps/pi-coding-web/src/runtime/remote-agent-controller.ts",
+			"apps/pi-coding-web/src/runtime/remote-resume.ts",
+			"apps/pi-coding-web/src/runtime/run-health.ts",
+			"apps/pi-coding-web/src/runtime/run-retry-status.ts",
+			"apps/pi-coding-web/src/storage/merged-session-index.ts",
+		].map((file) => join(repoRoot, file));
+		const retiredBrowserRuntimeTypes = [
+			"RunStatus",
+			"RuntimeRunRecord",
+			"RuntimeRunEventRecord",
+			"RuntimeActiveRunRestore",
+			"RuntimeSessionDetail",
+			"StartRunProjectFile",
+			"RuntimeSessionRecord",
+			"RuntimeMessageRecord",
+			"DeleteSessionResult",
+		] as const;
+
+		for (const file of browserFiles) {
+			const source = readFileSync(file, "utf8");
+			for (const retiredType of retiredBrowserRuntimeTypes) {
+				expect(source, `${toRepoPath(file)} must not reference ${retiredType}`).not.toMatch(
+					new RegExp(`\\b${retiredType}\\b`),
+				);
+			}
+			expect(source, `${toRepoPath(file)} must not use the retired completed status`).not.toContain('"completed"');
+		}
+
+		const bootstrapSource = readFileSync(
+			join(repoRoot, "apps/pi-coding-web/src/app/bootstrap.ts"),
+			"utf8",
+		);
+		const eventHandlerStart = bootstrapSource.indexOf("const applyConnectedRunEvent");
+		const eventHandlerEnd = bootstrapSource.indexOf("const connectToRemoteRun", eventHandlerStart);
+		const eventHandlerSource = bootstrapSource.slice(eventHandlerStart, eventHandlerEnd);
+		expect(eventHandlerSource).not.toContain('finishRemoteRun("succeeded")');
+		expect(eventHandlerSource).not.toMatch(/markRemoteRunSettled\([^)]*"succeeded"/s);
+	});
+
 	it("keeps product browser/runtime paths from calling the legacy pi-sessions API", () => {
 		const browserFiles = [
 			join(repoRoot, "apps", "pi-coding-web", "src", "app", "bootstrap.ts"),

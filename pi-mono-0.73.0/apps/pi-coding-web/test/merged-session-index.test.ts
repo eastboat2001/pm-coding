@@ -1,11 +1,11 @@
 import type { SessionMetadata } from "@mariozechner/pi-web-ui";
-import type { RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import { describe, expect, it } from "vitest";
-import { mergeRuntimeSessionMetadata, mergeSessionMetadata } from "../src/storage/merged-session-index.js";
+import type { BrowserSessionRecord } from "../src/runtime/browser-records.js";
+import { mergeBrowserSessionRecords, mergeSessionMetadata } from "../src/storage/merged-session-index.js";
 
 describe("merged session index", () => {
 	it("includes sessions that only exist in configured storage", () => {
-		const sessions = mergeRuntimeSessionMetadata([], [], [createMetadata("configured-only", "PI-only session")]);
+		const sessions = mergeBrowserSessionRecords([], [], [createMetadata("configured-only", "PI-only session")]);
 
 		expect(sessions).toHaveLength(1);
 		expect(sessions[0]).toMatchObject({
@@ -25,7 +25,7 @@ describe("merged session index", () => {
 			0,
 		);
 
-		const sessions = mergeRuntimeSessionMetadata([], [browserEmpty], [configuredEmpty]);
+		const sessions = mergeBrowserSessionRecords([], [browserEmpty], [configuredEmpty]);
 
 		expect(sessions).toEqual([]);
 	});
@@ -37,7 +37,7 @@ describe("merged session index", () => {
 			runStatus: "running",
 		} as SessionMetadata;
 
-		const sessions = mergeRuntimeSessionMetadata([], [activeEmpty], []);
+		const sessions = mergeBrowserSessionRecords([], [activeEmpty], []);
 
 		expect(sessions).toHaveLength(1);
 		expect(sessions[0]).toMatchObject({
@@ -48,9 +48,9 @@ describe("merged session index", () => {
 	});
 
 	it("preserves configured metadata when runtime state also exists", () => {
-		const sessions = mergeRuntimeSessionMetadata(
+		const sessions = mergeBrowserSessionRecords(
 			[
-				createRuntimeSession({
+				createBrowserSession({
 					sessionId: "session-1",
 					title: "Runtime title",
 					lastRunId: "run-1",
@@ -118,7 +118,7 @@ function createMetadata(
 	};
 }
 
-function createRuntimeSession(overrides: Partial<RuntimeSessionRecord> = {}): RuntimeSessionRecord {
+function createBrowserSession(overrides: Partial<BrowserSessionRecord> = {}): BrowserSessionRecord {
 	return {
 		sessionId: "session-1",
 		clientId: "550e8400-e29b-41d4-a716-446655440000",

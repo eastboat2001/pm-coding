@@ -1,5 +1,6 @@
-import type { DeleteSessionResult } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunStatus } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "../runtime/client-id.js";
+import type { BrowserDeleteSessionResult } from "../runtime/browser-records.js";
 import { getBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { formatSessionUpdatedAt } from "../storage/session-timestamps.js";
 
@@ -19,7 +20,7 @@ export type GeneratedAppRecord = {
 	fileCount: number;
 	updatedAt: string;
 	activeRunId?: string;
-	runStatus?: string;
+	runStatus?: AgentV2RunStatus;
 };
 
 type GeneratedAppsResponse = {
@@ -47,12 +48,12 @@ export type SessionProjectSource = {
 	createdAt: string;
 	lastModified: string;
 	messageCount?: number;
-	runStatus?: string;
+	runStatus?: AgentV2RunStatus;
 	activeRunId?: string;
 	runUpdatedAt?: string;
 };
 
-export function isRuntimeSessionDeletionDeferred(result: DeleteSessionResult | undefined): boolean {
+export function isBrowserSessionDeletionDeferred(result: BrowserDeleteSessionResult | undefined): boolean {
 	return Boolean(result && !result.deleted && (result.cancelledRuns ?? 0) > 0);
 }
 
@@ -260,7 +261,7 @@ export function formatGeneratedAppUpdatedAt(value: string, now = new Date()): st
 	return formatSessionUpdatedAt(value, now);
 }
 
-export function projectSessionStatusLabel(status: string | undefined): string {
+export function projectSessionStatusLabel(status: AgentV2RunStatus | "idle" | undefined): string {
 	switch (status) {
 		case "queued":
 		case "running":

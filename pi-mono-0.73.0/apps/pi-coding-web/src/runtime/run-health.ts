@@ -1,11 +1,18 @@
-import type { RuntimeRunRecord } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunStatus } from "@mariozechner/pi-web-workspace";
 
 import type { DiagnosticEvent } from "../diagnostics/diagnostic-client.js";
 
 export const QUEUED_RUN_TIMEOUT_MS = 10_000;
 
+export interface QueuedRunDiagnosticInput {
+	runId: string;
+	sessionId: string;
+	status: AgentV2RunStatus;
+	updatedAt: string;
+}
+
 export function createQueuedRunTimeoutDiagnostic(
-	run: RuntimeRunRecord,
+	run: QueuedRunDiagnosticInput,
 	options: { nowMs?: number; timeoutMs?: number } = {},
 ): DiagnosticEvent | undefined {
 	if (run.status !== "queued") {

@@ -1,20 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type {
-	RunStatus,
-	RuntimeActiveRunRestore,
-	RuntimeRunEventRecord,
-	RuntimeRunRecord,
-	RuntimeSessionDetail,
-} from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunStatus } from "@mariozechner/pi-web-workspace";
 
-const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running", "cancelling"]);
-
-export interface ResolvedActiveRunRestore {
-	run: RuntimeRunRecord;
-	checkpointEvent?: RuntimeRunEventRecord;
-	afterSeq: number;
-	legacy: boolean;
-}
+const ACTIVE_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set(["queued", "running", "cancelling"]);
 
 export interface InterruptedToolResultResumeOptions {
 	activeRunId?: string;
@@ -22,7 +9,7 @@ export interface InterruptedToolResultResumeOptions {
 	messages: readonly AgentMessage[];
 	parentRunId?: string;
 	resumedSessions: Set<string>;
-	runStatus?: RunStatus;
+	runStatus?: AgentV2RunStatus;
 	sessionId?: string;
 	startRemoteContinuation(parentRunId: string): Promise<void>;
 	reportError(error: unknown, sessionId: string): void;
@@ -35,7 +22,7 @@ export function resumeInterruptedToolResultSession(options: InterruptedToolResul
 	const resumeKey = `${sessionId}:${parentRunId}`;
 	if (options.resumedSessions.has(resumeKey)) return false;
 	if (options.isStreaming) return false;
-	if (options.activeRunId && ACTIVE_RUN_STATUSES.has(options.runStatus as RunStatus)) return false;
+	if (options.activeRunId && options.runStatus && ACTIVE_RUN_STATUSES.has(options.runStatus)) return false;
 	if (options.runStatus !== "interrupted") return false;
 
 	const lastMessage = options.messages.at(-1);
@@ -47,25 +34,4 @@ export function resumeInterruptedToolResultSession(options: InterruptedToolResul
 		options.resumedSessions.delete(resumeKey);
 	});
 	return true;
-}
-
-export function resolveActiveRunRestore(
-	detail: RuntimeSessionDetail,
-	preferredRunId?: string,
-): ResolvedActiveRunRestore | undefined {
-	const restored = normalizeActiveRunRestore(detail.activeRun);
-	if (restored && (!preferredRunId || restored.run.runId === preferredRunId)) return restored;
-	return undefined;
-}
-
-function normalizeActiveRunRestore(
-	activeRun: RuntimeActiveRunRestore | undefined,
-): ResolvedActiveRunRestore | undefined {
-	if (!activeRun || !ACTIVE_RUN_STATUSES.has(activeRun.run.status)) return undefined;
-	return {
-		run: activeRun.run,
-		...(activeRun.checkpointEvent ? { checkpointEvent: activeRun.checkpointEvent } : {}),
-		afterSeq: activeRun.afterSeq,
-		legacy: false,
-	};
 }

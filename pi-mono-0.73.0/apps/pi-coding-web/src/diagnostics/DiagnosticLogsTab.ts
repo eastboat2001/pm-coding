@@ -1,17 +1,17 @@
 import { icon } from "@mariozechner/mini-lit";
 import { i18n, SettingsTab, type SessionMetadata } from "@mariozechner/pi-web-ui";
-import type { RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import { html, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { Download, RefreshCw, TriangleAlert } from "lucide";
 import { diagnosticSessionTitle, downloadDiagnosticSessionExport } from "./diagnostic-export-client.js";
 import { getBrowserAppStorage } from "../storage/browser-app-storage.js";
+import type { BrowserSessionRecord } from "../runtime/browser-records.js";
 
 const t = (message: string) => i18n(message as Parameters<typeof i18n>[0]);
 
 @customElement("pi-diagnostic-logs-tab")
 export class DiagnosticLogsTab extends SettingsTab {
-	@state() private sessions: RuntimeSessionRecord[] = [];
+	@state() private sessions: BrowserSessionRecord[] = [];
 	@state() private loading = true;
 	@state() private error = "";
 	@state() private exportingSessionId = "";
@@ -64,7 +64,7 @@ export class DiagnosticLogsTab extends SettingsTab {
 		`;
 	}
 
-	private renderSession(session: RuntimeSessionRecord): TemplateResult {
+	private renderSession(session: BrowserSessionRecord): TemplateResult {
 		const exporting = this.exportingSessionId === session.sessionId;
 		return html`
 			<div class="flex items-center justify-between gap-3 px-4 py-3">
@@ -104,7 +104,7 @@ export class DiagnosticLogsTab extends SettingsTab {
 		try {
 			const storage = getBrowserAppStorage();
 			const metadata = (await storage.sessions.getAllMetadata()) as Array<
-				SessionMetadata & { runStatus?: RuntimeSessionRecord["lastRunStatus"]; lastRunId?: string }
+				SessionMetadata & { runStatus?: BrowserSessionRecord["lastRunStatus"]; lastRunId?: string }
 			>;
 			this.sessions = metadata.map((session) => ({
 				sessionId: session.id,
@@ -125,7 +125,7 @@ export class DiagnosticLogsTab extends SettingsTab {
 		}
 	}
 
-	private async exportSession(session: RuntimeSessionRecord): Promise<void> {
+	private async exportSession(session: BrowserSessionRecord): Promise<void> {
 		this.exportingSessionId = session.sessionId;
 		this.error = "";
 		try {

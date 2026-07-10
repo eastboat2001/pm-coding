@@ -1,5 +1,5 @@
-import type { RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BrowserSessionRecord } from "../src/runtime/browser-records.js";
 import {
 	buildDiagnosticExportEndpoint,
 	diagnosticExportDownloadName,
@@ -27,7 +27,7 @@ describe("diagnostic export client helpers", () => {
 	});
 
 	it("uses readable labels and filesystem-safe download names for selected sessions", () => {
-		const session: RuntimeSessionRecord = {
+		const session: BrowserSessionRecord = {
 			sessionId: "session:/one",
 			clientId: "client-a",
 			title: "Token limit repro",
@@ -92,7 +92,7 @@ describe("diagnostic export client helpers", () => {
 	});
 });
 
-function createSession(overrides: Partial<RuntimeSessionRecord> = {}): RuntimeSessionRecord {
+function createSession(overrides: Partial<BrowserSessionRecord> = {}): BrowserSessionRecord {
 	return {
 		sessionId: "session-a",
 		clientId: "client-a",

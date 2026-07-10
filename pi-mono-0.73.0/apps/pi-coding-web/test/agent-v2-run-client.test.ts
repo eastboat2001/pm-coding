@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentV2RunEventRecord, AgentV2RunSnapshot, StartRunProjectFile } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunEventRecord, AgentV2RunSnapshot } from "@mariozechner/pi-web-workspace";
 import {
 	AGENT_V2_RUNS_API_PREFIX,
 	cancelAgentV2Run,
@@ -9,6 +9,7 @@ import {
 	getAgentV2Run,
 	listAgentV2RunEvents,
 	startAgentV2Run,
+	type AgentV2BrowserProjectFile,
 	type AgentV2RunEventConnection,
 } from "../src/runtime/agent-v2-run-client.js";
 
@@ -26,7 +27,7 @@ describe("agent v2 run client", () => {
 	});
 
 	it("posts generation starts to the agent v2 run API", async () => {
-		const projectFiles: StartRunProjectFile[] = [{ filename: "src/main.ts", content: "console.log('hi');" }];
+		const projectFiles: AgentV2BrowserProjectFile[] = [{ filename: "src/main.ts", content: "console.log('hi');" }];
 		const requests: Array<{ url: string; init?: RequestInit }> = [];
 		vi.stubGlobal(
 			"fetch",

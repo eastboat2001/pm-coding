@@ -1,4 +1,4 @@
-import type { RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunEventRecord } from "@mariozechner/pi-web-workspace";
 import { describe, expect, it } from "vitest";
 import {
 	retryStatusFromRunEvent,
@@ -30,11 +30,9 @@ describe("run retry status", () => {
 	});
 });
 
-function createRunEvent(payload: Record<string, unknown>): RuntimeRunEventRecord {
+function createRunEvent(payload: Record<string, unknown>): AgentV2RunEventRecord {
 	return {
-		eventId: 1,
 		runId: "run-1",
-		sessionId: "session-1",
 		clientId: "client-a",
 		seq: 1,
 		type: String(payload.type),

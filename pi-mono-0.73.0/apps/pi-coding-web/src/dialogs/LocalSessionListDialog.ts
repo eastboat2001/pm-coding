@@ -1,15 +1,15 @@
 import { DialogContent, DialogHeader } from "@mariozechner/mini-lit/dist/Dialog.js";
 import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
-import type { RunStatus } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunStatus } from "@mariozechner/pi-web-workspace";
 import { html } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
 import { formatSessionUpdatedAt } from "../storage/session-timestamps.js";
 
-const CANCELLABLE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running"]);
+const CANCELLABLE_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set(["queued", "running"]);
 const i18n = (text: string) => text;
 
-export function sessionRunStatusLabel(status: RunStatus | undefined): string {
+export function sessionRunStatusLabel(status: AgentV2RunStatus | undefined): string {
 	if (status === "queued") return i18n("Queued");
 	if (status === "running") return i18n("Running");
 	if (status === "cancelling") return i18n("Cancelling");
@@ -19,7 +19,7 @@ export function sessionRunStatusLabel(status: RunStatus | undefined): string {
 	return "";
 }
 
-export function isCancellableRunStatus(status: RunStatus | undefined): status is RunStatus {
+export function isCancellableRunStatus(status: AgentV2RunStatus | undefined): status is AgentV2RunStatus {
 	return status !== undefined && CANCELLABLE_RUN_STATUSES.has(status);
 }
 
@@ -84,7 +84,7 @@ export class LocalSessionListDialog extends DialogBase {
 		const previousSessions = this.sessions;
 		this.sessions = this.sessions.map((candidate) =>
 			candidate.id === session.id
-				? { ...candidate, activeRunId: undefined, runStatus: "cancelling" as RunStatus }
+				? { ...candidate, activeRunId: undefined, runStatus: "cancelling" as const }
 				: candidate,
 		);
 		try {

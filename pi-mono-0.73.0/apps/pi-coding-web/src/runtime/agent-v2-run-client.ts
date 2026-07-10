@@ -2,7 +2,6 @@ import type {
 	AgentV2RunEventRecord,
 	AgentV2RunSnapshot,
 	JsonObject,
-	StartRunProjectFile,
 } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "./client-id.js";
 
@@ -13,6 +12,11 @@ const MAX_POLL_INTERVAL_MS = 1000;
 const IDLE_POLL_BACKOFF_MS = 150;
 const RUN_EVENT_STREAM_RECONNECT_MS = 1000;
 
+export interface AgentV2BrowserProjectFile {
+	filename: string;
+	content: string;
+}
+
 export interface AgentV2BrowserStartRunRequest {
 	sessionId: string;
 	title: string;
@@ -20,7 +24,7 @@ export interface AgentV2BrowserStartRunRequest {
 	objective?: string;
 	message?: JsonObject;
 	attachments?: unknown[];
-	projectFiles?: StartRunProjectFile[];
+	projectFiles?: AgentV2BrowserProjectFile[];
 	model?: unknown;
 }
 

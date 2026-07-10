@@ -1,5 +1,6 @@
 import type { SessionMetadata } from "@mariozechner/pi-web-ui";
-import type { RunStatus, RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunStatus } from "@mariozechner/pi-web-workspace";
+import type { BrowserSessionRecord } from "../runtime/browser-records.js";
 
 export type SessionSource = "browser" | "configured";
 
@@ -12,7 +13,7 @@ export interface MergedSessionEntry {
 	usage: SessionMetadata["usage"];
 	thinkingLevel: SessionMetadata["thinkingLevel"];
 	preview: string;
-	runStatus?: RunStatus;
+	runStatus?: AgentV2RunStatus;
 	activeRunId?: string;
 	runUpdatedAt?: string;
 	browser?: SessionMetadata;
@@ -84,22 +85,22 @@ const EMPTY_USAGE: SessionMetadata["usage"] = {
 	},
 };
 
-export function mergeRuntimeSessionMetadata(
-	runtimeSessions: RuntimeSessionRecord[],
+export function mergeBrowserSessionRecords(
+	storedSessions: BrowserSessionRecord[],
 	browserSessions: SessionMetadata[],
 	localSessions: SessionMetadata[],
 ): MergedSessionEntry[] {
 	const metadataEntries = mergeSessionMetadata(browserSessions, localSessions);
 	const metadataById = new Map(metadataEntries.map((entry) => [entry.id, entry]));
-	const runtimeSessionIds = new Set(runtimeSessions.map((session) => session.sessionId));
-	const runtimeEntries = runtimeSessions.map((session) =>
-		runtimeSessionToMergedEntry(session, metadataById.get(session.sessionId)),
+	const storedSessionIds = new Set(storedSessions.map((session) => session.sessionId));
+	const storedEntries = storedSessions.map((session) =>
+		browserSessionToMergedEntry(session, metadataById.get(session.sessionId)),
 	);
-	const missingMetadataEntries = metadataEntries.filter((entry) => !runtimeSessionIds.has(entry.id));
-	return [...runtimeEntries, ...missingMetadataEntries].sort((a, b) => b.lastModified.localeCompare(a.lastModified));
+	const missingMetadataEntries = metadataEntries.filter((entry) => !storedSessionIds.has(entry.id));
+	return [...storedEntries, ...missingMetadataEntries].sort((a, b) => b.lastModified.localeCompare(a.lastModified));
 }
 
-function runtimeSessionToMergedEntry(session: RuntimeSessionRecord, metadata?: MergedSessionEntry): MergedSessionEntry {
+function browserSessionToMergedEntry(session: BrowserSessionRecord, metadata?: MergedSessionEntry): MergedSessionEntry {
 	return {
 		id: session.sessionId,
 		title: session.title,

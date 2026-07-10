@@ -1,4 +1,4 @@
-import type { RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunEventRecord } from "@mariozechner/pi-web-workspace";
 
 type RunRetryStatusLabel = "Retrying request..." | "next attempt in";
 
@@ -9,7 +9,7 @@ export interface RunRetryStatus {
 	delayMs?: number;
 }
 
-export function retryStatusFromRunEvent(event: RuntimeRunEventRecord): RunRetryStatus | undefined {
+export function retryStatusFromRunEvent(event: AgentV2RunEventRecord): RunRetryStatus | undefined {
 	const payload = event.payload;
 	if (!isRecord(payload) || payload.type !== "agent_retry_scheduled") return undefined;
 	return {
@@ -35,7 +35,7 @@ export function retryStatusText(
 	return parts.length > 0 ? `${label} (${parts.join(", ")})` : label;
 }
 
-export function shouldClearRetryStatusForRunEvent(event: RuntimeRunEventRecord): boolean {
+export function shouldClearRetryStatusForRunEvent(event: AgentV2RunEventRecord): boolean {
 	const payload = event.payload;
 	return isRecord(payload) && payload.type !== "agent_retry_scheduled";
 }

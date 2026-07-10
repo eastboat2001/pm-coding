@@ -5,7 +5,7 @@ import {
 	filterGeneratedApps,
 	formatGeneratedAppUpdatedAt,
 	type GeneratedAppRecord,
-	isRuntimeSessionDeletionDeferred,
+	isBrowserSessionDeletionDeferred,
 	loadGeneratedApps,
 	loadSessionProjectApps,
 	markGeneratedAppRunCancelling,
@@ -128,7 +128,7 @@ describe("generated apps state", () => {
 					title: "Plain Chat",
 					createdAt: "2026-06-12T06:30:00.000Z",
 					lastModified: "2026-06-12T06:31:00.000Z",
-					runStatus: "completed",
+					runStatus: "succeeded",
 				},
 				{
 					id: "session-2",
@@ -314,7 +314,7 @@ describe("generated apps state", () => {
 			[
 				{
 					...runningSession,
-					runStatus: "completed",
+					runStatus: "succeeded",
 					runUpdatedAt: "2026-06-12T06:12:00.000Z",
 				},
 			],
@@ -429,33 +429,33 @@ describe("generated apps state", () => {
 		expect(projectSessionStatusLabel("cancelled")).toBe("已取消");
 		expect(projectSessionStatusLabel("interrupted")).toBe("已中断");
 		expect(projectSessionStatusLabel("failed")).toBe("失败");
-		expect(projectSessionStatusLabel("completed")).toBe("空闲");
+		expect(projectSessionStatusLabel("succeeded")).toBe("空闲");
 		expect(projectSessionStatusLabel(undefined)).toBe("空闲");
 	});
 
 	it("defers local session cleanup only when force delete cancelled active runs", () => {
 		expect(
-			isRuntimeSessionDeletionDeferred({
+			isBrowserSessionDeletionDeferred({
 				deleted: false,
 				sessionId: "session-active",
 				cancelledRuns: 1,
 			}),
 		).toBe(true);
-		expect(isRuntimeSessionDeletionDeferred({ deleted: false, sessionId: "session-orphan" })).toBe(false);
+		expect(isBrowserSessionDeletionDeferred({ deleted: false, sessionId: "session-orphan" })).toBe(false);
 		expect(
-			isRuntimeSessionDeletionDeferred({
+			isBrowserSessionDeletionDeferred({
 				deleted: true,
 				sessionId: "session-deleted",
 				cancelledRuns: 1,
 			}),
 		).toBe(false);
-		expect(isRuntimeSessionDeletionDeferred(undefined)).toBe(false);
+		expect(isBrowserSessionDeletionDeferred(undefined)).toBe(false);
 	});
 
 	it("marks a generated app run as cancelling without changing other cards", () => {
 		const projects = [
 			{ ...createProject("active-app", "Active App"), status: "running" as const, runStatus: "running" },
-			{ ...createProject("idle-app", "Idle App"), status: "idle" as const, runStatus: "completed" },
+			{ ...createProject("idle-app", "Idle App"), status: "idle" as const, runStatus: "succeeded" },
 		];
 
 		const nextProjects = markGeneratedAppRunCancelling(projects, "active-app");

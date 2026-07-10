@@ -1,6 +1,5 @@
-import type { RuntimeRunRecord } from "@mariozechner/pi-web-workspace";
 import { describe, expect, it } from "vitest";
-import { createQueuedRunTimeoutDiagnostic } from "../src/runtime/run-health.js";
+import { createQueuedRunTimeoutDiagnostic, type QueuedRunDiagnosticInput } from "../src/runtime/run-health.js";
 
 describe("run health diagnostics", () => {
 	it("creates an error diagnostic when a run stays queued past the timeout", () => {
@@ -41,14 +40,11 @@ describe("run health diagnostics", () => {
 	});
 });
 
-function createRun(overrides: Partial<RuntimeRunRecord> = {}): RuntimeRunRecord {
+function createRun(overrides: Partial<QueuedRunDiagnosticInput> = {}): QueuedRunDiagnosticInput {
 	return {
 		runId: "run-1",
 		sessionId: "session-1",
-		clientId: "client-1",
 		status: "queued",
-		model: {},
-		thinkingLevel: "high",
 		updatedAt: "2026-06-10T00:00:00.000Z",
 		...overrides,
 	};

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
-import type { RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunEventRecord } from "@mariozechner/pi-web-workspace";
 import { describe, expect, it } from "vitest";
 import {
 	drainRemoteRunEvents,
@@ -22,7 +22,7 @@ describe("RemoteAgentController", () => {
 		await controller.applyRunEvent(
 			createRunEventRecord(3, "r1", { type: "agent_end", messages: [assistantMessage] }),
 		);
-		await controller.finishRemoteRun("completed");
+		await controller.finishRemoteRun("succeeded");
 
 		expect(controller.activeRunId).toBeUndefined();
 		expect(controller.lastSeq).toBe(3);
@@ -295,7 +295,7 @@ describe("RemoteAgentController", () => {
 				createRunEventRecord(3, "r1", { type: "agent_end", messages: [assistantMessage] }),
 			];
 		});
-		await controller.finishRemoteRun("completed");
+		await controller.finishRemoteRun("succeeded");
 
 		expect(controller.activeRunId).toBeUndefined();
 		expect(controller.lastSeq).toBe(3);
@@ -365,11 +365,9 @@ function createFakeRemoteAgent(messages: Array<AssistantMessage | UserMessage> =
 	};
 }
 
-function createRunEventRecord(seq: number, runId: string, payload: Record<string, unknown>): RuntimeRunEventRecord {
+function createRunEventRecord(seq: number, runId: string, payload: Record<string, unknown>): AgentV2RunEventRecord {
 	return {
-		eventId: seq,
 		runId,
-		sessionId: "session-1",
 		clientId: "client-1",
 		seq,
 		type: String(payload.type || "agent"),

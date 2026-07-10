@@ -1,12 +1,17 @@
 import type { Agent, AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { RunStatus, RuntimeRunEventRecord } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunEventRecord, AgentV2RunStatus } from "@mariozechner/pi-web-workspace";
 
-const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
-type RuntimeRunEventLoader = (
+const TERMINAL_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set([
+	"cancelled",
+	"succeeded",
+	"failed",
+	"interrupted",
+]);
+type AgentV2RunEventLoader = (
 	runId: string,
 	afterSeq: number,
-) => RuntimeRunEventRecord[] | Promise<RuntimeRunEventRecord[]>;
+) => AgentV2RunEventRecord[] | Promise<AgentV2RunEventRecord[]>;
 export type RemoteRunEventDrainResult =
 	| { ok: true; afterSeq: number }
 	| { ok: false; afterSeq: number; error: unknown };
@@ -39,7 +44,7 @@ export class RemoteAgentController {
 		this.assistantMessageEndApplied = false;
 	}
 
-	async applyRunEvent(event: RuntimeRunEventRecord): Promise<void> {
+	async applyRunEvent(event: AgentV2RunEventRecord): Promise<void> {
 		if (!this._activeRunId) {
 			throw new Error("startRemoteRun() must be called before applyRunEvent().");
 		}
@@ -63,7 +68,7 @@ export class RemoteAgentController {
 		}
 	}
 
-	hydrateRunEvents(events: RuntimeRunEventRecord[]): void {
+	hydrateRunEvents(events: AgentV2RunEventRecord[]): void {
 		if (!this._activeRunId) {
 			throw new Error("startRemoteRun() must be called before hydrateRunEvents().");
 		}
@@ -88,7 +93,7 @@ export class RemoteAgentController {
 		}
 	}
 
-	hydrateCheckpoint(event: RuntimeRunEventRecord | undefined, afterSeq: number): void {
+	hydrateCheckpoint(event: AgentV2RunEventRecord | undefined, afterSeq: number): void {
 		if (!this._activeRunId) {
 			throw new Error("startRemoteRun() must be called before hydrateCheckpoint().");
 		}
@@ -103,7 +108,7 @@ export class RemoteAgentController {
 		this._lastSeq = Math.max(this._lastSeq, afterSeq);
 	}
 
-	markRunEventSeen(event: Pick<RuntimeRunEventRecord, "runId" | "seq">): void {
+	markRunEventSeen(event: Pick<AgentV2RunEventRecord, "runId" | "seq">): void {
 		if (!this._activeRunId) {
 			throw new Error("startRemoteRun() must be called before markRunEventSeen().");
 		}
@@ -113,7 +118,7 @@ export class RemoteAgentController {
 		this._lastSeq = Math.max(this._lastSeq, event.seq);
 	}
 
-	async finishRemoteRun(status: RunStatus): Promise<void> {
+	async finishRemoteRun(status: AgentV2RunStatus): Promise<void> {
 		if (!this._activeRunId) throw new Error("No active remote run to finish.");
 		if (!TERMINAL_RUN_STATUSES.has(status)) throw new Error(`Remote run status ${status} is not terminal.`);
 		if (!this.agentEndApplied) throw new Error("Remote run cannot finish before an agent_end event.");
@@ -124,7 +129,7 @@ export class RemoteAgentController {
 		this.assistantMessageEndApplied = false;
 	}
 
-	async settleRemoteRun(status: RunStatus, errorMessage?: string): Promise<void> {
+	async settleRemoteRun(status: AgentV2RunStatus, errorMessage?: string): Promise<void> {
 		if (!this._activeRunId) throw new Error("No active remote run to settle.");
 		if (!TERMINAL_RUN_STATUSES.has(status)) throw new Error(`Remote run status ${status} is not terminal.`);
 		const terminalMessage = this.shouldAppendTerminalMessage(status)
@@ -132,9 +137,7 @@ export class RemoteAgentController {
 			: undefined;
 		if (terminalMessage) {
 			await this.applyRunEvent({
-				eventId: 0,
 				runId: this._activeRunId,
-				sessionId: "",
 				clientId: "",
 				seq: this._lastSeq,
 				type: "message_end",
@@ -144,9 +147,7 @@ export class RemoteAgentController {
 		}
 		if (!this.agentEndApplied) {
 			await this.applyRunEvent({
-				eventId: 0,
 				runId: this._activeRunId,
-				sessionId: "",
 				clientId: "",
 				seq: this._lastSeq,
 				type: "agent_end",
@@ -157,7 +158,7 @@ export class RemoteAgentController {
 		await this.finishRemoteRun(status);
 	}
 
-	private shouldAppendTerminalMessage(status: RunStatus): boolean {
+	private shouldAppendTerminalMessage(status: AgentV2RunStatus): boolean {
 		if (status === "cancelled") return !hasCancelledAssistantMessage(this.agent.state.messages);
 		return !this.assistantMessageEndApplied;
 	}
@@ -227,7 +228,7 @@ export class RemoteAgentController {
 export async function drainRemoteRunEvents(
 	runId: string,
 	controller: RemoteAgentController,
-	loadEvents: RuntimeRunEventLoader,
+	loadEvents: AgentV2RunEventLoader,
 ): Promise<void> {
 	if (controller.activeRunId !== runId) return;
 	const events = await loadEvents(runId, controller.lastSeq);
@@ -240,7 +241,7 @@ export async function drainRemoteRunEvents(
 export async function tryDrainRemoteRunEvents(
 	runId: string,
 	controller: RemoteAgentController,
-	loadEvents: RuntimeRunEventLoader,
+	loadEvents: AgentV2RunEventLoader,
 ): Promise<RemoteRunEventDrainResult> {
 	const afterSeq = controller.lastSeq;
 	try {
@@ -290,7 +291,7 @@ function isAssistantMessageEndEvent(event: AgentEvent): boolean {
 	return isRecord(message) && message.role === "assistant";
 }
 
-function createRemoteRunTerminalMessage(status: RunStatus, errorMessage?: string): AssistantMessage | undefined {
+function createRemoteRunTerminalMessage(status: AgentV2RunStatus, errorMessage?: string): AssistantMessage | undefined {
 	if (status === "failed") return createRemoteRunFailureMessage(errorMessage);
 	if (status === "cancelled") return createRemoteRunCancelledMessage();
 	return undefined;

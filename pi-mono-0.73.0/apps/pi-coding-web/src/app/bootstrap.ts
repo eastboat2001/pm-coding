@@ -30,11 +30,10 @@ import {
 	setLanguage,
 } from "@mariozechner/pi-web-ui";
 import type {
+	AgentV2Error,
 	AgentV2RunEventRecord,
 	AgentV2RunSnapshot,
-	RunStatus,
-	RuntimeRunEventRecord,
-	RuntimeRunRecord,
+	AgentV2RunStatus,
 } from "@mariozechner/pi-web-workspace";
 import { html, render } from "lit";
 import { Folder, PanelsTopLeft, Plus, Settings } from "lucide";
@@ -136,8 +135,13 @@ import { ModelController, SELECTED_MODEL_KEY } from "./model-controller.js";
 import { createCoalescedRenderScheduler } from "./render-scheduler.js";
 import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessionTitle } from "./session-controller.js";
 
-const ACTIVE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["queued", "running", "cancelling"]);
-const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
+const ACTIVE_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set(["queued", "running", "cancelling"]);
+const TERMINAL_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set([
+	"cancelled",
+	"succeeded",
+	"failed",
+	"interrupted",
+]);
 const AGENT_V2_LIFECYCLE_EVENT_PREFIX = "agent_v2.";
 const EMPTY_USAGE: SessionMetadata["usage"] = {
 	input: 0,
@@ -176,28 +180,15 @@ const piRuntimeConfig = {
 
 let pendingHandoffModelContext: { documentFiles: HandoffDocumentFile[] } | undefined;
 
-type TrackedRemoteRun = Pick<RuntimeRunRecord, "runId" | "sessionId" | "clientId" | "status" | "updatedAt">;
+type TrackedRemoteRun = Pick<AgentV2RunSnapshot, "runId" | "clientId" | "status" | "updatedAt"> & {
+	sessionId: string;
+	error?: AgentV2Error;
+};
 
-function agentV2StatusToRunStatus(status: AgentV2RunSnapshot["status"]): RunStatus {
-	switch (status) {
-		case "succeeded":
-			return "completed";
-		default:
-			return status;
-	}
-}
-
-function agentV2LifecycleStatusToRunStatus(status: unknown): RunStatus | undefined {
-	if (status === "succeeded") return "completed";
+function agentV2LifecycleStatus(status: unknown): AgentV2RunStatus | undefined {
+	if (status === "succeeded") return status;
 	if (status === "queued" || status === "running" || status === "cancelling") return status;
 	if (status === "failed" || status === "cancelled" || status === "interrupted") return status;
-	return undefined;
-}
-
-function agentV2LifecyclePhaseToRunStatus(phase: unknown): RunStatus | undefined {
-	if (phase === "delivery") return "completed";
-	if (phase === "failed") return "failed";
-	if (phase === "cancelled") return "cancelled";
 	return undefined;
 }
 
@@ -206,38 +197,26 @@ function toTrackedRemoteRun(run: AgentV2RunSnapshot, sessionId: string): Tracked
 		runId: run.runId,
 		sessionId,
 		clientId: run.clientId,
-		status: agentV2StatusToRunStatus(run.status),
+		status: run.status,
 		updatedAt: run.updatedAt,
+		...(run.error ? { error: run.error } : {}),
 	};
 }
 
-function toRuntimeRunEventRecord(event: AgentV2RunEventRecord, sessionId: string): RuntimeRunEventRecord {
-	return {
-		eventId: event.seq,
-		runId: event.runId,
-		sessionId,
-		clientId: event.clientId,
-		seq: event.seq,
-		type: event.type,
-		payload: event.payload,
-		createdAt: event.createdAt,
-	};
-}
-
-function runEventPayloadType(event: RuntimeRunEventRecord): string | undefined {
+function runEventPayloadType(event: AgentV2RunEventRecord): string | undefined {
 	return isRecord(event.payload) && typeof event.payload.type === "string" ? event.payload.type : undefined;
 }
 
-function isAgentV2LifecycleRunEvent(event: RuntimeRunEventRecord): boolean {
+function isAgentV2LifecycleRunEvent(event: AgentV2RunEventRecord): boolean {
 	return (
 		event.type.startsWith(AGENT_V2_LIFECYCLE_EVENT_PREFIX) ||
 		runEventPayloadType(event)?.startsWith(AGENT_V2_LIFECYCLE_EVENT_PREFIX) === true
 	);
 }
 
-function runStatusFromAgentV2LifecycleEvent(event: RuntimeRunEventRecord): RunStatus | undefined {
+function runStatusFromAgentV2LifecycleEvent(event: AgentV2RunEventRecord): AgentV2RunStatus | undefined {
 	if (!isRecord(event.payload)) return undefined;
-	return agentV2LifecycleStatusToRunStatus(event.payload.status) ?? agentV2LifecyclePhaseToRunStatus(event.payload.phase);
+	return agentV2LifecycleStatus(event.payload.status);
 }
 
 const runClient = {
@@ -245,16 +224,15 @@ const runClient = {
 	connectRunEvents: (
 		runId: string,
 		afterSeq: number,
-		onEvent: (event: RuntimeRunEventRecord) => void | Promise<void>,
+		onEvent: (event: AgentV2RunEventRecord) => void | Promise<void>,
 		options = {},
 	) =>
-		connectAgentV2RunEvents(runId, afterSeq, (event) => onEvent(toRuntimeRunEventRecord(event, currentSessionId ?? "")), options),
+		connectAgentV2RunEvents(runId, afterSeq, onEvent, options),
 	getRun: async (runId: string) => {
 		const run = await getAgentV2Run(runId);
 		return run ? toTrackedRemoteRun(run, currentSessionId ?? "") : undefined;
 	},
-	listRunEvents: async (runId: string, afterSeq = 0) =>
-		(await listAgentV2RunEvents(runId, afterSeq)).map((event) => toRuntimeRunEventRecord(event, currentSessionId ?? "")),
+	listRunEvents: listAgentV2RunEvents,
 	startRun: startAgentV2Run,
 };
 
@@ -271,7 +249,7 @@ type SkillSlashSuggestion = {
 
 type SkillDiagnostic = SkillListDetails["diagnostics"][number];
 type SessionMetadataWithRunState = SessionMetadata & {
-	runStatus?: RunStatus;
+	runStatus?: AgentV2RunStatus;
 	activeRunId?: string;
 	lastRunId?: string;
 	runUpdatedAt?: string;
@@ -394,10 +372,10 @@ const normalizePositiveInteger = (value: unknown, fallback: number): number =>
 const normalizeNonNegativeInteger = (value: unknown, fallback: number): number =>
 	typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : fallback;
 
-const isActiveRunStatus = (status: RunStatus | undefined): status is RunStatus =>
+const isActiveRunStatus = (status: AgentV2RunStatus | undefined): status is AgentV2RunStatus =>
 	status !== undefined && ACTIVE_RUN_STATUSES.has(status);
 
-const isTerminalRunStatus = (status: RunStatus | undefined): status is RunStatus =>
+const isTerminalRunStatus = (status: AgentV2RunStatus | undefined): status is AgentV2RunStatus =>
 	status !== undefined && TERMINAL_RUN_STATUSES.has(status);
 
 let currentSessionId: string | undefined;
@@ -413,7 +391,7 @@ let remoteRunStatusPollId: ReturnType<typeof setTimeout> | undefined;
 let remoteRunProviderStallStatusTimerId: ReturnType<typeof setTimeout> | undefined;
 let currentActiveRunId: string | undefined;
 let currentLastRunId: string | undefined;
-let currentRunStatus: RunStatus | undefined;
+let currentRunStatus: AgentV2RunStatus | undefined;
 let currentRunUpdatedAt: string | undefined;
 let currentCapabilityPlan: CapabilityPlan | undefined;
 const remoteRunTransientStatusTexts: RunTransientStatusTexts = {};
@@ -444,7 +422,7 @@ const errorDiagnosticData = (error: unknown, extra: DiagnosticData = {}): Diagno
 	message: error instanceof Error ? error.message : String(error),
 });
 
-const trackRemoteRun = (run?: Pick<RuntimeRunRecord, "runId" | "status" | "updatedAt">): void => {
+const trackRemoteRun = (run?: Pick<AgentV2RunSnapshot, "runId" | "status" | "updatedAt">): void => {
 	currentActiveRunId = run?.runId;
 	currentRunStatus = run?.status;
 	currentRunUpdatedAt = run?.updatedAt;
@@ -531,7 +509,7 @@ const requestChatPanelUpdate = (): void => {
 
 const i18nText = (key: string): string => i18n(key as Parameters<typeof i18n>[0]);
 
-const markRemoteRunSettled = (runId: string, status: RunStatus, updatedAt?: string): void => {
+const markRemoteRunSettled = (runId: string, status: AgentV2RunStatus, updatedAt?: string): void => {
 	closeRemoteRunConnection();
 	clearProviderStallStatusTimer();
 	remoteAgentController = undefined;
@@ -1157,7 +1135,7 @@ function nonEmptyText(value: string | undefined): string | undefined {
 }
 
 function promptTextFromMessage(message: AgentMessage): string | undefined {
-	if (isRecord(message) && typeof message.llmContent === "string") {
+	if ("llmContent" in message && typeof message.llmContent === "string") {
 		const llmContent = nonEmptyText(message.llmContent);
 		if (llmContent) return llmContent;
 	}
@@ -1232,8 +1210,9 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 			});
 		}
 		closeRemoteRunConnection();
-		if (remoteAgentController?.activeRunId === run.runId) {
-			await remoteAgentController.settleRemoteRun(run.status, run.error ?? undefined);
+		const controller = remoteAgentController;
+		if (controller?.activeRunId === run.runId) {
+			await controller.settleRemoteRun(run.status, run.error?.message);
 		}
 		markRemoteRunSettled(run.runId, run.status, run.updatedAt);
 		await saveSession();
@@ -1247,11 +1226,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 };
 
 function reportQueuedRunTimeoutIfNeeded(run: TrackedRemoteRun): void {
-	const diagnostic = createQueuedRunTimeoutDiagnostic({
-		...run,
-		model: {},
-		thinkingLevel: agent.state.thinkingLevel,
-	} as RuntimeRunRecord);
+	const diagnostic = createQueuedRunTimeoutDiagnostic(run);
 	if (!diagnostic || reportedQueuedRunTimeouts.has(run.runId)) {
 		return;
 	}
@@ -1330,7 +1305,7 @@ const cancelCurrentRemoteRun = async (runId: string): Promise<void> => {
 	}
 };
 
-const applyConnectedRunEvent = async (event: RuntimeRunEventRecord): Promise<void> => {
+const applyConnectedRunEvent = async (event: AgentV2RunEventRecord): Promise<void> => {
 	if (!remoteAgentController || event.runId !== remoteAgentController.activeRunId) return;
 
 	const retryStatus = retryStatusFromRunEvent(event);
@@ -1385,18 +1360,7 @@ const applyConnectedRunEvent = async (event: RuntimeRunEventRecord): Promise<voi
 	currentRunUpdatedAt = event.createdAt;
 
 	if (payloadType === "agent_end") {
-		const syncedTerminalStatus = await syncCurrentRunStatusFromServer(event.runId);
-		if (!syncedTerminalStatus) {
-			if (remoteAgentController?.activeRunId === event.runId) {
-				await remoteAgentController.finishRemoteRun("completed");
-			}
-			markRemoteRunSettled(event.runId, "completed", event.createdAt);
-			await saveSession();
-			scheduleRemoteRunRender();
-			requestChatPanelUpdate();
-			refreshGeneratedAppsPanel({ force: true });
-			if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
-		}
+		await syncCurrentRunStatusFromServer(event.runId);
 	}
 };
 
@@ -1420,7 +1384,7 @@ const connectToRemoteRun = (run: TrackedRemoteRun, controller: RemoteAgentContro
 					eventType: "agent.remote_event.error",
 					data: errorDiagnosticData(error, {
 						runId: event.runId,
-						sessionId: event.sessionId,
+						sessionId: currentSessionId,
 						seq: event.seq,
 					}),
 				});
@@ -1682,12 +1646,11 @@ function writeProjectContextPacketDiagnostic(decision: ContextOrchestratorDecisi
 	});
 }
 
-function restoredRunStatusFromEvents(events: RuntimeRunEventRecord[]): RunStatus | undefined {
+function restoredRunStatusFromEvents(events: AgentV2RunEventRecord[]): AgentV2RunStatus | undefined {
 	for (let index = events.length - 1; index >= 0; index -= 1) {
 		const event = events[index];
 		const lifecycleStatus = runStatusFromAgentV2LifecycleEvent(event);
 		if (lifecycleStatus) return lifecycleStatus;
-		if (runEventPayloadType(event) === "agent_end") return "completed";
 	}
 	return undefined;
 }
@@ -1710,9 +1673,9 @@ const restoreActiveRemoteRunFromMetadata = async (
 		return undefined;
 	});
 
-	let replayedEvents: RuntimeRunEventRecord[] = [];
+	let replayedEvents: AgentV2RunEventRecord[] = [];
 	try {
-		replayedEvents = (await listAgentV2RunEvents(activeRunId, 0)).map((event) => toRuntimeRunEventRecord(event, sessionId));
+		replayedEvents = await listAgentV2RunEvents(activeRunId, 0);
 	} catch (error) {
 		writeDiagnosticEvent({
 			level: "warn",
@@ -1724,7 +1687,7 @@ const restoreActiveRemoteRunFromMetadata = async (
 
 	const restoredStatus =
 		restoredRunStatusFromEvents(replayedEvents) ??
-		(run ? agentV2StatusToRunStatus(run.status) : sessionMetadata?.runStatus);
+		(run ? run.status : sessionMetadata?.runStatus);
 	if (!restoredStatus || !isActiveRunStatus(restoredStatus)) {
 		currentActiveRunId = undefined;
 		currentLastRunId = run?.runId ?? sessionMetadata?.lastRunId ?? activeRunId;

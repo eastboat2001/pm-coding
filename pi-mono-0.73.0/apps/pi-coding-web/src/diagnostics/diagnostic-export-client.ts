@@ -1,5 +1,5 @@
-import type { RuntimeSessionRecord } from "@mariozechner/pi-web-workspace";
 import { getOrCreatePiClientId, piClientHeaders } from "../runtime/client-id.js";
+import type { BrowserSessionRecord } from "../runtime/browser-records.js";
 
 const LOGS_API_PREFIX = "/api/pi-logs";
 const DEFAULT_MAX_DIAGNOSTIC_EVENTS = 200000;
@@ -23,18 +23,18 @@ export function buildDiagnosticExportEndpoint(options: DiagnosticExportEndpointO
 	return `${LOGS_API_PREFIX}/export?${params.toString()}`;
 }
 
-export function diagnosticSessionTitle(session: RuntimeSessionRecord): string {
+export function diagnosticSessionTitle(session: BrowserSessionRecord): string {
 	return session.title?.trim() || session.sessionId;
 }
 
-export function diagnosticExportDownloadName(session: RuntimeSessionRecord): string {
+export function diagnosticExportDownloadName(session: BrowserSessionRecord): string {
 	const title = sanitizeFilenamePart(diagnosticSessionTitle(session));
 	const sessionId = sanitizeFilenamePart(session.sessionId);
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 	return `pi-diagnostics-${title}-${sessionId}-${timestamp}.zip`;
 }
 
-export async function downloadDiagnosticSessionExport(session: RuntimeSessionRecord): Promise<void> {
+export async function downloadDiagnosticSessionExport(session: BrowserSessionRecord): Promise<void> {
 	const clientId = getOrCreatePiClientId();
 	const endpoint = buildDiagnosticExportEndpoint({
 		...(session.lastRunId ? { runId: session.lastRunId } : { sessionId: session.sessionId }),

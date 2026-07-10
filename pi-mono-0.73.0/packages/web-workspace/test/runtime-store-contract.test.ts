@@ -8,6 +8,11 @@ import type {
 	AgentV2ValidationRecord,
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "../src/agent-v2-types.js";
+import type {
+	AgentV2DiagnosticExportStore,
+	AgentV2RunApiStore,
+	AgentV2WorkerStore,
+} from "../src/agent-v2-runtime-store.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 import type { RuntimeStore } from "../src/runtime-store.js";
 import type {
@@ -21,7 +26,19 @@ import type {
 } from "../src/types.js";
 
 type Expect<T extends true> = T;
+type Equal<Left, Right> =
+	(<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2 ? true : false;
 type IsRequiredKey<T, K extends keyof T> = Record<never, never> extends Pick<T, K> ? false : true;
+
+type _AgentV2RunApiStoreListsWithClientIdOnly = Expect<
+	Equal<Parameters<AgentV2RunApiStore["listAgentV2Runs"]>["length"], 1>
+>;
+type _AgentV2DiagnosticExportStoreListsWithClientIdOnly = Expect<
+	Equal<Parameters<AgentV2DiagnosticExportStore["listAgentV2Runs"]>["length"], 1>
+>;
+type _AgentV2WorkerStoreListsActiveOwnedRunsWithWorkerIdOnly = Expect<
+	Equal<Parameters<AgentV2WorkerStore["listAgentV2RunsByWorker"]>["length"], 1>
+>;
 
 type _RuntimeStoreRequiresAppendAgentV2RunEvent = Expect<IsRequiredKey<RuntimeStore, "appendAgentV2RunEvent">>;
 type _RuntimeStoreRequiresListAgentV2Runs = Expect<IsRequiredKey<RuntimeStore, "listAgentV2Runs">>;

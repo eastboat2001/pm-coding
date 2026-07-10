@@ -24,7 +24,7 @@ export interface AgentV2SchemaStore {
 export interface AgentV2RunApiStore {
 	createAgentV2Run(input: CreateAgentV2RunInput): AgentV2StoreResult<AgentV2RunSnapshot>;
 	getAgentV2Run(clientId: string, runId: string): AgentV2StoreResult<AgentV2RunSnapshot | undefined>;
-	listAgentV2Runs(clientId: string, options?: { limit?: number; status?: string }): AgentV2StoreResult<AgentV2RunSnapshot[]>;
+	listAgentV2Runs(clientId: string): AgentV2StoreResult<AgentV2RunSnapshot[]>;
 	updateAgentV2RunWithResult(input: UpdateAgentV2RunInput): AgentV2StoreResult<AgentV2RunUpdateResult>;
 }
 
@@ -68,7 +68,8 @@ export interface AgentV2WorkerStore {
 	updateAgentV2Run(input: UpdateAgentV2RunInput): AgentV2StoreResult<AgentV2RunSnapshot>;
 	updateAgentV2RunWithResult(input: UpdateAgentV2RunInput): AgentV2StoreResult<AgentV2RunUpdateResult>;
 	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): AgentV2StoreResult<AgentV2DiagnosticEvent>;
-	listAgentV2RunsByWorker(workerId: string, options?: { statuses?: string[] }): AgentV2StoreResult<AgentV2RunSnapshot[]>;
+	/** Lists this worker's runs whose status is running or cancelling. */
+	listAgentV2RunsByWorker(workerId: string): AgentV2StoreResult<AgentV2RunSnapshot[]>;
 }
 
 export interface AgentV2ResetStoreOptions {
@@ -88,7 +89,7 @@ export interface AgentV2ResetStore {
 
 export interface AgentV2DiagnosticExportStore {
 	getAgentV2Run(clientId: string, runId: string): AgentV2StoreResult<AgentV2RunSnapshot | undefined>;
-	listAgentV2Runs(clientId: string, options?: { limit?: number; status?: string }): AgentV2StoreResult<AgentV2RunSnapshot[]>;
+	listAgentV2Runs(clientId: string): AgentV2StoreResult<AgentV2RunSnapshot[]>;
 	listAgentV2RunEvents(clientId: string, runId: string, afterSeq: number): AgentV2StoreResult<AgentV2RunEventRecord[]>;
 	listAgentV2Diagnostics(clientId: string, runId: string): AgentV2StoreResult<AgentV2DiagnosticEvent[]>;
 }

@@ -21,6 +21,7 @@ const RETIRED_APPLICATION_GENERATION_ENV = [
 	"PI_RUN_MAX_AGENT_TURNS",
 	"PI_RUN_MAX_AGENT_TOOL_EXECUTIONS",
 ] as const;
+const SECRET_SENTINEL = "super-secret-retired-value-DO-NOT-LEAK";
 
 const CONFIG_ENV_KEYS = [
 	"PI_STORAGE_ENV_FILE",
@@ -119,24 +120,57 @@ describe("storage config diagnostics", () => {
 	it.each(RETIRED_APPLICATION_GENERATION_ENV)("rejects retired process env %s", (variable) => {
 		withIsolatedConfigEnv(() => {
 			const root = mkdtempSync(join(tmpdir(), "pi-config-retired-process-"));
-			process.env[variable] = "retired";
+			process.env[variable] = SECRET_SENTINEL;
 
 			try {
 				loadStorageConfig(root);
 				throw new Error("expected retired configuration to be rejected");
 			} catch (error) {
 				expect(error).toBeInstanceOf(RetiredApplicationGenerationConfigError);
-				expect((error as RetiredApplicationGenerationConfigError).variables).toEqual([variable]);
-				expect((error as Error).message).toContain(variable);
+				if (!(error instanceof RetiredApplicationGenerationConfigError)) throw error;
+				expect(error.variables).toEqual([variable]);
+				expect(error.message).toContain(variable);
+				expect(error.variables).not.toContain(SECRET_SENTINEL);
+				expect(error.message).not.toContain(SECRET_SENTINEL);
 			}
 		});
 	});
 
-	it("rejects retired variables from the configured .env file", () => {
+	it("rejects an empty retired process env value", () => {
+		withIsolatedConfigEnv(() => {
+			const root = mkdtempSync(join(tmpdir(), "pi-config-retired-empty-process-"));
+			process.env.PI_APP_AGENT_VERSION = "";
+
+			expect(() => loadStorageConfig(root)).toThrow(/PI_APP_AGENT_VERSION/);
+		});
+	});
+
+	it("rejects retired variables from the configured .env file without leaking their values", () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-config-retired-file-"));
 		try {
 			withIsolatedConfigEnv(() => {
-				writeFileSync(join(dir, ".env"), "PI_RUN_QUEUE_NAME=pi:runs\n");
+				writeFileSync(join(dir, ".env"), `PI_RUN_QUEUE_NAME=${SECRET_SENTINEL}\n`);
+
+				try {
+					loadStorageConfig(dir);
+					throw new Error("expected retired configuration to be rejected");
+				} catch (error) {
+					expect(error).toBeInstanceOf(RetiredApplicationGenerationConfigError);
+					if (!(error instanceof RetiredApplicationGenerationConfigError)) throw error;
+					expect(error.variables).toEqual(["PI_RUN_QUEUE_NAME"]);
+					expect(error.message).not.toContain(SECRET_SENTINEL);
+				}
+			});
+		} finally {
+			rmSync(dir, { force: true, recursive: true });
+		}
+	});
+
+	it("rejects an empty retired value from the configured .env file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-config-retired-empty-file-"));
+		try {
+			withIsolatedConfigEnv(() => {
+				writeFileSync(join(dir, ".env"), "PI_RUN_QUEUE_NAME=\n");
 				expect(() => loadStorageConfig(dir)).toThrow(/PI_RUN_QUEUE_NAME/);
 			});
 		} finally {
@@ -167,6 +201,33 @@ describe("storage config diagnostics", () => {
 					queueName: "custom-agent-v2-runs",
 					eventStreamMaxLen: 2500,
 					eventStreamTtlSeconds: 900,
+				});
+			});
+		} finally {
+			rmSync(dir, { force: true, recursive: true });
+		}
+	});
+
+	it("prefers process env for all agent v2 runtime overrides", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-config-agent-v2-precedence-"));
+		try {
+			withIsolatedConfigEnv(() => {
+				writeFileSync(
+					join(dir, ".env"),
+					[
+						"PI_AGENT_V2_RUN_QUEUE_NAME=file-agent-v2-runs",
+						"PI_AGENT_V2_RUN_EVENT_STREAM_MAXLEN=1111",
+						"PI_AGENT_V2_RUN_EVENT_STREAM_TTL_SECONDS=2222",
+					].join("\n"),
+				);
+				process.env.PI_AGENT_V2_RUN_QUEUE_NAME = "process-agent-v2-runs";
+				process.env.PI_AGENT_V2_RUN_EVENT_STREAM_MAXLEN = "3333";
+				process.env.PI_AGENT_V2_RUN_EVENT_STREAM_TTL_SECONDS = "4444";
+
+				expect(loadStorageConfig(dir).agentV2).toEqual({
+					queueName: "process-agent-v2-runs",
+					eventStreamMaxLen: 3333,
+					eventStreamTtlSeconds: 4444,
 				});
 			});
 		} finally {

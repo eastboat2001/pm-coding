@@ -263,6 +263,23 @@ docker compose ps
 
 PostgreSQL and Redis data are preserved in the Podman named volumes unless you run `docker compose down -v` or remove those volumes explicitly.
 
+## Production Cutover Rehearsal
+
+Before the production cutover, remove `PI_APP_AGENT_VERSION` and every legacy `PI_RUN_*` variable from the deployment environment. PI Coding Web runs Agent v2 only: do not run a dual v1/v2 runtime.
+
+Configure `PI_CUTOVER_MODEL_PROVIDER` and `PI_CUTOVER_MODEL_ID` in `.env`, then run the rehearsal from this directory:
+
+```bash
+docker compose config
+docker compose up -d --no-build postgres redis pi-coding-web pi-worker
+docker compose --profile cutover run --rm pi-cutover-rehearsal
+docker compose logs --tail=200 pi-coding-web pi-worker
+```
+
+The rehearsal checks storage health, starts and reads an Agent v2 run, replays its events, cancels that run, and confirms retired v1 run/session routes return tombstones. It never calls reset or removes runtime data. A zero exit code means every check passed; the command prints one JSON report and returns nonzero for any failed check.
+
+Existing v1 runtime data is not migrated. A fresh deployment or reset is destructive and requires explicit operator confirmation before it is performed. Rollback means redeploying the previous image; it does not restore a v1 runtime beside Agent v2.
+
 ## Quick Health Checks
 
 ```bash

@@ -335,6 +335,19 @@ describe("agent v2 production import boundary", () => {
 		expect(existsSync(join(repoRoot, "apps", "pi-coding-web", "src", "worker", "legacy-v1-main.ts"))).toBe(false);
 	});
 
+	it("keeps the cutover rehearsal on v2 routes without reset or legacy configuration", () => {
+		const source = readFileSync(
+			join(repoRoot, "apps", "pi-coding-web", "src", "worker", "cutover-rehearsal.ts"),
+			"utf8",
+		);
+
+		expect(source).toContain("/api/agent-v2/runs");
+		expect(source).toContain("/api/pi-storage/status");
+		expect(source).not.toContain("/api/pi-storage/reset");
+		expect(source).not.toContain("PI_APP_AGENT_VERSION");
+		expect(source).not.toMatch(/PI_RUN_/);
+	});
+
 	it("removes legacy v1 generation services and their dedicated tests", () => {
 		for (const file of deletedLegacyGenerationFiles) {
 			expect(existsSync(join(repoRoot, file)), `${file} must be deleted`).toBe(false);

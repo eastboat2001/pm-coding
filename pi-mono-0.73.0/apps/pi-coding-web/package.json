@@ -9,6 +9,7 @@
     "build:worker": "npm run build --workspace=@mariozechner/pi-web-workspace && tsgo -p tsconfig.worker.json",
     "preview": "vite preview",
     "worker": "node dist-worker/worker/main.js",
+    "rehearse:cutover": "node dist-worker/worker/cutover-rehearsal.js",
     "logs": "node scripts/pi-logs.mjs",
     "test": "tsx ../../node_modules/vitest/dist/cli.js --run --config vitest.config.ts",
     "check": "tsgo --noEmit",

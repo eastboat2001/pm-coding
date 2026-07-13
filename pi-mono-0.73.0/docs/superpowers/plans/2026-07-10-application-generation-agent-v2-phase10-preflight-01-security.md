@@ -192,7 +192,7 @@ Expected: at least the metadata/symlink cases FAIL on current lexical checks.
 
 - [ ] **Step 3: Replace lexical caller logic**
 
-For file create use `authorizeNew`; get/update/delete use `authorizeExisting(..., "file")`; rewrite chooses existing/new. Preview derives trusted project root from `dirname(metadataPath)`, authorizes metadata `serveRoot` with trusted lifecycle policy, then authorizes every requested target with project-content policy. Only `path_missing` may fall back to authorized `index.html`.
+For file create use `authorizeNew`; get/update/delete use `authorizeExisting(..., "file")`; rewrite chooses existing/new. Preview derives trusted project root from `dirname(metadataPath)`, authorizes metadata `serveRoot` as ordinary project content with `WorkspacePathGuard.forProjectContent(projectRoot).authorizeAbsoluteExisting(..., "directory")`, then creates a project-content guard rooted at that authorized serve root for every requested target. `trusted_lifecycle` remains reserved for `.pi/build-staging` and is never used to authorize preview content. Only `path_missing` may fall back to authorized `index.html`.
 
 - [ ] **Step 4: Sync, verify and commit**
 

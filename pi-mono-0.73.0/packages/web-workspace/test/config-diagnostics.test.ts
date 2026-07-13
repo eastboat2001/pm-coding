@@ -26,6 +26,15 @@ const RETIRED_APPLICATION_GENERATION_ENV = [
 	"PI_PROJECT_BUILD_TIMEOUT_MS",
 ] as const;
 const SECRET_SENTINEL = "super-secret-retired-value-DO-NOT-LEAK";
+const INVALID_REGISTRY_ORIGINS = [
+	"https://.",
+	"https://.example.com",
+	"https://a..b",
+	"https://-",
+	"https://_",
+	"https://example.com:0",
+] as const;
+const INVALID_REGISTRY_MESSAGE = "Error: Invalid production container build configuration: PI_BUILD_REGISTRY_ORIGINS";
 
 const CONFIG_ENV_KEYS = [
 	"PI_STORAGE_ENV_FILE",
@@ -263,6 +272,44 @@ describe("storage config diagnostics", () => {
 			expect(() => loadStorageConfig(root)).toThrow(variable);
 		});
 	});
+
+	it.each(INVALID_REGISTRY_ORIGINS)(
+		"rejects malformed process-env registry origin without leaking its value: %s",
+		(value) => {
+			withIsolatedConfigEnv(() => {
+				const root = mkdtempSync(join(tmpdir(), "pi-config-invalid-registry-process-"));
+				process.env.PI_BUILD_REGISTRY_ORIGINS = value;
+
+				try {
+					loadStorageConfig(root);
+					throw new Error("expected malformed registry origin to be rejected");
+				} catch (error) {
+					expect(String(error)).toBe(INVALID_REGISTRY_MESSAGE);
+				}
+			});
+		},
+	);
+
+	it.each(INVALID_REGISTRY_ORIGINS)(
+		"rejects malformed env-file registry origin without leaking its value: %s",
+		(value) => {
+			const dir = mkdtempSync(join(tmpdir(), "pi-config-invalid-registry-file-"));
+			try {
+				withIsolatedConfigEnv(() => {
+					writeFileSync(join(dir, ".env"), `PI_BUILD_REGISTRY_ORIGINS=${value}\n`);
+
+					try {
+						loadStorageConfig(dir);
+						throw new Error("expected malformed registry origin to be rejected");
+					} catch (error) {
+						expect(String(error)).toBe(INVALID_REGISTRY_MESSAGE);
+					}
+				});
+			} finally {
+				rmSync(dir, { force: true, recursive: true });
+			}
+		},
+	);
 
 	it("loads all agent v2 runtime overrides", () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-config-agent-v2-"));

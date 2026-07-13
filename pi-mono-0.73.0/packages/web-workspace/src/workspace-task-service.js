@@ -104,13 +104,14 @@ export class WorkspaceTaskService {
             return buildStaticResult(options, "passed", true, build.serveRoot, [], logs);
         }
         catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            if (error instanceof BuildRunnerError) {
+            const isBuildRunnerError = error instanceof BuildRunnerError;
+            const message = isBuildRunnerError ? error.message : "Static build failed.";
+            if (isBuildRunnerError) {
                 for (const log of error.logs ?? [])
                     appendProjectLog(logs, log);
             }
             appendProjectLog(logs, message);
-            return buildStaticResult(options, "failed", false, findStaticServeRoot(options.projectDir, staticServeRootCandidates(true)) || "", [message], logs, error instanceof BuildRunnerError ? error.code : undefined);
+            return buildStaticResult(options, "failed", false, findStaticServeRoot(options.projectDir, staticServeRootCandidates(true)) || "", [message], logs, isBuildRunnerError ? error.code : "build.execution_failed");
         }
     }
     recordTaskResult(result) {

@@ -181,6 +181,34 @@ it("generates exact host and port pairs without cross-pair authorization", async
 	expect(numericError).toMatchObject({ code: "build.policy_rejected" });
 });
 
+it("emits an exact dstdomain ACL without sibling or subdomain wildcard semantics", async () => {
+	const executor = new FakeExecutor();
+	await runner(executor, { registryOrigins: ["https://registry.npmjs.org"] }).build({
+		projectId: "p",
+		...fixture(),
+		allowedOutputs: ["dist"],
+	});
+	const bytes = executor.commands.find(({ command }) => command.stdin)?.command.stdin;
+	const config = bytes ? new TextDecoder().decode(bytes) : "";
+
+	expect(config).toContain("acl origin_0_host dstdomain registry.npmjs.org");
+	expect(config).not.toContain("dstdomain .registry.npmjs.org");
+	expect(config).not.toContain("dstdomain npmjs.org");
+});
+
+it("rejects a suffix-wildcard registry hostname before invoking the engine", async () => {
+	const executor = new FakeExecutor();
+	const error = await runner(executor, { registryOrigins: ["https://.example.com"] })
+		.build({ projectId: "p", ...fixture(), allowedOutputs: ["dist"] })
+		.catch((value: unknown) => value);
+
+	expect(error).toMatchObject({
+		code: "build.policy_rejected",
+		message: "Registry origins must be exact HTTPS DNS hostname origins.",
+	});
+	expect(executor.commands).toEqual([]);
+});
+
 it("rejects missing or mutable images before invoking an engine", async () => {
 	for (const overrides of [{ image: "" }, { image: "node:22" }, { proxyImage: "ubuntu/squid:latest" }]) {
 		const executor = new FakeExecutor();

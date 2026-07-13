@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { type BuildRunner, BuildRunnerError } from "../src/build-runner.js";
+import { WorkspaceDiagnosticLogService } from "../src/diagnostic-log-service.js";
 import type { StorageConfig } from "../src/types.js";
 import { WorkspaceFileService } from "../src/workspace-file-service.js";
 import { projectDirectory } from "../src/workspace-paths.js";
@@ -234,6 +235,39 @@ describe("project execution and preview hardening", () => {
 		expect(logText.length).toBeLessThan(80_000);
 		expect(logText).toContain("[truncated");
 		expect(result.failureCode).toBe("build.execution_failed");
+	});
+
+	it("normalizes unknown BuildRunner failures without exposing raw error details", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
+		mkdirSync(projectDir, { recursive: true });
+		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ scripts: { build: "node build.js" } }), "utf8");
+		const diagnostics = new WorkspaceDiagnosticLogService(config);
+		diagnostics.ensureDirs();
+		const runner: BuildRunner = {
+			build: async () => {
+				throw new Error("Authorization=Bearer secret");
+			},
+		};
+		const service = createWorkspaceTaskService(config, { buildRunner: runner, diagnostics });
+
+		const result = await service.run({
+			task: "build_static",
+			clientId: "client-a",
+			sessionId: "s1",
+			title: "Secret",
+		});
+		const diagnosticText = JSON.stringify(diagnostics.queryEvents({ sessionId: "s1", limit: 10 }));
+
+		expect(result).toMatchObject({
+			status: "failed",
+			failureCode: "build.execution_failed",
+			errors: ["Static build failed."],
+		});
+		expect(result.logs?.join("\n")).toContain("Static build failed.");
+		expect(JSON.stringify(result)).not.toContain("Authorization=Bearer secret");
+		expect(diagnosticText).not.toContain("Authorization=Bearer secret");
 	});
 
 	it("fails validate when static app JavaScript does not match the generated HTML contract", async () => {

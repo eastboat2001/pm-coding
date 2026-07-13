@@ -75,7 +75,7 @@ export async function runAgentV2StaticValidationGate(
 			undefined,
 			input.signal,
 		);
-		if (buildResult.status === "failed" && buildResult.failureCode) {
+		if (buildResult.status === "failed") {
 			taskResult = buildResult;
 		} else {
 			throwIfAborted(input.signal);
@@ -92,9 +92,10 @@ export async function runAgentV2StaticValidationGate(
 		}
 	}
 	const rawErrors = rawErrorsFor(taskResult);
-	const failures = taskResult.failureCode
-		? [classifyBuildRunnerFailure(taskResult, input.taskId)]
-		: rawErrors.map((message) => classifyStaticValidationFailure(message, input.taskId));
+	const failures =
+		taskResult.task === "build_static" && taskResult.status === "failed"
+			? [classifyBuildRunnerFailure(taskResult, input.taskId)]
+			: rawErrors.map((message) => classifyStaticValidationFailure(message, input.taskId));
 	if (failures.length === 0 && taskResult.status === "failed") {
 		failures.push(
 			createFailure({

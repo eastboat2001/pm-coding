@@ -166,6 +166,45 @@ describe("agent v2 validation gate", () => {
 		});
 	});
 
+	it("stops after an untyped failed build and normalizes its classification", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const sourceMessage =
+			"Static preview found a build source entry at ./src/main.ts. Run build_static before preview so PI can serve browser-ready dist/build output.";
+		const tasks = mockTaskSequence([
+			taskResult({ task: "validate", status: "failed", valid: false, errors: [sourceMessage], serveRoot: "" }),
+			taskResult({
+				task: "build_static",
+				status: "failed",
+				valid: false,
+				errors: ["Static build failed."],
+				logs: ["Static build failed."],
+				serveRoot: "",
+			}),
+			taskResult({ task: "validate", status: "failed", valid: false, errors: [sourceMessage], serveRoot: "" }),
+		]);
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+			tasks,
+		});
+
+		expect(tasks.calls).toEqual(["validate", "build_static"]);
+		expect(result.status).toBe("failed");
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "build.execution_failed",
+				source: "static_validate",
+				retryable: true,
+			}),
+		]);
+		expect(result.rawResult.task).toBe("build_static");
+	});
+
 	it("runs build_static between validate attempts when source output must be built", async () => {
 		const config = testConfig(tempRoot());
 		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };

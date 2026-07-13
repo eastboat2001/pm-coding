@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync } from "node:fs";
-import { isIP } from "node:net";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { inspectBuildManifest } from "./build-manifest-policy.js";
 import {
@@ -10,6 +9,7 @@ import {
 	type BuildRunnerInput,
 	type BuildRunnerResult,
 } from "./build-runner.js";
+import { parseExactRegistryOrigin } from "./registry-origin.js";
 
 export interface ContainerCommand {
 	args: readonly string[];
@@ -581,25 +581,14 @@ function proxyConfiguration(origins: readonly string[]): string {
 		throw new BuildRunnerError("build.config_missing", "At least one registry origin is required.");
 	const normalized = new Map<string, { hostname: string; port: number }>();
 	for (const origin of origins) {
-		let url: URL;
-		try {
-			url = new URL(origin);
-		} catch {
-			throw new BuildRunnerError("build.policy_rejected", "Registry origin is invalid.");
+		const parsed = parseExactRegistryOrigin(origin);
+		if (!parsed) {
+			throw new BuildRunnerError(
+				"build.policy_rejected",
+				"Registry origins must be exact HTTPS DNS hostname origins.",
+			);
 		}
-		if (
-			url.protocol !== "https:" ||
-			url.pathname !== "/" ||
-			url.search ||
-			url.hash ||
-			url.username ||
-			url.password ||
-			isNumericHostname(url.hostname)
-		) {
-			throw new BuildRunnerError("build.policy_rejected", "Registry origins must be pure HTTPS hostname origins.");
-		}
-		const hostname = url.hostname.toLowerCase();
-		const port = url.port ? Number(url.port) : 443;
+		const { hostname, port } = parsed;
 		normalized.set(`${hostname}:${port}`, { hostname, port });
 	}
 	const accessRules: string[] = [];
@@ -627,11 +616,6 @@ function proxyConfiguration(origins: readonly string[]): string {
 		"visible_hostname proxy",
 		"",
 	].join("\n");
-}
-
-function isNumericHostname(hostname: string): boolean {
-	const candidate = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-	return isIP(candidate) !== 0;
 }
 
 function assertSimpleProjectId(projectId: string): void {

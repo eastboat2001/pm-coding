@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync } from "node:fs";
-import { isIP } from "node:net";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { inspectBuildManifest } from "./build-manifest-policy.js";
 import { BuildRunnerError, } from "./build-runner.js";
+import { parseExactRegistryOrigin } from "./registry-origin.js";
 const DIGEST_IMAGE = /^[^\s@]+@sha256:[0-9a-f]{64}$/;
 const publicationLocks = new Map();
 export class BuildRunnerCleanupError extends BuildRunnerError {
@@ -472,24 +472,11 @@ function proxyConfiguration(origins) {
         throw new BuildRunnerError("build.config_missing", "At least one registry origin is required.");
     const normalized = new Map();
     for (const origin of origins) {
-        let url;
-        try {
-            url = new URL(origin);
+        const parsed = parseExactRegistryOrigin(origin);
+        if (!parsed) {
+            throw new BuildRunnerError("build.policy_rejected", "Registry origins must be exact HTTPS DNS hostname origins.");
         }
-        catch {
-            throw new BuildRunnerError("build.policy_rejected", "Registry origin is invalid.");
-        }
-        if (url.protocol !== "https:" ||
-            url.pathname !== "/" ||
-            url.search ||
-            url.hash ||
-            url.username ||
-            url.password ||
-            isNumericHostname(url.hostname)) {
-            throw new BuildRunnerError("build.policy_rejected", "Registry origins must be pure HTTPS hostname origins.");
-        }
-        const hostname = url.hostname.toLowerCase();
-        const port = url.port ? Number(url.port) : 443;
+        const { hostname, port } = parsed;
         normalized.set(`${hostname}:${port}`, { hostname, port });
     }
     const accessRules = [];
@@ -512,10 +499,6 @@ function proxyConfiguration(origins) {
         "visible_hostname proxy",
         "",
     ].join("\n");
-}
-function isNumericHostname(hostname) {
-    const candidate = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-    return isIP(candidate) !== 0;
 }
 function assertSimpleProjectId(projectId) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(projectId))

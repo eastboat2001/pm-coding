@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import { isIP } from "node:net";
 import { isAbsolute, join, resolve } from "node:path";
 import { CONFIG_ENV_FILE } from "./constants.js";
 import { normalizePreviewOrigin } from "./preview-origin.js";
+import { parseExactRegistryOrigin } from "./registry-origin.js";
 const RETIRED_APPLICATION_GENERATION_ENV = [
     "PI_APP_AGENT_VERSION",
     "PI_RUNS_ENABLED",
@@ -148,17 +148,7 @@ function registryOriginValues(value) {
     return origins;
 }
 function isRegistryOrigin(value) {
-    try {
-        const url = new URL(value);
-        return (url.protocol === "https:" &&
-            url.origin === value &&
-            url.username === "" &&
-            url.password === "" &&
-            isIP(url.hostname.replace(/^\[|\]$/g, "")) === 0);
-    }
-    catch {
-        return false;
-    }
+    return parseExactRegistryOrigin(value) !== undefined;
 }
 function invalidContainerBuildConfig(variableName) {
     return new Error(`Invalid production container build configuration: ${variableName}`);

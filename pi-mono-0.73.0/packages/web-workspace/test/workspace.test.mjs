@@ -33,10 +33,17 @@ function testConfig(root, overrides = {}) {
 		},
 		previewBaseUrl: "http://localhost:5173",
 		previewInternalOrigin: "http://127.0.0.1:5173",
-		projectInstallCommand: "npm install",
-		projectBuildCommand: "npm run build",
-		projectInstallTimeoutMs: 120000,
-		projectBuildTimeoutMs: 120000,
+		containerBuild: {
+			engine: "docker",
+			image: "node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752",
+			proxyImage: "ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029",
+			timeoutMs: 120000,
+			cpus: 1,
+			memoryMb: 512,
+			pidsLimit: 128,
+			maxLogChars: 12000,
+			registryOrigins: ["https://registry.npmjs.org"],
+		},
 		clientIdRequired: true,
 		defaultModelProvider: "",
 		defaultModelId: "",
@@ -74,6 +81,12 @@ function testConfig(root, overrides = {}) {
 		...overrides,
 	};
 }
+
+const unusedBuildRunner = {
+	async build() {
+		throw new Error("BuildRunner must not be called by this test.");
+	},
+};
 
 async function test(name, fn) {
 	await fn();
@@ -152,10 +165,15 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 			"PI_SKILLS_DIR=env/skills",
 			"PI_DEFAULT_SKILLS_DIR=env/default-skills",
 			"PI_PREVIEW_BASE_URL=http://env.local/",
-			"PI_PROJECT_INSTALL_COMMAND=pnpm install",
-			"PI_PROJECT_BUILD_COMMAND=pnpm build",
-			"PI_PROJECT_INSTALL_TIMEOUT_MS=300000",
-			"PI_PROJECT_BUILD_TIMEOUT_MS=310000",
+			"PI_BUILD_CONTAINER_ENGINE=podman",
+			"PI_BUILD_CONTAINER_IMAGE=node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752",
+			"PI_BUILD_PROXY_IMAGE=ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029",
+			"PI_BUILD_TIMEOUT_MS=300000",
+			"PI_BUILD_CPUS=1.5",
+			"PI_BUILD_MEMORY_MB=768",
+			"PI_BUILD_PIDS_LIMIT=96",
+			"PI_BUILD_MAX_LOG_CHARS=9000",
+			"PI_BUILD_REGISTRY_ORIGINS=https://registry.npmjs.org,https://cdn.jsdelivr.net",
 			"PI_DEFAULT_MODEL_PROVIDER=env-provider",
 			"PI_DEFAULT_MODEL_ID=env-model",
 			"PI_HANDOFF_DEFAULT_THINKING_LEVEL=low",
@@ -174,10 +192,15 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 		"PI_SKILLS_DIR",
 		"PI_DEFAULT_SKILLS_DIR",
 		"PI_PREVIEW_BASE_URL",
-		"PI_PROJECT_INSTALL_COMMAND",
-		"PI_PROJECT_BUILD_COMMAND",
-		"PI_PROJECT_INSTALL_TIMEOUT_MS",
-		"PI_PROJECT_BUILD_TIMEOUT_MS",
+		"PI_BUILD_CONTAINER_ENGINE",
+		"PI_BUILD_CONTAINER_IMAGE",
+		"PI_BUILD_PROXY_IMAGE",
+		"PI_BUILD_TIMEOUT_MS",
+		"PI_BUILD_CPUS",
+		"PI_BUILD_MEMORY_MB",
+		"PI_BUILD_PIDS_LIMIT",
+		"PI_BUILD_MAX_LOG_CHARS",
+		"PI_BUILD_REGISTRY_ORIGINS",
 		"PI_DEFAULT_MODEL_PROVIDER",
 		"PI_DEFAULT_MODEL_ID",
 		"PI_HANDOFF_DEFAULT_THINKING_LEVEL",
@@ -198,10 +221,17 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 		assert.equal(config.skillsDir, resolve(root, "env/skills"));
 		assert.equal(config.defaultSkillsDir, resolve(root, "env/default-skills"));
 		assert.equal(config.previewBaseUrl, "http://env.local");
-		assert.equal(config.projectInstallCommand, "pnpm install");
-		assert.equal(config.projectBuildCommand, "pnpm build");
-		assert.equal(config.projectInstallTimeoutMs, 300000);
-		assert.equal(config.projectBuildTimeoutMs, 310000);
+		assert.deepEqual(config.containerBuild, {
+			engine: "podman",
+			image: "node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752",
+			proxyImage: "ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029",
+			timeoutMs: 300000,
+			cpus: 1.5,
+			memoryMb: 768,
+			pidsLimit: 96,
+			maxLogChars: 9000,
+			registryOrigins: ["https://registry.npmjs.org", "https://cdn.jsdelivr.net"],
+		});
 		assert.equal(config.defaultModelProvider, "env-provider");
 		assert.equal(config.defaultModelId, "env-model");
 		assert.equal(config.handoffDefaultThinkingLevel, "low");
@@ -871,7 +901,7 @@ await test("WorkspaceFileService previews a current project text file without wr
 	assert.equal(preview.truncated, false);
 	assert.equal(preview.hash.length, 64);
 	assert.equal(existsSync(siblingDir), true);
-	assert.throws(() => service.readProjectFilePreview({ ...context, filename: "../outside.txt" }), /Project path component/);
+	assert.throws(() => service.readProjectFilePreview({ ...context, filename: "../outside.txt" }), /Workspace path component/);
 });
 
 await test("WorkspaceFileService saves a text file preview with hash conflict protection", () => {
@@ -961,7 +991,7 @@ await test("WorkspaceFileService rejects project paths that escape the workspace
 			filename: "../outside.txt",
 			content: "no",
 		}),
-	/Project path component is empty\./);
+	/Workspace path component is invalid\./);
 });
 
 await test("WorkspaceCommandService rejects commands that can stop the PI server", async () => {
@@ -1003,7 +1033,7 @@ await test("configuredStoragePlugin ignores generated storage directories in the
 
 await test("WorkspacePreviewService serves dist when a project was built", async () => {
 	const root = tempRoot();
-	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
+	const config = testConfig(root);
 	const fileService = new WorkspaceFileService(config);
 	const previewService = new WorkspacePreviewService(config);
 	const context = { clientId: "client-a", sessionId: "session-abcdef", title: "Built App" };
@@ -1124,7 +1154,7 @@ await test("WorkspacePreviewService rewrites running project preview URLs for th
 
 	const result = previewService.listProjects({ headers: { host: "127.0.0.1:5194" } });
 
-	assert.equal(result.projects[0].previewUrl, "http://127.0.0.1:5194/preview/current-host-app/");
+	assert.equal(result.projects[0].previewUrl, "http://127.0.0.1:5173/preview/current-host-app/");
 });
 
 await test("WorkspacePreviewService renames generated project metadata", async () => {
@@ -1159,7 +1189,7 @@ await test("WorkspacePreviewService renames generated project metadata", async (
 
 	assert.equal(result.title, "Renamed App");
 	assert.equal(result.status, "running");
-	assert.equal(result.previewUrl, "http://127.0.0.1:5194/preview/rename-app/");
+	assert.equal(result.previewUrl, "http://127.0.0.1:5173/preview/rename-app/");
 	assert.equal(result.updatedAt, updatedAt);
 	assert.equal(metadata.title, "Renamed App");
 	assert.equal(metadata.updatedAt, updatedAt);
@@ -1169,7 +1199,7 @@ await test("WorkspaceTaskService previews static root without running package sc
 	const root = tempRoot();
 	const config = testConfig(root);
 	const fileService = new WorkspaceFileService(config);
-	const taskService = new WorkspaceTaskService(config);
+	const taskService = new WorkspaceTaskService(config, unusedBuildRunner);
 	const context = { clientId: "client-a", sessionId: "session-static-script", title: "Static Script" };
 
 	const created = fileService.handle({
@@ -1202,7 +1232,7 @@ await test("WorkspaceTaskService previews static root without running package sc
 
 await test("WorkspacePreviewService rejects build source entries before build_static", async () => {
 	const root = tempRoot();
-	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
+	const config = testConfig(root);
 	const fileService = new WorkspaceFileService(config);
 	const previewService = new WorkspacePreviewService(config);
 	const context = { clientId: "client-a", sessionId: "session-vite-source", title: "Vite Source" };
@@ -1235,9 +1265,9 @@ await test("WorkspacePreviewService rejects build source entries before build_st
 
 await test("WorkspaceTaskService rejects Node services without a static entry", async () => {
 	const root = tempRoot();
-	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
+	const config = testConfig(root);
 	const fileService = new WorkspaceFileService(config);
-	const taskService = new WorkspaceTaskService(config);
+	const taskService = new WorkspaceTaskService(config, unusedBuildRunner);
 	const context = { clientId: "client-a", sessionId: "session-node-service", title: "Node Service" };
 
 	fileService.handle({
@@ -1261,21 +1291,25 @@ await test("WorkspaceTaskService rejects Node services without a static entry", 
 	assert.match(result.logs.join(""), /Node services are not started/);
 });
 
-await test("WorkspaceTaskService build_static runs the configured build and exposes static output", async () => {
+await test("WorkspaceTaskService build_static uses BuildRunner and exposes static output", async () => {
 	const root = tempRoot();
-	const config = testConfig(root, {
-		projectInstallCommand: "npm install",
-		projectBuildCommand: "npm exec vite build",
-	});
+	const config = testConfig(root);
 	const fileService = new WorkspaceFileService(config);
-	const commands = [];
-	const taskService = new WorkspaceTaskService(config, undefined, async (command, cwd, _timeoutMs, logs) => {
-		commands.push(command);
-		logs.push(`ran: ${command}\n`);
-		if (command === "npm exec vite build") {
-			mkdirSync(join(cwd, "dist"), { recursive: true });
-			writeFileSync(join(cwd, "dist", "index.html"), "<h1>Built static</h1>", "utf8");
-		}
+	const buildInputs = [];
+	const taskService = new WorkspaceTaskService(config, {
+		async build(input) {
+			buildInputs.push(input);
+			const serveRoot = join(input.projectRoot, "dist");
+			mkdirSync(serveRoot, { recursive: true });
+			writeFileSync(join(serveRoot, "index.html"), "<h1>Built static</h1>", "utf8");
+			return {
+				serveRoot,
+				outputDirectory: "dist",
+				files: ["index.html"],
+				logs: ["container build completed\n"],
+				durationMs: 1,
+			};
+		},
 	});
 	const context = { clientId: "client-a", sessionId: "session-build-static", title: "Build Static" };
 
@@ -1297,7 +1331,21 @@ await test("WorkspaceTaskService build_static runs the configured build and expo
 
 	assert.equal(build.status, "passed");
 	assert.equal(build.valid, true);
-	assert.deepEqual(commands, ["npm install", "npm exec vite build"]);
+	assert.equal(buildInputs.length, 1);
+	assert.deepEqual(
+		{
+			projectId: buildInputs[0].projectId,
+			projectRoot: buildInputs[0].projectRoot,
+			artifactRoot: buildInputs[0].artifactRoot,
+			allowedOutputs: buildInputs[0].allowedOutputs,
+		},
+		{
+			projectId: "dist",
+			projectRoot: String(created.projectRoot),
+			artifactRoot: String(created.projectRoot),
+			allowedOutputs: ["dist", "build", "public"],
+		},
+	);
 	assert.equal(build.serveRoot, join(String(created.projectRoot), "dist"));
 	assert.equal(existsSync(join(String(created.projectRoot), "dist", "index.html")), true);
 	assert.match(build.logs.join(""), /Static build completed/);
@@ -1307,7 +1355,7 @@ await test("WorkspaceTaskService build_static runs the configured build and expo
 
 await test("WorkspacePreviewService does not return a clickable URL for an unpreviewable project", async () => {
 	const root = tempRoot();
-	const config = testConfig(root, { projectInstallCommand: "", projectBuildCommand: "" });
+	const config = testConfig(root);
 	const fileService = new WorkspaceFileService(config);
 	const previewService = new WorkspacePreviewService(config);
 	const context = { clientId: "client-a", sessionId: "session-unpreviewable", title: "Unpreviewable" };

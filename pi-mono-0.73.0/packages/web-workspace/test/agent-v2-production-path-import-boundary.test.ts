@@ -330,6 +330,33 @@ describe("agent v2 production import boundary", () => {
 		}
 	});
 
+	it("routes production workspace tasks through the isolated BuildRunner factory", () => {
+		const factoryFile = join(repoRoot, "packages/web-workspace/src/workspace-task-factory.ts");
+		expect(existsSync(factoryFile), "workspace task factory must exist").toBe(true);
+		if (!existsSync(factoryFile)) return;
+		const factory = readFileSync(factoryFile, "utf8");
+		const taskService = readFileSync(join(repoRoot, "packages/web-workspace/src/workspace-task-service.ts"), "utf8");
+		const vitePlugin = readFileSync(join(repoRoot, "packages/web-workspace/src/vite-plugin.ts"), "utf8");
+		const serverTools = readFileSync(join(repoRoot, "packages/web-workspace/src/server-agent-tools.ts"), "utf8");
+		const validationGate = readFileSync(
+			join(repoRoot, "packages/web-workspace/src/agent-v2-validation-gate.ts"),
+			"utf8",
+		);
+
+		expect(factory).toContain("new EphemeralContainerBuildRunner");
+		expect(factory).toContain("config.containerBuild");
+		expect(taskService).not.toContain("runCommand");
+		expect(taskService).not.toContain("ProjectCommandRunner");
+		for (const [name, source] of [
+			["vite-plugin.ts", vitePlugin],
+			["server-agent-tools.ts", serverTools],
+			["agent-v2-validation-gate.ts", validationGate],
+		] as const) {
+			expect(source, name).toContain("createWorkspaceTaskService");
+			expect(source, name).not.toContain("new WorkspaceTaskService");
+		}
+	});
+
 	it("deletes the legacy v1 worker entry", () => {
 		expect(existsSync(join(repoRoot, "apps", "pi-coding-web", "src", "worker", "legacy-v1-main.ts"))).toBe(false);
 	});

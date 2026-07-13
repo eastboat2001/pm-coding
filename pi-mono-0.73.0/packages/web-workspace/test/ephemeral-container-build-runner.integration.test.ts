@@ -3,13 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import { BuildRunnerError, type BuildRunnerResult } from "../src/build-runner.js";
-import {
-	type ContainerCommand,
-	type ContainerCommandExecutor,
-	type ContainerCommandResult,
-	EphemeralContainerBuildRunner,
+import { loadStorageConfig } from "../src/config.js";
+import type {
+	ContainerCommand,
+	ContainerCommandExecutor,
+	ContainerCommandResult,
 } from "../src/ephemeral-container-build-runner.js";
+import { projectDirectory } from "../src/workspace-paths.js";
+import { createWorkspaceTaskService } from "../src/workspace-task-factory.js";
 
 const engine = required("PI_TEST_BUILD_CONTAINER_ENGINE");
 const image = required("PI_TEST_BUILD_CONTAINER_IMAGE");
@@ -19,72 +20,60 @@ const root = mkdtempSync(join(tmpdir(), "pi-real-container-runner-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 it("denies direct, off-allowlist, and literal-IP egress then restores and builds through the allowlisted registry", async () => {
-	const projectRoot = join(root, "project");
-	const artifactRoot = join(root, "artifacts");
-	mkdirSync(projectRoot);
-	mkdirSync(artifactRoot);
-	writeFileSync(
-		join(projectRoot, "package.json"),
-		JSON.stringify({
-			name: "isolated-fixture",
-			version: "1.0.0",
-			scripts: { build: "node build.mjs" },
-			dependencies: { "is-number": "7.0.0" },
-		}),
-	);
-	writeFileSync(
-		join(projectRoot, "package-lock.json"),
-		JSON.stringify({
-			name: "isolated-fixture",
-			version: "1.0.0",
-			lockfileVersion: 3,
-			requires: true,
-			packages: {
-				"": { name: "isolated-fixture", version: "1.0.0", dependencies: { "is-number": "7.0.0" } },
-				"node_modules/is-number": {
-					version: "7.0.0",
-					resolved: "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
-					integrity:
-						"sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==",
-				},
+	const config = integrationConfig();
+	const projectRoot = projectDirectory(config.clientsRootDir, "real", "integration");
+	mkdirSync(projectRoot, { recursive: true });
+	const packageJson = JSON.stringify({
+		name: "isolated-fixture",
+		version: "1.0.0",
+		scripts: { build: "node build.mjs" },
+		dependencies: { "is-number": "7.0.0" },
+	});
+	const packageLock = JSON.stringify({
+		name: "isolated-fixture",
+		version: "1.0.0",
+		lockfileVersion: 3,
+		requires: true,
+		packages: {
+			"": { name: "isolated-fixture", version: "1.0.0", dependencies: { "is-number": "7.0.0" } },
+			"node_modules/is-number": {
+				version: "7.0.0",
+				resolved: "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
+				integrity:
+					"sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==",
 			},
-		}),
-	);
-	writeFileSync(
-		join(projectRoot, "build.mjs"),
-		[
-			'import { mkdirSync, writeFileSync } from "node:fs";',
-			'import { createRequire } from "node:module";',
-			'if (!createRequire(import.meta.url)("is-number")(7)) process.exit(2);',
-			'mkdirSync("dist");',
-			'writeFileSync("dist/index.html", "ok");',
-		].join("\n"),
-	);
+		},
+	});
+	const buildSource = [
+		'import { mkdirSync, writeFileSync } from "node:fs";',
+		'import { createRequire } from "node:module";',
+		'if (!createRequire(import.meta.url)("is-number")(7)) process.exit(2);',
+		'mkdirSync("dist");',
+		'writeFileSync("dist/index.html", "<!doctype html><script src=\\"./app.js\\"></script>");',
+		'writeFileSync("dist/app.js", "document.body.dataset.ready = \'true\';");',
+	].join("\n");
+	writeFileSync(join(projectRoot, "package.json"), packageJson);
+	writeFileSync(join(projectRoot, "package-lock.json"), packageLock);
+	writeFileSync(join(projectRoot, "build.mjs"), buildSource);
 	const probingExecutor = new ProxyProbingExecutor();
+	const service = createWorkspaceTaskService(config, {
+		containerBuildRunnerOptions: { id: () => "integration-fixed", executor: probingExecutor },
+	});
 
-	let result: BuildRunnerResult;
-	try {
-		result = await new EphemeralContainerBuildRunner({
-			id: () => "integration-fixed",
-			executor: probingExecutor,
-			config: {
-				engine: engine as "docker" | "podman",
-				image,
-				proxyImage,
-				timeoutMs: 120_000,
-				cpus: 1,
-				memoryMb: 512,
-				pidsLimit: 128,
-				maxLogChars: 4_096,
-				registryOrigins: ["https://registry.npmjs.org"],
-			},
-		}).build({ projectId: "real", projectRoot, artifactRoot, allowedOutputs: ["dist"] });
-	} catch (error) {
-		if (error instanceof BuildRunnerError) throw new Error(`${error.code}: ${(error.logs ?? []).join("\n")}`);
-		throw error;
-	}
+	const result = await service.run({
+		task: "build_static",
+		clientId: "integration",
+		sessionId: "real",
+		title: "Real isolated build",
+	});
 
-	expect(readFileSync(join(result.serveRoot, "index.html"), "utf8")).toBe("ok");
+	expect(result.status, `${result.failureCode}: ${(result.logs ?? []).join("\n")}`).toBe("passed");
+	expect(result.serveRoot).toBe(join(projectRoot, "dist"));
+	expect(readFileSync(join(projectRoot, "dist", "index.html"), "utf8")).toContain("app.js");
+	expect(readFileSync(join(projectRoot, "dist", "app.js"), "utf8")).toContain("dataset.ready");
+	expect(readFileSync(join(projectRoot, "package.json"), "utf8")).toBe(packageJson);
+	expect(readFileSync(join(projectRoot, "package-lock.json"), "utf8")).toBe(packageLock);
+	expect(readFileSync(join(projectRoot, "build.mjs"), "utf8")).toBe(buildSource);
 	expect(existsSync(join(projectRoot, "node_modules"))).toBe(false);
 	expect(probingExecutor.evidence).toEqual({
 		allowedThroughProxy: true,
@@ -111,33 +100,39 @@ it("denies direct, off-allowlist, and literal-IP egress then restores and builds
 }, 180_000);
 
 it("cleans every named resource after a real build failure", async () => {
-	const projectRoot = join(root, "failing-project");
-	const artifactRoot = join(root, "failing-artifacts");
-	mkdirSync(projectRoot);
-	mkdirSync(artifactRoot);
+	const config = integrationConfig();
+	const projectRoot = projectDirectory(config.clientsRootDir, "failure", "integration");
+	mkdirSync(projectRoot, { recursive: true });
 	writeFileSync(
 		join(projectRoot, "package.json"),
 		JSON.stringify({ scripts: { build: 'node -e "process.exit(23)"' } }),
 	);
-	const error = await new EphemeralContainerBuildRunner({
-		id: () => "integration-failure",
-		config: {
-			engine: engine as "docker" | "podman",
-			image,
-			proxyImage,
-			timeoutMs: 120_000,
-			cpus: 1,
-			memoryMb: 512,
-			pidsLimit: 128,
-			maxLogChars: 4_096,
-			registryOrigins: ["https://registry.npmjs.org"],
-		},
-	})
-		.build({ projectId: "failure", projectRoot, artifactRoot, allowedOutputs: ["dist"] })
-		.catch((value: unknown) => value);
-	expect(error).toMatchObject({ code: "build.execution_failed" });
+	const service = createWorkspaceTaskService(config, {
+		containerBuildRunnerOptions: { id: () => "integration-failure" },
+	});
+	const result = await service.run({
+		task: "build_static",
+		clientId: "integration",
+		sessionId: "failure",
+		title: "Real failing build",
+	});
+	expect(result).toMatchObject({ status: "failed", failureCode: "build.execution_failed" });
 	assertNoResources("pi-build-integration-failure");
 }, 180_000);
+
+function integrationConfig() {
+	const config = loadStorageConfig(root);
+	return {
+		...config,
+		containerBuild: {
+			...config.containerBuild,
+			engine: requiredEngine(),
+			image,
+			proxyImage,
+			maxLogChars: 4_096,
+		},
+	};
+}
 
 class ProxyProbingExecutor implements ContainerCommandExecutor {
 	readonly commands: readonly string[][] = [];
@@ -258,4 +253,9 @@ function required(name: string): string {
 	const value = process.env[name];
 	if (!value) throw new Error(`${name} is required; this integration test must not be skipped.`);
 	return value;
+}
+
+function requiredEngine(): "docker" | "podman" {
+	if (engine === "docker" || engine === "podman") return engine;
+	throw new Error("PI_TEST_BUILD_CONTAINER_ENGINE must be docker or podman.");
 }

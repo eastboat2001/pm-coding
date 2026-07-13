@@ -215,6 +215,7 @@ git commit -m "fix(web-workspace): protect project file and preview IO"
 - Modify: `packages/web-workspace/src/workspace-preview-service.ts`
 - Modify: `packages/web-workspace/src/config.ts`, `types.ts` and matching mirrors
 - Create/Modify tests: `preview-origin.test.ts`, `preview-readiness-checker.test.ts`, `static-preview-quality-gate.test.ts`, `static-preview-smoke-gate.test.ts`, `config-diagnostics.test.ts`
+- Modify direct `StorageConfig` fixtures: `agent-v2-execution-core.test.ts`, `agent-v2-file-adapter.test.ts`, `agent-v2-validation-gate.test.ts`, `agent-v2-vite-plugin-routes.test.ts`, `run-events-sse.test.ts`, `runtime-store-factory.test.ts`, `server-agent-tools.test.ts`, `vite-plugin-schema-init.test.ts`, `workspace.test.mjs`, `workspace-isolation.test.ts`, `workspace-project-hardening.test.ts`, `workspace-skill-service.test.ts`, `workspace-task-abort.test.ts`
 
 **Interfaces:**
 
@@ -226,9 +227,9 @@ export function buildTrustedPreviewUrl(config: PreviewOriginConfig, projectId: s
 `StorageConfig.previewInternalOrigin` defaults to `http://127.0.0.1:5173`; explicit `PI_PREVIEW_INTERNAL_ORIGIN` must be HTTP(S) origin without credentials/query/hash.
 
 - [ ] **Step 1: Write RED tests** for Linux/native nested assets, symlinked dist, out-of-root index, Host header poisoning, external readiness origin and invalid internal origin.
-- [ ] **Step 2: Run the five focused test files and confirm expected failures.**
+- [ ] **Step 2: Run `preview-origin`, `preview-readiness-checker`, both static gate tests, `config-diagnostics`, and `workspace-project-hardening`; confirm expected failures.**
 - [ ] **Step 3: Remove both local `pathIsInside` implementations; authorize index/scripts/assets and serve-root candidates through `WorkspacePathGuard`. Build/probe URLs only from configured origin.**
-- [ ] **Step 4: Sync all modified mirrors, run focused tests plus `npm run check:source-mirrors -- <files>`, then commit `fix(web-workspace): secure static validation and preview origin`.**
+- [ ] **Step 4: Sync all modified mirrors, run the six focused tests, `node test/workspace.test.mjs`, and `npm run check:source-mirrors -- <files>`, then commit `fix(web-workspace): secure static validation and preview origin`.**
 
 ### Task 5: Define BuildRunner and Manifest Policy
 

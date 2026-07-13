@@ -1,5 +1,5 @@
 import { lstatSync, realpathSync, type Stats } from "node:fs";
-import { isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
+import { isAbsolute, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
 
 export type WorkspacePathPolicy = "project_content" | "trusted_lifecycle";
 export type WorkspacePathExpectedType = "any" | "file" | "directory";
@@ -69,6 +69,7 @@ export class WorkspacePathGuard {
 
 		const components = input.split(/[\\/]/);
 		for (const component of components) this.validateComponent(component);
+		this.validatePolicy(components);
 		return join(...components);
 	}
 
@@ -104,10 +105,12 @@ export class WorkspacePathGuard {
 		if (!isAbsolute(target)) {
 			throw new WorkspacePathAuthorizationError("path_absolute", "Workspace target must be absolute.");
 		}
+		validateRawAbsoluteComponents(target);
 		const absolutePath = resolve(target);
 		const relativePath = relative(this.realRoot, absolutePath);
 		this.assertContained(absolutePath);
 		if (!relativePath) {
+			this.validatePolicy([]);
 			const stat = lstatSync(this.realRoot);
 			assertExpectedType(stat, expectedType, this.realRoot);
 			return { relativePath: ".", absolutePath: this.realRoot, realRoot: this.realRoot };
@@ -137,15 +140,23 @@ export class WorkspacePathGuard {
 				`Workspace path component is invalid: ${component}`,
 			);
 		}
+	}
 
-		if (this.policy === "project_content") {
-			const lowerComponent = component.toLowerCase();
-			if (lowerComponent === ".pi" || INTERNAL_PROJECT_FILES.has(lowerComponent)) {
-				throw new WorkspacePathAuthorizationError(
-					"path_internal",
-					`Workspace path targets internal project state: ${component}`,
-				);
-			}
+	private validatePolicy(components: string[]): void {
+		const lowerComponents = components.map((component) => component.toLowerCase());
+		const isTrustedLifecyclePath =
+			lowerComponents.length >= 2 && lowerComponents[0] === ".pi" && lowerComponents[1] === "build-staging";
+		const targetsProjectInternalPath = lowerComponents.some(
+			(component) => component === ".pi" || INTERNAL_PROJECT_FILES.has(component),
+		);
+		if (
+			(this.policy === "trusted_lifecycle" && !isTrustedLifecyclePath) ||
+			(this.policy === "project_content" && targetsProjectInternalPath)
+		) {
+			throw new WorkspacePathAuthorizationError(
+				"path_internal",
+				`Workspace path is not allowed by the ${this.policy} policy.`,
+			);
 		}
 	}
 
@@ -185,6 +196,19 @@ export class WorkspacePathGuard {
 
 function isCrossPlatformAbsolute(path: string): boolean {
 	return posix.isAbsolute(path) || win32.isAbsolute(path) || /^[A-Za-z]:/.test(path);
+}
+
+function validateRawAbsoluteComponents(path: string): void {
+	const root = parse(path).root;
+	const remainder = path.slice(root.length);
+	if (!remainder) return;
+	const components = remainder.split(/[\\/]/);
+	if (components.some((component) => component === "" || component === "." || component === "..")) {
+		throw new WorkspacePathAuthorizationError(
+			"path_component_invalid",
+			"Absolute workspace path contains an invalid raw component.",
+		);
+	}
 }
 
 function assertExpectedType(stat: Stats, expectedType: WorkspacePathExpectedType, path: string): void {

@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	type WorkspacePathAuthorizationCode,
@@ -102,6 +102,19 @@ describe("WorkspacePathGuard", () => {
 		);
 	});
 
+	it("rejects invalid raw components in absolute existing paths before normalization", () => {
+		const guard = WorkspacePathGuard.forProjectContent(root);
+
+		for (const target of [
+			`${root}${sep}.${sep}README.md`,
+			`${root}${sep}src${sep}..${sep}README.md`,
+			`${root}${sep}${sep}README.md`,
+			`${root}${sep}src${sep}`,
+		]) {
+			expectAuthorizationCode(() => guard.authorizeAbsoluteExisting(target), "path_component_invalid");
+		}
+	});
+
 	it("rejects a real external directory link for existing and new paths", () => {
 		const linkedDirectory = join(root, "linked");
 		symlinkSync(outside, linkedDirectory, process.platform === "win32" ? "junction" : "dir");
@@ -121,13 +134,35 @@ describe("WorkspacePathGuard", () => {
 		});
 	});
 
-	it("allows trusted lifecycle staging paths without weakening link or containment checks", () => {
+	it("allows only the case-insensitive exact trusted lifecycle staging subtree", () => {
 		mkdirSync(join(root, ".pi", "build-staging"), { recursive: true });
+		writeFileSync(join(root, ".pi", "state.json"), "state", "utf8");
+		writeFileSync(join(root, ".pi-project.json"), "metadata", "utf8");
+		writeFileSync(join(root, ".pi-project-files.json"), "metadata", "utf8");
 		const trusted = WorkspacePathGuard.forTrustedLifecycle(root);
 
+		expect(trusted.authorizeExisting(".pi/build-staging", "directory").relativePath).toBe(
+			join(".pi", "build-staging"),
+		);
 		expect(trusted.authorizeNew(".pi/build-staging/output.txt").relativePath).toBe(
 			join(".pi", "build-staging", "output.txt"),
 		);
+		expect(trusted.authorizeNew(".PI/BUILD-STAGING/case-insensitive.txt").relativePath).toBe(
+			join(".PI", "BUILD-STAGING", "case-insensitive.txt"),
+		);
+
+		for (const input of [
+			".pi",
+			".pi/state.json",
+			".pi/build-staging-other/output.txt",
+			".PI-PROJECT.JSON",
+			".pi-project-files.json",
+			"README.md",
+		]) {
+			expectAuthorizationCode(() => trusted.authorizeExisting(input), "path_internal");
+		}
+		expectAuthorizationCode(() => trusted.authorizeAbsoluteExisting(root, "directory"), "path_internal");
+		expectAuthorizationCode(() => trusted.authorizeExisting(".pi/build-staging", "file"), "path_type_invalid");
 
 		const linkedDirectory = join(root, ".pi", "build-staging", "linked");
 		symlinkSync(outside, linkedDirectory, process.platform === "win32" ? "junction" : "dir");

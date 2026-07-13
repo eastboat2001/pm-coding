@@ -4,6 +4,7 @@ import { basename, dirname, extname, join } from "node:path";
 import { PREVIEW_PREFIX, PROJECT_METADATA_FILE } from "./constants.js";
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { readJsonFile, sendJson, writeJsonFile } from "./json.js";
+import { buildTrustedPreviewUrl, type PreviewOriginConfig } from "./preview-origin.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import type {
 	JsonObject,
@@ -336,13 +337,8 @@ function normalizeProjectTitle(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
 }
 
-export function buildPreviewUrl(config: StorageConfig, req: PreviewRequestLike, projectId: string): string {
-	const path = `${PREVIEW_PREFIX}/${encodeURIComponent(projectId)}/`;
-	if (config.previewBaseUrl) return `${config.previewBaseUrl}${path}`;
-	const host = req.headers.host || "localhost";
-	const forwardedProto = req.headers["x-forwarded-proto"];
-	const protocol = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto || "http";
-	return `${protocol}://${host}${path}`;
+export function buildPreviewUrl(config: PreviewOriginConfig, _req: PreviewRequestLike, projectId: string): string {
+	return buildTrustedPreviewUrl(config, projectId);
 }
 
 function rewritePreviewHtml(html: string, previewBasePath: string): string {

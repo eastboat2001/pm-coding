@@ -92,4 +92,29 @@ document.querySelector('#btn-export').addEventListener('click', () => {});
 		expect(result.valid).toBe(true);
 		expect(result.errors).toEqual([]);
 	});
+
+	it("authorizes nested native paths after stripping URL query and hash", () => {
+		const root = writeProject({
+			"index.html":
+				'<!doctype html><html><body><h1>Ready</h1><script src="./js/nested/app.js?v=1#boot"></script></body></html>',
+			"js/nested/app.js": "document.querySelector('h1').textContent = 'Ready';",
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(true);
+		expect(result.checkedFiles).toContain("js/nested/app.js");
+	});
+
+	it("fails closed when an explicit index escapes the serve root", () => {
+		const parent = tempServeRoot();
+		const root = join(parent, "site");
+		mkdirSync(root);
+		writeFileSync(join(parent, "outside.html"), "<h1>outside</h1>", "utf8");
+
+		const result = assessStaticPreviewQuality({ serveRoot: root, indexFile: "../outside.html" });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("index.html");
+	});
 });

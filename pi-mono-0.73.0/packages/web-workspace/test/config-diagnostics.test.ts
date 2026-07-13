@@ -39,6 +39,7 @@ const CONFIG_ENV_KEYS = [
 	"PI_AGENT_V2_RUN_EVENT_STREAM_TTL_SECONDS",
 	"PI_MODEL_MAX_OUTPUT_TOKENS",
 	"PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS",
+	"PI_PREVIEW_INTERNAL_ORIGIN",
 ] as const;
 
 function withIsolatedConfigEnv<T>(run: () => T): T {
@@ -114,6 +115,36 @@ describe("storage config diagnostics", () => {
 
 			process.env.PI_WORKER_ID = "worker-custom";
 			expect(loadStorageConfig(root).workerId).toBe("worker-custom");
+		});
+	});
+
+	it("defaults and normalizes the internal preview origin", () => {
+		withIsolatedConfigEnv(() => {
+			const root = mkdtempSync(join(tmpdir(), "pi-config-preview-origin-"));
+			expect(loadStorageConfig(root).previewInternalOrigin).toBe("http://127.0.0.1:5173");
+
+			process.env.PI_PREVIEW_INTERNAL_ORIGIN = "https://preview.internal:8443/";
+			expect(loadStorageConfig(root).previewInternalOrigin).toBe("https://preview.internal:8443");
+		});
+	});
+
+	it.each([
+		"ftp://preview.internal",
+		"http://user:secret@preview.internal",
+		"http://preview.internal/path",
+		"http://preview.internal?secret=value",
+		"http://preview.internal#secret-value",
+	])("rejects invalid internal preview origin without leaking its value", (value) => {
+		withIsolatedConfigEnv(() => {
+			const root = mkdtempSync(join(tmpdir(), "pi-config-invalid-preview-origin-"));
+			process.env.PI_PREVIEW_INTERNAL_ORIGIN = value;
+
+			expect(() => loadStorageConfig(root)).toThrow("PI_PREVIEW_INTERNAL_ORIGIN");
+			try {
+				loadStorageConfig(root);
+			} catch (error) {
+				expect(String(error)).not.toContain(value);
+			}
 		});
 	});
 

@@ -284,6 +284,7 @@ export interface StorageConfig {
 	workerConcurrency: number;
 	clientIdRequired: boolean;
 	previewBaseUrl: string;
+	previewInternalOrigin: string;
 	projectInstallCommand: string;
 	projectBuildCommand: string;
 	projectInstallTimeoutMs: number;

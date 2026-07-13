@@ -146,6 +146,7 @@ function testConfig(root: string): StorageConfig {
 		},
 		clientIdRequired: true,
 		previewBaseUrl: "http://localhost:5173",
+		previewInternalOrigin: "http://127.0.0.1:5173",
 		projectInstallCommand: "npm install",
 		projectBuildCommand: "npm run build",
 		projectInstallTimeoutMs: 120000,

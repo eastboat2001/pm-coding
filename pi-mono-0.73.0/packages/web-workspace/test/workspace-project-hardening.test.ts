@@ -15,6 +15,22 @@ function tempRoot(): string {
 }
 
 describe("project execution and preview hardening", () => {
+	it("rejects a symlinked static serve-root candidate", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
+		const outside = join(root, "outside-dist");
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(join(outside, "index.html"), "<h1>outside</h1>", "utf8");
+		symlinkSync(outside, join(projectDir, "dist"), process.platform === "win32" ? "junction" : "dir");
+		const service = new WorkspaceTaskService(config);
+
+		const result = await service.run({ task: "inspect", clientId: "client-a", sessionId: "s1", title: "Static" });
+
+		expect(result.serveRoot).toBe("");
+	});
+
 	it("rejects build_static package script commands before executing the runner", async () => {
 		const root = tempRoot();
 		const config = { ...testConfig(root), projectInstallCommand: "", projectBuildCommand: "npm run build" };
@@ -330,6 +346,7 @@ function testConfig(root: string): StorageConfig {
 		},
 		clientIdRequired: true,
 		previewBaseUrl: "http://localhost:5173",
+		previewInternalOrigin: "http://127.0.0.1:5173",
 		projectInstallCommand: "npm install",
 		projectBuildCommand: "npm run build",
 		projectInstallTimeoutMs: 120000,

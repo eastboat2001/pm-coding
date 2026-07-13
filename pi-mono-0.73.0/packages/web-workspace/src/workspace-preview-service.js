@@ -2,6 +2,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync } fr
 import { basename, dirname, extname, join } from "node:path";
 import { PREVIEW_PREFIX, PROJECT_METADATA_FILE } from "./constants.js";
 import { readJsonFile, sendJson, writeJsonFile } from "./json.js";
+import { buildTrustedPreviewUrl } from "./preview-origin.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 import { listProjectSourceFiles, safeRelativePreviewPath, sanitizePathComponent, workspaceContext, } from "./workspace-paths.js";
@@ -300,14 +301,8 @@ function clientDirectoryNames(clientsRoot) {
 function normalizeProjectTitle(value) {
     return value.replace(/\s+/g, " ").trim();
 }
-export function buildPreviewUrl(config, req, projectId) {
-    const path = `${PREVIEW_PREFIX}/${encodeURIComponent(projectId)}/`;
-    if (config.previewBaseUrl)
-        return `${config.previewBaseUrl}${path}`;
-    const host = req.headers.host || "localhost";
-    const forwardedProto = req.headers["x-forwarded-proto"];
-    const protocol = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto || "http";
-    return `${protocol}://${host}${path}`;
+export function buildPreviewUrl(config, _req, projectId) {
+    return buildTrustedPreviewUrl(config, projectId);
 }
 function rewritePreviewHtml(html, previewBasePath) {
     return html

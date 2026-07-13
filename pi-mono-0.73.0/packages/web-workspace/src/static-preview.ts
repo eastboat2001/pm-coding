@@ -1,15 +1,28 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 
 export function staticServeRootCandidates(hasPackageJson: boolean): string[] {
 	return hasPackageJson ? ["dist", "build", "public", ""] : ["", "dist", "build", "public"];
 }
 
 export function findStaticServeRoot(projectDir: string, candidates: string[]): string | undefined {
+	const guard = WorkspacePathGuard.forProjectContent(projectDir);
 	for (const candidate of candidates) {
-		const serveRoot = candidate ? join(projectDir, candidate) : projectDir;
-		const entryPath = join(serveRoot, "index.html");
-		if (!existsSync(entryPath) || !statSync(entryPath).isFile()) continue;
+		let serveRoot: string;
+		let entryPath: string;
+		try {
+			serveRoot = candidate
+				? guard.authorizeExisting(candidate, "directory").absolutePath
+				: guard.authorizeAbsoluteExisting(projectDir, "directory").absolutePath;
+			entryPath = guard.authorizeExisting(
+				candidate ? join(candidate, "index.html") : "index.html",
+				"file",
+			).absolutePath;
+		} catch (error) {
+			if (error instanceof WorkspacePathAuthorizationError) continue;
+			throw error;
+		}
 		if (indexHtmlRequiresBuild(entryPath)) continue;
 		return serveRoot;
 	}
@@ -17,10 +30,18 @@ export function findStaticServeRoot(projectDir: string, candidates: string[]): s
 }
 
 export function findBuildSourceEntry(projectDir: string, candidates: string[]): string | undefined {
+	const guard = WorkspacePathGuard.forProjectContent(projectDir);
 	for (const candidate of candidates) {
-		const serveRoot = candidate ? join(projectDir, candidate) : projectDir;
-		const entryPath = join(serveRoot, "index.html");
-		if (existsSync(entryPath) && statSync(entryPath).isFile() && indexHtmlRequiresBuild(entryPath)) return entryPath;
+		try {
+			const entryPath = guard.authorizeExisting(
+				candidate ? join(candidate, "index.html") : "index.html",
+				"file",
+			).absolutePath;
+			if (indexHtmlRequiresBuild(entryPath)) return entryPath;
+		} catch (error) {
+			if (error instanceof WorkspacePathAuthorizationError) continue;
+			throw error;
+		}
 	}
 	return undefined;
 }

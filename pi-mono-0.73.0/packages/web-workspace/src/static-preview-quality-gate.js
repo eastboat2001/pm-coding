@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { normalize } from "node:path";
+import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 const ID_ATTRIBUTE_PATTERN = /\bid\s*=\s*(['"])([^'"]+)\1/g;
 const CLASS_ATTRIBUTE_PATTERN = /\bclass\s*=\s*(['"])([^'"]*)\1/;
 const STYLE_ATTRIBUTE_PATTERN = /\bstyle\s*=\s*(['"])([^'"]*)\1/;
@@ -10,10 +11,25 @@ const GET_ELEMENT_BY_ID_PATTERN = /\bdocument\.getElementById\(\s*(['"`])([^'"`$
 const QUERY_SELECTOR_PATTERN = /\b(?:document\.)?(?:querySelector|querySelectorAll)\(\s*(['"`])([^'"`$]+)\1\s*\)/g;
 const DOLLAR_SELECTOR_PATTERN = /\$\(\s*(['"`])([^'"`$]+)\1\s*\)/g;
 export function assessStaticPreviewQuality(input) {
-    const indexPath = input.indexFile ? join(input.serveRoot, input.indexFile) : join(input.serveRoot, "index.html");
     const errors = [];
     const warnings = [];
     const checkedFiles = [];
+    let guard;
+    let indexPath;
+    try {
+        guard = WorkspacePathGuard.forProjectContent(input.serveRoot);
+        indexPath = guard.authorizeExisting(input.indexFile || "index.html", "file").absolutePath;
+    }
+    catch (error) {
+        if (!(error instanceof WorkspacePathAuthorizationError))
+            throw error;
+        return {
+            valid: false,
+            errors: ["Static quality gate requires an authorized index.html inside the serve root."],
+            warnings,
+            checkedFiles,
+        };
+    }
     if (!existsSync(indexPath)) {
         return {
             valid: false,
@@ -25,8 +41,9 @@ export function assessStaticPreviewQuality(input) {
     const html = readFileSync(indexPath, "utf8");
     checkedFiles.push(relativeCheckedPath(input.serveRoot, indexPath));
     const htmlIds = extractHtmlIds(html);
-    const scripts = readLocalScripts(input.serveRoot, html, warnings);
+    const scripts = readLocalScripts(guard, html, errors);
     checkedFiles.push(...scripts.map((script) => script.src));
+    checkedFiles.push(...authorizeLinkedResources(guard, html, errors));
     const referencedIds = collectReferencedIds(scripts);
     for (const [id, files] of referencedIds) {
         if (htmlIds.has(id))
@@ -60,24 +77,69 @@ function extractHtmlIds(html) {
     }
     return ids;
 }
-function readLocalScripts(serveRoot, html, warnings) {
+function readLocalScripts(guard, html, errors) {
     const scripts = [];
     for (const match of html.matchAll(SCRIPT_SRC_PATTERN)) {
         const src = match[2]?.trim();
-        if (!src || isExternalResource(src) || src.startsWith("/") || src.startsWith("data:"))
+        const localPath = localResourcePath(src);
+        if (!src || !localPath)
             continue;
-        const scriptPath = normalize(join(serveRoot, src));
-        if (!pathIsInside(serveRoot, scriptPath) || !existsSync(scriptPath)) {
-            warnings.push(`Local script ${src} could not be read by the static quality gate.`);
-            continue;
+        try {
+            const authorized = guard.authorizeExisting(localPath, "file");
+            scripts.push({
+                src: authorized.relativePath.replace(/\\/g, "/"),
+                path: authorized.absolutePath,
+                content: readFileSync(authorized.absolutePath, "utf8"),
+            });
         }
-        scripts.push({
-            src,
-            path: scriptPath,
-            content: readFileSync(scriptPath, "utf8"),
-        });
+        catch (error) {
+            if (!(error instanceof WorkspacePathAuthorizationError))
+                throw error;
+            errors.push(`Local script ${src} could not be authorized by the static quality gate.`);
+        }
     }
     return scripts;
+}
+function authorizeLinkedResources(guard, html, errors) {
+    const checked = [];
+    for (const match of html.matchAll(/<(link|img|source|video|audio|track)\b[^>]*>/gi)) {
+        const tag = match[0];
+        const value = /\blink\b/i.test(match[1] ?? "") ? attributeResource(tag, "href") : attributeResource(tag, "src");
+        const localPath = localResourcePath(value);
+        if (!value || !localPath)
+            continue;
+        try {
+            checked.push(guard.authorizeExisting(localPath, "file").relativePath.replace(/\\/g, "/"));
+        }
+        catch (error) {
+            if (!(error instanceof WorkspacePathAuthorizationError))
+                throw error;
+            errors.push(`Local asset ${value} could not be authorized by the static quality gate.`);
+        }
+    }
+    return checked;
+}
+function attributeResource(tag, name) {
+    const match = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\u0060]+))`, "i").exec(tag);
+    return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+function localResourcePath(value) {
+    const trimmed = value?.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+        return undefined;
+    }
+    const withoutQueryOrHash = trimmed.split(/[?#]/, 1)[0]?.trim();
+    if (!withoutQueryOrHash)
+        return undefined;
+    const relativePath = withoutQueryOrHash.replace(/^\/+/, "").replace(/^\.\/+/, "");
+    if (!relativePath)
+        return undefined;
+    try {
+        return decodeURIComponent(relativePath);
+    }
+    catch {
+        return relativePath;
+    }
 }
 function collectReferencedIds(scripts) {
     const ids = new Map();
@@ -192,11 +254,6 @@ function stripTags(value) {
 }
 function isExternalResource(value) {
     return /^https?:\/\//i.test(value) || value.startsWith("//");
-}
-function pathIsInside(root, target) {
-    const normalizedRoot = normalize(root);
-    const normalizedTarget = normalize(target);
-    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}\\`);
 }
 function relativeCheckedPath(root, file) {
     const relative = normalize(file)

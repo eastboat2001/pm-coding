@@ -30,6 +30,7 @@ function testConfig(root: string): StorageConfig {
 		},
 		clientIdRequired: true,
 		previewBaseUrl: "http://localhost:5173",
+		previewInternalOrigin: "http://127.0.0.1:5173",
 		projectInstallCommand: "",
 		projectBuildCommand: "node build.js",
 		projectInstallTimeoutMs: 120000,

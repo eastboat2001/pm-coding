@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { normalize } from "node:path";
 import { createContext, Script } from "node:vm";
+import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 const SCRIPT_TAG_PATTERN = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
 const SRC_ATTRIBUTE_PATTERN = /\bsrc\s*=\s*(['"])([^'"]+)\1/i;
 const ID_ATTRIBUTE_PATTERN = /\bid\s*=\s*(['"])([^'"]+)\1/i;
@@ -11,10 +12,25 @@ const DATA_ATTRIBUTE_PATTERN = /\bdata-([a-z0-9_.:-]+)\s*=\s*(['"])([^'"]*)\2/gi
 const DEFAULT_SCRIPT_TIMEOUT_MS = 500;
 const MAX_TIMER_FLUSH = 50;
 export async function runStaticPreviewSmokeGate(input) {
-    const indexPath = input.indexFile ? join(input.serveRoot, input.indexFile) : join(input.serveRoot, "index.html");
     const errors = [];
     const warnings = [];
     const checkedFiles = [];
+    let guard;
+    let indexPath;
+    try {
+        guard = WorkspacePathGuard.forProjectContent(input.serveRoot);
+        indexPath = guard.authorizeExisting(input.indexFile || "index.html", "file").absolutePath;
+    }
+    catch (error) {
+        if (!(error instanceof WorkspacePathAuthorizationError))
+            throw error;
+        return {
+            valid: false,
+            errors: ["Runtime smoke gate requires an authorized index.html inside the serve root."],
+            warnings,
+            checkedFiles,
+        };
+    }
     if (!existsSync(indexPath)) {
         return {
             valid: false,
@@ -25,8 +41,9 @@ export async function runStaticPreviewSmokeGate(input) {
     }
     const html = readFileSync(indexPath, "utf8");
     checkedFiles.push(relativeCheckedPath(input.serveRoot, indexPath));
-    const scripts = readScripts(input.serveRoot, html, errors, warnings);
+    const scripts = readScripts(guard, html, errors, warnings);
     checkedFiles.push(...scripts.map((script) => script.label));
+    checkedFiles.push(...authorizeLinkedResources(guard, html, errors));
     const runtime = new SmokeRuntime(html, new Map(scripts.map((script) => [script.label, script.content])));
     const context = runtime.context();
     const timeout = input.scriptTimeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS;
@@ -46,7 +63,7 @@ export async function runStaticPreviewSmokeGate(input) {
         checkedFiles,
     };
 }
-function readScripts(serveRoot, html, errors, warnings) {
+function readScripts(guard, html, errors, warnings) {
     const scripts = [];
     let inlineIndex = 0;
     for (const match of html.matchAll(SCRIPT_TAG_PATTERN)) {
@@ -62,18 +79,62 @@ function readScripts(serveRoot, html, errors, warnings) {
             warnings.push(`Runtime smoke gate skipped external script ${src}.`);
             continue;
         }
-        if (src.startsWith("/") || src.startsWith("data:")) {
-            warnings.push(`Runtime smoke gate skipped non-local script ${src}.`);
+        const localPath = localResourcePath(src);
+        if (!localPath)
             continue;
+        try {
+            const authorized = guard.authorizeExisting(localPath, "file");
+            scripts.push({
+                label: authorized.relativePath.replace(/\\/g, "/"),
+                content: readFileSync(authorized.absolutePath, "utf8"),
+            });
         }
-        const scriptPath = normalize(join(serveRoot, src));
-        if (!pathIsInside(serveRoot, scriptPath) || !existsSync(scriptPath)) {
+        catch (error) {
+            if (!(error instanceof WorkspacePathAuthorizationError))
+                throw error;
             errors.push(`Runtime smoke gate could not read local script ${src}.`);
-            continue;
         }
-        scripts.push({ label: src.replace(/^\.\//, ""), content: readFileSync(scriptPath, "utf8") });
     }
     return scripts;
+}
+function authorizeLinkedResources(guard, html, errors) {
+    const checked = [];
+    for (const match of html.matchAll(/<(link|img|source|video|audio|track)\b[^>]*>/gi)) {
+        const tag = match[0];
+        const value = /\blink\b/i.test(match[1] ?? "")
+            ? attributeMatch(tag, /\bhref\s*=\s*(["'])([^"']+)\1/i)
+            : attributeMatch(tag, SRC_ATTRIBUTE_PATTERN);
+        const localPath = localResourcePath(value);
+        if (!value || !localPath)
+            continue;
+        try {
+            checked.push(guard.authorizeExisting(localPath, "file").relativePath.replace(/\\/g, "/"));
+        }
+        catch (error) {
+            if (!(error instanceof WorkspacePathAuthorizationError))
+                throw error;
+            errors.push(`Runtime smoke gate could not authorize local asset ${value}.`);
+        }
+    }
+    return checked;
+}
+function localResourcePath(value) {
+    const trimmed = value?.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+        return undefined;
+    }
+    const withoutQueryOrHash = trimmed.split(/[?#]/, 1)[0]?.trim();
+    if (!withoutQueryOrHash)
+        return undefined;
+    const relativePath = withoutQueryOrHash.replace(/^\/+/, "").replace(/^\.\/+/, "");
+    if (!relativePath)
+        return undefined;
+    try {
+        return decodeURIComponent(relativePath);
+    }
+    catch {
+        return relativePath;
+    }
 }
 function runScript(script, context, timeoutMs, phase, errors) {
     try {
@@ -546,11 +607,6 @@ function stripTags(value) {
 }
 function isExternalResource(value) {
     return /^https?:\/\//i.test(value) || value.startsWith("//");
-}
-function pathIsInside(root, target) {
-    const normalizedRoot = normalize(root);
-    const normalizedTarget = normalize(target);
-    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}\\`);
 }
 function relativeCheckedPath(root, file) {
     const relative = normalize(file)

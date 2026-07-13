@@ -2,6 +2,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { PROJECT_METADATA_FILE } from "./constants.js";
 import { isObject, readJsonFile } from "./json.js";
+import { buildTrustedPreviewUrl } from "./preview-origin.js";
 import { workspaceContext } from "./workspace-paths.js";
 const DEFAULT_PREVIEW_PROBE_TIMEOUT_MS = 5_000;
 export class PreviewReadinessChecker {
@@ -34,10 +35,7 @@ export class PreviewReadinessChecker {
         if (!previewUrl) {
             return this.notReady("preview_url_missing", base);
         }
-        const probeUrl = this.probeUrl(projectId, previewUrl);
-        if (!probeUrl) {
-            return this.notReady("preview_url_missing", { ...base, previewUrl });
-        }
+        const probeUrl = buildTrustedPreviewUrl({ previewBaseUrl: "", previewInternalOrigin: this.config.previewInternalOrigin }, projectId);
         const serveRoot = stringValue(metadata.serveRoot).trim();
         if (!serveRoot || !pathIsInsideRealPath(context.projectDir, serveRoot) || !pathIsDirectory(serveRoot)) {
             return this.notReady("serve_root_missing", { ...base, previewUrl });
@@ -77,25 +75,6 @@ export class PreviewReadinessChecker {
             previewUrl,
             status,
         };
-    }
-    probeUrl(projectId, previewUrl) {
-        const previewBaseUrl = this.config.previewBaseUrl.trim();
-        const previewPath = `/preview/${encodeURIComponent(projectId)}/`;
-        if (previewBaseUrl) {
-            try {
-                return new URL(previewPath, previewBaseUrl).toString();
-            }
-            catch {
-                return undefined;
-            }
-        }
-        try {
-            const parsedPreviewUrl = new URL(previewUrl);
-            return parsedPreviewUrl.pathname.startsWith(previewPath) ? parsedPreviewUrl.toString() : undefined;
-        }
-        catch {
-            return undefined;
-        }
     }
     readProjectMetadata(metadataPath) {
         if (!existsSync(metadataPath))

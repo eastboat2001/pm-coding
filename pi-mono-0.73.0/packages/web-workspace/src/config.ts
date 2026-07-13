@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { CONFIG_ENV_FILE } from "./constants.js";
+import { normalizePreviewOrigin } from "./preview-origin.js";
 import type { StorageConfig } from "./types.js";
 
 const RETIRED_APPLICATION_GENERATION_ENV = [
@@ -71,7 +72,11 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		workerId: stringValue(env("PI_WORKER_ID")) || "pi-worker",
 		workerConcurrency: positiveIntegerValue(env("PI_WORKER_CONCURRENCY"), 2),
 		clientIdRequired: envBooleanValue(env("PI_CLIENT_ID_REQUIRED")) ?? true,
-		previewBaseUrl: normalizedHostValue(stringValue(env("PI_PREVIEW_BASE_URL"))),
+		previewBaseUrl: optionalPreviewOrigin(stringValue(env("PI_PREVIEW_BASE_URL")), "PI_PREVIEW_BASE_URL"),
+		previewInternalOrigin: normalizePreviewOrigin(
+			stringValue(env("PI_PREVIEW_INTERNAL_ORIGIN")) || "http://127.0.0.1:5173",
+			"PI_PREVIEW_INTERNAL_ORIGIN",
+		),
 		projectInstallCommand: stringValue(env("PI_PROJECT_INSTALL_COMMAND")) || "npm install",
 		projectBuildCommand: stringValue(env("PI_PROJECT_BUILD_COMMAND")) || "npm run build",
 		projectInstallTimeoutMs: positiveIntegerValue(env("PI_PROJECT_INSTALL_TIMEOUT_MS"), 120000),
@@ -192,6 +197,11 @@ function stringValue(value: unknown): string {
 
 function normalizedHostValue(value: string): string {
 	return value.trim().replace(/\/+$/, "");
+}
+
+function optionalPreviewOrigin(value: string, variableName: string): string {
+	const configured = value.trim();
+	return configured ? normalizePreviewOrigin(configured, variableName) : "";
 }
 
 function positiveIntegerValue(envValue: string | undefined, defaultValue: number): number {

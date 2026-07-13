@@ -55,10 +55,11 @@ describe("PreviewReadinessChecker", () => {
 		expect(result.status).toBe("running");
 	});
 
-	it("uses configured preview base for probing while returning metadata preview URL", async () => {
+	it("uses only the configured internal origin for probing while returning metadata preview URL", async () => {
 		const publicPreviewUrl = "https://public.example/previews/project-client-a-session-";
 		const probeCalls: string[] = [];
-		config.previewBaseUrl = "http://127.0.0.1:5193";
+		config.previewBaseUrl = "https://public.example";
+		config.previewInternalOrigin = "http://127.0.0.1:5193";
 		writeProject({ indexHtml: readyHtml, previewUrl: publicPreviewUrl });
 
 		const checker = new PreviewReadinessChecker(config, {
@@ -78,13 +79,13 @@ describe("PreviewReadinessChecker", () => {
 		expect(probeCalls).toEqual(["http://127.0.0.1:5193/preview/project-client-a-session-/"]);
 	});
 
-	it("does not fetch metadata preview URLs outside the project preview path when no preview base is configured", async () => {
-		let fetched = false;
+	it("does not use an external metadata preview URL as the readiness origin", async () => {
+		const probeCalls: string[] = [];
 		writeProject({ indexHtml: readyHtml, previewUrl: "http://localhost:5173/admin/project-client-a-session-/" });
 
 		const checker = new PreviewReadinessChecker(config, {
-			fetch: async () => {
-				fetched = true;
+			fetch: async (url) => {
+				probeCalls.push(String(url));
 				return {
 					ok: true,
 					status: 200,
@@ -94,9 +95,9 @@ describe("PreviewReadinessChecker", () => {
 		});
 		const result = await checker.check(input);
 
-		expect(result.ready).toBe(false);
-		expect(result.reasonCode).toBe("preview_url_missing");
-		expect(fetched).toBe(false);
+		expect(result.ready).toBe(true);
+		expect(result.reasonCode).toBe("ready");
+		expect(probeCalls).toEqual(["http://127.0.0.1:5173/preview/project-client-a-session-/"]);
 	});
 
 	it("does not trust metadata for a different project id", async () => {
@@ -379,6 +380,7 @@ describe("PreviewReadinessChecker", () => {
 			},
 			clientIdRequired: true,
 			previewBaseUrl: "",
+			previewInternalOrigin: "http://127.0.0.1:5173",
 			projectInstallCommand: "",
 			projectBuildCommand: "",
 			projectInstallTimeoutMs: 1000,

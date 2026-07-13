@@ -20,6 +20,10 @@ const RETIRED_APPLICATION_GENERATION_ENV = [
 	"PI_RUN_RETRY_JITTER_RATIO",
 	"PI_RUN_MAX_AGENT_TURNS",
 	"PI_RUN_MAX_AGENT_TOOL_EXECUTIONS",
+	"PI_PROJECT_INSTALL_COMMAND",
+	"PI_PROJECT_BUILD_COMMAND",
+	"PI_PROJECT_INSTALL_TIMEOUT_MS",
+	"PI_PROJECT_BUILD_TIMEOUT_MS",
 ] as const;
 const SECRET_SENTINEL = "super-secret-retired-value-DO-NOT-LEAK";
 
@@ -40,6 +44,15 @@ const CONFIG_ENV_KEYS = [
 	"PI_MODEL_MAX_OUTPUT_TOKENS",
 	"PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS",
 	"PI_PREVIEW_INTERNAL_ORIGIN",
+	"PI_BUILD_CONTAINER_ENGINE",
+	"PI_BUILD_CONTAINER_IMAGE",
+	"PI_BUILD_PROXY_IMAGE",
+	"PI_BUILD_TIMEOUT_MS",
+	"PI_BUILD_CPUS",
+	"PI_BUILD_MEMORY_MB",
+	"PI_BUILD_PIDS_LIMIT",
+	"PI_BUILD_MAX_LOG_CHARS",
+	"PI_BUILD_REGISTRY_ORIGINS",
 ] as const;
 
 function withIsolatedConfigEnv<T>(run: () => T): T {
@@ -74,6 +87,17 @@ describe("storage config diagnostics", () => {
 			expect(config.runtimeDbFile).toBe(resolve(root, "data/runtime/pi-runtime.sqlite"));
 			expect(config.modelMaxOutputTokens).toBe(12000);
 			expect(config.contextProviderPayloadBudgetChars).toBe(90000);
+			expect(config.containerBuild).toEqual({
+				engine: "docker",
+				image: "node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752",
+				proxyImage: "ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029",
+				timeoutMs: 120000,
+				cpus: 1,
+				memoryMb: 512,
+				pidsLimit: 128,
+				maxLogChars: 12000,
+				registryOrigins: ["https://registry.npmjs.org"],
+			});
 
 			const events = createStartupDiagnosticEvents(config);
 
@@ -207,6 +231,37 @@ describe("storage config diagnostics", () => {
 		} finally {
 			rmSync(dir, { force: true, recursive: true });
 		}
+	});
+
+	it("rejects retired project command variables from the configured .env file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-config-retired-project-command-file-"));
+		try {
+			withIsolatedConfigEnv(() => {
+				writeFileSync(join(dir, ".env"), `PI_PROJECT_BUILD_COMMAND=${SECRET_SENTINEL}\n`);
+				expect(() => loadStorageConfig(dir)).toThrow(/PI_PROJECT_BUILD_COMMAND/);
+			});
+		} finally {
+			rmSync(dir, { force: true, recursive: true });
+		}
+	});
+
+	it.each([
+		["PI_BUILD_CONTAINER_ENGINE", "nerdctl"],
+		["PI_BUILD_CONTAINER_IMAGE", "node:22"],
+		["PI_BUILD_PROXY_IMAGE", "ubuntu/squid:latest"],
+		["PI_BUILD_TIMEOUT_MS", "0"],
+		["PI_BUILD_CPUS", "0"],
+		["PI_BUILD_MEMORY_MB", "not-a-number"],
+		["PI_BUILD_PIDS_LIMIT", "-1"],
+		["PI_BUILD_MAX_LOG_CHARS", "0"],
+		["PI_BUILD_REGISTRY_ORIGINS", "https://127.0.0.1"],
+		["PI_BUILD_REGISTRY_ORIGINS", "https://registry.npmjs.org/path"],
+	] as const)("rejects invalid production container config %s", (variable, value) => {
+		withIsolatedConfigEnv(() => {
+			const root = mkdtempSync(join(tmpdir(), "pi-config-invalid-container-build-"));
+			process.env[variable] = value;
+			expect(() => loadStorageConfig(root)).toThrow(variable);
+		});
 	});
 
 	it("loads all agent v2 runtime overrides", () => {

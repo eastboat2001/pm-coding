@@ -1,14 +1,15 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { type BuildRunner, BuildRunnerError } from "../src/build-runner.js";
 import type { StorageConfig } from "../src/types.js";
 import { WorkspaceFileService } from "../src/workspace-file-service.js";
 import { projectDirectory } from "../src/workspace-paths.js";
 import { WorkspacePreviewService } from "../src/workspace-preview-service.js";
-import { WorkspaceTaskService } from "../src/workspace-task-service.js";
+import { createWorkspaceTaskService } from "../src/workspace-task-factory.js";
 
 function tempRoot(): string {
 	return mkdtempSync(join(tmpdir(), "pi-web-workspace-hardening-"));
@@ -24,24 +25,35 @@ describe("project execution and preview hardening", () => {
 		mkdirSync(outside, { recursive: true });
 		writeFileSync(join(outside, "index.html"), "<h1>outside</h1>", "utf8");
 		symlinkSync(outside, join(projectDir, "dist"), process.platform === "win32" ? "junction" : "dir");
-		const service = new WorkspaceTaskService(config);
+		const service = createWorkspaceTaskService(config);
 
 		const result = await service.run({ task: "inspect", clientId: "client-a", sessionId: "s1", title: "Static" });
 
 		expect(result.serveRoot).toBe("");
 	});
 
-	it("rejects build_static package script commands before executing the runner", async () => {
+	it("routes build_static exclusively through BuildRunner without executing configured host commands", async () => {
 		const root = tempRoot();
-		const config = { ...testConfig(root), projectInstallCommand: "", projectBuildCommand: "npm run build" };
+		const marker = join(root, "host-command-ran");
+		const config = {
+			...testConfig(root),
+			projectInstallCommand: "",
+			projectBuildCommand: `node -e "require('node:fs').writeFileSync(${JSON.stringify(marker)},'unsafe')"`,
+		};
 		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
 		mkdirSync(projectDir, { recursive: true });
 		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ scripts: { build: "node build.js" } }), "utf8");
 
-		const commands: string[] = [];
-		const service = new WorkspaceTaskService(config, undefined, async (command) => {
-			commands.push(command);
+		const build = vi.fn<BuildRunner["build"]>(async ({ projectRoot, artifactRoot, signal }) => {
+			expect(projectRoot).toBe(projectDir);
+			expect(artifactRoot).toBe(projectDir);
+			expect(signal).toBeUndefined();
+			const serveRoot = join(projectDir, "dist");
+			mkdirSync(serveRoot);
+			writeFileSync(join(serveRoot, "index.html"), "<h1>built</h1>", "utf8");
+			return { serveRoot, outputDirectory: "dist", files: ["index.html"], logs: ["isolated build"], durationMs: 1 };
 		});
+		const service = createWorkspaceTaskService(config, { buildRunner: { build } });
 
 		const result = await service.run({
 			task: "build_static",
@@ -50,9 +62,11 @@ describe("project execution and preview hardening", () => {
 			title: "Hardening",
 		});
 
-		expect(commands).toEqual([]);
-		expect(result.status).toBe("failed");
-		expect(result.errors?.join("\n")).toContain("package scripts are not allowed");
+		expect(build).toHaveBeenCalledOnce();
+		expect(existsSync(marker)).toBe(false);
+		expect(result.status).toBe("passed");
+		expect(result.serveRoot).toBe(join(projectDir, "dist"));
+		expect(result.logs?.join("\n")).toContain("isolated build");
 	});
 
 	it("rejects create rewrite delete and preview of trusted metadata", async () => {
@@ -201,22 +215,25 @@ describe("project execution and preview hardening", () => {
 		expect(result.omittedBytes).toBeGreaterThan(0);
 	});
 
-	it("truncates build_static command logs", async () => {
+	it("truncates sanitized BuildRunner failure logs", async () => {
 		const root = tempRoot();
-		const config = { ...testConfig(root), projectInstallCommand: "", projectBuildCommand: "node build.js" };
+		const config = testConfig(root);
 		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
 		mkdirSync(projectDir, { recursive: true });
 		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }), "utf8");
-		const service = new WorkspaceTaskService(config, undefined, async (_command, _cwd, _timeoutMs, logs) => {
-			logs.push("x".repeat(200_000));
-			throw new Error("boom");
-		});
+		const runner: BuildRunner = {
+			build: async () => {
+				throw new BuildRunnerError("build.execution_failed", "Container build failed.", ["x".repeat(200_000)]);
+			},
+		};
+		const service = createWorkspaceTaskService(config, { buildRunner: runner });
 
 		const result = await service.run({ task: "build_static", clientId: "client-a", sessionId: "s1", title: "Logs" });
 
 		const logText = result.logs?.join("") ?? "";
 		expect(logText.length).toBeLessThan(80_000);
 		expect(logText).toContain("[truncated");
+		expect(result.failureCode).toBe("build.execution_failed");
 	});
 
 	it("fails validate when static app JavaScript does not match the generated HTML contract", async () => {
@@ -247,7 +264,7 @@ $('#kpi-yield').textContent = '91.2%';
 `,
 			"utf8",
 		);
-		const service = new WorkspaceTaskService(config);
+		const service = createWorkspaceTaskService(config);
 
 		const result = await service.run({
 			task: "validate",
@@ -293,7 +310,7 @@ document.addEventListener('DOMContentLoaded', () => {
 `,
 			"utf8",
 		);
-		const service = new WorkspaceTaskService(config);
+		const service = createWorkspaceTaskService(config);
 
 		const result = await service.run({
 			task: "validate",
@@ -347,10 +364,17 @@ function testConfig(root: string): StorageConfig {
 		clientIdRequired: true,
 		previewBaseUrl: "http://localhost:5173",
 		previewInternalOrigin: "http://127.0.0.1:5173",
-		projectInstallCommand: "npm install",
-		projectBuildCommand: "npm run build",
-		projectInstallTimeoutMs: 120000,
-		projectBuildTimeoutMs: 120000,
+		containerBuild: {
+			engine: "docker",
+			image: "node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752",
+			proxyImage: "ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029",
+			timeoutMs: 120000,
+			cpus: 1,
+			memoryMb: 512,
+			pidsLimit: 128,
+			maxLogChars: 12000,
+			registryOrigins: ["https://registry.npmjs.org"],
+		},
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",

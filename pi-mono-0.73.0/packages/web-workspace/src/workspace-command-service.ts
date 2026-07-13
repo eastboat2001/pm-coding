@@ -12,7 +12,7 @@ export class WorkspaceCommandService {
 		mkdirSync(projectDir, { recursive: true });
 		const command = String(body.command || "").trim();
 		if (!command) throw new Error("Field `command` is required.");
-		const timeoutMs = Math.max(1000, Math.min(Number(body.timeoutMs || this.config.projectBuildTimeoutMs), 300000));
+		const timeoutMs = Math.max(1000, Math.min(Number(body.timeoutMs || 120000), 300000));
 		const logs: string[] = [];
 		try {
 			await runCommand(command, projectDir, timeoutMs, logs);

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { isAbsolute, join, resolve } from "node:path";
 import { CONFIG_ENV_FILE } from "./constants.js";
 import { normalizePreviewOrigin } from "./preview-origin.js";
@@ -19,7 +20,16 @@ const RETIRED_APPLICATION_GENERATION_ENV = [
 	"PI_RUN_RETRY_JITTER_RATIO",
 	"PI_RUN_MAX_AGENT_TURNS",
 	"PI_RUN_MAX_AGENT_TOOL_EXECUTIONS",
+	"PI_PROJECT_INSTALL_COMMAND",
+	"PI_PROJECT_BUILD_COMMAND",
+	"PI_PROJECT_INSTALL_TIMEOUT_MS",
+	"PI_PROJECT_BUILD_TIMEOUT_MS",
 ] as const;
+
+const DEFAULT_BUILD_CONTAINER_IMAGE = "node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752";
+const DEFAULT_BUILD_PROXY_IMAGE =
+	"ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029";
+const DIGEST_IMAGE = /^[^\s@]+@sha256:[0-9a-f]{64}$/;
 
 export class RetiredApplicationGenerationConfigError extends Error {
 	constructor(readonly variables: string[]) {
@@ -38,6 +48,7 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 	);
 	if (retiredVariables.length > 0) throw new RetiredApplicationGenerationConfigError([...retiredVariables]);
 	const env = (name: string) => envValue(name, configEnv.values);
+	const containerBuild = containerBuildConfig(env);
 	const envStorageDir = stringValue(env("PI_STORAGE_DIR"));
 	const storageDir = envStorageDir ? resolveConfiguredPath(rootDir, envStorageDir) : undefined;
 	const clientsRootDir = resolveConfiguredPath(
@@ -77,10 +88,7 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 			stringValue(env("PI_PREVIEW_INTERNAL_ORIGIN")) || "http://127.0.0.1:5173",
 			"PI_PREVIEW_INTERNAL_ORIGIN",
 		),
-		projectInstallCommand: stringValue(env("PI_PROJECT_INSTALL_COMMAND")) || "npm install",
-		projectBuildCommand: stringValue(env("PI_PROJECT_BUILD_COMMAND")) || "npm run build",
-		projectInstallTimeoutMs: positiveIntegerValue(env("PI_PROJECT_INSTALL_TIMEOUT_MS"), 120000),
-		projectBuildTimeoutMs: positiveIntegerValue(env("PI_PROJECT_BUILD_TIMEOUT_MS"), 120000),
+		containerBuild,
 		defaultModelProvider: stringValue(env("PI_DEFAULT_MODEL_PROVIDER")),
 		defaultModelId: stringValue(env("PI_DEFAULT_MODEL_ID")),
 		handoffDefaultThinkingLevel: thinkingLevelValue(env("PI_HANDOFF_DEFAULT_THINKING_LEVEL")),
@@ -127,6 +135,78 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 			stringValue(env("OTEL_DEPLOYMENT_ENVIRONMENT")) ||
 			stringValue(env("DEPLOYMENT_ENVIRONMENT")),
 	};
+}
+
+function containerBuildConfig(env: (name: string) => string | undefined): StorageConfig["containerBuild"] {
+	const engineValue = stringValue(env("PI_BUILD_CONTAINER_ENGINE")) || "docker";
+	if (engineValue !== "docker" && engineValue !== "podman") {
+		throw invalidContainerBuildConfig("PI_BUILD_CONTAINER_ENGINE");
+	}
+	const image = digestImageValue(
+		stringValue(env("PI_BUILD_CONTAINER_IMAGE")) || DEFAULT_BUILD_CONTAINER_IMAGE,
+		"PI_BUILD_CONTAINER_IMAGE",
+	);
+	const proxyImage = digestImageValue(
+		stringValue(env("PI_BUILD_PROXY_IMAGE")) || DEFAULT_BUILD_PROXY_IMAGE,
+		"PI_BUILD_PROXY_IMAGE",
+	);
+	return {
+		engine: engineValue,
+		image,
+		proxyImage,
+		timeoutMs: positiveConfigNumber(env("PI_BUILD_TIMEOUT_MS"), 120000, "PI_BUILD_TIMEOUT_MS", true),
+		cpus: positiveConfigNumber(env("PI_BUILD_CPUS"), 1, "PI_BUILD_CPUS", false),
+		memoryMb: positiveConfigNumber(env("PI_BUILD_MEMORY_MB"), 512, "PI_BUILD_MEMORY_MB", true),
+		pidsLimit: positiveConfigNumber(env("PI_BUILD_PIDS_LIMIT"), 128, "PI_BUILD_PIDS_LIMIT", true),
+		maxLogChars: positiveConfigNumber(env("PI_BUILD_MAX_LOG_CHARS"), 12000, "PI_BUILD_MAX_LOG_CHARS", true),
+		registryOrigins: registryOriginValues(env("PI_BUILD_REGISTRY_ORIGINS")),
+	};
+}
+
+function digestImageValue(value: string, variableName: string): string {
+	if (!DIGEST_IMAGE.test(value)) throw invalidContainerBuildConfig(variableName);
+	return value;
+}
+
+function positiveConfigNumber(
+	value: string | undefined,
+	defaultValue: number,
+	variableName: string,
+	requireInteger: boolean,
+): number {
+	if (value === undefined) return defaultValue;
+	const parsed = Number(value.trim());
+	if (!Number.isFinite(parsed) || parsed <= 0 || (requireInteger && !Number.isInteger(parsed))) {
+		throw invalidContainerBuildConfig(variableName);
+	}
+	return parsed;
+}
+
+function registryOriginValues(value: string | undefined): string[] {
+	const origins = value === undefined ? ["https://registry.npmjs.org"] : value.split(",").map((part) => part.trim());
+	if (origins.length === 0 || origins.some((origin) => !isRegistryOrigin(origin))) {
+		throw invalidContainerBuildConfig("PI_BUILD_REGISTRY_ORIGINS");
+	}
+	return origins;
+}
+
+function isRegistryOrigin(value: string): boolean {
+	try {
+		const url = new URL(value);
+		return (
+			url.protocol === "https:" &&
+			url.origin === value &&
+			url.username === "" &&
+			url.password === "" &&
+			isIP(url.hostname.replace(/^\[|\]$/g, "")) === 0
+		);
+	} catch {
+		return false;
+	}
+}
+
+function invalidContainerBuildConfig(variableName: string): Error {
+	return new Error(`Invalid production container build configuration: ${variableName}`);
 }
 
 function loadConfigEnvFile(

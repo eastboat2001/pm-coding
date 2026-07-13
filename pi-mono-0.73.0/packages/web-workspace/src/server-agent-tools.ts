@@ -18,7 +18,8 @@ import type {
 } from "./types.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
-import { WorkspaceTaskService } from "./workspace-task-service.js";
+import { createWorkspaceTaskService } from "./workspace-task-factory.js";
+import type { WorkspaceTaskService } from "./workspace-task-service.js";
 
 type ServerDirectProjectToolContext = Pick<ProjectWorkspaceContext, "clientId" | "sessionId" | "title"> & {
 	activeSkillNames?: string[];
@@ -170,7 +171,7 @@ export function createServerDirectProjectTools(
 	options: ServerDirectProjectToolOptions = {},
 ): Array<ServerDirectAgentTool<TSchema, ProjectFileResult | ProjectTaskResult>> {
 	const files = new WorkspaceFileService(config);
-	const tasks = new WorkspaceTaskService(config, undefined, undefined, diagnostics);
+	const tasks = createWorkspaceTaskService(config, { diagnostics });
 	const readCache = new Map<string, ServerDirectToolResult<ProjectFileResult>>();
 	const specExecution = createSpecExecutionState(options.specExecution);
 	return [

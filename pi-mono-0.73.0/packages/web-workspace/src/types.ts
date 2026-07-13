@@ -1,4 +1,6 @@
 import type { IncomingMessage } from "node:http";
+import type { BuildRunnerFailureCode } from "./build-runner.js";
+import type { ContainerBuildRunnerConfig } from "./ephemeral-container-build-runner.js";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -285,10 +287,7 @@ export interface StorageConfig {
 	clientIdRequired: boolean;
 	previewBaseUrl: string;
 	previewInternalOrigin: string;
-	projectInstallCommand: string;
-	projectBuildCommand: string;
-	projectInstallTimeoutMs: number;
-	projectBuildTimeoutMs: number;
+	containerBuild: ContainerBuildRunnerConfig;
 	defaultModelProvider: string;
 	defaultModelId: string;
 	handoffDefaultThinkingLevel: string;
@@ -588,6 +587,7 @@ export interface ProjectTaskResult extends JsonObject {
 	previewUrl?: string;
 	serveRoot?: string;
 	logs?: string[];
+	failureCode?: BuildRunnerFailureCode;
 	updatedAt?: string;
 }
 

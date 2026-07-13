@@ -2,10 +2,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { type BuildRunner, BuildRunnerError } from "../src/build-runner.js";
 import type { StorageConfig } from "../src/types.js";
 import { runCommand } from "../src/workspace-command-service.js";
 import { projectDirectory } from "../src/workspace-paths.js";
-import { WorkspaceTaskService } from "../src/workspace-task-service.js";
+import { createWorkspaceTaskService } from "../src/workspace-task-factory.js";
 
 function tempRoot(): string {
 	return mkdtempSync(join(tmpdir(), "pi-web-workspace-task-abort-"));
@@ -31,10 +32,17 @@ function testConfig(root: string): StorageConfig {
 		clientIdRequired: true,
 		previewBaseUrl: "http://localhost:5173",
 		previewInternalOrigin: "http://127.0.0.1:5173",
-		projectInstallCommand: "",
-		projectBuildCommand: "node build.js",
-		projectInstallTimeoutMs: 120000,
-		projectBuildTimeoutMs: 120000,
+		containerBuild: {
+			engine: "docker",
+			image: "node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752",
+			proxyImage: "ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029",
+			timeoutMs: 120000,
+			cpus: 1,
+			memoryMb: 512,
+			pidsLimit: 128,
+			maxLogChars: 12000,
+			registryOrigins: ["https://registry.npmjs.org"],
+		},
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",
@@ -81,11 +89,14 @@ describe("WorkspaceTaskService abort handling", () => {
 
 		const controller = new AbortController();
 		let receivedSignal = false;
-		const service = new WorkspaceTaskService(config, undefined, async (_command, _cwd, _timeoutMs, _logs, signal) => {
-			receivedSignal = signal === controller.signal;
-			controller.abort();
-			throw new Error("Command aborted");
-		});
+		const runner: BuildRunner = {
+			build: async ({ signal }) => {
+				receivedSignal = signal === controller.signal;
+				controller.abort();
+				throw new BuildRunnerError("build.cancelled", "Build was cancelled.", ["cancelled safely"]);
+			},
+		};
+		const service = createWorkspaceTaskService(config, { buildRunner: runner });
 
 		const result = await service.run(
 			{ task: "build_static", clientId: "client-a", sessionId: "s1", title: "Abort" },
@@ -95,7 +106,9 @@ describe("WorkspaceTaskService abort handling", () => {
 
 		expect(receivedSignal).toBe(true);
 		expect(result.status).toBe("failed");
-		expect(result.errors).toContain("Command aborted");
+		expect(result.failureCode).toBe("build.cancelled");
+		expect(result.errors).toContain("Build was cancelled.");
+		expect(result.logs?.join("\n")).toContain("cancelled safely");
 	});
 
 	it("fails command execution immediately when the signal is already aborted", async () => {

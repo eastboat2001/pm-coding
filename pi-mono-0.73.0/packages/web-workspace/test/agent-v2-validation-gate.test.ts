@@ -78,7 +78,7 @@ describe("agent v2 validation gate", () => {
 		expect(result.validation).toMatchObject({ status: "passed", summary: "Static validation passed" });
 	});
 
-	it("normalizes build-required messaging into v2 preview failures", async () => {
+	it("preserves structured BuildRunner failures in v2 validation", async () => {
 		const config = testConfig(tempRoot());
 		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
 		const sourceMessage =
@@ -103,6 +103,7 @@ describe("agent v2 validation gate", () => {
 			{
 				task: "build_static",
 				status: "failed",
+				failureCode: "build.timeout",
 				projectId: "project-a",
 				sessionId: context.sessionId,
 				title: context.title,
@@ -111,7 +112,8 @@ describe("agent v2 validation gate", () => {
 				files: ["index.html", "src/main.ts"],
 				hasPackageJson: true,
 				valid: false,
-				errors: ["Build failed: missing dependency"],
+				errors: ["Container build timed out."],
+				logs: ["sanitized timeout log"],
 				mode: "static",
 				serveRoot: "",
 			},
@@ -141,32 +143,26 @@ describe("agent v2 validation gate", () => {
 			tasks,
 		});
 		const [failure] = result.failures;
-		const [rawError] = result.rawResult.errors ?? [];
 
-		expect(tasks.calls).toEqual(["validate", "build_static", "validate"]);
+		expect(tasks.calls).toEqual(["validate", "build_static"]);
 		expect(result.status).toBe("failed");
-		expect(result.failures).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					code: "static.preview_build_required",
-					source: "preview",
-					retryable: false,
-				}),
-			]),
-		);
-		expect(result.rawResult.errors).toEqual([sourceMessage]);
-		expect(rawError).toContain("build_static before preview");
-		expect(failure?.message).not.toContain("project_task");
-		expect(failure?.code).not.toContain("project_task");
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "build.timeout",
+				source: "static_validate",
+				retryable: true,
+			}),
+		]);
+		expect(result.rawResult.task).toBe("build_static");
+		expect(failure?.data).toMatchObject({ sourceMessage: "Container build timed out." });
 		expect(result.validation.details).toMatchObject({
-			rawErrors: [rawError],
+			rawErrors: ["Container build timed out."],
 			buildResult: expect.objectContaining({
 				status: "failed",
-				errors: ["Build failed: missing dependency"],
+				failureCode: "build.timeout",
+				errors: ["Container build timed out."],
+				logs: ["sanitized timeout log"],
 			}),
-		});
-		expect(failure?.data).toMatchObject({
-			sourceMessage: rawError,
 		});
 	});
 
@@ -373,10 +369,17 @@ function testConfig(root: string): StorageConfig {
 		clientIdRequired: true,
 		previewBaseUrl: "http://localhost:5173",
 		previewInternalOrigin: "http://127.0.0.1:5173",
-		projectInstallCommand: "npm install",
-		projectBuildCommand: "npm run build",
-		projectInstallTimeoutMs: 120000,
-		projectBuildTimeoutMs: 120000,
+		containerBuild: {
+			engine: "docker",
+			image: "node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752",
+			proxyImage: "ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029",
+			timeoutMs: 120000,
+			cpus: 1,
+			memoryMb: 512,
+			pidsLimit: 128,
+			maxLogChars: 12000,
+			registryOrigins: ["https://registry.npmjs.org"],
+		},
 		defaultModelProvider: "",
 		defaultModelId: "",
 		handoffDefaultThinkingLevel: "high",

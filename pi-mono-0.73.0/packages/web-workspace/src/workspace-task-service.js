@@ -1,21 +1,21 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { isObject, readJsonFile } from "./json.js";
+import { BuildRunnerError } from "./build-runner.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import { assessStaticPreviewQuality } from "./static-preview-quality-gate.js";
 import { runStaticPreviewSmokeGate } from "./static-preview-smoke-gate.js";
-import { appendProjectLog, isUnsafeProjectCommand, runCommand, truncateProjectLogs, } from "./workspace-command-service.js";
+import { appendProjectLog, truncateProjectLogs } from "./workspace-command-service.js";
 import { listProjectSourceFiles, workspaceContext } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 export class WorkspaceTaskService {
     config;
+    buildRunner;
     previews;
-    runProjectCommand;
     diagnostics;
-    constructor(config, previews = new WorkspacePreviewService(config), runProjectCommand = runCommand, diagnostics) {
+    constructor(config, buildRunner, previews = new WorkspacePreviewService(config), diagnostics) {
         this.config = config;
+        this.buildRunner = buildRunner;
         this.previews = previews;
-        this.runProjectCommand = runProjectCommand;
         this.diagnostics = diagnostics;
     }
     async run(body, req, signal) {
@@ -83,31 +83,34 @@ export class WorkspaceTaskService {
         const logs = [];
         appendProjectLog(logs, `Project root: ${options.projectDir}\n`);
         const packageJsonPath = join(options.projectDir, "package.json");
-        const errors = validateBuildStaticProject(packageJsonPath, this.config);
+        const errors = [];
+        if (!existsSync(packageJsonPath))
+            errors.push("build_static requires package.json.");
         if (options.files.length === 0)
             errors.push("Project workspace is empty.");
         if (errors.length > 0)
             return buildStaticResult(options, "failed", false, "", errors, logs);
         try {
-            const installCommand = this.config.projectInstallCommand.trim();
-            if (installCommand) {
-                await this.runProjectCommand(installCommand, options.projectDir, this.config.projectInstallTimeoutMs, logs, signal);
-            }
-            const buildCommand = this.config.projectBuildCommand.trim();
-            if (buildCommand) {
-                await this.runProjectCommand(buildCommand, options.projectDir, this.config.projectBuildTimeoutMs, logs, signal);
-            }
-            const staticRoot = findStaticServeRoot(options.projectDir, staticServeRootCandidates(true));
-            if (!staticRoot) {
-                throw new Error("Static build finished, but no index.html was found in the project root, dist, build, or public.");
-            }
+            const build = await this.buildRunner.build({
+                projectId: "dist",
+                projectRoot: options.projectDir,
+                artifactRoot: options.projectDir,
+                allowedOutputs: ["dist", "build", "public"],
+                signal,
+            });
+            for (const log of build.logs)
+                appendProjectLog(logs, log);
             appendProjectLog(logs, "Static build completed.\n");
-            return buildStaticResult(options, "passed", true, staticRoot, [], logs);
+            return buildStaticResult(options, "passed", true, build.serveRoot, [], logs);
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            if (error instanceof BuildRunnerError) {
+                for (const log of error.logs ?? [])
+                    appendProjectLog(logs, log);
+            }
             appendProjectLog(logs, message);
-            return buildStaticResult(options, "failed", false, findStaticServeRoot(options.projectDir, staticServeRootCandidates(true)) || "", [message], logs);
+            return buildStaticResult(options, "failed", false, findStaticServeRoot(options.projectDir, staticServeRootCandidates(true)) || "", [message], logs, error instanceof BuildRunnerError ? error.code : undefined);
         }
     }
     recordTaskResult(result) {
@@ -139,7 +142,7 @@ export class WorkspaceTaskService {
 function isProjectTaskName(value) {
     return (value === "inspect" || value === "validate" || value === "build_static" || value === "preview" || value === "logs");
 }
-function buildStaticResult(options, status, valid, serveRoot, errors, logs) {
+function buildStaticResult(options, status, valid, serveRoot, errors, logs, failureCode) {
     const files = listProjectSourceFiles(options.projectDir).map((file) => relative(options.projectDir, file));
     return {
         task: "build_static",
@@ -156,62 +159,7 @@ function buildStaticResult(options, status, valid, serveRoot, errors, logs) {
         mode: "static",
         serveRoot,
         logs: truncateProjectLogs(logs),
+        ...(failureCode ? { failureCode } : {}),
     };
-}
-function validateBuildStaticProject(packageJsonPath, config) {
-    const errors = [];
-    if (!existsSync(packageJsonPath))
-        errors.push("build_static requires package.json.");
-    if (!config.projectBuildCommand.trim())
-        errors.push("build_static requires a configured project build command.");
-    if (config.projectInstallCommand.trim() && isUnsafeProjectCommand(config.projectInstallCommand)) {
-        errors.push("Configured project install command is not allowed.");
-    }
-    if (config.projectBuildCommand.trim() && isUnsafeProjectCommand(config.projectBuildCommand)) {
-        errors.push("Configured project build command is not allowed.");
-    }
-    const installScriptError = packageScriptCommandError(config.projectInstallCommand, "install");
-    if (installScriptError)
-        errors.push(installScriptError);
-    const buildScriptError = packageScriptCommandError(config.projectBuildCommand, "build");
-    if (buildScriptError)
-        errors.push(buildScriptError);
-    if (existsSync(packageJsonPath))
-        errors.push(...unsafePackageScriptErrors(packageJsonPath));
-    return errors;
-}
-function packageScriptCommandError(command, label) {
-    if (!invokesPackageScript(command))
-        return undefined;
-    return `Configured project ${label} command invokes package scripts; package scripts are not allowed for build_static.`;
-}
-function invokesPackageScript(command) {
-    const normalized = command.trim().toLowerCase().replace(/\s+/g, " ");
-    if (!normalized)
-        return false;
-    return PACKAGE_SCRIPT_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized));
-}
-const PACKAGE_SCRIPT_COMMAND_PATTERNS = [
-    /(?:^|\b)(?:npm|npm\.cmd|pnpm|pnpm\.cmd|yarn|yarn\.cmd|bun|bun\.cmd)\s+(?:run|run-script)\b/,
-    /(?:^|\b)(?:yarn|yarn\.cmd|pnpm|pnpm\.cmd)\s+(?!install\b|add\b|exec\b|dlx\b|create\b|init\b|config\b|cache\b|store\b|--version\b|-v\b)[^\s]+/,
-];
-function unsafePackageScriptErrors(packageJsonPath) {
-    let packageJson;
-    try {
-        packageJson = readJsonFile(packageJsonPath);
-    }
-    catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return [`package.json could not be read: ${message}`];
-    }
-    if (!isObject(packageJson.scripts))
-        return [];
-    const errors = [];
-    for (const [name, script] of Object.entries(packageJson.scripts)) {
-        if (typeof script === "string" && isUnsafeProjectCommand(script)) {
-            errors.push(`package.json script \`${name}\` contains a command that is not allowed.`);
-        }
-    }
-    return errors;
 }
 //# sourceMappingURL=workspace-task-service.js.map

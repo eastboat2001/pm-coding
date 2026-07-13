@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { formatSkillLoadResult, prepareSkillLoadArguments, prepareSkillResourceArguments, skillLoadSchema, skillResourceSchema, } from "./skill-tool-contract.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
-import { WorkspaceTaskService } from "./workspace-task-service.js";
+import { createWorkspaceTaskService } from "./workspace-task-factory.js";
 const filenameSchema = Type.String({
     description: "Relative file path inside the server project root, such as index.html or src/main.js.",
 });
@@ -65,7 +65,7 @@ export function createServerDirectSkillTools(config, diagnostics) {
 }
 export function createServerDirectProjectTools(config, context, diagnostics, options = {}) {
     const files = new WorkspaceFileService(config);
-    const tasks = new WorkspaceTaskService(config, undefined, undefined, diagnostics);
+    const tasks = createWorkspaceTaskService(config, { diagnostics });
     const readCache = new Map();
     const specExecution = createSpecExecutionState(options.specExecution);
     return [

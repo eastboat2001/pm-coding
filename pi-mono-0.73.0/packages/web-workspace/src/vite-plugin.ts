@@ -45,7 +45,8 @@ import { sanitizePathComponent } from "./workspace-paths.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
-import { WorkspaceTaskService } from "./workspace-task-service.js";
+import { createWorkspaceTaskService } from "./workspace-task-factory.js";
+import type { WorkspaceTaskService } from "./workspace-task-service.js";
 
 const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
@@ -76,7 +77,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 	const sessions = new WorkspaceSessionService(config);
 	const files = new WorkspaceFileService(config);
 	const previews = new WorkspacePreviewService(config, diagnostics);
-	const tasks = new WorkspaceTaskService(config, previews, undefined, diagnostics);
+	const tasks = createWorkspaceTaskService(config, { previews, diagnostics });
 	const skills = new WorkspaceSkillService(config, diagnostics);
 	const runtimeDb = createAgentV2RuntimeStore(config);
 	const diagnosticExports = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);

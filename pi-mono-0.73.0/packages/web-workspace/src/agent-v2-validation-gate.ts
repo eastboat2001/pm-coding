@@ -7,7 +7,8 @@ import {
 	createAgentV2ToolRegistry,
 } from "./agent-v2-tool-governance.js";
 import type { ProjectTaskResult, StorageConfig } from "./types.js";
-import { WorkspaceTaskService } from "./workspace-task-service.js";
+import { createWorkspaceTaskService } from "./workspace-task-factory.js";
+import type { WorkspaceTaskService } from "./workspace-task-service.js";
 
 export interface AgentV2ValidationGateContext {
 	clientId: string;
@@ -42,7 +43,7 @@ export interface AgentV2ValidationGateResult {
 export async function runAgentV2StaticValidationGate(
 	input: RunAgentV2StaticValidationGateInput,
 ): Promise<AgentV2ValidationGateResult> {
-	const tasks = input.tasks ?? new WorkspaceTaskService(input.config);
+	const tasks = input.tasks ?? createWorkspaceTaskService(input.config);
 	const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
 	assertAgentV2ToolAllowed(registry, "validation.static_quality", "validation");
 	assertAgentV2ToolAllowed(registry, "validation.static_smoke", "validation");
@@ -74,20 +75,26 @@ export async function runAgentV2StaticValidationGate(
 			undefined,
 			input.signal,
 		);
-		throwIfAborted(input.signal);
-		taskResult = await tasks.run(
-			{
-				clientId: input.context.clientId,
-				sessionId: input.context.sessionId,
-				title: input.context.title,
-				task: "validate",
-			},
-			undefined,
-			input.signal,
-		);
+		if (buildResult.status === "failed" && buildResult.failureCode) {
+			taskResult = buildResult;
+		} else {
+			throwIfAborted(input.signal);
+			taskResult = await tasks.run(
+				{
+					clientId: input.context.clientId,
+					sessionId: input.context.sessionId,
+					title: input.context.title,
+					task: "validate",
+				},
+				undefined,
+				input.signal,
+			);
+		}
 	}
 	const rawErrors = rawErrorsFor(taskResult);
-	const failures = rawErrors.map((message) => classifyStaticValidationFailure(message, input.taskId));
+	const failures = taskResult.failureCode
+		? [classifyBuildRunnerFailure(taskResult, input.taskId)]
+		: rawErrors.map((message) => classifyStaticValidationFailure(message, input.taskId));
 	if (failures.length === 0 && taskResult.status === "failed") {
 		failures.push(
 			createFailure({
@@ -147,7 +154,21 @@ function buildResultSummary(result: ProjectTaskResult): Record<string, unknown> 
 		files: result.files,
 		errors: rawErrorsFor(result),
 		logs: Array.isArray(result.logs) ? result.logs.map(String) : undefined,
+		failureCode: result.failureCode,
 	};
+}
+
+function classifyBuildRunnerFailure(result: ProjectTaskResult, taskId: string): AgentV2ValidationFailure {
+	const code = result.failureCode ?? "build.execution_failed";
+	const sourceMessage = rawErrorsFor(result)[0] ?? "Static build failed.";
+	return createFailure({
+		code,
+		message: sourceMessage,
+		retryable: !["build.config_missing", "build.policy_rejected", "build.output_escape"].includes(code),
+		source: "static_validate",
+		taskId,
+		sourceMessage,
+	});
 }
 
 function classifyStaticValidationFailure(message: string, taskId: string): AgentV2ValidationFailure {

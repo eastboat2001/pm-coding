@@ -297,6 +297,7 @@ The proxy image is a digest-pinned Squid-compatible image. The runner writes a g
 - Create: `packages/web-workspace/src/workspace-task-factory.ts` plus mirrors
 - Modify: `packages/web-workspace/src/workspace-task-service.ts`, `workspace-command-service.ts`, `agent-v2-validation-gate.ts`, `config.ts`, `types.ts`, `vite-plugin.ts`, `server-agent-tools.ts` plus mirrors
 - Modify tests: `workspace-task-abort.test.ts`, `workspace-project-hardening.test.ts`, `agent-v2-validation-gate.test.ts`, `config-diagnostics.test.ts`, `workspace.test.mjs`
+- Modify remaining direct `StorageConfig` fixtures: `agent-v2-execution-core.test.ts`, `agent-v2-file-adapter.test.ts`, `agent-v2-vite-plugin-routes.test.ts`, `preview-readiness-checker.test.ts`, `run-events-sse.test.ts`, `runtime-store-factory.test.ts`, `server-agent-tools.test.ts`, `vite-plugin-schema-init.test.ts`, `workspace-isolation.test.ts`, `workspace-skill-service.test.ts`
 - Modify: `packages/web-workspace/test/ephemeral-container-build-runner.integration.test.ts`
 - Modify: `packages/web-workspace/test/agent-v2-production-path-import-boundary.test.ts`
 

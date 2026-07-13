@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { normalize } from "node:path";
 import { type Context, createContext, Script } from "node:vm";
+import { classifyStaticResourceReference, staticHtmlAttributeValue } from "./static-preview.js";
 import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 
 export interface StaticPreviewSmokeGateInput {
@@ -24,7 +25,6 @@ type ScriptBlock = {
 type Listener = (event: SmokeEvent) => void;
 
 const SCRIPT_TAG_PATTERN = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
-const SRC_ATTRIBUTE_PATTERN = /\bsrc\s*=\s*(['"])([^'"]+)\1/i;
 const ID_ATTRIBUTE_PATTERN = /\bid\s*=\s*(['"])([^'"]+)\1/i;
 const CLASS_ATTRIBUTE_PATTERN = /\bclass\s*=\s*(['"])([^'"]*)\1/i;
 const STYLE_ATTRIBUTE_PATTERN = /\bstyle\s*=\s*(['"])([^'"]*)\1/i;
@@ -97,19 +97,19 @@ function readScripts(guard: WorkspacePathGuard, html: string, errors: string[], 
 	for (const match of html.matchAll(SCRIPT_TAG_PATTERN)) {
 		const attrs = match[1] ?? "";
 		const inlineContent = match[2] ?? "";
-		const src = attributeMatch(attrs, SRC_ATTRIBUTE_PATTERN);
+		const src = staticHtmlAttributeValue(attrs, "src");
 		if (!src) {
 			if (inlineContent.trim()) scripts.push({ label: `inline script ${++inlineIndex}`, content: inlineContent });
 			continue;
 		}
-		if (isExternalResource(src)) {
+		const reference = classifyStaticResourceReference(src);
+		if (reference?.kind === "external") {
 			warnings.push(`Runtime smoke gate skipped external script ${src}.`);
 			continue;
 		}
-		const localPath = localResourcePath(src);
-		if (!localPath) continue;
+		if (reference?.kind !== "local") continue;
 		try {
-			const authorized = guard.authorizeExisting(localPath, "file");
+			const authorized = guard.authorizeExisting(reference.relativePath, "file");
 			scripts.push({
 				label: authorized.relativePath.replace(/\\/g, "/"),
 				content: readFileSync(authorized.absolutePath, "utf8"),
@@ -126,35 +126,17 @@ function authorizeLinkedResources(guard: WorkspacePathGuard, html: string, error
 	const checked: string[] = [];
 	for (const match of html.matchAll(/<(link|img|source|video|audio|track)\b[^>]*>/gi)) {
 		const tag = match[0];
-		const value = /\blink\b/i.test(match[1] ?? "")
-			? attributeMatch(tag, /\bhref\s*=\s*(["'])([^"']+)\1/i)
-			: attributeMatch(tag, SRC_ATTRIBUTE_PATTERN);
-		const localPath = localResourcePath(value);
-		if (!value || !localPath) continue;
+		const value = staticHtmlAttributeValue(tag, /\blink\b/i.test(match[1] ?? "") ? "href" : "src");
+		const reference = classifyStaticResourceReference(value);
+		if (!value || reference?.kind !== "local") continue;
 		try {
-			checked.push(guard.authorizeExisting(localPath, "file").relativePath.replace(/\\/g, "/"));
+			checked.push(guard.authorizeExisting(reference.relativePath, "file").relativePath.replace(/\\/g, "/"));
 		} catch (error) {
 			if (!(error instanceof WorkspacePathAuthorizationError)) throw error;
 			errors.push(`Runtime smoke gate could not authorize local asset ${value}.`);
 		}
 	}
 	return checked;
-}
-
-function localResourcePath(value: string | undefined): string | undefined {
-	const trimmed = value?.trim();
-	if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
-		return undefined;
-	}
-	const withoutQueryOrHash = trimmed.split(/[?#]/, 1)[0]?.trim();
-	if (!withoutQueryOrHash) return undefined;
-	const relativePath = withoutQueryOrHash.replace(/^\/+/, "").replace(/^\.\/+/, "");
-	if (!relativePath) return undefined;
-	try {
-		return decodeURIComponent(relativePath);
-	} catch {
-		return relativePath;
-	}
 }
 
 function runScript(script: ScriptBlock, context: Context, timeoutMs: number, phase: string, errors: string[]): void {
@@ -662,10 +644,6 @@ function sourceLineFromSources(error: unknown, sources?: Map<string, string>): s
 
 function stripTags(value: string): string {
 	return value.replace(/<[^>]+>/g, " ");
-}
-
-function isExternalResource(value: string): boolean {
-	return /^https?:\/\//i.test(value) || value.startsWith("//");
 }
 
 function relativeCheckedPath(root: string, file: string): string {

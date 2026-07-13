@@ -1,11 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { normalize } from "node:path";
+import { classifyStaticResourceReference, staticHtmlAttributeValue } from "./static-preview.js";
 import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 const ID_ATTRIBUTE_PATTERN = /\bid\s*=\s*(['"])([^'"]+)\1/g;
 const CLASS_ATTRIBUTE_PATTERN = /\bclass\s*=\s*(['"])([^'"]*)\1/;
 const STYLE_ATTRIBUTE_PATTERN = /\bstyle\s*=\s*(['"])([^'"]*)\1/;
-const SCRIPT_SRC_PATTERN = /<script\b[^>]*\bsrc\s*=\s*(['"])([^'"]+)\1[^>]*>/gi;
-const LINK_HREF_PATTERN = /<link\b[^>]*\bhref\s*=\s*(['"])([^'"]+)\1[^>]*>/gi;
+const SCRIPT_TAG_PATTERN = /<script\b([^>]*)>/gi;
+const LINK_TAG_PATTERN = /<link\b([^>]*)>/gi;
 const OPEN_TAG_PATTERN = /<([a-z][\w:-]*)\b([^>]*)>/gi;
 const GET_ELEMENT_BY_ID_PATTERN = /\bdocument\.getElementById\(\s*(['"`])([^'"`$]+)\1\s*\)/g;
 const QUERY_SELECTOR_PATTERN = /\b(?:document\.)?(?:querySelector|querySelectorAll)\(\s*(['"`])([^'"`$]+)\1\s*\)/g;
@@ -79,13 +80,13 @@ function extractHtmlIds(html) {
 }
 function readLocalScripts(guard, html, errors) {
     const scripts = [];
-    for (const match of html.matchAll(SCRIPT_SRC_PATTERN)) {
-        const src = match[2]?.trim();
-        const localPath = localResourcePath(src);
-        if (!src || !localPath)
+    for (const match of html.matchAll(SCRIPT_TAG_PATTERN)) {
+        const src = staticHtmlAttributeValue(match[1] ?? "", "src");
+        const reference = classifyStaticResourceReference(src);
+        if (!src || reference?.kind !== "local")
             continue;
         try {
-            const authorized = guard.authorizeExisting(localPath, "file");
+            const authorized = guard.authorizeExisting(reference.relativePath, "file");
             scripts.push({
                 src: authorized.relativePath.replace(/\\/g, "/"),
                 path: authorized.absolutePath,
@@ -104,12 +105,12 @@ function authorizeLinkedResources(guard, html, errors) {
     const checked = [];
     for (const match of html.matchAll(/<(link|img|source|video|audio|track)\b[^>]*>/gi)) {
         const tag = match[0];
-        const value = /\blink\b/i.test(match[1] ?? "") ? attributeResource(tag, "href") : attributeResource(tag, "src");
-        const localPath = localResourcePath(value);
-        if (!value || !localPath)
+        const value = staticHtmlAttributeValue(tag, /\blink\b/i.test(match[1] ?? "") ? "href" : "src");
+        const reference = classifyStaticResourceReference(value);
+        if (!value || reference?.kind !== "local")
             continue;
         try {
-            checked.push(guard.authorizeExisting(localPath, "file").relativePath.replace(/\\/g, "/"));
+            checked.push(guard.authorizeExisting(reference.relativePath, "file").relativePath.replace(/\\/g, "/"));
         }
         catch (error) {
             if (!(error instanceof WorkspacePathAuthorizationError))
@@ -118,28 +119,6 @@ function authorizeLinkedResources(guard, html, errors) {
         }
     }
     return checked;
-}
-function attributeResource(tag, name) {
-    const match = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\u0060]+))`, "i").exec(tag);
-    return match?.[1] ?? match?.[2] ?? match?.[3];
-}
-function localResourcePath(value) {
-    const trimmed = value?.trim();
-    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
-        return undefined;
-    }
-    const withoutQueryOrHash = trimmed.split(/[?#]/, 1)[0]?.trim();
-    if (!withoutQueryOrHash)
-        return undefined;
-    const relativePath = withoutQueryOrHash.replace(/^\/+/, "").replace(/^\.\/+/, "");
-    if (!relativePath)
-        return undefined;
-    try {
-        return decodeURIComponent(relativePath);
-    }
-    catch {
-        return relativePath;
-    }
 }
 function collectReferencedIds(scripts) {
     const ids = new Map();
@@ -237,23 +216,22 @@ function isHiddenByDefault(className, style) {
 }
 function externalResourceWarnings(html) {
     const warnings = [];
-    for (const match of html.matchAll(SCRIPT_SRC_PATTERN)) {
-        const src = match[2]?.trim();
-        if (src && isExternalResource(src))
+    for (const match of html.matchAll(SCRIPT_TAG_PATTERN)) {
+        const src = staticHtmlAttributeValue(match[1] ?? "", "src");
+        if (classifyStaticResourceReference(src)?.kind === "external") {
             warnings.push(`External script ${src} should have a local fallback.`);
+        }
     }
-    for (const match of html.matchAll(LINK_HREF_PATTERN)) {
-        const href = match[2]?.trim();
-        if (href && isExternalResource(href))
+    for (const match of html.matchAll(LINK_TAG_PATTERN)) {
+        const href = staticHtmlAttributeValue(match[1] ?? "", "href");
+        if (classifyStaticResourceReference(href)?.kind === "external") {
             warnings.push(`External stylesheet ${href} should have a local fallback.`);
+        }
     }
     return warnings;
 }
 function stripTags(value) {
     return value.replace(/<[^>]+>/g, " ");
-}
-function isExternalResource(value) {
-    return /^https?:\/\//i.test(value) || value.startsWith("//");
 }
 function relativeCheckedPath(root, file) {
     const relative = normalize(file)

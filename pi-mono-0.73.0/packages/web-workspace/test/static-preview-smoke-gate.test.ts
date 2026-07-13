@@ -122,4 +122,55 @@ document.addEventListener('DOMContentLoaded', () => {
 		expect(result.valid).toBe(false);
 		expect(result.errors.join("\n")).toContain("index.html");
 	});
+
+	it("rejects a missing unquoted local script", async () => {
+		const root = writeProject({
+			"index.html": "<!doctype html><html><body><h1>Ready</h1><script src=missing.js></script></body></html>",
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("missing.js");
+	});
+
+	it.each(["https://cdn.example/app.js", "data:text/javascript,document.body.dataset.ready='yes'"])(
+		"does not classify an unquoted external or data script as local: %s",
+		async (src) => {
+			const root = writeProject({
+				"index.html": `<!doctype html><html><body><h1>Ready</h1><script src=${src}></script></body></html>`,
+			});
+
+			const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+			expect(result.valid).toBe(true);
+			expect(result.checkedFiles).toEqual(["index.html"]);
+		},
+	);
+
+	it("authorizes an unquoted local script after stripping query and hash", async () => {
+		const root = writeProject({
+			"index.html":
+				"<!doctype html><html><body><h1>Ready</h1><script src=js/app.js?v=1#boot></script></body></html>",
+			"js/app.js": "document.querySelector('h1').textContent = 'Ready';",
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid).toBe(true);
+		expect(result.checkedFiles).toContain("js/app.js");
+	});
+
+	it("rejects an unquoted local script that escapes the serve root", async () => {
+		const parent = tempServeRoot();
+		const root = join(parent, "site");
+		mkdirSync(root);
+		writeFileSync(join(root, "index.html"), "<h1>Ready</h1><script src=../outside.js></script>", "utf8");
+		writeFileSync(join(parent, "outside.js"), "document.body.textContent = 'outside';", "utf8");
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("../outside.js");
+	});
 });

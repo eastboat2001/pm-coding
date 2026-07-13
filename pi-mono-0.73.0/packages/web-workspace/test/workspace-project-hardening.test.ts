@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,7 +39,7 @@ describe("project execution and preview hardening", () => {
 		expect(result.errors?.join("\n")).toContain("package scripts are not allowed");
 	});
 
-	it("does not serve internal preview metadata files", async () => {
+	it("rejects create rewrite delete and preview of trusted metadata", async () => {
 		const root = tempRoot();
 		const config = testConfig(root);
 		const files = new WorkspaceFileService(config);
@@ -66,6 +66,97 @@ describe("project execution and preview hardening", () => {
 		expect(res.statusCode).toBe(404);
 		expect(res.body).not.toContain("projectRoot");
 		expect(res.body).not.toContain("serveRoot");
+
+		for (const command of ["create", "rewrite"] as const) {
+			expect(() =>
+				files.handle({
+					clientId: "client-a",
+					sessionId: "s1",
+					title: "Preview",
+					command,
+					filename: ".pi-project.json",
+					content: "untrusted",
+				}),
+			).toThrow();
+		}
+		expect(() =>
+			files.handle({
+				clientId: "client-a",
+				sessionId: "s1",
+				title: "Preview",
+				command: "delete",
+				filename: ".pi-project.json",
+			}),
+		).toThrow();
+	});
+
+	it("does not trust metadata serveRoot outside the real project root", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const files = new WorkspaceFileService(config);
+		const previews = new WorkspacePreviewService(config);
+		const req = { headers: { host: "localhost:5173", "x-forwarded-proto": "http" } };
+		files.handle({
+			clientId: "client-a",
+			sessionId: "s1",
+			title: "Preview",
+			command: "create",
+			filename: "index.html",
+			content: "<h1>project</h1>",
+		});
+		const preview = await previews.preview({ clientId: "client-a", sessionId: "s1", title: "Preview" }, req);
+		const outside = join(root, "outside");
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(join(outside, "index.html"), "<h1>outside secret</h1>", "utf8");
+		writeFileSync(
+			join(projectDirectory(config.clientsRootDir, "s1", "client-a"), ".pi-project.json"),
+			JSON.stringify({ ...preview, serveRoot: outside }),
+			"utf8",
+		);
+		const res = new MockResponse();
+
+		expect(
+			previews.servePreviewRequest(
+				{ url: `/preview/${encodeURIComponent(preview.projectId)}/` } as IncomingMessage,
+				res as unknown as ServerResponse,
+			),
+		).toBe(true);
+		expect(res.statusCode).toBe(404);
+		expect(res.body).not.toContain("outside secret");
+	});
+
+	it("does not convert a rejected preview path into SPA index fallback", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const files = new WorkspaceFileService(config);
+		const previews = new WorkspacePreviewService(config);
+		const req = { headers: { host: "localhost:5173", "x-forwarded-proto": "http" } };
+		files.handle({
+			clientId: "client-a",
+			sessionId: "s1",
+			title: "Preview",
+			command: "create",
+			filename: "index.html",
+			content: "<h1>spa fallback</h1>",
+		});
+		const preview = await previews.preview({ clientId: "client-a", sessionId: "s1", title: "Preview" }, req);
+		const outside = join(root, "outside");
+		mkdirSync(outside, { recursive: true });
+		symlinkSync(
+			outside,
+			join(projectDirectory(config.clientsRootDir, "s1", "client-a"), "escape"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
+		const res = new MockResponse();
+
+		expect(
+			previews.servePreviewRequest(
+				{ url: `/preview/${encodeURIComponent(preview.projectId)}/escape/missing.js` } as IncomingMessage,
+				res as unknown as ServerResponse,
+			),
+		).toBe(true);
+		expect(res.statusCode).toBe(404);
+		expect(res.body).not.toContain("spa fallback");
 	});
 
 	it("truncates project_file get results for large files", () => {

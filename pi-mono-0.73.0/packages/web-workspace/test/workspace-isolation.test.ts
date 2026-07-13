@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -85,6 +85,48 @@ describe("workspace client isolation and path safety", () => {
 		expect(() =>
 			files.handle({ clientId: "client-a", sessionId: "/", title: "Shared title", command: "list" }),
 		).toThrow("Invalid session id");
+	});
+
+	it("rejects file reads and writes through an escaping junction", () => {
+		const files = new WorkspaceFileService(config);
+		const projectDir = projectDirectory(config.clientsRootDir, "session-1", "client-a");
+		const outside = join(root, "outside");
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(join(outside, "secret.txt"), "secret", "utf8");
+		symlinkSync(outside, join(projectDir, "linked"), process.platform === "win32" ? "junction" : "dir");
+
+		expect(() =>
+			files.handle({
+				clientId: "client-a",
+				sessionId: "session-1",
+				title: "Shared title",
+				command: "get",
+				filename: "linked/secret.txt",
+			}),
+		).toThrow();
+		expect(() =>
+			files.handle({
+				clientId: "client-a",
+				sessionId: "session-1",
+				title: "Shared title",
+				command: "rewrite",
+				filename: "linked/secret.txt",
+				content: "overwritten",
+			}),
+		).toThrow();
+		expect(() =>
+			files.handle({
+				clientId: "client-a",
+				sessionId: "session-1",
+				title: "Shared title",
+				command: "create",
+				filename: "linked/new.txt",
+				content: "created",
+			}),
+		).toThrow();
+		expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe("secret");
+		expect(existsSync(join(outside, "new.txt"))).toBe(false);
 	});
 
 	it("derives project workspace ids only from client and session ids", () => {

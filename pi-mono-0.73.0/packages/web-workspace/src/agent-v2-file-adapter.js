@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { extname } from "node:path";
 import { createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
-import { safeRelativeProjectPath, workspaceContext } from "./workspace-paths.js";
+import { WorkspacePathAuthorizationError } from "./workspace-path-guard.js";
 export function createAgentV2FileAdapter(input) {
     const files = input.files ?? new WorkspaceFileService(input.config);
     const context = {
@@ -11,13 +10,12 @@ export function createAgentV2FileAdapter(input) {
         sessionId: input.context.sessionId,
         title: input.context.title,
     };
-    const projectDir = workspaceContext(input.config, context).projectDir;
-    const artifactFor = (path, content, taskId) => ({
+    const artifactFor = (path, content, taskId, checksum = `sha256:${createHash("sha256").update(content).digest("hex")}`) => ({
         artifactId: `file:${normalizeV2Path(path)}`,
         kind: "source",
         path: normalizeV2Path(path),
         mediaType: mediaTypeForPath(path),
-        checksum: `sha256:${createHash("sha256").update(content).digest("hex")}`,
+        checksum,
         version: "v2",
         sourceTaskId: taskId,
         validationStatus: "not_started",
@@ -25,7 +23,7 @@ export function createAgentV2FileAdapter(input) {
     });
     const mapError = (error, path) => {
         const message = error instanceof Error ? error.message : String(error);
-        if (isPathValidationError(message)) {
+        if (error instanceof WorkspacePathAuthorizationError) {
             throw new Error(JSON.stringify(createAgentV2ToolFailure({
                 code: "file.path_invalid",
                 message,
@@ -85,11 +83,11 @@ export function createAgentV2FileAdapter(input) {
                 });
                 const persistedPath = typeof result.filename === "string" ? result.filename : patch.path;
                 const path = publicPath(persistedPath);
-                const content = readPersistedFile(projectDir, persistedPath);
+                const persisted = files.readProjectFilePreview({ ...context, filename: persistedPath });
                 return {
                     path,
                     action: "updated",
-                    artifact: artifactFor(path, content, patch.taskId),
+                    artifact: artifactFor(path, persisted.content, patch.taskId, `sha256:${persisted.hash}`),
                 };
             }
             catch (error) {
@@ -97,11 +95,6 @@ export function createAgentV2FileAdapter(input) {
             }
         },
     };
-}
-function isPathValidationError(message) {
-    return (message.includes("Project path component is empty.") ||
-        message.includes("Invalid project path component:") ||
-        message.includes("Resolved path escapes configured root."));
 }
 function normalizeV2Path(path) {
     return path.replace(/\\/g, "/");
@@ -119,9 +112,5 @@ function mediaTypeForPath(path) {
     if (extension === ".md")
         return "text/markdown";
     return "text/plain";
-}
-function readPersistedFile(projectDir, path) {
-    const relativePath = safeRelativeProjectPath(path);
-    return readFileSync(resolve(projectDir, relativePath), "utf8");
 }
 //# sourceMappingURL=agent-v2-file-adapter.js.map

@@ -10,7 +10,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, extname, relative, resolve } from "node:path";
+import { dirname, extname, relative } from "node:path";
 import { PROJECT_FILE_GET_MAX_BYTES } from "./constants.js";
 import type {
 	ProjectFilePreviewRequest,
@@ -23,7 +23,12 @@ import type {
 	ProjectRequestContext,
 	StorageConfig,
 } from "./types.js";
-import { assertInside, listProjectSourceFiles, safeRelativeProjectPath, workspaceContext } from "./workspace-paths.js";
+import {
+	type AuthorizedWorkspacePath,
+	WorkspacePathAuthorizationError,
+	WorkspacePathGuard,
+} from "./workspace-path-guard.js";
+import { listProjectSourceFiles, workspaceContext } from "./workspace-paths.js";
 
 export class WorkspaceFileService {
 	constructor(private readonly config: StorageConfig) {}
@@ -47,19 +52,18 @@ export class WorkspaceFileService {
 
 	readProjectFilePreview(body: ProjectFilePreviewRequest): ProjectFilePreviewResult {
 		const { projectDir, projectId, sessionId, title } = workspaceContext(this.config, body);
-		const relativePath = safeRelativeProjectPath(String(body.filename || "").trim());
-		const targetPath = resolve(projectDir, relativePath);
-		assertInside(projectDir, targetPath);
-		if (!existsSync(targetPath)) throw new Error(`File not found: ${normalizeProjectFilePath(relativePath)}`);
-		const stat = statSync(targetPath);
-		if (!stat.isFile()) throw new Error(`Project path is not a file: ${normalizeProjectFilePath(relativePath)}`);
+		const authorized = WorkspacePathGuard.forProjectContent(projectDir).authorizeExisting(
+			String(body.filename || "").trim(),
+			"file",
+		);
+		const stat = statSync(authorized.absolutePath);
 
 		const maxBytes = normalizePreviewMaxBytes(body.maxBytes);
 		const bytesToRead = Math.min(stat.size, maxBytes);
-		const buffer = bytesToRead > 0 ? readFilePrefix(targetPath, bytesToRead) : Buffer.alloc(0);
+		const buffer = bytesToRead > 0 ? readFilePrefix(authorized.absolutePath, bytesToRead) : Buffer.alloc(0);
 		const binary = isProbablyBinary(buffer);
 		const content = binary ? "" : buffer.toString("utf8");
-		const filename = normalizeProjectFilePath(relativePath);
+		const filename = normalizeProjectFilePath(authorized.relativePath);
 		return {
 			projectId,
 			sessionId,
@@ -70,7 +74,7 @@ export class WorkspaceFileService {
 			language: languageForFilename(filename),
 			binary,
 			truncated: stat.size > bytesToRead,
-			hash: fileHash(targetPath),
+			hash: fileHash(authorized.absolutePath),
 			projectRoot: projectDir,
 		};
 	}
@@ -87,22 +91,18 @@ export class WorkspaceFileService {
 			throw new Error(`File content exceeds the ${PROJECT_FILE_SAVE_MAX_BYTES} byte save limit.`);
 		}
 
-		const relativePath = safeRelativeProjectPath(filename);
-		const targetPath = resolve(projectDir, relativePath);
-		assertInside(projectDir, targetPath);
-		if (!existsSync(targetPath)) throw new Error(`File not found: ${normalizeProjectFilePath(relativePath)}`);
-		const stat = statSync(targetPath);
-		if (!stat.isFile()) throw new Error(`Project path is not a file: ${normalizeProjectFilePath(relativePath)}`);
+		const authorized = WorkspacePathGuard.forProjectContent(projectDir).authorizeExisting(filename, "file");
+		const stat = statSync(authorized.absolutePath);
 		const currentPrefix =
 			stat.size > 0
-				? readFilePrefix(targetPath, Math.min(stat.size, DEFAULT_PROJECT_FILE_PREVIEW_MAX_BYTES))
+				? readFilePrefix(authorized.absolutePath, Math.min(stat.size, DEFAULT_PROJECT_FILE_PREVIEW_MAX_BYTES))
 				: Buffer.alloc(0);
 		if (isProbablyBinary(currentPrefix))
-			throw new Error(`Cannot edit binary file: ${normalizeProjectFilePath(relativePath)}`);
-		const currentHash = fileHash(targetPath);
+			throw new Error(`Cannot edit binary file: ${normalizeProjectFilePath(authorized.relativePath)}`);
+		const currentHash = fileHash(authorized.absolutePath);
 		if (currentHash !== baseHash) throw new Error("File has changed since it was opened. Reload before saving.");
 
-		writeFileSync(targetPath, content, "utf8");
+		writeFileSync(authorized.absolutePath, content, "utf8");
 		return { ...this.readProjectFilePreview(body), action: "saved" };
 	}
 
@@ -119,21 +119,17 @@ export class WorkspaceFileService {
 		}
 
 		if (!filename) throw new Error("Field `filename` is required.");
-		const relativePath = safeRelativeProjectPath(filename);
-		const targetPath = resolve(projectDir, relativePath);
-		assertInside(projectDir, targetPath);
+		const guard = WorkspacePathGuard.forProjectContent(projectDir);
 
 		if (command === "get") {
-			const readableFile = resolveReadableProjectFile(projectDir, relativePath, targetPath);
-			if (!existsSync(readableFile.targetPath)) throw new Error(`File not found: ${relativePath}`);
-			const stat = statSync(readableFile.targetPath);
-			if (!stat.isFile()) throw new Error(`Project path is not a file: ${readableFile.relativePath}`);
+			const readableFile = authorizeReadableProjectFile(guard, filename);
+			const stat = statSync(readableFile.absolutePath);
 			const bytesToRead = Math.min(stat.size, PROJECT_FILE_GET_MAX_BYTES);
-			const content = bytesToRead > 0 ? readFilePrefix(readableFile.targetPath, bytesToRead).toString("utf8") : "";
+			const content = bytesToRead > 0 ? readFilePrefix(readableFile.absolutePath, bytesToRead).toString("utf8") : "";
 			const truncated = stat.size > bytesToRead;
 			return {
 				command,
-				filename: readableFile.relativePath,
+				filename: normalizeProjectFilePath(readableFile.relativePath),
 				content,
 				size: stat.size,
 				...(truncated ? { truncated, omittedBytes: stat.size - bytesToRead } : { truncated: false }),
@@ -142,19 +138,25 @@ export class WorkspaceFileService {
 		}
 
 		if (command === "delete") {
-			const existed = existsSync(targetPath);
-			if (existed) rmSync(targetPath, { force: true });
-			return { command, filename: relativePath, action: existed ? "deleted" : "missing", projectRoot: projectDir };
+			const authorized = guard.authorizeExisting(filename, "file");
+			rmSync(authorized.absolutePath, { force: true });
+			return {
+				command,
+				filename: normalizeProjectFilePath(authorized.relativePath),
+				action: "deleted",
+				projectRoot: projectDir,
+			};
 		}
 
 		if (command === "create" || command === "rewrite") {
 			if (typeof body.content !== "string") throw new Error("Field `content` is required.");
-			const existed = existsSync(targetPath);
-			mkdirSync(dirname(targetPath), { recursive: true });
-			writeFileSync(targetPath, body.content, "utf8");
+			const { authorized, existed } =
+				command === "create" ? authorizeCreate(guard, filename) : authorizeRewrite(guard, filename);
+			mkdirSync(dirname(authorized.absolutePath), { recursive: true });
+			writeFileSync(authorized.absolutePath, body.content, "utf8");
 			return {
 				command,
-				filename: relativePath,
+				filename: normalizeProjectFilePath(authorized.relativePath),
 				action: existed ? "updated" : "created",
 				projectRoot: projectDir,
 				fileCount: listProjectSourceFiles(projectDir).length,
@@ -162,11 +164,12 @@ export class WorkspaceFileService {
 		}
 
 		if (command === "update") {
-			if (!existsSync(targetPath)) throw new Error(`File not found: ${relativePath}`);
+			const authorized = guard.authorizeExisting(filename, "file");
+			const relativePath = normalizeProjectFilePath(authorized.relativePath);
 			const oldStr = String(body.old_str ?? "");
 			const newStr = String(body.new_str ?? "");
 			if (!oldStr) throw new Error("Field `old_str` is required for update.");
-			const current = readFileSync(targetPath, "utf8");
+			const current = readFileSync(authorized.absolutePath, "utf8");
 			const firstMatchIndex = current.indexOf(oldStr);
 			if (firstMatchIndex === -1) throw new Error(`old_str was not found in ${relativePath}.`);
 			if (current.indexOf(oldStr, firstMatchIndex + 1) !== -1) {
@@ -175,7 +178,7 @@ export class WorkspaceFileService {
 				);
 			}
 			writeFileSync(
-				targetPath,
+				authorized.absolutePath,
 				`${current.slice(0, firstMatchIndex)}${newStr}${current.slice(firstMatchIndex + oldStr.length)}`,
 				"utf8",
 			);
@@ -194,24 +197,45 @@ function normalizeProjectFilePath(path: string): string {
 	return path.replace(/\\/g, "/");
 }
 
-function resolveReadableProjectFile(
-	projectDir: string,
-	relativePath: string,
-	targetPath: string,
-): { relativePath: string; targetPath: string } {
-	if (existsSync(targetPath)) return { relativePath: normalizeProjectFilePath(relativePath), targetPath };
-	for (const candidate of attachmentAliasCandidates(relativePath)) {
-		const candidateRelativePath = safeRelativeProjectPath(candidate);
-		const candidateTargetPath = resolve(projectDir, candidateRelativePath);
-		assertInside(projectDir, candidateTargetPath);
-		if (existsSync(candidateTargetPath)) {
-			return {
-				relativePath: normalizeProjectFilePath(candidateRelativePath),
-				targetPath: candidateTargetPath,
-			};
+function authorizeReadableProjectFile(guard: WorkspacePathGuard, path: string): AuthorizedWorkspacePath {
+	try {
+		return guard.authorizeExisting(path, "file");
+	} catch (error) {
+		if (!(error instanceof WorkspacePathAuthorizationError) || error.code !== "path_missing") throw error;
+		for (const candidate of attachmentAliasCandidates(path)) {
+			try {
+				return guard.authorizeExisting(candidate, "file");
+			} catch (candidateError) {
+				if (
+					!(candidateError instanceof WorkspacePathAuthorizationError) ||
+					candidateError.code !== "path_missing"
+				) {
+					throw candidateError;
+				}
+			}
 		}
+		throw error;
 	}
-	return { relativePath: normalizeProjectFilePath(relativePath), targetPath };
+}
+
+function authorizeRewrite(
+	guard: WorkspacePathGuard,
+	path: string,
+): { authorized: AuthorizedWorkspacePath; existed: boolean } {
+	try {
+		return { authorized: guard.authorizeExisting(path, "file"), existed: true };
+	} catch (error) {
+		if (!(error instanceof WorkspacePathAuthorizationError) || error.code !== "path_missing") throw error;
+		return { authorized: guard.authorizeNew(path), existed: false };
+	}
+}
+
+function authorizeCreate(
+	guard: WorkspacePathGuard,
+	path: string,
+): { authorized: AuthorizedWorkspacePath; existed: boolean } {
+	const authorized = guard.authorizeNew(path);
+	return { authorized, existed: existsSync(authorized.absolutePath) };
 }
 
 function attachmentAliasCandidates(relativePath: string): string[] {

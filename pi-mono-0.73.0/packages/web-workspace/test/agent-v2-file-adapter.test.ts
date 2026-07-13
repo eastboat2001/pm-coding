@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentV2FileAdapter } from "../src/agent-v2-file-adapter.js";
 import type { StorageConfig } from "../src/types.js";
+import { WorkspaceFileService } from "../src/workspace-file-service.js";
+import { WorkspacePathAuthorizationError } from "../src/workspace-path-guard.js";
 
 const cleanupRoots: string[] = [];
 
@@ -55,6 +57,33 @@ describe("agent v2 file adapter", () => {
 				now: "2026-07-08T00:01:00.000Z",
 			}),
 		).toThrow("file.path_invalid");
+	});
+
+	it("maps authorization errors to file.path_invalid without message matching", () => {
+		const root = tempRoot();
+		const files = new WorkspaceFileService(testConfig(root));
+		files.handle = () => {
+			throw new WorkspacePathAuthorizationError("path_symlink", "arbitrary authorization rejection");
+		};
+		const adapter = createAgentV2FileAdapter({
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			files,
+		});
+
+		try {
+			adapter.readFile("linked/secret.txt");
+		} catch (error) {
+			const failure = JSON.parse(error instanceof Error ? error.message : String(error));
+			expect(failure).toMatchObject({
+				code: "file.path_invalid",
+				message: "arbitrary authorization rejection",
+				retryable: false,
+				path: "linked/secret.txt",
+			});
+			return;
+		}
+		throw new Error("Expected authorization failure.");
 	});
 
 	it("computes patch artifact checksum from the persisted file content", () => {

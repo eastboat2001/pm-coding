@@ -1,7 +1,7 @@
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { basename, extname, join, resolve } from "node:path";
-import { PREVIEW_PREFIX, PROJECT_MANIFEST_FILE, PROJECT_METADATA_FILE } from "./constants.js";
+import { basename, dirname, extname, join } from "node:path";
+import { PREVIEW_PREFIX, PROJECT_METADATA_FILE } from "./constants.js";
 import type { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 import { readJsonFile, sendJson, writeJsonFile } from "./json.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
@@ -14,8 +14,8 @@ import type {
 	ProjectPreviewSummary,
 	StorageConfig,
 } from "./types.js";
+import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 import {
-	assertInside,
 	listProjectSourceFiles,
 	safeRelativePreviewPath,
 	sanitizePathComponent,
@@ -89,8 +89,9 @@ export class WorkspacePreviewService {
 		const projectId = parts.shift();
 		if (!projectId) return false;
 
-		const metadata = this.readProjectMetadata(decodeURIComponent(projectId));
-		if (!metadata || metadata.status !== "running") {
+		const record = this.findProjectMetadata(decodeURIComponent(projectId));
+		const metadata = record?.metadata;
+		if (!record || !metadata || metadata.status !== "running") {
 			sendJson(res, { error: "Preview not found." }, 404);
 			return true;
 		}
@@ -100,24 +101,42 @@ export class WorkspacePreviewService {
 			return true;
 		}
 
-		const serveRoot = String(metadata.serveRoot || "");
-		if (!serveRoot || !existsSync(serveRoot)) {
+		const configuredServeRoot = String(metadata.serveRoot || "");
+		if (!configuredServeRoot) {
+			sendJson(res, { error: "Preview output is missing." }, 404);
+			return true;
+		}
+		let serveRoot: string;
+		try {
+			serveRoot = WorkspacePathGuard.forProjectContent(dirname(record.metadataPath)).authorizeAbsoluteExisting(
+				configuredServeRoot,
+				"directory",
+			).absolutePath;
+		} catch (error) {
+			if (!(error instanceof WorkspacePathAuthorizationError)) throw error;
 			sendJson(res, { error: "Preview output is missing." }, 404);
 			return true;
 		}
 
 		const requestedPath =
 			parts.length > 0 ? safeRelativePreviewPath(parts.map((part) => decodeURIComponent(part))) : "index.html";
-		if (isInternalPreviewPath(requestedPath)) {
-			sendJson(res, { error: "Preview not found." }, 404);
-			return true;
-		}
-		let targetPath = resolve(serveRoot, requestedPath);
-		assertInside(serveRoot, targetPath);
-		if (!existsSync(targetPath) || statSync(targetPath).isDirectory()) targetPath = resolve(serveRoot, "index.html");
-		if (!existsSync(targetPath) || !statSync(targetPath).isFile()) {
-			sendJson(res, { error: "Preview entry file is missing." }, 404);
-			return true;
+		const guard = WorkspacePathGuard.forProjectContent(serveRoot);
+		let targetPath: string;
+		try {
+			targetPath = guard.authorizeExisting(requestedPath, "file").absolutePath;
+		} catch (error) {
+			if (!(error instanceof WorkspacePathAuthorizationError)) throw error;
+			if (error.code !== "path_missing") {
+				sendJson(res, { error: "Preview not found." }, 404);
+				return true;
+			}
+			try {
+				targetPath = guard.authorizeExisting("index.html", "file").absolutePath;
+			} catch (fallbackError) {
+				if (!(fallbackError instanceof WorkspacePathAuthorizationError)) throw fallbackError;
+				sendJson(res, { error: "Preview entry file is missing." }, 404);
+				return true;
+			}
 		}
 
 		res.statusCode = 200;
@@ -315,14 +334,6 @@ function clientDirectoryNames(clientsRoot: string): string[] {
 
 function normalizeProjectTitle(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
-}
-
-function isInternalPreviewPath(path: string): boolean {
-	const internalFiles = new Set([PROJECT_METADATA_FILE, PROJECT_MANIFEST_FILE]);
-	return path
-		.replace(/\\/g, "/")
-		.split("/")
-		.some((part) => part === ".pi" || internalFiles.has(part));
 }
 
 export function buildPreviewUrl(config: StorageConfig, req: PreviewRequestLike, projectId: string): string {

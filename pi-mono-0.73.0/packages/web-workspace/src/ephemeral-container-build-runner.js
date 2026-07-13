@@ -5,6 +5,19 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { inspectBuildManifest } from "./build-manifest-policy.js";
 import { BuildRunnerError, } from "./build-runner.js";
 const DIGEST_IMAGE = /^[^\s@]+@sha256:[0-9a-f]{64}$/;
+const publicationLocks = new Map();
+export class BuildRunnerCleanupError extends BuildRunnerError {
+    primary;
+    cleanupErrors;
+    cause;
+    constructor(primary, cleanupErrors, logs) {
+        super("build.cleanup_failed", "Container build cleanup failed.", logs);
+        this.primary = primary;
+        this.cleanupErrors = cleanupErrors;
+        this.name = "BuildRunnerCleanupError";
+        this.cause = primary;
+    }
+}
 export class EphemeralContainerBuildRunner {
     config;
     executor;
@@ -53,11 +66,12 @@ export class EphemeralContainerBuildRunner {
             primaryError = this.normalizeError(error, logs, input.signal);
         }
         const cleanupErrors = await this.cleanup(resources);
+        if (cleanupErrors.length > 0) {
+            const sanitizedCleanupErrors = cleanupErrors.flatMap((error) => this.sanitizeLogs([error]));
+            throw new BuildRunnerCleanupError(primaryError, sanitizedCleanupErrors, this.sanitizeLogs(cleanupErrors));
+        }
         if (primaryError)
             throw primaryError;
-        if (cleanupErrors.length > 0) {
-            throw new BuildRunnerError("build.cleanup_failed", "Container build cleanup failed.", this.sanitizeLogs(cleanupErrors));
-        }
         if (!result)
             throw new BuildRunnerError("build.execution_failed", "Container build did not produce a result.");
         return result;
@@ -92,6 +106,7 @@ export class EphemeralContainerBuildRunner {
             resources.seed,
             "--network",
             "none",
+            ...this.containerHardening("1000:1000", "16m"),
             "--mount",
             `type=volume,src=${resources.workspace},dst=/workspace`,
             this.config.image,
@@ -106,12 +121,9 @@ export class EphemeralContainerBuildRunner {
             "--rm",
             "--network",
             "none",
-            "--cap-drop",
-            "ALL",
+            ...this.containerHardening("0:0", "16m"),
             "--cap-add",
             "CHOWN",
-            "--security-opt",
-            "no-new-privileges",
             "--mount",
             `type=volume,src=${resources.workspace},dst=/workspace`,
             "--mount",
@@ -131,12 +143,9 @@ export class EphemeralContainerBuildRunner {
             "-i",
             "--network",
             "none",
-            "--cap-drop",
-            "ALL",
+            ...this.containerHardening("0:0", "16m"),
             "--cap-add",
             "CHOWN",
-            "--security-opt",
-            "no-new-privileges",
             "--mount",
             `type=volume,src=${resources.config},dst=/config`,
             "--entrypoint",
@@ -156,9 +165,7 @@ export class EphemeralContainerBuildRunner {
             "proxy",
             "--network",
             resources.internalNetwork,
-            ...this.hardening("13:13"),
-            "--tmpfs",
-            "/tmp:rw,noexec,nosuid,nodev,size=16m",
+            ...this.containerHardening("13:13", "16m"),
             "--mount",
             `type=volume,src=${resources.config},dst=/config,readonly`,
             "--entrypoint",
@@ -178,9 +185,7 @@ export class EphemeralContainerBuildRunner {
             `${resources.prefix}-${phase}`,
             "--network",
             phase === "restore" ? resources.internalNetwork : "none",
-            ...this.hardening("1000:1000"),
-            "--tmpfs",
-            "/tmp:rw,noexec,nosuid,nodev,size=64m",
+            ...this.containerHardening("1000:1000", "64m"),
             "--mount",
             `type=volume,src=${resources.workspace},dst=/workspace`,
             "--mount",
@@ -210,44 +215,54 @@ export class EphemeralContainerBuildRunner {
         const artifactRoot = realpathSync(input.artifactRoot);
         if (!lstatSync(artifactRoot).isDirectory())
             throw new BuildRunnerError("build.output_escape", "Artifact root is not a directory.");
-        await this.required([
-            "create",
-            "--name",
-            resources.exporter,
-            "--network",
-            "none",
-            "--mount",
-            `type=volume,src=${resources.workspace},dst=/workspace,readonly`,
-            this.config.image,
-            "true",
-        ], signal);
-        for (const output of outputs) {
-            const stage = join(artifactRoot, `.${input.projectId}-${resources.prefix}-stage`);
-            rmSync(stage, { recursive: true, force: true });
-            mkdirSync(stage);
-            const copied = await this.execute(["cp", `${resources.exporter}:/workspace/${output}/.`, stage], signal);
-            if (copied.exitCode !== 0) {
-                rmSync(stage, { recursive: true, force: true });
-                continue;
+        return withPublicationLock(publicationKey(artifactRoot, input.projectId), async () => {
+            await this.required([
+                "create",
+                "--name",
+                resources.exporter,
+                "--network",
+                "none",
+                ...this.containerHardening("1000:1000", "16m"),
+                "--mount",
+                `type=volume,src=${resources.workspace},dst=/workspace,readonly`,
+                this.config.image,
+                "true",
+            ], signal);
+            for (const output of outputs) {
+                const stage = join(artifactRoot, `.${input.projectId}-${resources.prefix}-stage`);
+                const destination = join(artifactRoot, input.projectId);
+                const backup = join(artifactRoot, `.${input.projectId}-${resources.prefix}-backup`);
+                let movedExisting = false;
+                let published = false;
+                try {
+                    rmSync(stage, { recursive: true, force: true });
+                    rmSync(backup, { recursive: true, force: true });
+                    mkdirSync(stage);
+                    const copied = await this.execute(["cp", `${resources.exporter}:/workspace/${output}/.`, stage], signal);
+                    if (copied.exitCode !== 0)
+                        continue;
+                    const files = authorizeTree(stage);
+                    if (lstatOrUndefined(destination)) {
+                        renameSync(destination, backup);
+                        movedExisting = true;
+                    }
+                    renameSync(stage, destination);
+                    published = true;
+                    return { serveRoot: destination, outputDirectory: output, files };
+                }
+                catch (error) {
+                    if (movedExisting && lstatOrUndefined(backup) && !lstatOrUndefined(destination))
+                        renameSync(backup, destination);
+                    throw error;
+                }
+                finally {
+                    rmSync(stage, { recursive: true, force: true });
+                    if (published || !movedExisting || lstatOrUndefined(destination))
+                        rmSync(backup, { recursive: true, force: true });
+                }
             }
-            const files = authorizeTree(stage);
-            const destination = join(artifactRoot, input.projectId);
-            const backup = join(artifactRoot, `.${input.projectId}-${resources.prefix}-backup`);
-            rmSync(backup, { recursive: true, force: true });
-            if (lstatOrUndefined(destination))
-                renameSync(destination, backup);
-            try {
-                renameSync(stage, destination);
-                rmSync(backup, { recursive: true, force: true });
-            }
-            catch (error) {
-                if (lstatOrUndefined(backup) && !lstatOrUndefined(destination))
-                    renameSync(backup, destination);
-                throw error;
-            }
-            return { serveRoot: destination, outputDirectory: output, files };
-        }
-        throw new BuildRunnerError("build.output_missing", "No authorized build output was produced.");
+            throw new BuildRunnerError("build.output_missing", "No authorized build output was produced.");
+        });
     }
     hardening(user) {
         return [
@@ -265,6 +280,9 @@ export class EphemeralContainerBuildRunner {
             "--pids-limit",
             String(this.config.pidsLimit),
         ];
+    }
+    containerHardening(user, tmpSize) {
+        return [...this.hardening(user), "--tmpfs", `/tmp:rw,noexec,nosuid,nodev,size=${tmpSize}`];
     }
     async required(args, signal, stdin) {
         const result = await this.execute(args, signal, stdin);
@@ -338,18 +356,21 @@ export class EphemeralContainerBuildRunner {
             .filter(Boolean)
             .join("\n")
             .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[redacted]@")
-            .replace(/\b(token|password|secret|authorization)\s*[=:]\s*[^\s]+/gi, "$1=[redacted]");
+            .replace(/\bauthorization\s*[=:]\s*(?:(?:bearer|basic)\s+)?[^\s]+/gi, "Authorization=[redacted]")
+            .replace(/\b[A-Z0-9_]*(?:API_KEY|TOKEN|PASSWORD|SECRET)[A-Z0-9_]*\s*[=:]\s*[^\s]+/gi, "credential=[redacted]");
         if (text.length > this.config.maxLogChars)
             text = text.slice(0, this.config.maxLogChars);
         return text ? [text] : [];
     }
 }
-class SpawnContainerCommandExecutor {
+export class SpawnContainerCommandExecutor {
     maxOutputChars;
     constructor(maxOutputChars) {
         this.maxOutputChars = maxOutputChars;
     }
     async execute(executable, command) {
+        if (command.signal?.aborted)
+            throw abortError();
         return new Promise((resolvePromise, reject) => {
             const child = spawn(executable, [...command.args], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
             let stdout = "";
@@ -367,6 +388,8 @@ class SpawnContainerCommandExecutor {
             });
             const abort = () => child.kill("SIGKILL");
             command.signal?.addEventListener("abort", abort, { once: true });
+            if (command.signal?.aborted)
+                abort();
             child.on("error", reject);
             child.on("close", (code) => {
                 clearTimeout(timer);
@@ -397,6 +420,33 @@ function appendBounded(current, addition, limit) {
         return current;
     return current + addition.slice(0, limit - current.length);
 }
+function abortError() {
+    const error = new Error("Container command aborted.");
+    error.name = "AbortError";
+    return error;
+}
+async function withPublicationLock(key, operation) {
+    const previous = publicationLocks.get(key) ?? Promise.resolve();
+    let release = () => { };
+    const gate = new Promise((resolvePromise) => {
+        release = resolvePromise;
+    });
+    const tail = previous.catch(() => { }).then(() => gate);
+    publicationLocks.set(key, tail);
+    await previous.catch(() => { });
+    try {
+        return await operation();
+    }
+    finally {
+        release();
+        if (publicationLocks.get(key) === tail)
+            publicationLocks.delete(key);
+    }
+}
+function publicationKey(artifactRoot, projectId) {
+    const key = join(artifactRoot, projectId);
+    return process.platform === "win32" ? key.toLowerCase() : key;
+}
 function names(rawId) {
     const id = rawId
         .toLowerCase()
@@ -420,8 +470,7 @@ function names(rawId) {
 function proxyConfiguration(origins) {
     if (origins.length === 0)
         throw new BuildRunnerError("build.config_missing", "At least one registry origin is required.");
-    const hosts = [];
-    const ports = [];
+    const normalized = new Map();
     for (const origin of origins) {
         let url;
         try {
@@ -436,21 +485,23 @@ function proxyConfiguration(origins) {
             url.hash ||
             url.username ||
             url.password ||
-            isIP(url.hostname)) {
+            isNumericHostname(url.hostname)) {
             throw new BuildRunnerError("build.policy_rejected", "Registry origins must be pure HTTPS hostname origins.");
         }
-        hosts.push(url.hostname.toLowerCase());
-        ports.push(url.port ? Number(url.port) : 443);
+        const hostname = url.hostname.toLowerCase();
+        const port = url.port ? Number(url.port) : 443;
+        normalized.set(`${hostname}:${port}`, { hostname, port });
+    }
+    const accessRules = [];
+    let index = 0;
+    for (const { hostname, port } of normalized.values()) {
+        accessRules.push(`acl origin_${index}_host dstdomain ${hostname}`, `acl origin_${index}_port port ${port}`, `http_access allow CONNECT origin_${index}_host origin_${index}_port`, `http_access allow origin_${index}_host origin_${index}_port`);
+        index++;
     }
     return [
         "http_port 3128",
-        `acl allowed_hosts dstdomain ${[...new Set(hosts)].join(" ")}`,
-        `acl allowed_ports port ${[...new Set(ports)].join(" ")}`,
         "acl CONNECT method CONNECT",
-        "http_access deny !allowed_hosts",
-        "http_access deny !allowed_ports",
-        "http_access allow CONNECT allowed_hosts allowed_ports",
-        "http_access allow allowed_hosts allowed_ports",
+        ...accessRules,
         "http_access deny all",
         "cache deny all",
         "access_log none",
@@ -461,6 +512,10 @@ function proxyConfiguration(origins) {
         "visible_hostname proxy",
         "",
     ].join("\n");
+}
+function isNumericHostname(hostname) {
+    const candidate = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    return isIP(candidate) !== 0;
 }
 function assertSimpleProjectId(projectId) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(projectId))

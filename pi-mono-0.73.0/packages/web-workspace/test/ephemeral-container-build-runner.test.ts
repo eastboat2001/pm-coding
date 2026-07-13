@@ -1,13 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { BuildRunnerError } from "../src/build-runner.js";
 import {
+	BuildRunnerCleanupError,
 	type ContainerCommand,
 	type ContainerCommandExecutor,
 	type ContainerCommandResult,
 	EphemeralContainerBuildRunner,
+	SpawnContainerCommandExecutor,
 } from "../src/ephemeral-container-build-runner.js";
 
 const roots: string[] = [];
@@ -69,10 +71,11 @@ function fixture(): { projectRoot: string; artifactRoot: string } {
 function runner(
 	executor: ContainerCommandExecutor,
 	overrides: Partial<ConstructorParameters<typeof EphemeralContainerBuildRunner>[0]["config"]> = {},
+	id = "fixed-id",
 ) {
 	return new EphemeralContainerBuildRunner({
 		executor,
-		id: () => "fixed-id",
+		id: () => id,
 		now: (() => {
 			let value = 0;
 			return () => value++;
@@ -107,7 +110,10 @@ it("uses named storage and a proxy-only egress topology with hardened containers
 	const restore = runs.find(({ command }) => command.args.includes("ci"));
 	const build = runs.find(({ command }) => command.args.includes("build"));
 	const proxy = runs.find(({ command }) => command.args.includes("--hostname") && command.args.includes("proxy"));
-	for (const entry of [restore, build, proxy]) {
+	const containers = executor.commands.filter(
+		({ command }) => command.args[0] === "run" || command.args[0] === "create",
+	);
+	for (const entry of containers) {
 		expect(entry?.command.args).toEqual(
 			expect.arrayContaining([
 				"--read-only",
@@ -121,6 +127,7 @@ it("uses named storage and a proxy-only egress topology with hardened containers
 				"256m",
 				"--pids-limit",
 				"64",
+				"--tmpfs",
 			]),
 		);
 	}
@@ -153,6 +160,27 @@ it("uses named storage and a proxy-only egress topology with hardened containers
 	expect(configText).toMatch(/access_log\s+none/);
 });
 
+it("generates exact host and port pairs without cross-pair authorization", async () => {
+	const executor = new FakeExecutor();
+	await runner(executor, {
+		registryOrigins: ["https://registry.npmjs.org", "https://a.example", "https://b.example:8443"],
+	}).build({ projectId: "p", ...fixture(), allowedOutputs: ["dist"] });
+	const bytes = executor.commands.find(({ command }) => command.stdin)?.command.stdin;
+	const config = bytes ? new TextDecoder().decode(bytes) : "";
+	expect(config).toContain("acl origin_1_host dstdomain a.example");
+	expect(config).toContain("acl origin_1_port port 443");
+	expect(config).toContain("http_access allow CONNECT origin_1_host origin_1_port");
+	expect(config).toContain("acl origin_2_host dstdomain b.example");
+	expect(config).toContain("acl origin_2_port port 8443");
+	expect(config).toContain("http_access allow CONNECT origin_2_host origin_2_port");
+	expect(config).not.toContain("allowed_hosts");
+	expect(config).not.toContain("allowed_ports");
+	const numericError = await runner(new FakeExecutor(), { registryOrigins: ["https://127.0.0.1"] })
+		.build({ projectId: "p", ...fixture(), allowedOutputs: ["dist"] })
+		.catch((value: unknown) => value);
+	expect(numericError).toMatchObject({ code: "build.policy_rejected" });
+});
+
 it("rejects missing or mutable images before invoking an engine", async () => {
 	for (const overrides of [{ image: "" }, { image: "node:22" }, { proxyImage: "ubuntu/squid:latest" }]) {
 		const executor = new FakeExecutor();
@@ -168,7 +196,11 @@ it("rejects missing or mutable images before invoking an engine", async () => {
 it("cleans every named resource after timeout and redacts bounded logs", async () => {
 	const executor = new FakeExecutor((args) =>
 		args.includes("ci")
-			? { exitCode: 124, stdout: "", stderr: `https://user:secret@registry.npmjs.org/${"x".repeat(500)}` }
+			? {
+					exitCode: 124,
+					stdout: "",
+					stderr: `NPM_TOKEN=npm-secret API_KEY=api-secret Authorization: Bearer bearer-secret https://user:url-secret@registry.npmjs.org/${"x".repeat(500)}`,
+				}
 			: { exitCode: 0, stdout: "", stderr: "" },
 	);
 	const error = await runner(executor)
@@ -176,11 +208,80 @@ it("cleans every named resource after timeout and redacts bounded logs", async (
 		.catch((value: unknown) => value);
 	expect(error).toBeInstanceOf(BuildRunnerError);
 	expect((error as BuildRunnerError).code).toBe("build.timeout");
-	expect((error as BuildRunnerError).logs?.join("\n")).not.toContain("secret");
+	for (const secret of ["npm-secret", "api-secret", "bearer-secret", "url-secret"]) {
+		expect((error as BuildRunnerError).logs?.join("\n")).not.toContain(secret);
+	}
+	expect((error as BuildRunnerError).logs?.join("\n")).toContain("[redacted]");
 	expect((error as BuildRunnerError).logs?.join("\n").length).toBeLessThanOrEqual(256);
 	const cleanup = executor.commands.filter(({ command }) => command.args.includes("rm"));
 	expect(cleanup.some(({ command }) => command.args[0] === "network")).toBe(true);
 	expect(cleanup.some(({ command }) => command.args[0] === "volume")).toBe(true);
+});
+
+it.each([
+	[
+		"container",
+		"pi-build-fixed-id-proxy",
+		(args: readonly string[]) => args[0] === "rm" && args.at(-1) === "pi-build-fixed-id-proxy",
+	],
+	[
+		"network",
+		"pi-build-fixed-id-internal",
+		(args: readonly string[]) =>
+			args[0] === "network" && args[1] === "rm" && args.at(-1) === "pi-build-fixed-id-internal",
+	],
+	[
+		"volume",
+		"pi-build-fixed-id-workspace",
+		(args: readonly string[]) =>
+			args[0] === "volume" && args[1] === "rm" && args.at(-1) === "pi-build-fixed-id-workspace",
+	],
+] as const)(
+	"preserves the primary failure and surfaces %s cleanup failures",
+	async (_kind, resourceName, failsCleanup) => {
+		const executor = new FakeExecutor((args) => {
+			if (args.includes("ci")) return { exitCode: 124, stdout: "", stderr: "primary timeout" };
+			if (failsCleanup(args)) return { exitCode: 1, stdout: "", stderr: `cleanup failed: ${args.at(-1)}` };
+			return { exitCode: 0, stdout: "", stderr: "" };
+		});
+		const error = await runner(executor)
+			.build({ projectId: "p", ...fixture(), allowedOutputs: ["dist"] })
+			.catch((value: unknown) => value);
+		expect(error).toBeInstanceOf(BuildRunnerCleanupError);
+		expect((error as BuildRunnerCleanupError).code).toBe("build.cleanup_failed");
+		expect((error as BuildRunnerCleanupError).primary).toMatchObject({ code: "build.timeout" });
+		expect((error as BuildRunnerCleanupError).cleanupErrors).not.toHaveLength(0);
+		expect((error as BuildRunnerCleanupError).cleanupErrors.join("\n")).toContain(resourceName);
+		expect(executor.commands.filter(({ command }) => command.args[0] === "rm")).toHaveLength(5);
+		expect(
+			executor.commands.filter(({ command }) => command.args[0] === "network" && command.args[1] === "rm"),
+		).toHaveLength(2);
+		expect(
+			executor.commands.filter(({ command }) => command.args[0] === "volume" && command.args[1] === "rm"),
+		).toHaveLength(3);
+	},
+);
+
+it("default executor rejects a pre-aborted signal and an abort immediately after registration", async () => {
+	const executor = new SpawnContainerCommandExecutor(256);
+	const preAborted = new AbortController();
+	preAborted.abort();
+	await expect(
+		executor.execute(process.execPath, {
+			args: ["-e", "process.exit(17)"],
+			timeoutMs: 5_000,
+			signal: preAborted.signal,
+		}),
+	).rejects.toMatchObject({ name: "AbortError" });
+
+	const racing = new AbortController();
+	const execution = executor.execute(process.execPath, {
+		args: ["-e", "setTimeout(() => {}, 10000)"],
+		timeoutMs: 15_000,
+		signal: racing.signal,
+	});
+	racing.abort();
+	await expect(execution).rejects.toMatchObject({ name: "AbortError" });
 });
 
 it("cleans named resources when dependency restore is cancelled", async () => {
@@ -219,4 +320,88 @@ it("rejects a linked artifact root instead of publishing through it", async () =
 		.catch((value: unknown) => value);
 	expect(error).toBeInstanceOf(BuildRunnerError);
 	expect((error as BuildRunnerError).code).toBe("build.output_escape");
+});
+
+it("cleans staging and backup paths when output authorization fails", async () => {
+	const paths = fixture();
+	const outside = join(paths.artifactRoot, "..", "unsafe-output-target");
+	mkdirSync(outside);
+	class UnsafeOutputExecutor extends FakeExecutor {
+		override async execute(executable: string, command: ContainerCommand): Promise<ContainerCommandResult> {
+			const result = await super.execute(executable, command);
+			if (command.args[0] === "cp" && command.args[1]?.includes("-exporter:/workspace/")) {
+				const destination = command.args.at(-1);
+				if (destination)
+					symlinkSync(outside, join(destination, "escape"), process.platform === "win32" ? "junction" : "dir");
+			}
+			return result;
+		}
+	}
+	const error = await runner(new UnsafeOutputExecutor())
+		.build({ projectId: "p", ...paths, allowedOutputs: ["dist"] })
+		.catch((value: unknown) => value);
+	expect(error).toMatchObject({ code: "build.output_escape" });
+	expect(
+		readdirSync(paths.artifactRoot).filter((name) => name.includes("-stage") || name.includes("-backup")),
+	).toEqual([]);
+});
+
+it("preserves published output and cleans temporary paths when replacement rename fails", async () => {
+	const paths = fixture();
+	const destination = join(paths.artifactRoot, "p");
+	mkdirSync(destination);
+	writeFileSync(join(destination, "old.html"), "old");
+	class RenameFailureExecutor extends FakeExecutor {
+		override async execute(executable: string, command: ContainerCommand): Promise<ContainerCommandResult> {
+			const result = await super.execute(executable, command);
+			if (command.args[0] === "cp" && command.args[1]?.includes("-exporter:/workspace/")) {
+				mkdirSync(join(paths.artifactRoot, ".p-pi-build-fixed-id-backup"));
+			}
+			return result;
+		}
+	}
+	const error = await runner(new RenameFailureExecutor())
+		.build({ projectId: "p", ...paths, allowedOutputs: ["dist"] })
+		.catch((value: unknown) => value);
+	expect(error).toMatchObject({ code: "build.execution_failed" });
+	expect(readdirSync(destination)).toContain("old.html");
+	expect(
+		readdirSync(paths.artifactRoot).filter((name) => name.includes("-stage") || name.includes("-backup")),
+	).toEqual([]);
+});
+
+it("serializes publication for concurrent builds of the same project", async () => {
+	const paths = fixture();
+	let exportCopies = 0;
+	let releaseFirst: (() => void) | undefined;
+	const firstBlocked = new Promise<void>((resolvePromise) => {
+		releaseFirst = resolvePromise;
+	});
+	let firstReached: (() => void) | undefined;
+	const firstAtExport = new Promise<void>((resolvePromise) => {
+		firstReached = resolvePromise;
+	});
+	class BlockingExportExecutor extends FakeExecutor {
+		override async execute(executable: string, command: ContainerCommand): Promise<ContainerCommandResult> {
+			const result = await super.execute(executable, command);
+			if (command.args[0] === "cp" && command.args[1]?.includes("-exporter:/workspace/")) {
+				exportCopies++;
+				if (exportCopies === 1) {
+					firstReached?.();
+					await firstBlocked;
+				}
+			}
+			return result;
+		}
+	}
+	const executor = new BlockingExportExecutor();
+	const input = { projectId: "same-project", ...paths, allowedOutputs: ["dist"] as const };
+	const first = runner(executor, {}, "publication-a").build(input);
+	await firstAtExport;
+	const second = runner(executor, {}, "publication-b").build(input);
+	await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+	expect(exportCopies).toBe(1);
+	releaseFirst?.();
+	await Promise.all([first, second]);
+	expect(exportCopies).toBe(2);
 });

@@ -60,6 +60,21 @@ interface Resources {
 }
 
 const DIGEST_IMAGE = /^[^\s@]+@sha256:[0-9a-f]{64}$/;
+const publicationLocks = new Map<string, Promise<void>>();
+
+export class BuildRunnerCleanupError extends BuildRunnerError {
+	readonly cause: BuildRunnerError | undefined;
+
+	constructor(
+		readonly primary: BuildRunnerError | undefined,
+		readonly cleanupErrors: readonly string[],
+		logs: readonly string[],
+	) {
+		super("build.cleanup_failed", "Container build cleanup failed.", logs);
+		this.name = "BuildRunnerCleanupError";
+		this.cause = primary;
+	}
+}
 
 export class EphemeralContainerBuildRunner implements BuildRunner {
 	private readonly config: ContainerBuildRunnerConfig;
@@ -109,14 +124,11 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 			primaryError = this.normalizeError(error, logs, input.signal);
 		}
 		const cleanupErrors = await this.cleanup(resources);
-		if (primaryError) throw primaryError;
 		if (cleanupErrors.length > 0) {
-			throw new BuildRunnerError(
-				"build.cleanup_failed",
-				"Container build cleanup failed.",
-				this.sanitizeLogs(cleanupErrors),
-			);
+			const sanitizedCleanupErrors = cleanupErrors.flatMap((error) => this.sanitizeLogs([error]));
+			throw new BuildRunnerCleanupError(primaryError, sanitizedCleanupErrors, this.sanitizeLogs(cleanupErrors));
 		}
+		if (primaryError) throw primaryError;
 		if (!result) throw new BuildRunnerError("build.execution_failed", "Container build did not produce a result.");
 		return result;
 	}
@@ -162,6 +174,7 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 				resources.seed,
 				"--network",
 				"none",
+				...this.containerHardening("1000:1000", "16m"),
 				"--mount",
 				`type=volume,src=${resources.workspace},dst=/workspace`,
 				this.config.image,
@@ -179,12 +192,9 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 				"--rm",
 				"--network",
 				"none",
-				"--cap-drop",
-				"ALL",
+				...this.containerHardening("0:0", "16m"),
 				"--cap-add",
 				"CHOWN",
-				"--security-opt",
-				"no-new-privileges",
 				"--mount",
 				`type=volume,src=${resources.workspace},dst=/workspace`,
 				"--mount",
@@ -207,12 +217,9 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 				"-i",
 				"--network",
 				"none",
-				"--cap-drop",
-				"ALL",
+				...this.containerHardening("0:0", "16m"),
 				"--cap-add",
 				"CHOWN",
-				"--security-opt",
-				"no-new-privileges",
 				"--mount",
 				`type=volume,src=${resources.config},dst=/config`,
 				"--entrypoint",
@@ -237,9 +244,7 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 				"proxy",
 				"--network",
 				resources.internalNetwork,
-				...this.hardening("13:13"),
-				"--tmpfs",
-				"/tmp:rw,noexec,nosuid,nodev,size=16m",
+				...this.containerHardening("13:13", "16m"),
 				"--mount",
 				`type=volume,src=${resources.config},dst=/config,readonly`,
 				"--entrypoint",
@@ -268,9 +273,7 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 			`${resources.prefix}-${phase}`,
 			"--network",
 			phase === "restore" ? resources.internalNetwork : "none",
-			...this.hardening("1000:1000"),
-			"--tmpfs",
-			"/tmp:rw,noexec,nosuid,nodev,size=64m",
+			...this.containerHardening("1000:1000", "64m"),
 			"--mount",
 			`type=volume,src=${resources.workspace},dst=/workspace`,
 			"--mount",
@@ -309,44 +312,54 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 		const artifactRoot = realpathSync(input.artifactRoot);
 		if (!lstatSync(artifactRoot).isDirectory())
 			throw new BuildRunnerError("build.output_escape", "Artifact root is not a directory.");
-		await this.required(
-			[
-				"create",
-				"--name",
-				resources.exporter,
-				"--network",
-				"none",
-				"--mount",
-				`type=volume,src=${resources.workspace},dst=/workspace,readonly`,
-				this.config.image,
-				"true",
-			],
-			signal,
-		);
-		for (const output of outputs) {
-			const stage = join(artifactRoot, `.${input.projectId}-${resources.prefix}-stage`);
-			rmSync(stage, { recursive: true, force: true });
-			mkdirSync(stage);
-			const copied = await this.execute(["cp", `${resources.exporter}:/workspace/${output}/.`, stage], signal);
-			if (copied.exitCode !== 0) {
-				rmSync(stage, { recursive: true, force: true });
-				continue;
+		return withPublicationLock(publicationKey(artifactRoot, input.projectId), async () => {
+			await this.required(
+				[
+					"create",
+					"--name",
+					resources.exporter,
+					"--network",
+					"none",
+					...this.containerHardening("1000:1000", "16m"),
+					"--mount",
+					`type=volume,src=${resources.workspace},dst=/workspace,readonly`,
+					this.config.image,
+					"true",
+				],
+				signal,
+			);
+			for (const output of outputs) {
+				const stage = join(artifactRoot, `.${input.projectId}-${resources.prefix}-stage`);
+				const destination = join(artifactRoot, input.projectId);
+				const backup = join(artifactRoot, `.${input.projectId}-${resources.prefix}-backup`);
+				let movedExisting = false;
+				let published = false;
+				try {
+					rmSync(stage, { recursive: true, force: true });
+					rmSync(backup, { recursive: true, force: true });
+					mkdirSync(stage);
+					const copied = await this.execute(["cp", `${resources.exporter}:/workspace/${output}/.`, stage], signal);
+					if (copied.exitCode !== 0) continue;
+					const files = authorizeTree(stage);
+					if (lstatOrUndefined(destination)) {
+						renameSync(destination, backup);
+						movedExisting = true;
+					}
+					renameSync(stage, destination);
+					published = true;
+					return { serveRoot: destination, outputDirectory: output, files };
+				} catch (error) {
+					if (movedExisting && lstatOrUndefined(backup) && !lstatOrUndefined(destination))
+						renameSync(backup, destination);
+					throw error;
+				} finally {
+					rmSync(stage, { recursive: true, force: true });
+					if (published || !movedExisting || lstatOrUndefined(destination))
+						rmSync(backup, { recursive: true, force: true });
+				}
 			}
-			const files = authorizeTree(stage);
-			const destination = join(artifactRoot, input.projectId);
-			const backup = join(artifactRoot, `.${input.projectId}-${resources.prefix}-backup`);
-			rmSync(backup, { recursive: true, force: true });
-			if (lstatOrUndefined(destination)) renameSync(destination, backup);
-			try {
-				renameSync(stage, destination);
-				rmSync(backup, { recursive: true, force: true });
-			} catch (error) {
-				if (lstatOrUndefined(backup) && !lstatOrUndefined(destination)) renameSync(backup, destination);
-				throw error;
-			}
-			return { serveRoot: destination, outputDirectory: output, files };
-		}
-		throw new BuildRunnerError("build.output_missing", "No authorized build output was produced.");
+			throw new BuildRunnerError("build.output_missing", "No authorized build output was produced.");
+		});
 	}
 
 	private hardening(user: string): string[] {
@@ -365,6 +378,10 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 			"--pids-limit",
 			String(this.config.pidsLimit),
 		];
+	}
+
+	private containerHardening(user: string, tmpSize: string): string[] {
+		return [...this.hardening(user), "--tmpfs", `/tmp:rw,noexec,nosuid,nodev,size=${tmpSize}`];
 	}
 
 	private async required(args: readonly string[], signal?: AbortSignal, stdin?: Uint8Array): Promise<void> {
@@ -452,16 +469,18 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 			.filter(Boolean)
 			.join("\n")
 			.replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[redacted]@")
-			.replace(/\b(token|password|secret|authorization)\s*[=:]\s*[^\s]+/gi, "$1=[redacted]");
+			.replace(/\bauthorization\s*[=:]\s*(?:(?:bearer|basic)\s+)?[^\s]+/gi, "Authorization=[redacted]")
+			.replace(/\b[A-Z0-9_]*(?:API_KEY|TOKEN|PASSWORD|SECRET)[A-Z0-9_]*\s*[=:]\s*[^\s]+/gi, "credential=[redacted]");
 		if (text.length > this.config.maxLogChars) text = text.slice(0, this.config.maxLogChars);
 		return text ? [text] : [];
 	}
 }
 
-class SpawnContainerCommandExecutor implements ContainerCommandExecutor {
+export class SpawnContainerCommandExecutor implements ContainerCommandExecutor {
 	constructor(private readonly maxOutputChars: number) {}
 
 	async execute(executable: string, command: ContainerCommand): Promise<ContainerCommandResult> {
+		if (command.signal?.aborted) throw abortError();
 		return new Promise((resolvePromise, reject) => {
 			const child = spawn(executable, [...command.args], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
 			let stdout = "";
@@ -479,6 +498,7 @@ class SpawnContainerCommandExecutor implements ContainerCommandExecutor {
 			});
 			const abort = () => child.kill("SIGKILL");
 			command.signal?.addEventListener("abort", abort, { once: true });
+			if (command.signal?.aborted) abort();
 			child.on("error", reject);
 			child.on("close", (code) => {
 				clearTimeout(timer);
@@ -508,6 +528,34 @@ function appendBounded(current: string, addition: string, limit: number): string
 	return current + addition.slice(0, limit - current.length);
 }
 
+function abortError(): Error {
+	const error = new Error("Container command aborted.");
+	error.name = "AbortError";
+	return error;
+}
+
+async function withPublicationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+	const previous = publicationLocks.get(key) ?? Promise.resolve();
+	let release = (): void => {};
+	const gate = new Promise<void>((resolvePromise) => {
+		release = resolvePromise;
+	});
+	const tail = previous.catch(() => {}).then(() => gate);
+	publicationLocks.set(key, tail);
+	await previous.catch(() => {});
+	try {
+		return await operation();
+	} finally {
+		release();
+		if (publicationLocks.get(key) === tail) publicationLocks.delete(key);
+	}
+}
+
+function publicationKey(artifactRoot: string, projectId: string): string {
+	const key = join(artifactRoot, projectId);
+	return process.platform === "win32" ? key.toLowerCase() : key;
+}
+
 function names(rawId: string): Resources {
 	const id = rawId
 		.toLowerCase()
@@ -531,8 +579,7 @@ function names(rawId: string): Resources {
 function proxyConfiguration(origins: readonly string[]): string {
 	if (origins.length === 0)
 		throw new BuildRunnerError("build.config_missing", "At least one registry origin is required.");
-	const hosts: string[] = [];
-	const ports: number[] = [];
+	const normalized = new Map<string, { hostname: string; port: number }>();
 	for (const origin of origins) {
 		let url: URL;
 		try {
@@ -547,22 +594,29 @@ function proxyConfiguration(origins: readonly string[]): string {
 			url.hash ||
 			url.username ||
 			url.password ||
-			isIP(url.hostname)
+			isNumericHostname(url.hostname)
 		) {
 			throw new BuildRunnerError("build.policy_rejected", "Registry origins must be pure HTTPS hostname origins.");
 		}
-		hosts.push(url.hostname.toLowerCase());
-		ports.push(url.port ? Number(url.port) : 443);
+		const hostname = url.hostname.toLowerCase();
+		const port = url.port ? Number(url.port) : 443;
+		normalized.set(`${hostname}:${port}`, { hostname, port });
+	}
+	const accessRules: string[] = [];
+	let index = 0;
+	for (const { hostname, port } of normalized.values()) {
+		accessRules.push(
+			`acl origin_${index}_host dstdomain ${hostname}`,
+			`acl origin_${index}_port port ${port}`,
+			`http_access allow CONNECT origin_${index}_host origin_${index}_port`,
+			`http_access allow origin_${index}_host origin_${index}_port`,
+		);
+		index++;
 	}
 	return [
 		"http_port 3128",
-		`acl allowed_hosts dstdomain ${[...new Set(hosts)].join(" ")}`,
-		`acl allowed_ports port ${[...new Set(ports)].join(" ")}`,
 		"acl CONNECT method CONNECT",
-		"http_access deny !allowed_hosts",
-		"http_access deny !allowed_ports",
-		"http_access allow CONNECT allowed_hosts allowed_ports",
-		"http_access allow allowed_hosts allowed_ports",
+		...accessRules,
 		"http_access deny all",
 		"cache deny all",
 		"access_log none",
@@ -573,6 +627,11 @@ function proxyConfiguration(origins: readonly string[]): string {
 		"visible_hostname proxy",
 		"",
 	].join("\n");
+}
+
+function isNumericHostname(hostname: string): boolean {
+	const candidate = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+	return isIP(candidate) !== 0;
 }
 
 function assertSimpleProjectId(projectId: string): void {

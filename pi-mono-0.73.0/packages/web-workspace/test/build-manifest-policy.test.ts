@@ -130,6 +130,28 @@ describe("inspectBuildManifest", () => {
 		expectPolicyRejection(() => inspect());
 	});
 
+	it.each(["npm:foo", "npm:@scope/foo"])(
+		"accepts selector-less npm alias %s as the default registry selector",
+		(spec) => {
+			writePackage({ dependencies: { aliased: spec }, scripts: { build: "vite build" } });
+			writeLock({
+				packages: {
+					"node_modules/aliased": { resolved: "https://registry.example/foo/-/foo-1.0.0.tgz" },
+				},
+			});
+
+			expect(inspect().restoreCommand).toEqual([
+				"npm",
+				"ci",
+				"--ignore-scripts",
+				"--no-audit",
+				"--no-fund",
+				"--userconfig",
+				"/etc/npmrc",
+			]);
+		},
+	);
+
 	it("requires a valid package-lock when dependencies are declared", () => {
 		writePackage({ dependencies: { vite: "^7.0.0" }, scripts: { build: "vite build" } });
 		expectPolicyRejection(() => inspect());

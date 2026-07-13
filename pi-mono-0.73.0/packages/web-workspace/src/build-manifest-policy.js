@@ -110,8 +110,8 @@ function isSupportedDependencySpec(spec, allowedRegistryHosts) {
     return isRegistrySelector(trimmed);
 }
 function isSupportedNpmAlias(spec) {
-    const match = /^npm:((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)@(.+)$/.exec(spec);
-    return match !== null && isRegistrySelector(match[2] ?? "");
+    const match = /^npm:((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)(?:@(.+))?$/.exec(spec);
+    return match !== null && isRegistrySelector(match[2] ?? "*");
 }
 function isRegistrySelector(selector) {
     return selector.length > 0 && /^[0-9A-Za-z*^~<>=|._+ -]+$/.test(selector);

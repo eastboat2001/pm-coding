@@ -264,6 +264,7 @@ export function inspectBuildManifest(input: { projectRoot: string; registryOrigi
 **Files:**
 - Create: `packages/web-workspace/src/ephemeral-container-build-runner.ts` plus mirrors
 - Create: `packages/web-workspace/test/ephemeral-container-build-runner.test.ts`
+- Create: `packages/web-workspace/test/ephemeral-container-build-runner.integration.test.ts`
 
 **Interfaces:**
 

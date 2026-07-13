@@ -2,7 +2,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BuildRunnerError } from "./build-runner.js";
 const TRUSTED_NPMRC_PATH = "/etc/npmrc";
-const UNSUPPORTED_LOCKFILES = ["yarn.lock", "pnpm-lock.yaml", "pnpm-lock.yml", "bun.lock", "bun.lockb"];
+const UNSUPPORTED_LOCKFILES = [
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "pnpm-lock.yml",
+    "bun.lock",
+    "bun.lockb",
+];
 const FORBIDDEN_LIFECYCLE_SCRIPTS = [
     "prebuild",
     "postbuild",
@@ -94,27 +101,33 @@ function validateDependencies(manifest, property, allowedRegistryHosts) {
 }
 function isSupportedDependencySpec(spec, allowedRegistryHosts) {
     const trimmed = spec.trim();
-    if (!trimmed || trimmed.includes("\\") || trimmed.startsWith(".") || trimmed.startsWith("/"))
-        return false;
-    if (/^[A-Za-z]:/.test(trimmed) || /^[^@/\s]+\/[^/\s]+$/.test(trimmed))
-        return false;
     if (trimmed.startsWith("npm:")) {
-        const aliasedSpec = trimmed.slice(4);
-        return aliasedSpec.length > 0 && !/^[a-z][a-z0-9+.-]*:/i.test(aliasedSpec);
+        return isSupportedNpmAlias(trimmed);
     }
     if (trimmed.startsWith("https:")) {
         return urlUsesAllowedRegistry(trimmed, allowedRegistryHosts);
     }
-    return !/^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !trimmed.includes("://");
+    return isRegistrySelector(trimmed);
+}
+function isSupportedNpmAlias(spec) {
+    const match = /^npm:((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)@(.+)$/.exec(spec);
+    return match !== null && isRegistrySelector(match[2] ?? "");
+}
+function isRegistrySelector(selector) {
+    return selector.length > 0 && /^[0-9A-Za-z*^~<>=|._+ -]+$/.test(selector);
 }
 function validatePackageLock(lock, allowedRegistryHosts) {
-    if (typeof lock.lockfileVersion !== "number" ||
-        !Number.isInteger(lock.lockfileVersion) ||
-        lock.lockfileVersion < 1) {
+    const lockfileVersion = lock.lockfileVersion;
+    if (lockfileVersion !== 1 && lockfileVersion !== 2 && lockfileVersion !== 3) {
         throw policyRejection("Package lock is invalid.");
     }
-    if (!isObject(lock.packages) && !isObject(lock.dependencies)) {
+    if (lockfileVersion === 1 && !isObject(lock.dependencies)) {
         throw policyRejection("Package lock is invalid.");
+    }
+    if (lockfileVersion === 2 || lockfileVersion === 3) {
+        if (!isObject(lock.packages) || !isObject(lock.packages[""])) {
+            throw policyRejection("Package lock is invalid.");
+        }
     }
     visitLockValues(lock, allowedRegistryHosts, new Set());
 }

@@ -70,6 +70,28 @@ describe("inspectBuildManifest", () => {
 		},
 	);
 
+	it("rejects npm-shrinkwrap even when package-lock is valid and allowlisted", () => {
+		writePackage({ dependencies: { vite: "^7.0.0" }, scripts: { build: "vite build" } });
+		writeLock({
+			packages: {
+				"node_modules/vite": { resolved: "https://registry.example/vite/-/vite-7.0.0.tgz" },
+			},
+		});
+		writeFileSync(
+			join(projectRoot, "npm-shrinkwrap.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": {},
+					"node_modules/vite": { resolved: "https://evil.example/vite/-/vite-7.0.0.tgz" },
+				},
+			}),
+			"utf8",
+		);
+
+		expectPolicyRejection(() => inspect());
+	});
+
 	it("allows only npm packageManager declarations", () => {
 		writePackage({ packageManager: "pnpm@10.0.0", scripts: { build: "vite build" } });
 		expectPolicyRejection(() => inspect());
@@ -96,6 +118,11 @@ describe("inspectBuildManifest", () => {
 		"github:user/repo",
 		"http://registry.example/pkg.tgz",
 		"user/repo",
+		"git@github.com:user/repo.git",
+		"git+ssh://git@github.com/user/repo.git",
+		"npm:foo@file:../local",
+		"npm:foo@git+https://evil.example/x.git",
+		"npm:foo@http://evil.example/x.tgz",
 	])("rejects unsafe dependency spec %s", (spec) => {
 		writePackage({ dependencies: { unsafe: spec }, scripts: { build: "vite build" } });
 		writeLock();
@@ -174,6 +201,53 @@ describe("inspectBuildManifest", () => {
 		}
 	});
 
+	it("rejects unknown lockfile versions", () => {
+		writePackage({ dependencies: { vite: "^7.0.0" }, scripts: { build: "vite build" } });
+		writeRawLock({ lockfileVersion: 999, packages: { "": {} } });
+
+		expectPolicyRejection(() => inspect());
+	});
+
+	it.each([
+		{ lockfileVersion: 1, packages: { "": {} } },
+		{ dependencies: {}, lockfileVersion: 2 },
+		{ lockfileVersion: 2, packages: {} },
+		{ lockfileVersion: 2, packages: { "": "not-an-object" } },
+		{ dependencies: {}, lockfileVersion: 3 },
+		{ lockfileVersion: 3, packages: {} },
+		{ lockfileVersion: 3, packages: { "": "not-an-object" } },
+	])("rejects lockfile schema mismatch %#", (lock) => {
+		writePackage({ dependencies: { vite: "^7.0.0" }, scripts: { build: "vite build" } });
+		writeRawLock(lock);
+
+		expectPolicyRejection(() => inspect());
+	});
+
+	it("accepts the supported v1 lockfile schema", () => {
+		writePackage({ dependencies: { vite: "^7.0.0" }, scripts: { build: "vite build" } });
+		writeRawLock({
+			dependencies: {
+				vite: { resolved: "https://registry.example/vite/-/vite-7.0.0.tgz" },
+			},
+			lockfileVersion: 1,
+		});
+
+		expect(inspect().restoreCommand?.[0]).toBe("npm");
+	});
+
+	it("accepts the supported v2 lockfile schema", () => {
+		writePackage({ dependencies: { vite: "^7.0.0" }, scripts: { build: "vite build" } });
+		writeRawLock({
+			lockfileVersion: 2,
+			packages: {
+				"": {},
+				"node_modules/vite": { resolved: "https://registry.example/vite/-/vite-7.0.0.tgz" },
+			},
+		});
+
+		expect(inspect().restoreCommand?.[0]).toBe("npm");
+	});
+
 	function inspect(
 		registryOrigins: readonly string[] = ["https://registry.example"],
 	): ReturnType<typeof inspectBuildManifest> {
@@ -185,13 +259,18 @@ describe("inspectBuildManifest", () => {
 	}
 
 	function writeLock(overrides: Record<string, unknown> = {}): void {
-		writeFileSync(
-			join(projectRoot, "package-lock.json"),
-			JSON.stringify({ lockfileVersion: 3, packages: {}, ...overrides }),
-			"utf8",
-		);
+		const packages = isRecord(overrides.packages) ? { "": {}, ...overrides.packages } : { "": {} };
+		writeRawLock({ lockfileVersion: 3, ...overrides, packages });
+	}
+
+	function writeRawLock(lock: Record<string, unknown>): void {
+		writeFileSync(join(projectRoot, "package-lock.json"), JSON.stringify(lock), "utf8");
 	}
 });
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function expectPolicyRejection(action: () => unknown): void {
 	capturePolicyRejection(action);

@@ -42,15 +42,16 @@
 ```text
 01/T0 mirror command
   ├─ 01/T1-T6 workspace/build safety
-  └─ 02/T1 durable store + outbox
-        ├─ 02/T2 atomic start
-        ├─ 02/T3-T8 trusted model + input materialization + repair
-        └─ 03/T2 dispatcher <─ 03/T1 Redis queue
-              ├─ 03/T3 worker durable transitions
-              ├─ 03/T4 SSE healing
-              └─ 03/T5 diagnostics ─> 03/T6 control loop ─> 03/T7 shutdown
-                    └─ 04/T1-T2 browser v2 projection/removal
-                          └─ 04/T3-T5 config/deletion/final verification
+  └─ 02/T1 schema v2
+        └─ 02/T2 durable store + outbox
+              └─ 02/T3 atomic start
+                    ├─ 02/T4-T9 trusted model + input materialization + repair + production proof
+                    └─ 03/T2 dispatcher <─ 03/T1 Redis queue
+                          ├─ 03/T3 worker durable transitions
+                          ├─ 03/T4 SSE healing
+                          └─ 03/T5 diagnostics ─> 03/T6 control loop ─> 03/T7 shutdown
+                                └─ 04/T1-T2 browser v2 projection/removal
+                                      └─ 04/T3-T5 config/deletion/final verification
 ```
 
 ## Subagent Rules

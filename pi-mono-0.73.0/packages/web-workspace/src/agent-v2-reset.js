@@ -7,7 +7,6 @@ export function assertAgentV2ResetConfirmation(confirmation) {
 export function resetAgentV2RuntimeData(store, options = {}, diagnostics) {
     assertAgentV2ResetConfirmation(options.confirmation);
     const storeResult = store.resetAgentV2RuntimeData({
-        includeClients: options.includeClients,
         now: options.now,
     });
     if (isPromiseLike(storeResult)) {

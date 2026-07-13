@@ -22,6 +22,7 @@ import {
 	type AgentV2ValidationRecord,
 	type AgentV2ValidationRow,
 	type AppendAgentV2RunEventInput,
+	type AppendAgentV2ValidationAttemptInput,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
 	buildAgentV2Document,
@@ -29,6 +30,7 @@ import {
 	buildAgentV2Task,
 	buildAgentV2Validation,
 	type CreateAgentV2RunInput,
+	equalAgentV2ValidationRecords,
 	stringifyAgentV2Json,
 	toAgentV2ArtifactRecord,
 	toAgentV2DiagnosticRecord,
@@ -40,9 +42,15 @@ import {
 	type UpsertAgentV2ArtifactInput,
 	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
-	type UpsertAgentV2ValidationInput,
 } from "./agent-v2-store.js";
-import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
+import {
+	AGENT_V2_SCHEMA_INDEXES,
+	AGENT_V2_SCHEMA_RESET_REQUIRED,
+	AGENT_V2_SCHEMA_TABLES,
+	AGENT_V2_SCHEMA_VERSION,
+	type AgentV2RunSnapshot,
+	type AgentV2TaskNode,
+} from "./agent-v2-types.js";
 import { isObject } from "./json.js";
 import type {
 	CreateRunWithMessageInput,
@@ -76,17 +84,13 @@ import type {
 export type { CreateRunWithMessageInput } from "./runtime-store.js";
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set(["cancelled", "completed", "failed", "interrupted"]);
-const LEGACY_RESET_TABLES = [
-	"app_preview_goal_events",
-	"app_preview_goals",
-	"run_events",
-	"messages",
-	"runs",
-	"sessions",
-] as const;
 const AGENT_V2_RESET_TABLES = [
+	"agent_v2_outbox",
+	"agent_v2_input_references",
+	"agent_v2_input_blobs",
+	"agent_v2_bootstraps",
 	"agent_v2_diagnostics",
-	"agent_v2_validations",
+	"agent_v2_validation_attempts",
 	"agent_v2_documents",
 	"agent_v2_artifacts",
 	"agent_v2_tasks",
@@ -94,6 +98,104 @@ const AGENT_V2_RESET_TABLES = [
 	"agent_v2_runs",
 	"agent_v2_schema_metadata",
 ] as const;
+const AGENT_V2_PRE_V2_TABLES = ["agent_v2_validations"] as const;
+
+const SQLITE_AGENT_V2_SCHEMA = `
+	CREATE TABLE agent_v2_schema_metadata (
+		singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+		schema_version INTEGER NOT NULL CHECK(schema_version = 2),
+		applied_at TEXT NOT NULL
+	);
+	CREATE TABLE agent_v2_runs (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL,
+		status TEXT NOT NULL CHECK(status IN ('queued','running','cancelling','succeeded','failed','cancelled','interrupted')),
+		phase TEXT NOT NULL CHECK(phase IN ('intake','capability_routing','spec_draft','spec_review','plan_draft','task_generation','implementation','validation','repair','preview','delivery','blocked','failed','cancelled')),
+		attempt INTEGER NOT NULL CHECK(attempt >= 0), input_json TEXT NOT NULL, model_json TEXT NOT NULL,
+		worker_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT, error_json TEXT,
+		PRIMARY KEY (client_id, run_id)
+	);
+	CREATE INDEX idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at);
+	CREATE INDEX idx_agent_v2_runs_worker_active ON agent_v2_runs(worker_id, updated_at)
+		WHERE worker_id IS NOT NULL AND status IN ('running','cancelling');
+	CREATE TABLE agent_v2_run_events (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, seq INTEGER NOT NULL CHECK(seq > 0), event_type TEXT NOT NULL,
+		payload_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (client_id, run_id, seq),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE TABLE agent_v2_tasks (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+		status TEXT NOT NULL CHECK(status IN ('pending','ready','running','blocked','succeeded','failed','cancelled')),
+		parent_task_id TEXT, depends_on_json TEXT NOT NULL, acceptance_criteria_json TEXT NOT NULL,
+		input_json TEXT NOT NULL, output_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		started_at TEXT, ended_at TEXT, error_json TEXT, PRIMARY KEY (client_id, run_id, task_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC);
+	CREATE TABLE agent_v2_artifacts (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL,
+		media_type TEXT NOT NULL, checksum TEXT NOT NULL, version TEXT NOT NULL, validation_status TEXT NOT NULL,
+		source_task_id TEXT, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		PRIMARY KEY (client_id, run_id, artifact_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
+	CREATE TABLE agent_v2_documents (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, document_id TEXT NOT NULL, kind TEXT NOT NULL, version TEXT NOT NULL,
+		content_markdown TEXT NOT NULL, content_json TEXT NOT NULL, source_task_id TEXT, created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL, PRIMARY KEY (client_id, run_id, document_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC);
+	CREATE TABLE agent_v2_diagnostics (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, diagnostic_id TEXT NOT NULL, severity TEXT NOT NULL,
+		category TEXT NOT NULL, code TEXT NOT NULL, message TEXT NOT NULL, phase TEXT, task_id TEXT, artifact_id TEXT,
+		trace_id TEXT, data_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (client_id, run_id, diagnostic_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at, diagnostic_id);
+	CREATE TABLE agent_v2_validation_attempts (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, validation_id TEXT NOT NULL, attempt INTEGER NOT NULL CHECK(attempt > 0),
+		task_id TEXT, artifact_id TEXT, status TEXT NOT NULL CHECK(status IN ('passed','failed','blocked','warning')),
+		summary TEXT NOT NULL, details_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		PRIMARY KEY (client_id, run_id, validation_id, attempt),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_validation_attempts_run_created ON agent_v2_validation_attempts(client_id, run_id, created_at, validation_id, attempt);
+	CREATE TABLE agent_v2_input_blobs (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, input_id TEXT NOT NULL, logical_path TEXT NOT NULL,
+		media_type TEXT NOT NULL, encoding TEXT NOT NULL CHECK(encoding IN ('utf8','binary')), bytes BLOB NOT NULL,
+		byte_length INTEGER NOT NULL CHECK(byte_length >= 0), checksum TEXT NOT NULL, created_at TEXT NOT NULL,
+		PRIMARY KEY (client_id, run_id, input_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE UNIQUE INDEX uq_agent_v2_input_blobs_logical_path ON agent_v2_input_blobs(client_id, run_id, logical_path);
+	CREATE TABLE agent_v2_input_references (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, input_id TEXT NOT NULL, logical_path TEXT NOT NULL,
+		media_type TEXT NOT NULL, checksum TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('attachment','project_file')),
+		ordinal INTEGER NOT NULL CHECK(ordinal >= 0), display_name TEXT, byte_length INTEGER NOT NULL CHECK(byte_length >= 0),
+		PRIMARY KEY (client_id, run_id, kind, ordinal),
+		FOREIGN KEY (client_id, run_id, input_id) REFERENCES agent_v2_input_blobs(client_id, run_id, input_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE,
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE TABLE agent_v2_bootstraps (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, bootstrap_version TEXT NOT NULL, bootstrap_checksum TEXT NOT NULL,
+		created_at TEXT NOT NULL, PRIMARY KEY (client_id, run_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE TABLE agent_v2_outbox (
+		intent_id TEXT PRIMARY KEY, dedupe_key TEXT NOT NULL, client_id TEXT NOT NULL, run_id TEXT NOT NULL,
+		kind TEXT NOT NULL CHECK(kind IN ('run_enqueue','run_cancel','live_event','workspace_diagnostic','langfuse_diagnostic')),
+		status TEXT NOT NULL CHECK(status IN ('pending','leased','delivered','dead_letter')), available_at TEXT NOT NULL,
+		created_at TEXT NOT NULL, updated_at TEXT NOT NULL, reference_json TEXT NOT NULL,
+		attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0), lease_owner TEXT, lease_expires_at TEXT,
+		last_error_code TEXT, last_error_message TEXT, delivered_at TEXT,
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE UNIQUE INDEX uq_agent_v2_outbox_dedupe ON agent_v2_outbox(dedupe_key);
+	CREATE INDEX idx_agent_v2_outbox_dispatch ON agent_v2_outbox(status, available_at, created_at, intent_id);
+	CREATE INDEX idx_agent_v2_outbox_lease ON agent_v2_outbox(status, lease_expires_at, intent_id);
+	CREATE INDEX idx_agent_v2_outbox_run ON agent_v2_outbox(client_id, run_id, created_at, intent_id);
+`;
 const AGENT_V2_RUN_EVENT_COLUMNS = "client_id, run_id, seq, event_type, payload_json, created_at";
 
 type SessionRow = {
@@ -294,141 +396,12 @@ export class RuntimeDbStore implements RuntimeStore {
 	ensureAgentV2Schema(): void {
 		mkdirSync(dirname(this.dbFile), { recursive: true });
 		const db = this.open();
-		this.ensureClientIdentitySchema(db);
-		db.exec(`
-			CREATE TABLE IF NOT EXISTS agent_v2_schema_metadata (
-				schema_version INTEGER PRIMARY KEY,
-				applied_at TEXT NOT NULL
-			);
-
-			CREATE TABLE IF NOT EXISTS agent_v2_runs (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				status TEXT NOT NULL,
-				phase TEXT NOT NULL,
-				attempt INTEGER NOT NULL,
-				input_json TEXT NOT NULL,
-				model_json TEXT NOT NULL,
-				worker_id TEXT,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				started_at TEXT,
-				ended_at TEXT,
-				error_json TEXT,
-				PRIMARY KEY (client_id, run_id),
-				FOREIGN KEY (client_id) REFERENCES clients(client_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at);
-
-			CREATE TABLE IF NOT EXISTS agent_v2_run_events (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				seq INTEGER NOT NULL,
-				event_type TEXT NOT NULL,
-				payload_json TEXT NOT NULL,
-				created_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, seq),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-
-			CREATE TABLE IF NOT EXISTS agent_v2_tasks (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				task_id TEXT NOT NULL,
-				parent_task_id TEXT,
-				kind TEXT NOT NULL,
-				title TEXT NOT NULL,
-				status TEXT NOT NULL,
-				depends_on_json TEXT NOT NULL,
-				acceptance_criteria_json TEXT NOT NULL DEFAULT '[]',
-				input_json TEXT NOT NULL,
-				output_json TEXT NOT NULL,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				started_at TEXT,
-				ended_at TEXT,
-				error_json TEXT,
-				PRIMARY KEY (client_id, run_id, task_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC);
-
-				CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
-					client_id TEXT NOT NULL,
-					run_id TEXT NOT NULL,
-				artifact_id TEXT NOT NULL,
-				kind TEXT NOT NULL,
-				path TEXT NOT NULL,
-				media_type TEXT NOT NULL,
-				checksum TEXT NOT NULL,
-				version TEXT NOT NULL,
-				source_task_id TEXT,
-				validation_status TEXT NOT NULL,
-				metadata_json TEXT NOT NULL,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, artifact_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-				);
-				CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
-
-				CREATE TABLE IF NOT EXISTS agent_v2_documents (
-					client_id TEXT NOT NULL,
-					run_id TEXT NOT NULL,
-					document_id TEXT NOT NULL,
-					kind TEXT NOT NULL,
-					version TEXT NOT NULL,
-					content_markdown TEXT NOT NULL,
-					content_json TEXT NOT NULL,
-					source_task_id TEXT,
-					created_at TEXT NOT NULL,
-					updated_at TEXT NOT NULL,
-					PRIMARY KEY (client_id, run_id, document_id),
-					FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-				);
-				CREATE INDEX IF NOT EXISTS idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC);
-
-				CREATE TABLE IF NOT EXISTS agent_v2_validations (
-					client_id TEXT NOT NULL,
-					run_id TEXT NOT NULL,
-				validation_id TEXT NOT NULL,
-				task_id TEXT,
-				artifact_id TEXT,
-				status TEXT NOT NULL,
-				summary TEXT NOT NULL,
-				details_json TEXT NOT NULL,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, validation_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_validations_run_updated ON agent_v2_validations(client_id, run_id, updated_at DESC);
-
-			CREATE TABLE IF NOT EXISTS agent_v2_diagnostics (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				diagnostic_id TEXT NOT NULL,
-				severity TEXT NOT NULL,
-				category TEXT NOT NULL,
-				code TEXT NOT NULL,
-				phase TEXT,
-				task_id TEXT,
-				artifact_id TEXT,
-				trace_id TEXT,
-				message TEXT NOT NULL,
-				data_json TEXT NOT NULL,
-				created_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, diagnostic_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at ASC);
-			`);
-		ensureSqliteColumn(db, "agent_v2_tasks", "acceptance_criteria_json", "TEXT NOT NULL DEFAULT '[]'");
-		db.prepare(
-			`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
-			VALUES (?, ?)
-			ON CONFLICT(schema_version) DO NOTHING`,
-		).run(AGENT_V2_SCHEMA_VERSION, now());
+		const existingTables = sqliteAgentV2ObjectNames(db, "table");
+		if (existingTables.length > 0) {
+			assertExactSqliteAgentV2Schema(db);
+			return;
+		}
+		this.writeTransaction(db, () => createSqliteAgentV2Schema(db, now()));
 	}
 
 	close(): void {
@@ -1020,7 +993,6 @@ export class RuntimeDbStore implements RuntimeStore {
 
 	createAgentV2Run(input: CreateAgentV2RunInput): AgentV2RunSnapshot {
 		const run = buildAgentV2Run(input);
-		this.upsertClient(run.clientId);
 		this.open()
 			.prepare(
 				`INSERT INTO agent_v2_runs (
@@ -1382,14 +1354,22 @@ export class RuntimeDbStore implements RuntimeStore {
 		return row ? toAgentV2DocumentRecord(row) : undefined;
 	}
 
-	upsertAgentV2Validation(input: UpsertAgentV2ValidationInput): AgentV2ValidationRecord {
+	appendAgentV2ValidationAttempt(input: AppendAgentV2ValidationAttemptInput): AgentV2ValidationRecord {
 		const validation = buildAgentV2Validation(input);
+		const existing = this.listAgentV2Validations(validation.clientId, validation.runId).find(
+			(record) => record.validationId === validation.validationId && record.attempt === validation.attempt,
+		);
+		if (existing) {
+			if (equalAgentV2ValidationRecords(existing, validation)) return existing;
+			throw new Error("Agent v2 validation attempt conflict");
+		}
 		this.open()
 			.prepare(
-				`INSERT INTO agent_v2_validations (
+				`INSERT INTO agent_v2_validation_attempts (
 					client_id,
 					run_id,
 					validation_id,
+					attempt,
 					task_id,
 					artifact_id,
 					status,
@@ -1397,19 +1377,13 @@ export class RuntimeDbStore implements RuntimeStore {
 					details_json,
 					created_at,
 					updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT(client_id, run_id, validation_id) DO UPDATE SET
-					task_id = excluded.task_id,
-					artifact_id = excluded.artifact_id,
-					status = excluded.status,
-					summary = excluded.summary,
-					details_json = excluded.details_json,
-					updated_at = excluded.updated_at`,
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				validation.clientId,
 				validation.runId,
 				validation.validationId,
+				validation.attempt,
 				validation.taskId ?? null,
 				validation.artifactId ?? null,
 				validation.status,
@@ -1420,7 +1394,7 @@ export class RuntimeDbStore implements RuntimeStore {
 			);
 		return requiredRecord(
 			this.listAgentV2Validations(validation.clientId, validation.runId).find(
-				(record) => record.validationId === validation.validationId,
+				(record) => record.validationId === validation.validationId && record.attempt === validation.attempt,
 			),
 			"agent v2 validation",
 		);
@@ -1430,9 +1404,9 @@ export class RuntimeDbStore implements RuntimeStore {
 		const rows = this.open()
 			.prepare(
 				`SELECT ${AGENT_V2_VALIDATION_COLUMNS}
-				FROM agent_v2_validations
+				FROM agent_v2_validation_attempts
 				WHERE client_id = ? AND run_id = ?
-				ORDER BY created_at ASC, validation_id ASC`,
+				ORDER BY created_at ASC, validation_id ASC, attempt ASC`,
 			)
 			.all(clientId, runId) as unknown as AgentV2ValidationRow[];
 		return rows.map(toAgentV2ValidationRecord);
@@ -1493,24 +1467,14 @@ export class RuntimeDbStore implements RuntimeStore {
 	}
 
 	resetAgentV2RuntimeData(options: ResetAgentV2RuntimeDataOptions = {}): ResetAgentV2RuntimeDataResult {
-		this.ensureAgentV2Schema();
-
 		const db = this.open();
 		const appliedAt = options.now?.() ?? now();
 		return this.writeTransaction(db, () => {
-			const legacyRowsDeletedBase = deleteAllRows(db, LEGACY_RESET_TABLES);
-			const agentV2RowsDeleted = deleteAllRows(db, AGENT_V2_RESET_TABLES);
-			const legacyRowsDeleted = {
-				...legacyRowsDeletedBase,
-				clients: options.includeClients === true ? deleteAllRows(db, ["clients"]).clients : 0,
-			};
-			db.prepare("INSERT INTO agent_v2_schema_metadata (schema_version, applied_at) VALUES (?, ?)").run(
-				AGENT_V2_SCHEMA_VERSION,
-				appliedAt,
-			);
-
+			const tables = [...AGENT_V2_PRE_V2_TABLES, ...AGENT_V2_RESET_TABLES] as const;
+			const agentV2RowsDeleted = countSqliteRows(db, tables);
+			for (const table of tables) db.exec(`DROP TABLE IF EXISTS ${table}`);
+			createSqliteAgentV2Schema(db, appliedAt);
 			return {
-				legacyRowsDeleted,
 				agentV2RowsDeleted,
 				schemaVersion: AGENT_V2_SCHEMA_VERSION,
 			};
@@ -1760,7 +1724,7 @@ function requiredRecord<T>(record: T | undefined, label: string): T {
 	return record;
 }
 
-function deleteAllRows<TableName extends string>(
+function countSqliteRows<TableName extends string>(
 	db: DatabaseSync,
 	tables: readonly TableName[],
 ): Record<TableName, number> {
@@ -1770,8 +1734,8 @@ function deleteAllRows<TableName extends string>(
 			counts[table] = 0;
 			continue;
 		}
-		const result = db.prepare(`DELETE FROM ${table}`).run();
-		counts[table] = Number(result.changes);
+		const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number | bigint };
+		counts[table] = Number(row.count);
 	}
 	return counts;
 }
@@ -1783,10 +1747,95 @@ function sqliteTableExists(db: DatabaseSync, table: string): boolean {
 	return row?.present === 1;
 }
 
-function ensureSqliteColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
-	const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-	if (columns.some((entry) => entry.name === column)) return;
-	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+function createSqliteAgentV2Schema(db: DatabaseSync, appliedAt: string): void {
+	db.exec(SQLITE_AGENT_V2_SCHEMA);
+	db.prepare("INSERT INTO agent_v2_schema_metadata (singleton_id, schema_version, applied_at) VALUES (1, ?, ?)").run(
+		AGENT_V2_SCHEMA_VERSION,
+		appliedAt,
+	);
+}
+
+function sqliteAgentV2ObjectNames(db: DatabaseSync, type: "index" | "table"): string[] {
+	return (
+		db
+			.prepare("SELECT name FROM sqlite_master WHERE type = ? AND name LIKE 'agent_v2_%' ORDER BY name")
+			.all(type) as Array<{ name: string }>
+	).map((row) => row.name);
+}
+
+function assertExactSqliteAgentV2Schema(db: DatabaseSync): void {
+	const tables = sqliteAgentV2ObjectNames(db, "table");
+	const indexes = (
+		db
+			.prepare(
+				"SELECT name FROM sqlite_master WHERE type = 'index' AND (name LIKE 'idx_agent_v2_%' OR name LIKE 'uq_agent_v2_%') ORDER BY name",
+			)
+			.all() as Array<{ name: string }>
+	).map((row) => row.name);
+	const metadataColumns = sqliteTableExists(db, "agent_v2_schema_metadata")
+		? (db.prepare("PRAGMA table_info(agent_v2_schema_metadata)").all() as Array<{ name: string }>).map(
+				(row) => row.name,
+			)
+		: [];
+	const metadata =
+		JSON.stringify(metadataColumns) === JSON.stringify(["singleton_id", "schema_version", "applied_at"])
+			? (db.prepare("SELECT singleton_id, schema_version FROM agent_v2_schema_metadata").all() as Array<{
+					singleton_id: number;
+					schema_version: number;
+				}>)
+			: [];
+	if (
+		JSON.stringify(tables) !== JSON.stringify(AGENT_V2_SCHEMA_TABLES) ||
+		JSON.stringify(indexes) !== JSON.stringify([...AGENT_V2_SCHEMA_INDEXES].sort()) ||
+		metadata.length !== 1 ||
+		metadata[0]?.singleton_id !== 1 ||
+		metadata[0]?.schema_version !== AGENT_V2_SCHEMA_VERSION
+	) {
+		throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+	}
+	const reference = new DatabaseSync(":memory:");
+	try {
+		reference.exec("PRAGMA foreign_keys = ON");
+		reference.exec(SQLITE_AGENT_V2_SCHEMA);
+		if (JSON.stringify(sqliteAgentV2Shape(db)) !== JSON.stringify(sqliteAgentV2Shape(reference))) {
+			throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+		}
+	} finally {
+		reference.close();
+	}
+}
+
+function sqliteAgentV2Shape(db: DatabaseSync): unknown {
+	return {
+		tables: AGENT_V2_SCHEMA_TABLES.map((table) => ({
+			table,
+			columns: db.prepare(`PRAGMA table_info(${table})`).all(),
+			foreignKeys: db.prepare(`PRAGMA foreign_key_list(${table})`).all(),
+			sql: normalizeSchemaSql(
+				(
+					db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as {
+						sql: string;
+					}
+				).sql,
+			),
+		})),
+		indexes: [...AGENT_V2_SCHEMA_INDEXES].sort().map((name) => ({
+			name,
+			columns: db.prepare(`PRAGMA index_xinfo(${name})`).all(),
+			sql: normalizeSchemaSql(
+				(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?").get(name) as { sql: string })
+					.sql,
+			),
+		})),
+	};
+}
+
+function normalizeSchemaSql(sql: string): string {
+	return sql
+		.replaceAll(/\s+/g, " ")
+		.replaceAll(/\s*([(),>=])\s*/g, "$1")
+		.trim()
+		.toLowerCase();
 }
 
 function now(): string {

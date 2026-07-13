@@ -38,32 +38,45 @@ describe("agent v2 destructive reset", () => {
 		expect(() => assertAgentV2ResetConfirmation(undefined)).toThrow("confirmation token");
 	});
 
-	it("clears legacy generation data but keeps clients by default", () => {
+	it("clears only v2 data and preserves all legacy generation data and clients", () => {
 		seedLegacyRuntimeData(store);
 		seedAgentV2RuntimeData(dbFile, store);
 
-		const result = resetAgentV2RuntimeData(store, {
+		resetAgentV2RuntimeData(store, {
 			confirmation: CONFIRMATION_TOKEN,
 			now: () => "2026-07-07T00:00:00.000Z",
 		});
 
-		expect(result.legacyRowsDeleted.app_preview_goal_events).toBeGreaterThan(0);
-		expect(result.legacyRowsDeleted.app_preview_goals).toBeGreaterThan(0);
-		expect(result.legacyRowsDeleted.run_events).toBeGreaterThan(0);
-		expect(result.legacyRowsDeleted.messages).toBeGreaterThan(0);
-		expect(result.legacyRowsDeleted.runs).toBeGreaterThan(0);
-		expect(result.legacyRowsDeleted.sessions).toBeGreaterThan(0);
 		expect(countRows(dbFile, "clients")).toBe(1);
-		expect(countRows(dbFile, "sessions")).toBe(0);
-		expect(countRows(dbFile, "runs")).toBe(0);
+		expect(countRows(dbFile, "sessions")).toBe(1);
+		expect(countRows(dbFile, "messages")).toBe(1);
+		expect(countRows(dbFile, "runs")).toBe(1);
+		expect(countRows(dbFile, "run_events")).toBe(1);
+		expect(countRows(dbFile, "app_preview_goals")).toBe(1);
+		expect(countRows(dbFile, "app_preview_goal_events")).toBe(1);
 		expect(countRows(dbFile, "agent_v2_runs")).toBe(0);
 		expect(readAgentV2SchemaMetadata(dbFile)).toEqual([
 			{ schemaVersion: AGENT_V2_SCHEMA_VERSION, appliedAt: "2026-07-07T00:00:00.000Z" },
 		]);
 	});
 
-	it("clears v2 rows and rewrites schema metadata version 1", () => {
+	it("drops and recreates v2 rows and rewrites singleton schema metadata version 2", () => {
 		seedAgentV2RuntimeData(dbFile, store);
+		const legacyShape = new DatabaseSync(dbFile);
+		try {
+			legacyShape.exec(`
+				CREATE TABLE agent_v2_validations (
+					client_id TEXT NOT NULL,
+					run_id TEXT NOT NULL,
+					validation_id TEXT NOT NULL,
+					PRIMARY KEY (client_id, run_id, validation_id),
+					FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
+				);
+				INSERT INTO agent_v2_validations VALUES ('client-a', 'agent-v2-run-1', 'legacy-validation');
+			`);
+		} finally {
+			legacyShape.close();
+		}
 
 		const result = resetAgentV2RuntimeData(store, {
 			confirmation: CONFIRMATION_TOKEN,
@@ -73,8 +86,9 @@ describe("agent v2 destructive reset", () => {
 		expect(result.agentV2RowsDeleted.agent_v2_diagnostics).toBeGreaterThan(0);
 		expect(result.agentV2RowsDeleted.agent_v2_artifacts).toBeGreaterThan(0);
 		expect(result.agentV2RowsDeleted.agent_v2_tasks).toBeGreaterThan(0);
-		expect(result.agentV2RowsDeleted.agent_v2_validations).toBeGreaterThan(0);
+		expect(result.agentV2RowsDeleted.agent_v2_validation_attempts).toBeGreaterThan(0);
 		expect(result.agentV2RowsDeleted.agent_v2_runs).toBeGreaterThan(0);
+		expect(result.agentV2RowsDeleted.agent_v2_validations).toBe(1);
 		expect(result.agentV2RowsDeleted.agent_v2_schema_metadata).toBe(1);
 		expect(result.schemaVersion).toBe(AGENT_V2_SCHEMA_VERSION);
 		expect(readAgentV2SchemaMetadata(dbFile)).toEqual([
@@ -145,21 +159,44 @@ describe("agent v2 destructive reset", () => {
 		expect(withDiagnostics.diagnosticsDeleted).toBe(7);
 	});
 
-	it("deletes clients too when includeClients is true", () => {
+	it("never deletes clients", () => {
 		seedLegacyRuntimeData(store);
 		seedAgentV2RuntimeData(dbFile, store);
 
-		const result = resetAgentV2RuntimeData(store, {
+		resetAgentV2RuntimeData(store, {
 			confirmation: CONFIRMATION_TOKEN,
-			includeClients: true,
 			now: () => "2026-07-07T04:00:00.000Z",
 		});
 
-		expect(result.legacyRowsDeleted.clients).toBe(1);
-		expect(countRows(dbFile, "clients")).toBe(0);
-		expect(countRows(dbFile, "sessions")).toBe(0);
+		expect(countRows(dbFile, "clients")).toBe(1);
+		expect(countRows(dbFile, "sessions")).toBe(1);
 		expect(readAgentV2SchemaMetadata(dbFile)).toEqual([
 			{ schemaVersion: AGENT_V2_SCHEMA_VERSION, appliedAt: "2026-07-07T04:00:00.000Z" },
+		]);
+	});
+
+	it("rolls back all v2 drops when exact-schema recreation fails", () => {
+		seedAgentV2RuntimeData(dbFile, store);
+		const internal = store as unknown as { database: DatabaseSync };
+		const originalExec = internal.database.exec.bind(internal.database);
+		internal.database.exec = (sql: string) => {
+			if (sql.includes("CREATE TABLE agent_v2_schema_metadata")) throw new Error("injected schema create failure");
+			return originalExec(sql);
+		};
+		try {
+			expect(() =>
+				resetAgentV2RuntimeData(store, {
+					confirmation: CONFIRMATION_TOKEN,
+					now: () => "2026-07-07T06:00:00.000Z",
+				}),
+			).toThrow("injected schema create failure");
+		} finally {
+			internal.database.exec = originalExec;
+		}
+		expect(countRows(dbFile, "agent_v2_runs")).toBe(1);
+		expect(countRows(dbFile, "agent_v2_validation_attempts")).toBe(1);
+		expect(readAgentV2SchemaMetadata(dbFile)).toEqual([
+			{ schemaVersion: AGENT_V2_SCHEMA_VERSION, appliedAt: expect.any(String) },
 		]);
 	});
 });
@@ -271,10 +308,11 @@ function seedAgentV2RuntimeData(dbFile: string, store: RuntimeDbStore, options: 
 	const db = new DatabaseSync(dbFile);
 	try {
 		db.prepare(
-			`INSERT INTO agent_v2_validations (
+			`INSERT INTO agent_v2_validation_attempts (
 				client_id,
 				run_id,
 				validation_id,
+				attempt,
 				task_id,
 				artifact_id,
 				status,
@@ -282,14 +320,15 @@ function seedAgentV2RuntimeData(dbFile: string, store: RuntimeDbStore, options: 
 				details_json,
 				created_at,
 				updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			"client-a",
 			runId,
 			"validation-1",
+			1,
 			"task-1",
 			"artifact-1",
-			"accepted",
+			"passed",
 			"Looks good",
 			JSON.stringify({ ok: true }),
 			"2026-07-07T00:15:00.000Z",

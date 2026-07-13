@@ -156,6 +156,7 @@ async function executeValidationTask(
 	state: { taskId: string; taskOutput: Record<string, unknown>; now: string },
 ): Promise<AgentV2ExecutionStepResult> {
 	const maxAttempts = input.maxRepairAttempts ?? 3;
+	const attempt = nextValidationRepairAttempt(state.taskOutput);
 	const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
 	throwIfAborted(input.signal);
 	const result = await runAgentV2StaticValidationGate({
@@ -167,7 +168,7 @@ async function executeValidationTask(
 		toolRegistry: registry,
 		signal: input.signal,
 	});
-	await Promise.resolve(input.store.upsertAgentV2Validation(result.validation));
+	await Promise.resolve(input.store.appendAgentV2ValidationAttempt({ ...result.validation, attempt }));
 
 	if (result.status === "passed") {
 		await advanceAgentV2Task({
@@ -189,7 +190,6 @@ async function executeValidationTask(
 		};
 	}
 
-	const attempt = nextValidationRepairAttempt(state.taskOutput);
 	const repairActions = planAgentV2RepairActions({
 		taskId: state.taskId,
 		failures: result.failures,

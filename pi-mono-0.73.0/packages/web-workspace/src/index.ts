@@ -136,8 +136,8 @@ export {
 	type AgentV2TaskRow,
 	type AgentV2ValidationRecord,
 	type AgentV2ValidationRow,
-	type AgentV2ValidationStatus,
 	type AppendAgentV2RunEventInput,
+	type AppendAgentV2ValidationAttemptInput,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
 	buildAgentV2Document,
@@ -156,7 +156,6 @@ export {
 	type UpsertAgentV2ArtifactInput,
 	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
-	type UpsertAgentV2ValidationInput,
 } from "./agent-v2-store.js";
 export {
 	type AgentV2TaskSelection,
@@ -178,8 +177,13 @@ export {
 	AGENT_V2_PHASES,
 	AGENT_V2_RUN_EVENT_TYPES,
 	AGENT_V2_RUN_STATUSES,
+	AGENT_V2_SCHEMA_INDEXES,
+	AGENT_V2_SCHEMA_RESET_REQUIRED,
+	AGENT_V2_SCHEMA_TABLE_COLUMNS,
+	AGENT_V2_SCHEMA_TABLES,
 	AGENT_V2_SCHEMA_VERSION,
 	AGENT_V2_TASK_STATUSES,
+	AGENT_V2_VALIDATION_STATUSES,
 	type AgentV2CapabilityDecision,
 	type AgentV2CapabilityDeliveryMode,
 	type AgentV2Error,
@@ -196,6 +200,7 @@ export {
 	type AgentV2TaskKind,
 	type AgentV2TaskNode,
 	type AgentV2TaskStatus,
+	type AgentV2ValidationStatus,
 } from "./agent-v2-types.js";
 export {
 	type AgentV2ValidationFailure,

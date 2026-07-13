@@ -626,13 +626,17 @@ describe("agent v2 runtime stores", () => {
 
 			expect(tables).toEqual([
 				"agent_v2_artifacts",
+				"agent_v2_bootstraps",
 				"agent_v2_diagnostics",
 				"agent_v2_documents",
+				"agent_v2_input_blobs",
+				"agent_v2_input_references",
+				"agent_v2_outbox",
 				"agent_v2_run_events",
 				"agent_v2_runs",
 				"agent_v2_schema_metadata",
 				"agent_v2_tasks",
-				"agent_v2_validations",
+				"agent_v2_validation_attempts",
 			]);
 
 			const artifactColumns = (db.prepare("PRAGMA table_info(agent_v2_artifacts)").all() as { name: string }[]).map(
@@ -647,8 +651,8 @@ describe("agent v2 runtime stores", () => {
 				"media_type",
 				"checksum",
 				"version",
-				"source_task_id",
 				"validation_status",
+				"source_task_id",
 				"metadata_json",
 				"created_at",
 				"updated_at",
@@ -660,10 +664,10 @@ describe("agent v2 runtime stores", () => {
 				"client_id",
 				"run_id",
 				"task_id",
-				"parent_task_id",
 				"kind",
 				"title",
 				"status",
+				"parent_task_id",
 				"depends_on_json",
 				"acceptance_criteria_json",
 				"input_json",
@@ -742,6 +746,8 @@ describe("agent v2 runtime stores", () => {
 		};
 		const queryable = new RecordingQueryable().on((query) => {
 			const sql = normalizeSql(query.sql);
+			if (/^SELECT table_name FROM information_schema\.tables/i.test(sql)) return { rows: [] };
+			if (/^INSERT INTO agent_v2_schema_metadata/i.test(sql)) return { rowCount: 1 };
 			if (/^CREATE /i.test(sql)) return { rowCount: 0 };
 			if (/FROM agent_v2_runs/i.test(sql)) return { rows: [runRow] };
 			if (/FROM agent_v2_tasks/i.test(sql)) return { rows: [taskRow] };
@@ -769,59 +775,48 @@ describe("agent v2 runtime stores", () => {
 			"agent_v2_tasks",
 			"agent_v2_artifacts",
 			"agent_v2_documents",
-			"agent_v2_validations",
+			"agent_v2_validation_attempts",
 			"agent_v2_diagnostics",
+			"agent_v2_input_blobs",
+			"agent_v2_input_references",
+			"agent_v2_bootstraps",
+			"agent_v2_outbox",
 		]) {
-			expect(statements.some((statement) => statement.includes(`CREATE TABLE IF NOT EXISTS ${table}`))).toBe(true);
+			expect(statements.some((statement) => statement.includes(`CREATE TABLE ${table}`))).toBe(true);
 		}
 		expect(
 			statements.some((statement) =>
+				statement.includes("CREATE INDEX idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at)"),
+			),
+		).toBe(true);
+		expect(
+			statements.some((statement) =>
 				statement.includes(
-					"CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at)",
+					"CREATE INDEX idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC)",
 				),
 			),
 		).toBe(true);
 		expect(
 			statements.some((statement) =>
 				statement.includes(
-					"CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC)",
-				),
-			),
-		).toBe(true);
-		expect(
-			statements.some((statement) =>
-				statement.includes(
-					"ALTER TABLE agent_v2_tasks ADD COLUMN IF NOT EXISTS acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb",
-				),
-			),
-		).toBe(true);
-		expect(
-			statements.some((statement) =>
-				statement.includes(
-					"CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)",
+					"CREATE INDEX idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)",
 				),
 			),
 		).toBe(true);
 		const artifactTableStatement = statements.find((statement) =>
-			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_artifacts"),
+			statement.includes("CREATE TABLE agent_v2_artifacts"),
 		);
 		const documentTableStatement = statements.find((statement) =>
-			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_documents"),
+			statement.includes("CREATE TABLE agent_v2_documents"),
 		);
-		const taskTableStatement = statements.find((statement) =>
-			statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_tasks"),
-		);
-		expect(taskTableStatement).toContain("acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb");
+		const taskTableStatement = statements.find((statement) => statement.includes("CREATE TABLE agent_v2_tasks"));
+		expect(taskTableStatement).toContain("acceptance_criteria_json JSONB NOT NULL");
 		expect(artifactTableStatement).toContain("path TEXT NOT NULL");
 		expect(artifactTableStatement).toContain("media_type TEXT NOT NULL");
 		expect(artifactTableStatement).toContain("checksum TEXT NOT NULL");
 		expect(artifactTableStatement).toContain("version TEXT NOT NULL");
 		expect(artifactTableStatement).toContain("source_task_id TEXT");
 		expect(artifactTableStatement).toContain("validation_status TEXT NOT NULL");
-		expect(artifactTableStatement).not.toMatch(/(^|[ (])task_id TEXT([, )]|$)/);
-		expect(artifactTableStatement).not.toContain("uri TEXT NOT NULL");
-		expect(artifactTableStatement).not.toContain("title TEXT NOT NULL");
-		expect(artifactTableStatement).not.toContain("description TEXT");
 		expect(documentTableStatement).toContain("document_id TEXT NOT NULL");
 		expect(documentTableStatement).toContain("kind TEXT NOT NULL");
 		expect(documentTableStatement).toContain("version TEXT NOT NULL");

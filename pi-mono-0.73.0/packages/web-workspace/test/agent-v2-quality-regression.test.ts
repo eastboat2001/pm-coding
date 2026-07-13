@@ -93,10 +93,11 @@ describe("agent v2 quality regression", () => {
 			createdAt: "2026-07-09T09:00:15.000Z",
 			updatedAt: "2026-07-09T09:00:15.000Z",
 		});
-		await store.upsertAgentV2Validation({
+		await store.appendAgentV2ValidationAttempt({
 			clientId: "client-a",
 			runId: "shared-run",
 			validationId: "validation-dashboard",
+			attempt: 1,
 			taskId: "implement",
 			artifactId: "artifact-dashboard",
 			status: "passed",
@@ -186,7 +187,7 @@ describe("agent v2 quality regression", () => {
 		expect(countRows(dbFile, "agent_v2_runs")).toBe(1);
 		expect(countRows(dbFile, "agent_v2_tasks")).toBe(2);
 		expect(countRows(dbFile, "agent_v2_artifacts")).toBe(1);
-		expect(countRows(dbFile, "agent_v2_validations")).toBe(1);
+		expect(countRows(dbFile, "agent_v2_validation_attempts")).toBe(1);
 		expect(countRows(dbFile, "agent_v2_diagnostics")).toBe(1);
 		expect(countRows(dbFile, "agent_v2_run_events")).toBe(1);
 
@@ -213,15 +214,13 @@ describe("agent v2 quality regression", () => {
 		expect(resetResult.diagnosticsDeleted).toBe(1);
 		expect(eventBus.purge).toHaveBeenCalledTimes(1);
 		expect(diagnostics.clearAgentV2Diagnostics).toHaveBeenCalledTimes(1);
-		expect(countRows(dbFile, "sessions")).toBe(0);
-		expect(countRows(dbFile, "runs")).toBe(0);
+		expect(countRows(dbFile, "sessions")).toBe(1);
+		expect(countRows(dbFile, "runs")).toBe(1);
 		expect(countRows(dbFile, "agent_v2_runs")).toBe(0);
 		expect(countRows(dbFile, "agent_v2_tasks")).toBe(0);
 		expect(countRows(dbFile, "agent_v2_artifacts")).toBe(0);
-		expect(countRows(dbFile, "agent_v2_validations")).toBe(0);
+		expect(countRows(dbFile, "agent_v2_validation_attempts")).toBe(0);
 		expect(countRows(dbFile, "agent_v2_run_events")).toBe(0);
-
-		seedLegacyRuntime(store, "shared-run");
 
 		expect(store.getRun("client-a", "shared-run")).toMatchObject({
 			clientId: "client-a",
@@ -242,7 +241,7 @@ describe("agent v2 quality regression", () => {
 		]);
 	});
 
-	it("initializes the Agent v2 schema independently with shared client identity rows only", async () => {
+	it("initializes the Agent v2 schema without shared client identity", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-schema-only-"));
 		const dbFile = join(root, "runtime.sqlite");
 		const store = new RuntimeDbStore(dbFile);
@@ -252,12 +251,11 @@ describe("agent v2 quality regression", () => {
 		store.ensureAgentV2Schema();
 
 		for (const table of [
-			"clients",
 			"agent_v2_runs",
 			"agent_v2_tasks",
 			"agent_v2_artifacts",
 			"agent_v2_documents",
-			"agent_v2_validations",
+			"agent_v2_validation_attempts",
 			"agent_v2_diagnostics",
 			"agent_v2_run_events",
 			"agent_v2_schema_metadata",
@@ -265,6 +263,7 @@ describe("agent v2 quality regression", () => {
 			expect(tableExists(dbFile, table), table).toBe(true);
 		}
 		for (const table of [
+			"clients",
 			"sessions",
 			"messages",
 			"runs",
@@ -344,10 +343,11 @@ describe("agent v2 quality regression", () => {
 			createdAt: "2026-07-09T09:31:03.000Z",
 			updatedAt: "2026-07-09T09:31:03.000Z",
 		});
-		await store.upsertAgentV2Validation({
+		await store.appendAgentV2ValidationAttempt({
 			clientId: "client-a",
 			runId: "schema-only-run",
 			validationId: "validation-1",
+			attempt: 1,
 			taskId: "task-1",
 			artifactId: "artifact-1",
 			status: "passed",
@@ -381,7 +381,7 @@ describe("agent v2 quality regression", () => {
 
 		expect(tableExists(dbFile, "agent_v2_runs")).toBe(true);
 		expect(tableExists(dbFile, "agent_v2_schema_metadata")).toBe(true);
-		expect(tableExists(dbFile, "clients")).toBe(true);
+		expect(tableExists(dbFile, "clients")).toBe(false);
 		expect(createdRun).toMatchObject({
 			clientId: "client-a",
 			runId: "schema-only-run",
@@ -445,23 +445,13 @@ describe("agent v2 quality regression", () => {
 			now: () => "2026-07-09T10:00:00.000Z",
 		});
 
-		expect(result.schemaVersion).toBeGreaterThan(0);
-		expect(result.legacyRowsDeleted).toMatchObject({
-			sessions: 0,
-			messages: 0,
-			runs: 0,
-			run_events: 0,
-			app_preview_goals: 0,
-			app_preview_goal_events: 0,
-			clients: 0,
-		});
+		expect(result.schemaVersion).toBe(2);
 		for (const table of [
-			"clients",
 			"agent_v2_runs",
 			"agent_v2_tasks",
 			"agent_v2_artifacts",
 			"agent_v2_documents",
-			"agent_v2_validations",
+			"agent_v2_validation_attempts",
 			"agent_v2_diagnostics",
 			"agent_v2_run_events",
 			"agent_v2_schema_metadata",
@@ -469,6 +459,7 @@ describe("agent v2 quality regression", () => {
 			expect(tableExists(dbFile, table), table).toBe(true);
 		}
 		for (const table of [
+			"clients",
 			"sessions",
 			"messages",
 			"runs",

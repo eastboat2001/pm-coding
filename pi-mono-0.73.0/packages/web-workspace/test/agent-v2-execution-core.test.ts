@@ -165,6 +165,9 @@ describe("agent v2 execution core", () => {
 				}),
 			}),
 		});
+		expect(store.listAgentV2Validations("client-a", "run-validation").map((record) => record.attempt)).toEqual([
+			1, 2,
+		]);
 	});
 
 	it("stops before static validation when the execution signal is already aborted", async () => {

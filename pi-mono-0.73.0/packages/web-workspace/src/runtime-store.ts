@@ -6,12 +6,12 @@ import type {
 	AgentV2RunUpdateResult as AgentV2RunUpdateResultFromStore,
 	AgentV2ValidationRecord,
 	AppendAgentV2RunEventInput as AppendAgentV2RunEventInputFromStore,
+	AppendAgentV2ValidationAttemptInput as AppendAgentV2ValidationAttemptInputFromStore,
 	CreateAgentV2RunInput as CreateAgentV2RunInputFromStore,
 	UpdateAgentV2RunInput as UpdateAgentV2RunInputFromStore,
 	UpsertAgentV2ArtifactInput as UpsertAgentV2ArtifactInputFromStore,
 	UpsertAgentV2DocumentInput as UpsertAgentV2DocumentInputFromStore,
 	UpsertAgentV2TaskInput as UpsertAgentV2TaskInputFromStore,
-	UpsertAgentV2ValidationInput as UpsertAgentV2ValidationInputFromStore,
 } from "./agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "./agent-v2-types.js";
 import type {
@@ -59,14 +59,12 @@ export interface CreateRunWithMessageInput extends JsonObject {
 }
 
 export interface ResetAgentV2RuntimeDataOptions {
-	includeClients?: boolean;
 	now?: () => string;
 }
 
 export interface ResetAgentV2RuntimeDataResult {
-	legacyRowsDeleted: Record<string, number>;
 	agentV2RowsDeleted: Record<string, number>;
-	schemaVersion: number;
+	schemaVersion: 2;
 }
 
 export type MaybePromise<T> = T | Promise<T>;
@@ -138,7 +136,9 @@ export interface RuntimeStore {
 	listAgentV2Artifacts(clientId: string, runId: string): MaybePromise<AgentV2ArtifactRecord[]>;
 	upsertAgentV2Document(input: UpsertAgentV2DocumentInputFromStore): MaybePromise<AgentV2DocumentRecord>;
 	listAgentV2Documents(clientId: string, runId: string): MaybePromise<AgentV2DocumentRecord[]>;
-	upsertAgentV2Validation(input: UpsertAgentV2ValidationInputFromStore): MaybePromise<AgentV2ValidationRecord>;
+	appendAgentV2ValidationAttempt(
+		input: AppendAgentV2ValidationAttemptInputFromStore,
+	): MaybePromise<AgentV2ValidationRecord>;
 	listAgentV2Validations(clientId: string, runId: string): MaybePromise<AgentV2ValidationRecord[]>;
 	getAgentV2Document(
 		clientId: string,

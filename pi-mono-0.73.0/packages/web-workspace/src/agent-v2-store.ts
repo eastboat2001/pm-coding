@@ -11,6 +11,7 @@ import type {
 	AgentV2TaskKind,
 	AgentV2TaskNode,
 	AgentV2TaskStatus,
+	AgentV2ValidationStatus,
 } from "./agent-v2-types.js";
 import { isObject } from "./json.js";
 import type { JsonObject } from "./types.js";
@@ -144,12 +145,11 @@ export interface AppendAgentV2RunEventInput extends JsonObject {
 	createdAt?: string;
 }
 
-export type AgentV2ValidationStatus = "passed" | "failed" | "blocked" | "warning";
-
 export interface AgentV2ValidationRecord extends JsonObject {
 	clientId: string;
 	runId: string;
 	validationId: string;
+	attempt: number;
 	taskId?: string;
 	artifactId?: string;
 	status: AgentV2ValidationStatus;
@@ -159,10 +159,11 @@ export interface AgentV2ValidationRecord extends JsonObject {
 	updatedAt: string;
 }
 
-export interface UpsertAgentV2ValidationInput extends JsonObject {
+export interface AppendAgentV2ValidationAttemptInput extends JsonObject {
 	clientId: string;
 	runId: string;
 	validationId: string;
+	attempt: number;
 	taskId?: string;
 	artifactId?: string;
 	status: AgentV2ValidationStatus;
@@ -265,6 +266,7 @@ export interface AgentV2ValidationRow {
 	client_id: string;
 	run_id: string;
 	validation_id: string;
+	attempt: number | string;
 	task_id: string | null;
 	artifact_id: string | null;
 	status: AgentV2ValidationStatus;
@@ -286,7 +288,7 @@ export const AGENT_V2_RUN_EVENT_COLUMNS = "client_id, run_id, seq, event_type, p
 export const AGENT_V2_DIAGNOSTIC_COLUMNS =
 	"client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
 export const AGENT_V2_VALIDATION_COLUMNS =
-	"client_id, run_id, validation_id, task_id, artifact_id, status, summary, details_json, created_at, updated_at";
+	"client_id, run_id, validation_id, attempt, task_id, artifact_id, status, summary, details_json, created_at, updated_at";
 
 export function buildAgentV2Run(input: CreateAgentV2RunInput): AgentV2RunSnapshot {
 	return createAgentV2RunSnapshot(input);
@@ -390,7 +392,10 @@ export function buildAgentV2Document(input: UpsertAgentV2DocumentInput): AgentV2
 	};
 }
 
-export function buildAgentV2Validation(input: UpsertAgentV2ValidationInput): AgentV2ValidationRecord {
+export function buildAgentV2Validation(input: AppendAgentV2ValidationAttemptInput): AgentV2ValidationRecord {
+	if (!Number.isInteger(input.attempt) || input.attempt <= 0) {
+		throw new Error("Agent v2 validation attempt must be a positive integer");
+	}
 	const createdAt = input.createdAt ?? new Date().toISOString();
 	const updatedAt = input.updatedAt ?? createdAt;
 
@@ -398,6 +403,7 @@ export function buildAgentV2Validation(input: UpsertAgentV2ValidationInput): Age
 		clientId: input.clientId,
 		runId: input.runId,
 		validationId: input.validationId,
+		attempt: input.attempt,
 		...(input.taskId ? { taskId: input.taskId } : {}),
 		...(input.artifactId ? { artifactId: input.artifactId } : {}),
 		status: input.status,
@@ -406,6 +412,25 @@ export function buildAgentV2Validation(input: UpsertAgentV2ValidationInput): Age
 		createdAt,
 		updatedAt,
 	};
+}
+
+export function equalAgentV2ValidationRecords(left: AgentV2ValidationRecord, right: AgentV2ValidationRecord): boolean {
+	return canonicalAgentV2Json(left) === canonicalAgentV2Json(right);
+}
+
+function canonicalAgentV2Json(value: unknown): string {
+	const jsonValue = JSON.parse(JSON.stringify(value)) as unknown;
+	return JSON.stringify(sortAgentV2JsonValue(jsonValue));
+}
+
+function sortAgentV2JsonValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(sortAgentV2JsonValue);
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value as Record<string, unknown>)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, entry]) => [key, sortAgentV2JsonValue(entry)]),
+	);
 }
 
 export function toAgentV2RunRecord(row: AgentV2RunRow): AgentV2RunSnapshot {
@@ -494,6 +519,7 @@ export function toAgentV2ValidationRecord(row: AgentV2ValidationRow): AgentV2Val
 		clientId: row.client_id,
 		runId: row.run_id,
 		validationId: row.validation_id,
+		attempt: toNumber(row.attempt),
 		...(row.task_id ? { taskId: row.task_id } : {}),
 		...(row.artifact_id ? { artifactId: row.artifact_id } : {}),
 		status: row.status,

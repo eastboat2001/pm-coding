@@ -10,9 +10,8 @@ import {
 import type { AgentV2ResetStore } from "../src/agent-v2-runtime-store.js";
 
 const STORE_RESULT = {
-	legacyRowsDeleted: { runs: 1 },
 	agentV2RowsDeleted: { agent_v2_runs: 2 },
-	schemaVersion: 1,
+	schemaVersion: 2 as const,
 };
 
 describe("agent v2 runtime reset maintenance", () => {
@@ -32,18 +31,17 @@ describe("agent v2 runtime reset maintenance", () => {
 		expect(resetAgentV2RuntimeData).not.toHaveBeenCalled();
 	});
 
-	it("passes includeClients and now to the store reset", async () => {
+	it("passes only the v2 reset clock to the store reset", async () => {
 		const { store, resetAgentV2RuntimeData } = createStore();
 		const now = () => "2026-07-07T05:00:00.000Z";
 
 		const result = await resetAgentV2Runtime({
 			store,
 			confirmation: AGENT_V2_RESET_CONFIRMATION,
-			includeClients: true,
 			now,
 		});
 
-		expect(resetAgentV2RuntimeData).toHaveBeenCalledWith({ includeClients: true, now });
+		expect(resetAgentV2RuntimeData).toHaveBeenCalledWith({ now });
 		expect(result.store).toEqual(STORE_RESULT);
 	});
 

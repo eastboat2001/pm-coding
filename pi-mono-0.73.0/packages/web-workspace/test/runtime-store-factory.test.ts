@@ -54,7 +54,7 @@ describe("createAgentV2RuntimeStore", () => {
 			"listAgentV2Diagnostics",
 			"upsertAgentV2Task",
 			"upsertAgentV2Artifact",
-			"upsertAgentV2Validation",
+			"appendAgentV2ValidationAttempt",
 			"appendAgentV2Diagnostic",
 			"resetAgentV2RuntimeData",
 			"close",

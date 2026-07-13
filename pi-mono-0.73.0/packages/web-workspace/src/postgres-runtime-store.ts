@@ -21,6 +21,7 @@ import {
 	type AgentV2ValidationRecord,
 	type AgentV2ValidationRow,
 	type AppendAgentV2RunEventInput,
+	type AppendAgentV2ValidationAttemptInput,
 	applyAgentV2RunUpdate,
 	buildAgentV2Artifact,
 	buildAgentV2Document,
@@ -28,6 +29,7 @@ import {
 	buildAgentV2Task,
 	buildAgentV2Validation,
 	type CreateAgentV2RunInput,
+	equalAgentV2ValidationRecords,
 	toAgentV2ArtifactRecord,
 	toAgentV2DiagnosticRecord,
 	toAgentV2DocumentRecord,
@@ -39,9 +41,16 @@ import {
 	type UpsertAgentV2ArtifactInput,
 	type UpsertAgentV2DocumentInput,
 	type UpsertAgentV2TaskInput,
-	type UpsertAgentV2ValidationInput,
 } from "./agent-v2-store.js";
-import { AGENT_V2_SCHEMA_VERSION, type AgentV2RunSnapshot, type AgentV2TaskNode } from "./agent-v2-types.js";
+import {
+	AGENT_V2_SCHEMA_INDEXES,
+	AGENT_V2_SCHEMA_RESET_REQUIRED,
+	AGENT_V2_SCHEMA_TABLE_COLUMNS,
+	AGENT_V2_SCHEMA_TABLES,
+	AGENT_V2_SCHEMA_VERSION,
+	type AgentV2RunSnapshot,
+	type AgentV2TaskNode,
+} from "./agent-v2-types.js";
 import type {
 	CreateRunWithMessageInput,
 	ResetAgentV2RuntimeDataOptions,
@@ -176,17 +185,13 @@ interface SessionRunContext {
 
 const ACTIVE_RUN_STATUSES: readonly RunStatus[] = ["queued", "running", "cancelling"];
 const TERMINAL_RUN_STATUSES = new Set<RunStatus>(["cancelled", "completed", "failed", "interrupted"]);
-const LEGACY_RESET_TABLES = [
-	"app_preview_goal_events",
-	"app_preview_goals",
-	"run_events",
-	"messages",
-	"runs",
-	"sessions",
-] as const;
 const AGENT_V2_RESET_TABLES = [
+	"agent_v2_outbox",
+	"agent_v2_input_references",
+	"agent_v2_input_blobs",
+	"agent_v2_bootstraps",
 	"agent_v2_diagnostics",
-	"agent_v2_validations",
+	"agent_v2_validation_attempts",
 	"agent_v2_documents",
 	"agent_v2_artifacts",
 	"agent_v2_tasks",
@@ -194,6 +199,95 @@ const AGENT_V2_RESET_TABLES = [
 	"agent_v2_runs",
 	"agent_v2_schema_metadata",
 ] as const;
+const AGENT_V2_PRE_V2_TABLES = ["agent_v2_validations"] as const;
+
+const POSTGRES_AGENT_V2_SCHEMA = `
+	CREATE TABLE agent_v2_schema_metadata (
+		singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1), schema_version INTEGER NOT NULL CHECK(schema_version = 2), applied_at TEXT NOT NULL
+	);
+	CREATE TABLE agent_v2_runs (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL,
+		status TEXT NOT NULL CHECK(status IN ('queued','running','cancelling','succeeded','failed','cancelled','interrupted')),
+		phase TEXT NOT NULL CHECK(phase IN ('intake','capability_routing','spec_draft','spec_review','plan_draft','task_generation','implementation','validation','repair','preview','delivery','blocked','failed','cancelled')),
+		attempt INTEGER NOT NULL CHECK(attempt >= 0), input_json JSONB NOT NULL, model_json JSONB NOT NULL,
+		worker_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT, error_json JSONB,
+		PRIMARY KEY (client_id, run_id)
+	);
+	CREATE INDEX idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at);
+	CREATE INDEX idx_agent_v2_runs_worker_active ON agent_v2_runs(worker_id, updated_at) WHERE worker_id IS NOT NULL AND status IN ('running','cancelling');
+	CREATE TABLE agent_v2_run_events (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, seq INTEGER NOT NULL CHECK(seq > 0), event_type TEXT NOT NULL,
+		payload_json JSONB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (client_id, run_id, seq),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE TABLE agent_v2_tasks (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+		status TEXT NOT NULL CHECK(status IN ('pending','ready','running','blocked','succeeded','failed','cancelled')),
+		parent_task_id TEXT, depends_on_json JSONB NOT NULL, acceptance_criteria_json JSONB NOT NULL,
+		input_json JSONB NOT NULL, output_json JSONB NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		started_at TEXT, ended_at TEXT, error_json JSONB, PRIMARY KEY (client_id, run_id, task_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC);
+	CREATE TABLE agent_v2_artifacts (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL,
+		media_type TEXT NOT NULL, checksum TEXT NOT NULL, version TEXT NOT NULL, validation_status TEXT NOT NULL,
+		source_task_id TEXT, metadata_json JSONB NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		PRIMARY KEY (client_id, run_id, artifact_id), FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC);
+	CREATE TABLE agent_v2_documents (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, document_id TEXT NOT NULL, kind TEXT NOT NULL, version TEXT NOT NULL,
+		content_markdown TEXT NOT NULL, content_json JSONB NOT NULL, source_task_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		PRIMARY KEY (client_id, run_id, document_id), FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC);
+	CREATE TABLE agent_v2_diagnostics (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, diagnostic_id TEXT NOT NULL, severity TEXT NOT NULL, category TEXT NOT NULL,
+		code TEXT NOT NULL, message TEXT NOT NULL, phase TEXT, task_id TEXT, artifact_id TEXT, trace_id TEXT,
+		data_json JSONB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (client_id, run_id, diagnostic_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at, diagnostic_id);
+	CREATE TABLE agent_v2_validation_attempts (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, validation_id TEXT NOT NULL, attempt INTEGER NOT NULL CHECK(attempt > 0),
+		task_id TEXT, artifact_id TEXT, status TEXT NOT NULL CHECK(status IN ('passed','failed','blocked','warning')),
+		summary TEXT NOT NULL, details_json JSONB NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		PRIMARY KEY (client_id, run_id, validation_id, attempt),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE INDEX idx_agent_v2_validation_attempts_run_created ON agent_v2_validation_attempts(client_id, run_id, created_at, validation_id, attempt);
+	CREATE TABLE agent_v2_input_blobs (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, input_id TEXT NOT NULL, logical_path TEXT NOT NULL, media_type TEXT NOT NULL,
+		encoding TEXT NOT NULL CHECK(encoding IN ('utf8','binary')), bytes BYTEA NOT NULL, byte_length INTEGER NOT NULL CHECK(byte_length >= 0),
+		checksum TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (client_id, run_id, input_id),
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE UNIQUE INDEX uq_agent_v2_input_blobs_logical_path ON agent_v2_input_blobs(client_id, run_id, logical_path);
+	CREATE TABLE agent_v2_input_references (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, input_id TEXT NOT NULL, logical_path TEXT NOT NULL, media_type TEXT NOT NULL,
+		checksum TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('attachment','project_file')), ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+		display_name TEXT, byte_length INTEGER NOT NULL CHECK(byte_length >= 0), PRIMARY KEY (client_id, run_id, kind, ordinal),
+		FOREIGN KEY (client_id, run_id, input_id) REFERENCES agent_v2_input_blobs(client_id, run_id, input_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE,
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE TABLE agent_v2_bootstraps (
+		client_id TEXT NOT NULL, run_id TEXT NOT NULL, bootstrap_version TEXT NOT NULL, bootstrap_checksum TEXT NOT NULL, created_at TEXT NOT NULL,
+		PRIMARY KEY (client_id, run_id), FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE TABLE agent_v2_outbox (
+		intent_id TEXT PRIMARY KEY, dedupe_key TEXT NOT NULL, client_id TEXT NOT NULL, run_id TEXT NOT NULL,
+		kind TEXT NOT NULL CHECK(kind IN ('run_enqueue','run_cancel','live_event','workspace_diagnostic','langfuse_diagnostic')),
+		status TEXT NOT NULL CHECK(status IN ('pending','leased','delivered','dead_letter')), available_at TEXT NOT NULL,
+		created_at TEXT NOT NULL, updated_at TEXT NOT NULL, reference_json JSONB NOT NULL, attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0),
+		lease_owner TEXT, lease_expires_at TEXT, last_error_code TEXT, last_error_message TEXT, delivered_at TEXT,
+		FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id) ON UPDATE NO ACTION ON DELETE NO ACTION NOT DEFERRABLE
+	);
+	CREATE UNIQUE INDEX uq_agent_v2_outbox_dedupe ON agent_v2_outbox(dedupe_key);
+	CREATE INDEX idx_agent_v2_outbox_dispatch ON agent_v2_outbox(status, available_at, created_at, intent_id);
+	CREATE INDEX idx_agent_v2_outbox_lease ON agent_v2_outbox(status, lease_expires_at, intent_id);
+	CREATE INDEX idx_agent_v2_outbox_run ON agent_v2_outbox(client_id, run_id, created_at, intent_id);
+`;
 
 const SESSION_COLUMNS =
 	"session_id, client_id, title, model_json, thinking_level, created_at, updated_at, last_run_status, last_run_id";
@@ -382,195 +476,159 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	async ensureAgentV2Schema(): Promise<void> {
-		await this.ensureClientIdentitySchema();
+		const tables = await this.listAgentV2TableNames(this.queryable);
+		if (tables.length > 0) {
+			await this.assertExactAgentV2Schema(this.queryable, tables);
+			return;
+		}
+		await this.withTransaction(async (tx) => {
+			await this.createAgentV2Schema(tx, now());
+		});
+	}
+
+	private async createAgentV2Schema(queryable: Queryable, appliedAt: string): Promise<void> {
+		await this.query(queryable, POSTGRES_AGENT_V2_SCHEMA);
 		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS agent_v2_schema_metadata (
-				schema_version INTEGER PRIMARY KEY,
-				applied_at TEXT NOT NULL
+			queryable,
+			"INSERT INTO agent_v2_schema_metadata (singleton_id, schema_version, applied_at) VALUES (1, $1, $2)",
+			[AGENT_V2_SCHEMA_VERSION, appliedAt],
+		);
+	}
+
+	private async listAgentV2TableNames(queryable: Queryable): Promise<string[]> {
+		const rows = await this.queryRows<{ table_name: string }>(
+			queryable,
+			"SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name LIKE 'agent_v2_%' ORDER BY table_name",
+		);
+		return rows.map((row) => row.table_name);
+	}
+
+	private async assertExactAgentV2Schema(queryable: Queryable, tables: readonly string[]): Promise<void> {
+		if (JSON.stringify(tables) !== JSON.stringify(AGENT_V2_SCHEMA_TABLES))
+			throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+		const metadataColumns = await this.queryRows<{ column_name: string }>(
+			queryable,
+			`SELECT column_name FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'agent_v2_schema_metadata'
+			ORDER BY ordinal_position`,
+		);
+		if (
+			JSON.stringify(metadataColumns.map((row) => row.column_name)) !==
+			JSON.stringify(["singleton_id", "schema_version", "applied_at"])
+		) {
+			throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+		}
+		const metadata = await this.queryRows<{ singleton_id: number; schema_version: number }>(
+			queryable,
+			"SELECT singleton_id, schema_version FROM agent_v2_schema_metadata",
+		);
+		const indexes = await this.queryRows<{
+			table_name: string;
+			index_name: string;
+			is_unique: boolean;
+			index_definition: string;
+		}>(
+			queryable,
+			`SELECT table_class.relname AS table_name, index_class.relname AS index_name,
+			index_catalog.indisunique AS is_unique, pg_get_indexdef(index_catalog.indexrelid) AS index_definition
+			FROM pg_index index_catalog
+			JOIN pg_class table_class ON table_class.oid = index_catalog.indrelid
+			JOIN pg_class index_class ON index_class.oid = index_catalog.indexrelid
+			JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+			WHERE table_namespace.nspname = current_schema()
+			AND table_class.relname LIKE 'agent_v2_%' AND NOT index_catalog.indisprimary
+			ORDER BY index_class.relname`,
+		);
+		if (
+			metadata.length !== 1 ||
+			metadata[0]?.singleton_id !== 1 ||
+			metadata[0]?.schema_version !== AGENT_V2_SCHEMA_VERSION ||
+			JSON.stringify(indexes.map((row) => row.index_name)) !== JSON.stringify([...AGENT_V2_SCHEMA_INDEXES].sort())
+		) {
+			throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+		}
+		const columns = await this.queryRows<{
+			table_name: string;
+			column_name: string;
+			data_type: string;
+			is_nullable: "NO" | "YES";
+			column_default: string | null;
+			is_identity: "NO" | "YES";
+			identity_generation: string | null;
+			is_generated: "NEVER" | "ALWAYS";
+			generation_expression: string | null;
+		}>(
+			queryable,
+			`SELECT table_name, column_name, data_type, is_nullable, column_default,
+			is_identity, identity_generation, is_generated, generation_expression
+			FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name LIKE 'agent_v2_%'
+			ORDER BY table_name, ordinal_position`,
+		);
+		for (const table of AGENT_V2_SCHEMA_TABLES) {
+			const tableColumns = columns.filter((row) => row.table_name === table);
+			const actual = tableColumns.map((row) => row.column_name);
+			if (
+				JSON.stringify(actual) !==
+				JSON.stringify(AGENT_V2_SCHEMA_TABLE_COLUMNS[table as keyof typeof AGENT_V2_SCHEMA_TABLE_COLUMNS])
 			)
-		`,
+				throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+			for (const column of tableColumns) {
+				const key = `${table}.${column.column_name}`;
+				if (column.data_type !== expectedPostgresAgentV2ColumnType(key))
+					throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+				if ((column.is_nullable === "YES") !== POSTGRES_AGENT_V2_NULLABLE_COLUMNS.has(key)) {
+					throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+				}
+				if (
+					column.column_default !== null ||
+					column.is_identity !== "NO" ||
+					column.identity_generation !== null ||
+					column.is_generated !== "NEVER" ||
+					column.generation_expression !== null
+				) {
+					throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+				}
+			}
+		}
+		const indexShapes = postgresAgentV2IndexShapes();
+		for (const index of indexes) {
+			const expected = indexShapes[index.index_name];
+			const normalized = normalizePostgresDefinition(index.index_definition);
+			const usingOffset = normalized.indexOf(" using ");
+			if (
+				!expected ||
+				index.table_name !== expected.table ||
+				index.is_unique !== expected.unique ||
+				usingOffset < 0 ||
+				normalized.slice(usingOffset) !== expected.definition
+			) {
+				throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+			}
+		}
+		const constraints = await this.queryRows<{
+			table_name: string;
+			constraint_type: string;
+			definition: string;
+			deferrable: boolean;
+			update_action: string;
+			delete_action: string;
+		}>(
+			queryable,
+			`SELECT table_class.relname AS table_name, c.contype AS constraint_type,
+			pg_get_constraintdef(c.oid) AS definition,
+			c.condeferrable AS deferrable, c.confupdtype AS update_action, c.confdeltype AS delete_action
+			FROM pg_constraint c
+			JOIN pg_class table_class ON table_class.oid = c.conrelid
+			WHERE c.connamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
+			AND table_class.relname LIKE 'agent_v2_%'`,
 		);
-		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS agent_v2_runs (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				status TEXT NOT NULL,
-				phase TEXT NOT NULL,
-				attempt INTEGER NOT NULL,
-				input_json JSONB NOT NULL,
-				model_json JSONB NOT NULL,
-				worker_id TEXT,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				started_at TEXT,
-				ended_at TEXT,
-				error_json JSONB,
-				PRIMARY KEY (client_id, run_id),
-				FOREIGN KEY (client_id) REFERENCES clients(client_id)
-			)
-		`,
-		);
-		await this.query(
-			this.queryable,
-			"CREATE INDEX IF NOT EXISTS idx_agent_v2_runs_status ON agent_v2_runs(status, updated_at)",
-		);
-		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS agent_v2_run_events (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				seq INTEGER NOT NULL,
-				event_type TEXT NOT NULL,
-				payload_json JSONB NOT NULL,
-				created_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, seq),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			)
-		`,
-		);
-		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS agent_v2_tasks (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				task_id TEXT NOT NULL,
-				parent_task_id TEXT,
-				kind TEXT NOT NULL,
-				title TEXT NOT NULL,
-				status TEXT NOT NULL,
-				depends_on_json JSONB NOT NULL,
-				acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-				input_json JSONB NOT NULL,
-				output_json JSONB NOT NULL,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				started_at TEXT,
-				ended_at TEXT,
-				error_json JSONB,
-				PRIMARY KEY (client_id, run_id, task_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			)
-		`,
-		);
-		await this.query(
-			this.queryable,
-			"ALTER TABLE agent_v2_tasks ADD COLUMN IF NOT EXISTS acceptance_criteria_json JSONB NOT NULL DEFAULT '[]'::jsonb",
-		);
-		await this.query(
-			this.queryable,
-			"CREATE INDEX IF NOT EXISTS idx_agent_v2_tasks_run_updated ON agent_v2_tasks(client_id, run_id, updated_at DESC)",
-		);
-		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS agent_v2_artifacts (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				artifact_id TEXT NOT NULL,
-				kind TEXT NOT NULL,
-				path TEXT NOT NULL,
-				media_type TEXT NOT NULL,
-				checksum TEXT NOT NULL,
-				version TEXT NOT NULL,
-				source_task_id TEXT,
-				validation_status TEXT NOT NULL,
-				metadata_json JSONB NOT NULL,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, artifact_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			)
-		`,
-		);
-		await this.query(
-			this.queryable,
-			"CREATE INDEX IF NOT EXISTS idx_agent_v2_artifacts_run_updated ON agent_v2_artifacts(client_id, run_id, updated_at DESC)",
-		);
-		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS agent_v2_documents (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				document_id TEXT NOT NULL,
-				kind TEXT NOT NULL,
-				version TEXT NOT NULL,
-				content_markdown TEXT NOT NULL,
-				content_json JSONB NOT NULL,
-				source_task_id TEXT,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, document_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			)
-		`,
-		);
-		await this.query(
-			this.queryable,
-			"CREATE INDEX IF NOT EXISTS idx_agent_v2_documents_run_updated ON agent_v2_documents(client_id, run_id, updated_at DESC)",
-		);
-		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS agent_v2_validations (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				validation_id TEXT NOT NULL,
-				task_id TEXT,
-				artifact_id TEXT,
-				status TEXT NOT NULL,
-				summary TEXT NOT NULL,
-				details_json JSONB NOT NULL,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, validation_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			)
-		`,
-		);
-		await this.query(
-			this.queryable,
-			"CREATE INDEX IF NOT EXISTS idx_agent_v2_validations_run_updated ON agent_v2_validations(client_id, run_id, updated_at DESC)",
-		);
-		await this.query(
-			this.queryable,
-			`
-			CREATE TABLE IF NOT EXISTS agent_v2_diagnostics (
-				client_id TEXT NOT NULL,
-				run_id TEXT NOT NULL,
-				diagnostic_id TEXT NOT NULL,
-				severity TEXT NOT NULL,
-				category TEXT NOT NULL,
-				code TEXT NOT NULL,
-				phase TEXT,
-				task_id TEXT,
-				artifact_id TEXT,
-				trace_id TEXT,
-				message TEXT NOT NULL,
-				data_json JSONB NOT NULL,
-				created_at TEXT NOT NULL,
-				PRIMARY KEY (client_id, run_id, diagnostic_id),
-				FOREIGN KEY (client_id, run_id) REFERENCES agent_v2_runs(client_id, run_id)
-			)
-		`,
-		);
-		await this.query(
-			this.queryable,
-			"CREATE INDEX IF NOT EXISTS idx_agent_v2_diagnostics_run_created ON agent_v2_diagnostics(client_id, run_id, created_at ASC)",
-		);
-		await this.query(
-			this.queryable,
-			`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
-			VALUES ($1, $2)
-			ON CONFLICT(schema_version) DO NOTHING`,
-			[AGENT_V2_SCHEMA_VERSION, now()],
-		);
+		if (
+			JSON.stringify(constraints.map(postgresAgentV2ConstraintSignature).sort()) !==
+			JSON.stringify(postgresAgentV2ExpectedConstraintSignatures())
+		) {
+			throw new Error(AGENT_V2_SCHEMA_RESET_REQUIRED);
+		}
 	}
 
 	private async ensureClientIdentitySchema(): Promise<void> {
@@ -1186,7 +1244,6 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	async createAgentV2Run(input: CreateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
 		const run = buildAgentV2Run(input);
 		return this.withTransaction(async (tx) => {
-			await this.upsertClientWithQueryable(tx, run.clientId, run.createdAt);
 			const row = await this.queryOne<AgentV2RunRow>(
 				tx,
 				`INSERT INTO agent_v2_runs (
@@ -1562,34 +1619,21 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		return row ? toAgentV2DocumentRecord(row) : undefined;
 	}
 
-	async upsertAgentV2Validation(input: UpsertAgentV2ValidationInput): Promise<AgentV2ValidationRecord> {
+	async appendAgentV2ValidationAttempt(input: AppendAgentV2ValidationAttemptInput): Promise<AgentV2ValidationRecord> {
 		const validation = buildAgentV2Validation(input);
 		const row = await this.queryOne<AgentV2ValidationRow>(
 			this.queryable,
-			`INSERT INTO agent_v2_validations (
-				client_id,
-				run_id,
-				validation_id,
-				task_id,
-				artifact_id,
-				status,
-				summary,
-				details_json,
-				created_at,
-				updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-			ON CONFLICT(client_id, run_id, validation_id) DO UPDATE SET
-				task_id = excluded.task_id,
-				artifact_id = excluded.artifact_id,
-				status = excluded.status,
-				summary = excluded.summary,
-				details_json = excluded.details_json,
-				updated_at = excluded.updated_at
+			`INSERT INTO agent_v2_validation_attempts (
+				client_id, run_id, validation_id, attempt, task_id, artifact_id,
+				status, summary, details_json, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			ON CONFLICT (client_id, run_id, validation_id, attempt) DO NOTHING
 			RETURNING ${AGENT_V2_VALIDATION_COLUMNS}`,
 			[
 				validation.clientId,
 				validation.runId,
 				validation.validationId,
+				validation.attempt,
 				validation.taskId ?? null,
 				validation.artifactId ?? null,
 				validation.status,
@@ -1599,16 +1643,21 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				validation.updatedAt,
 			],
 		);
-		return requiredRecord(row ? toAgentV2ValidationRecord(row) : undefined, "agent v2 validation");
+		if (row) return toAgentV2ValidationRecord(row);
+		const existing = (await this.listAgentV2Validations(validation.clientId, validation.runId)).find(
+			(record) => record.validationId === validation.validationId && record.attempt === validation.attempt,
+		);
+		if (existing && equalAgentV2ValidationRecords(existing, validation)) return existing;
+		throw new Error("Agent v2 validation attempt conflict");
 	}
 
 	async listAgentV2Validations(clientId: string, runId: string): Promise<AgentV2ValidationRecord[]> {
 		const rows = await this.queryRows<AgentV2ValidationRow>(
 			this.queryable,
 			`SELECT ${AGENT_V2_VALIDATION_COLUMNS}
-			FROM agent_v2_validations
-			WHERE client_id = $1 AND run_id = $2
-			ORDER BY created_at ASC, validation_id ASC`,
+				FROM agent_v2_validation_attempts
+				WHERE client_id = $1 AND run_id = $2
+				ORDER BY created_at ASC, validation_id ASC, attempt ASC`,
 			[clientId, runId],
 		);
 		return rows.map(toAgentV2ValidationRecord);
@@ -1665,28 +1714,16 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	async resetAgentV2RuntimeData(options: ResetAgentV2RuntimeDataOptions = {}): Promise<ResetAgentV2RuntimeDataResult> {
-		await this.ensureAgentV2Schema();
-
 		const appliedAt = options.now?.() ?? now();
 		return this.withTransaction(async (tx) => {
-			const legacyRowsDeletedBase = await this.deleteAllRows(tx, LEGACY_RESET_TABLES);
-			const agentV2RowsDeleted = await this.deleteAllRows(tx, AGENT_V2_RESET_TABLES);
-			const legacyRowsDeleted = {
-				...legacyRowsDeletedBase,
-				clients: options.includeClients === true ? await this.deleteTableRows(tx, "clients") : 0,
-			};
-			await this.query(
-				tx,
-				`INSERT INTO agent_v2_schema_metadata (schema_version, applied_at)
-				VALUES ($1, $2)`,
-				[AGENT_V2_SCHEMA_VERSION, appliedAt],
-			);
-
-			return {
-				legacyRowsDeleted,
-				agentV2RowsDeleted,
-				schemaVersion: AGENT_V2_SCHEMA_VERSION,
-			};
+			const tables = [...AGENT_V2_PRE_V2_TABLES, ...AGENT_V2_RESET_TABLES] as const;
+			const agentV2RowsDeleted = {} as Record<(typeof tables)[number], number>;
+			for (const table of tables) {
+				agentV2RowsDeleted[table] = await this.countTableRows(tx, table);
+				await this.query(tx, `DROP TABLE IF EXISTS ${table}`);
+			}
+			await this.createAgentV2Schema(tx, appliedAt);
+			return { agentV2RowsDeleted, schemaVersion: AGENT_V2_SCHEMA_VERSION };
 		});
 	}
 
@@ -1813,21 +1850,10 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		);
 	}
 
-	private async deleteAllRows<TableName extends string>(
-		queryable: Queryable,
-		tables: readonly TableName[],
-	): Promise<Record<TableName, number>> {
-		const counts = {} as Record<TableName, number>;
-		for (const table of tables) {
-			counts[table] = await this.deleteTableRows(queryable, table);
-		}
-		return counts;
-	}
-
-	private async deleteTableRows(queryable: Queryable, table: string): Promise<number> {
+	private async countTableRows(queryable: Queryable, table: string): Promise<number> {
 		if (!(await this.tableExists(queryable, table))) return 0;
-		const result = await this.query(queryable, `DELETE FROM ${table}`);
-		return Number(result.rowCount ?? 0);
+		const row = await this.queryOne<{ count: number | string }>(queryable, `SELECT COUNT(*) AS count FROM ${table}`);
+		return Number(row?.count ?? 0);
 	}
 
 	private async tableExists(queryable: Queryable, table: string): Promise<boolean> {
@@ -2022,6 +2048,233 @@ function toTimestamp(value: TimestampRowValue): string {
 function requiredRecord<T>(record: T | undefined, label: string): T {
 	if (!record) throw new Error(`Missing ${label} after write`);
 	return record;
+}
+
+const POSTGRES_AGENT_V2_NULLABLE_COLUMNS = new Set([
+	"agent_v2_runs.worker_id",
+	"agent_v2_runs.started_at",
+	"agent_v2_runs.ended_at",
+	"agent_v2_runs.error_json",
+	"agent_v2_tasks.parent_task_id",
+	"agent_v2_tasks.started_at",
+	"agent_v2_tasks.ended_at",
+	"agent_v2_tasks.error_json",
+	"agent_v2_artifacts.source_task_id",
+	"agent_v2_documents.source_task_id",
+	"agent_v2_diagnostics.phase",
+	"agent_v2_diagnostics.task_id",
+	"agent_v2_diagnostics.artifact_id",
+	"agent_v2_diagnostics.trace_id",
+	"agent_v2_validation_attempts.task_id",
+	"agent_v2_validation_attempts.artifact_id",
+	"agent_v2_input_references.display_name",
+	"agent_v2_outbox.lease_owner",
+	"agent_v2_outbox.lease_expires_at",
+	"agent_v2_outbox.last_error_code",
+	"agent_v2_outbox.last_error_message",
+	"agent_v2_outbox.delivered_at",
+]);
+
+const POSTGRES_AGENT_V2_JSON_COLUMNS = new Set([
+	"agent_v2_runs.input_json",
+	"agent_v2_runs.model_json",
+	"agent_v2_runs.error_json",
+	"agent_v2_run_events.payload_json",
+	"agent_v2_tasks.depends_on_json",
+	"agent_v2_tasks.acceptance_criteria_json",
+	"agent_v2_tasks.input_json",
+	"agent_v2_tasks.output_json",
+	"agent_v2_tasks.error_json",
+	"agent_v2_artifacts.metadata_json",
+	"agent_v2_documents.content_json",
+	"agent_v2_diagnostics.data_json",
+	"agent_v2_validation_attempts.details_json",
+	"agent_v2_outbox.reference_json",
+]);
+
+const POSTGRES_AGENT_V2_INTEGER_COLUMNS = new Set([
+	"agent_v2_schema_metadata.singleton_id",
+	"agent_v2_schema_metadata.schema_version",
+	"agent_v2_runs.attempt",
+	"agent_v2_run_events.seq",
+	"agent_v2_validation_attempts.attempt",
+	"agent_v2_input_blobs.byte_length",
+	"agent_v2_input_references.ordinal",
+	"agent_v2_input_references.byte_length",
+	"agent_v2_outbox.attempt_count",
+]);
+
+function expectedPostgresAgentV2ColumnType(key: string): string {
+	if (POSTGRES_AGENT_V2_JSON_COLUMNS.has(key)) return "jsonb";
+	if (POSTGRES_AGENT_V2_INTEGER_COLUMNS.has(key)) return "integer";
+	if (key === "agent_v2_input_blobs.bytes") return "bytea";
+	return "text";
+}
+
+function postgresAgentV2IndexShapes(): Record<string, { table: string; unique: boolean; definition: string }> {
+	return {
+		idx_agent_v2_artifacts_run_updated: {
+			table: "agent_v2_artifacts",
+			unique: false,
+			definition: " using btree(client_id,run_id,updated_at desc)",
+		},
+		idx_agent_v2_diagnostics_run_created: {
+			table: "agent_v2_diagnostics",
+			unique: false,
+			definition: " using btree(client_id,run_id,created_at,diagnostic_id)",
+		},
+		idx_agent_v2_documents_run_updated: {
+			table: "agent_v2_documents",
+			unique: false,
+			definition: " using btree(client_id,run_id,updated_at desc)",
+		},
+		idx_agent_v2_outbox_dispatch: {
+			table: "agent_v2_outbox",
+			unique: false,
+			definition: " using btree(status,available_at,created_at,intent_id)",
+		},
+		idx_agent_v2_outbox_lease: {
+			table: "agent_v2_outbox",
+			unique: false,
+			definition: " using btree(status,lease_expires_at,intent_id)",
+		},
+		idx_agent_v2_outbox_run: {
+			table: "agent_v2_outbox",
+			unique: false,
+			definition: " using btree(client_id,run_id,created_at,intent_id)",
+		},
+		idx_agent_v2_runs_status: {
+			table: "agent_v2_runs",
+			unique: false,
+			definition: " using btree(status,updated_at)",
+		},
+		idx_agent_v2_runs_worker_active: {
+			table: "agent_v2_runs",
+			unique: false,
+			definition:
+				" using btree(worker_id,updated_at)where((worker_id is not null)and(status = any(array['running'::text,'cancelling'::text])))",
+		},
+		idx_agent_v2_tasks_run_updated: {
+			table: "agent_v2_tasks",
+			unique: false,
+			definition: " using btree(client_id,run_id,updated_at desc)",
+		},
+		idx_agent_v2_validation_attempts_run_created: {
+			table: "agent_v2_validation_attempts",
+			unique: false,
+			definition: " using btree(client_id,run_id,created_at,validation_id,attempt)",
+		},
+		uq_agent_v2_input_blobs_logical_path: {
+			table: "agent_v2_input_blobs",
+			unique: true,
+			definition: " using btree(client_id,run_id,logical_path)",
+		},
+		uq_agent_v2_outbox_dedupe: {
+			table: "agent_v2_outbox",
+			unique: true,
+			definition: " using btree(dedupe_key)",
+		},
+	};
+}
+
+const POSTGRES_AGENT_V2_PRIMARY_KEYS: Record<string, readonly string[]> = {
+	agent_v2_schema_metadata: ["singleton_id"],
+	agent_v2_runs: ["client_id", "run_id"],
+	agent_v2_run_events: ["client_id", "run_id", "seq"],
+	agent_v2_tasks: ["client_id", "run_id", "task_id"],
+	agent_v2_artifacts: ["client_id", "run_id", "artifact_id"],
+	agent_v2_documents: ["client_id", "run_id", "document_id"],
+	agent_v2_diagnostics: ["client_id", "run_id", "diagnostic_id"],
+	agent_v2_validation_attempts: ["client_id", "run_id", "validation_id", "attempt"],
+	agent_v2_input_blobs: ["client_id", "run_id", "input_id"],
+	agent_v2_input_references: ["client_id", "run_id", "kind", "ordinal"],
+	agent_v2_bootstraps: ["client_id", "run_id"],
+	agent_v2_outbox: ["intent_id"],
+};
+
+const POSTGRES_AGENT_V2_FOREIGN_KEYS = [
+	["agent_v2_run_events", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	["agent_v2_tasks", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	["agent_v2_artifacts", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	["agent_v2_documents", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	["agent_v2_diagnostics", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	["agent_v2_validation_attempts", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	["agent_v2_input_blobs", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	[
+		"agent_v2_input_references",
+		["client_id", "run_id", "input_id"],
+		"agent_v2_input_blobs",
+		["client_id", "run_id", "input_id"],
+	],
+	["agent_v2_input_references", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	["agent_v2_bootstraps", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+	["agent_v2_outbox", ["client_id", "run_id"], "agent_v2_runs", ["client_id", "run_id"]],
+] as const;
+
+const POSTGRES_AGENT_V2_CHECKS: Record<string, readonly string[]> = {
+	agent_v2_schema_metadata: ["CHECK ((singleton_id = 1))", "CHECK ((schema_version = 2))"],
+	agent_v2_runs: [
+		"CHECK ((attempt >= 0))",
+		"CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'cancelling'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text, 'interrupted'::text])))",
+		"CHECK ((phase = ANY (ARRAY['intake'::text, 'capability_routing'::text, 'spec_draft'::text, 'spec_review'::text, 'plan_draft'::text, 'task_generation'::text, 'implementation'::text, 'validation'::text, 'repair'::text, 'preview'::text, 'delivery'::text, 'blocked'::text, 'failed'::text, 'cancelled'::text])))",
+	],
+	agent_v2_run_events: ["CHECK ((seq > 0))"],
+	agent_v2_tasks: [
+		"CHECK ((status = ANY (ARRAY['pending'::text, 'ready'::text, 'running'::text, 'blocked'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))",
+	],
+	agent_v2_validation_attempts: [
+		"CHECK ((attempt > 0))",
+		"CHECK ((status = ANY (ARRAY['passed'::text, 'failed'::text, 'blocked'::text, 'warning'::text])))",
+	],
+	agent_v2_input_blobs: [
+		"CHECK ((encoding = ANY (ARRAY['utf8'::text, 'binary'::text])))",
+		"CHECK ((byte_length >= 0))",
+	],
+	agent_v2_input_references: [
+		"CHECK ((kind = ANY (ARRAY['attachment'::text, 'project_file'::text])))",
+		"CHECK ((ordinal >= 0))",
+		"CHECK ((byte_length >= 0))",
+	],
+	agent_v2_outbox: [
+		"CHECK ((kind = ANY (ARRAY['run_enqueue'::text, 'run_cancel'::text, 'live_event'::text, 'workspace_diagnostic'::text, 'langfuse_diagnostic'::text])))",
+		"CHECK ((status = ANY (ARRAY['pending'::text, 'leased'::text, 'delivered'::text, 'dead_letter'::text])))",
+		"CHECK ((attempt_count >= 0))",
+	],
+};
+
+function postgresAgentV2ConstraintSignature(constraint: {
+	table_name: string;
+	constraint_type: string;
+	definition: string;
+	deferrable: boolean;
+	update_action: string;
+	delete_action: string;
+}): string {
+	const actions = constraint.constraint_type === "f" ? `${constraint.update_action}:${constraint.delete_action}` : "";
+	return `${constraint.table_name}|${constraint.constraint_type}|${normalizePostgresDefinition(constraint.definition)}|${constraint.deferrable ? "1" : "0"}|${actions}`;
+}
+
+function postgresAgentV2ExpectedConstraintSignatures(): string[] {
+	const signatures: string[] = [];
+	for (const [table, columns] of Object.entries(POSTGRES_AGENT_V2_PRIMARY_KEYS)) {
+		signatures.push(`${table}|p|${normalizePostgresDefinition(`PRIMARY KEY (${columns.join(", ")})`)}|0|`);
+	}
+	for (const [table, columns, referenceTable, referenceColumns] of POSTGRES_AGENT_V2_FOREIGN_KEYS) {
+		const definition = `FOREIGN KEY (${columns.join(", ")}) REFERENCES ${referenceTable}(${referenceColumns.join(", ")})`;
+		signatures.push(`${table}|f|${normalizePostgresDefinition(definition)}|0|a:a`);
+	}
+	for (const [table, checks] of Object.entries(POSTGRES_AGENT_V2_CHECKS)) {
+		for (const check of checks) signatures.push(`${table}|c|${normalizePostgresDefinition(check)}|0|`);
+	}
+	return signatures.sort();
+}
+
+function normalizePostgresDefinition(value: string): string {
+	return value
+		.toLowerCase()
+		.replaceAll(/\s+/g, " ")
+		.replaceAll(/\s*([(),])\s*/g, "$1")
+		.trim();
 }
 
 function now(): string {

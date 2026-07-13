@@ -58,6 +58,7 @@ export async function runAgentV2StaticValidationGate(input) {
             clientId: input.context.clientId,
             runId: input.runId,
             validationId: `static:${input.taskId}`,
+            attempt: 1,
             taskId: input.taskId,
             status,
             summary: status === "passed" ? "Static validation passed" : "Static validation failed",

@@ -1,4 +1,4 @@
-import type { UpsertAgentV2ValidationInput } from "./agent-v2-store.js";
+import type { AppendAgentV2ValidationAttemptInput } from "./agent-v2-store.js";
 import {
 	type AgentV2ToolFailure,
 	type AgentV2ToolRegistry,
@@ -36,7 +36,7 @@ export type AgentV2ValidationFailure = AgentV2ToolFailure & {
 export interface AgentV2ValidationGateResult {
 	status: "passed" | "failed";
 	failures: AgentV2ValidationFailure[];
-	validation: UpsertAgentV2ValidationInput;
+	validation: AppendAgentV2ValidationAttemptInput;
 	rawResult: ProjectTaskResult;
 }
 
@@ -116,6 +116,7 @@ export async function runAgentV2StaticValidationGate(
 			clientId: input.context.clientId,
 			runId: input.runId,
 			validationId: `static:${input.taskId}`,
+			attempt: 1,
 			taskId: input.taskId,
 			status,
 			summary: status === "passed" ? "Static validation passed" : "Static validation failed",

@@ -6,7 +6,7 @@ export const AGENT_V2_ARTIFACT_COLUMNS = "client_id, run_id, artifact_id, kind, 
 export const AGENT_V2_DOCUMENT_COLUMNS = "client_id, run_id, document_id, kind, version, content_markdown, content_json, source_task_id, created_at, updated_at";
 export const AGENT_V2_RUN_EVENT_COLUMNS = "client_id, run_id, seq, event_type, payload_json, created_at";
 export const AGENT_V2_DIAGNOSTIC_COLUMNS = "client_id, run_id, diagnostic_id, severity, category, code, phase, task_id, artifact_id, trace_id, message, data_json, created_at";
-export const AGENT_V2_VALIDATION_COLUMNS = "client_id, run_id, validation_id, task_id, artifact_id, status, summary, details_json, created_at, updated_at";
+export const AGENT_V2_VALIDATION_COLUMNS = "client_id, run_id, validation_id, attempt, task_id, artifact_id, status, summary, details_json, created_at, updated_at";
 export function buildAgentV2Run(input) {
     return createAgentV2RunSnapshot(input);
 }
@@ -99,12 +99,16 @@ export function buildAgentV2Document(input) {
     };
 }
 export function buildAgentV2Validation(input) {
+    if (!Number.isInteger(input.attempt) || input.attempt <= 0) {
+        throw new Error("Agent v2 validation attempt must be a positive integer");
+    }
     const createdAt = input.createdAt ?? new Date().toISOString();
     const updatedAt = input.updatedAt ?? createdAt;
     return {
         clientId: input.clientId,
         runId: input.runId,
         validationId: input.validationId,
+        attempt: input.attempt,
         ...(input.taskId ? { taskId: input.taskId } : {}),
         ...(input.artifactId ? { artifactId: input.artifactId } : {}),
         status: input.status,
@@ -113,6 +117,22 @@ export function buildAgentV2Validation(input) {
         createdAt,
         updatedAt,
     };
+}
+export function equalAgentV2ValidationRecords(left, right) {
+    return canonicalAgentV2Json(left) === canonicalAgentV2Json(right);
+}
+function canonicalAgentV2Json(value) {
+    const jsonValue = JSON.parse(JSON.stringify(value));
+    return JSON.stringify(sortAgentV2JsonValue(jsonValue));
+}
+function sortAgentV2JsonValue(value) {
+    if (Array.isArray(value))
+        return value.map(sortAgentV2JsonValue);
+    if (!value || typeof value !== "object")
+        return value;
+    return Object.fromEntries(Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, sortAgentV2JsonValue(entry)]));
 }
 export function toAgentV2RunRecord(row) {
     return {
@@ -195,6 +215,7 @@ export function toAgentV2ValidationRecord(row) {
         clientId: row.client_id,
         runId: row.run_id,
         validationId: row.validation_id,
+        attempt: toNumber(row.attempt),
         ...(row.task_id ? { taskId: row.task_id } : {}),
         ...(row.artifact_id ? { artifactId: row.artifact_id } : {}),
         status: row.status,

@@ -5,12 +5,12 @@ import type {
 	AgentV2RunEventRecord,
 	AgentV2RunUpdateResult,
 	AgentV2ValidationRecord,
+	AppendAgentV2ValidationAttemptInput,
 	CreateAgentV2RunInput,
 	UpdateAgentV2RunInput,
 	UpsertAgentV2ArtifactInput,
 	UpsertAgentV2DocumentInput,
 	UpsertAgentV2TaskInput,
-	UpsertAgentV2ValidationInput,
 } from "./agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2TaskNode } from "./agent-v2-types.js";
 
@@ -40,7 +40,9 @@ export interface AgentV2RuntimeSnapshotStore {
 
 export interface AgentV2ExecutionStore extends AgentV2RuntimeSnapshotStore {
 	upsertAgentV2Artifact(input: UpsertAgentV2ArtifactInput): AgentV2StoreResult<AgentV2ArtifactRecord>;
-	upsertAgentV2Validation(input: UpsertAgentV2ValidationInput): AgentV2StoreResult<AgentV2ValidationRecord>;
+	appendAgentV2ValidationAttempt(
+		input: AppendAgentV2ValidationAttemptInput,
+	): AgentV2StoreResult<AgentV2ValidationRecord>;
 }
 
 export interface AgentV2PlanningStore {
@@ -73,14 +75,12 @@ export interface AgentV2WorkerStore {
 }
 
 export interface AgentV2ResetStoreOptions {
-	includeClients?: boolean;
 	now?: () => string;
 }
 
 export interface AgentV2ResetStoreResult {
-	legacyRowsDeleted: Record<string, number>;
 	agentV2RowsDeleted: Record<string, number>;
-	schemaVersion: number;
+	schemaVersion: 2;
 }
 
 export interface AgentV2ResetStore {

@@ -46,6 +46,7 @@ describe("agent v2 validation gate", () => {
 		]);
 		expect(result.validation).toMatchObject({
 			validationId: "static:validate",
+			attempt: 1,
 			status: "failed",
 			taskId: "validate",
 			summary: "Static validation failed",

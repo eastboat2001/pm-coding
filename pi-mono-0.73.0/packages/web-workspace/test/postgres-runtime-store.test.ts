@@ -108,8 +108,9 @@ describe("PostgresRuntimeStore", () => {
 		).toBe(true);
 	});
 
-	it("creates the independent Agent v2 schema with shared client identity rows only", async () => {
+	it("creates the independent exact Agent v2 schema without shared client identity", async () => {
 		const queryable = new RecordingQueryable().on((query) => {
+			if (/^SELECT table_name FROM information_schema\.tables/i.test(normalizeSql(query.sql))) return { rows: [] };
 			if (/^(CREATE |ALTER TABLE|INSERT INTO agent_v2_schema_metadata)/i.test(normalizeSql(query.sql))) {
 				return { rowCount: 0 };
 			}
@@ -121,18 +122,21 @@ describe("PostgresRuntimeStore", () => {
 
 		const statements = queryable.queries.map((query) => normalizeSql(query.sql));
 		for (const table of [
-			"clients",
 			"agent_v2_schema_metadata",
 			"agent_v2_runs",
 			"agent_v2_run_events",
 			"agent_v2_tasks",
 			"agent_v2_artifacts",
 			"agent_v2_documents",
-			"agent_v2_validations",
+			"agent_v2_validation_attempts",
 			"agent_v2_diagnostics",
+			"agent_v2_input_blobs",
+			"agent_v2_input_references",
+			"agent_v2_bootstraps",
+			"agent_v2_outbox",
 		]) {
 			expect(
-				statements.some((statement) => statement.includes(`CREATE TABLE IF NOT EXISTS ${table}`)),
+				statements.some((statement) => statement.includes(`CREATE TABLE ${table}`)),
 				table,
 			).toBe(true);
 		}
@@ -149,15 +153,13 @@ describe("PostgresRuntimeStore", () => {
 				table,
 			).toBe(false);
 		}
-		expect(statementIndex(queryable, /CREATE TABLE IF NOT EXISTS clients/i)).toBeLessThan(
-			statementIndex(queryable, /CREATE TABLE IF NOT EXISTS agent_v2_runs/i),
-		);
+		expect(statements.some((statement) => statement.includes("CREATE TABLE clients"))).toBe(false);
 	});
 
 	it("resets Agent v2 data without creating legacy tables on a fresh schema-only Postgres store", async () => {
 		const queryable = new RecordingQueryable().on((query) => {
 			const sql = normalizeSql(query.sql);
-			if (/^(CREATE TABLE|CREATE INDEX|ALTER TABLE|BEGIN|COMMIT)/i.test(sql)) return { rowCount: 0 };
+			if (/^(CREATE TABLE|CREATE INDEX|DROP TABLE|ALTER TABLE|BEGIN|COMMIT)/i.test(sql)) return { rowCount: 0 };
 			if (/^INSERT INTO agent_v2_schema_metadata/i.test(sql)) return { rowCount: 1 };
 			if (/^SELECT EXISTS \( SELECT 1 FROM information_schema\.tables/i.test(sql)) {
 				const table = String(query.values[0] ?? "");
@@ -165,21 +167,20 @@ describe("PostgresRuntimeStore", () => {
 					rows: [
 						{
 							present: [
-								"clients",
 								"agent_v2_schema_metadata",
 								"agent_v2_runs",
 								"agent_v2_run_events",
 								"agent_v2_tasks",
 								"agent_v2_artifacts",
 								"agent_v2_documents",
-								"agent_v2_validations",
+								"agent_v2_validation_attempts",
 								"agent_v2_diagnostics",
 							].includes(table),
 						},
 					],
 				};
 			}
-			if (/^DELETE FROM /i.test(sql)) return { rowCount: 0 };
+			if (/^SELECT COUNT\(\*\) AS count FROM /i.test(sql)) return { rows: [{ count: 0 }] };
 			return undefined;
 		});
 		const store = new PostgresRuntimeStore({ queryable });
@@ -189,15 +190,7 @@ describe("PostgresRuntimeStore", () => {
 		});
 
 		const statements = queryable.queries.map((query) => normalizeSql(query.sql));
-		expect(result.legacyRowsDeleted).toMatchObject({
-			sessions: 0,
-			messages: 0,
-			runs: 0,
-			run_events: 0,
-			app_preview_goals: 0,
-			app_preview_goal_events: 0,
-			clients: 0,
-		});
+		expect(result.schemaVersion).toBe(2);
 		for (const table of [
 			"sessions",
 			"messages",
@@ -207,7 +200,7 @@ describe("PostgresRuntimeStore", () => {
 			"app_preview_goal_events",
 		]) {
 			expect(
-				statements.some((statement) => statement.includes(`CREATE TABLE IF NOT EXISTS ${table}`)),
+				statements.some((statement) => statement.includes(`CREATE TABLE ${table}`)),
 				table,
 			).toBe(false);
 			expect(
@@ -215,9 +208,9 @@ describe("PostgresRuntimeStore", () => {
 				table,
 			).toBe(false);
 		}
-		expect(statements.some((statement) => statement.includes("CREATE TABLE IF NOT EXISTS agent_v2_runs"))).toBe(true);
-		expect(statements.some((statement) => statement === "DELETE FROM agent_v2_runs")).toBe(true);
-		expect(statements.some((statement) => statement === "DELETE FROM agent_v2_schema_metadata")).toBe(true);
+		expect(statements.some((statement) => statement.includes("CREATE TABLE agent_v2_runs"))).toBe(true);
+		expect(statements.some((statement) => statement === "DROP TABLE IF EXISTS agent_v2_runs")).toBe(true);
+		expect(statements.some((statement) => statement === "DROP TABLE IF EXISTS agent_v2_schema_metadata")).toBe(true);
 	});
 
 	it("rejects createRun when the session already has an active run before inserting", async () => {

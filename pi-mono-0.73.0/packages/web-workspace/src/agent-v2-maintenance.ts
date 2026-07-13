@@ -17,7 +17,6 @@ export interface AgentV2RuntimeResetOptions {
 	eventBus?: Pick<AgentV2RunEventBus, "purge">;
 	diagnostics?: AgentV2ResetDiagnosticsAdapter;
 	clientsRootDir?: string;
-	includeClients?: boolean;
 	includeDiagnostics?: boolean;
 	includeQueue?: boolean;
 	includeLiveEvents?: boolean;
@@ -41,7 +40,6 @@ export interface AgentV2RuntimeResetResult {
 export async function resetAgentV2Runtime(options: AgentV2RuntimeResetOptions): Promise<AgentV2RuntimeResetResult> {
 	assertAgentV2ResetConfirmation(options.confirmation);
 	const store = await options.store.resetAgentV2RuntimeData({
-		includeClients: options.includeClients,
 		now: options.now,
 	});
 	const [queue, liveEvents, diagnostics, generatedProjects] = await Promise.all([

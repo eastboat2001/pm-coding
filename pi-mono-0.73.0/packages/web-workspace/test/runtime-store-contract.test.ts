@@ -181,7 +181,7 @@ describe("runtime store contract", () => {
 			async listAgentV2Documents() {
 				return [];
 			},
-			async upsertAgentV2Validation() {
+			async appendAgentV2ValidationAttempt() {
 				return {} as AgentV2ValidationRecord;
 			},
 			async listAgentV2Validations() {
@@ -198,9 +198,8 @@ describe("runtime store contract", () => {
 			},
 			async resetAgentV2RuntimeData() {
 				return {
-					legacyRowsDeleted: {},
 					agentV2RowsDeleted: {},
-					schemaVersion: 1,
+					schemaVersion: 2,
 				};
 			},
 			async deleteSession() {

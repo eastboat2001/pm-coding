@@ -53,7 +53,6 @@ export function resetAgentV2RuntimeData(
 	assertAgentV2ResetConfirmation(options.confirmation);
 
 	const storeResult = store.resetAgentV2RuntimeData({
-		includeClients: options.includeClients,
 		now: options.now,
 	});
 

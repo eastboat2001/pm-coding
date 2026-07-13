@@ -5,7 +5,6 @@ export { AGENT_V2_RESET_CONFIRMATION };
 export async function resetAgentV2Runtime(options) {
     assertAgentV2ResetConfirmation(options.confirmation);
     const store = await options.store.resetAgentV2RuntimeData({
-        includeClients: options.includeClients,
         now: options.now,
     });
     const [queue, liveEvents, diagnostics, generatedProjects] = await Promise.all([

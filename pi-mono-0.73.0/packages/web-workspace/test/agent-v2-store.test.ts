@@ -607,7 +607,7 @@ describe("agent v2 runtime stores", () => {
 			updatedAt: "2026-07-07T00:01:00.000Z",
 		});
 
-		expect(insertedValues?.[6]).toEqual(createSpecContent());
+		expect(insertedValues?.[6]).toBe(JSON.stringify(createSpecContent()));
 		expect(document.contentJson).toEqual(createSpecContent());
 	});
 

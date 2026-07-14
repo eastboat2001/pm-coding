@@ -191,6 +191,7 @@ export const AGENT_V2_RUN_EVENT_TYPES = [
 	"agent_v2.artifact_indexed",
 	"agent_v2.validation_recorded",
 	"agent_v2.diagnostic_recorded",
+	"agent_v2.output_recorded",
 ] as const;
 export type AgentV2RunEventType = (typeof AGENT_V2_RUN_EVENT_TYPES)[number];
 
@@ -213,6 +214,61 @@ export type AgentV2TaskStatus = (typeof AGENT_V2_TASK_STATUSES)[number];
 
 export const AGENT_V2_VALIDATION_STATUSES = ["passed", "failed", "blocked", "warning"] as const;
 export type AgentV2ValidationStatus = (typeof AGENT_V2_VALIDATION_STATUSES)[number];
+export type AgentV2ArtifactValidationStatus = "not_started" | "pending" | "passed" | "failed" | "accepted";
+
+export interface AgentV2ModelUsageSummary {
+	input: number;
+	output: number;
+	totalTokens: number;
+	costTotal: number;
+}
+
+export interface AgentV2TaskUpdatedPayload {
+	type: "agent_v2.task_updated";
+	taskId: string;
+	kind: AgentV2TaskKind;
+	status: AgentV2TaskStatus;
+	phase: AgentV2Phase;
+	at: string;
+}
+
+export interface AgentV2ArtifactIndexedPayload {
+	type: "agent_v2.artifact_indexed";
+	artifactId: string;
+	path: string;
+	validationStatus: AgentV2ArtifactValidationStatus;
+	revision: string;
+	at: string;
+}
+
+export interface AgentV2ValidationRecordedPayload {
+	type: "agent_v2.validation_recorded";
+	validationId: string;
+	taskId: string;
+	attempt: number;
+	status: AgentV2ValidationStatus;
+	summary: string;
+	at: string;
+}
+
+export interface AgentV2OutputRecordedPayload {
+	type: "agent_v2.output_recorded";
+	taskId: string;
+	summary: string;
+	provider: string;
+	model: string;
+	usage?: AgentV2ModelUsageSummary;
+	at: string;
+}
+
+export interface AgentV2DiagnosticRecordedPayload {
+	type: "agent_v2.diagnostic_recorded";
+	diagnosticId: string;
+	severity: "debug" | "info" | "warn" | "error";
+	code: string;
+	message: string;
+	at: string;
+}
 
 export type AgentV2DocumentKind = "capability_decision" | "spec" | "plan" | "tasks";
 export type AgentV2CapabilityDeliveryMode =

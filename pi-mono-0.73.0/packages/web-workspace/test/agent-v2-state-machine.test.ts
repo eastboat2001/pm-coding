@@ -4,6 +4,7 @@ import {
 	assertAgentV2RunTransition,
 	createAgentV2RunSnapshot,
 	getReadyAgentV2TaskIds,
+	phaseForAgentV2Task,
 	transitionAgentV2RunSnapshot,
 } from "../src/agent-v2-state-machine.js";
 import type { AgentV2TaskNode } from "../src/agent-v2-types.js";
@@ -132,5 +133,13 @@ describe("Agent v2 state machine", () => {
 		]);
 
 		expect(ready).toEqual(["implementation"]);
+	});
+
+	it("projects implementation outcomes through one authoritative task phase mapping", () => {
+		const implementation = task("implementation", "ready", []);
+		expect(phaseForAgentV2Task(implementation, "succeeded")).toBe("validation");
+		expect(phaseForAgentV2Task(implementation, "failed")).toBe("failed");
+		expect(phaseForAgentV2Task(implementation, "blocked")).toBe("blocked");
+		expect(phaseForAgentV2Task(implementation, "cancelled")).toBe("cancelled");
 	});
 });

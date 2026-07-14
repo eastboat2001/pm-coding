@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
+	type AgentV2InputMaterializer,
 	type AgentV2ModelExecution,
 	AgentV2RunEventLog,
 	type AgentV2RunQueue,
@@ -8,6 +9,7 @@ import {
 	type AgentV2WorkerExecution,
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
+	DurableAgentV2InputMaterializer,
 	executeAgentV2NextTask,
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
@@ -61,7 +63,10 @@ export function createAgentV2WorkerExecution(
 		settingsSources?: GlobalProviderApiKeySources;
 		complete?: ConstructorParameters<typeof AgentV2PiModelExecution>[0]["complete"];
 	} = {},
-): AgentV2WorkerExecution & { readonly modelExecution: AgentV2ModelExecution } {
+): AgentV2WorkerExecution & {
+	readonly materializer: AgentV2InputMaterializer;
+	readonly modelExecution: AgentV2ModelExecution;
+} {
 	// Settings are intentionally a restart-scoped snapshot: endpoint, capabilities and credentials
 	// must never be paired across two file versions while concurrent tasks are executing.
 	const settingsSnapshot = loadAgentV2ServerSettingsSnapshot(config, dependencies.settingsSources);
@@ -71,7 +76,9 @@ export function createAgentV2WorkerExecution(
 		complete: dependencies.complete,
 		maxOutputTokens: config.modelMaxOutputTokens,
 	});
+	const materializer = new DurableAgentV2InputMaterializer(store);
 	return {
+		materializer,
 		modelExecution,
 		async executeNextTask(
 			input: AgentV2WorkerExecutionInput,
@@ -81,6 +88,8 @@ export function createAgentV2WorkerExecution(
 				config,
 				context: agentV2ContextFromRunInput(input.run),
 				runId: input.run.runId,
+				materializer,
+				modelExecution,
 				signal: input.signal,
 			});
 		},

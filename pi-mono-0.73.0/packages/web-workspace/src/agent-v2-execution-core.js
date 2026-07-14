@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { createAgentV2FileAdapter } from "./agent-v2-file-adapter.js";
+import { AgentV2ModelContractError, parseAgentV2ImplementationResult, } from "./agent-v2-model-execution.js";
 import { planAgentV2RepairActions } from "./agent-v2-repair-engine.js";
 import { advanceAgentV2Task, loadAgentV2RuntimeSnapshot } from "./agent-v2-runtime-core.js";
+import { normalizeAgentV2ModelReference } from "./agent-v2-start-input.js";
+import { phaseForAgentV2Task } from "./agent-v2-state-machine.js";
+import { transitionAgentV2Task } from "./agent-v2-task-engine.js";
 import { assertAgentV2ToolAllowed, createAgentV2ToolRegistry, } from "./agent-v2-tool-governance.js";
 import { runAgentV2StaticValidationGate } from "./agent-v2-validation-gate.js";
 export async function executeAgentV2NextTask(input) {
@@ -33,7 +37,7 @@ export async function executeAgentV2NextTask(input) {
         });
     }
     if (task.kind === "implementation") {
-        return executeImplementationTask(input, snapshot.run, task, now);
+        return executeImplementationTask(input, snapshot.run, snapshot.contextPacket, task, now);
     }
     await advanceAgentV2Task({
         store: input.store,
@@ -56,21 +60,44 @@ export async function executeAgentV2NextTask(input) {
         diagnosticIds: [],
     };
 }
-async function executeImplementationTask(input, run, task, now) {
+async function executeImplementationTask(input, run, contextPacket, task, proposedNow) {
     const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
     assertAgentV2ToolAllowed(registry, "file.write", "implementation");
+    const signal = input.signal ?? new AbortController().signal;
+    throwIfAborted(signal);
+    const materializedInputs = await input.materializer.materialize({ run, signal });
+    throwIfAborted(signal);
+    const envelope = await input.modelExecution.generateImplementation({
+        run,
+        contextPacket,
+        task,
+        inputs: materializedInputs,
+        signal,
+    });
+    throwIfAborted(signal);
+    const trustedModel = normalizeAgentV2ModelReference(run.model);
+    if (envelope.provider !== trustedModel.provider || envelope.model !== trustedModel.id) {
+        throw new AgentV2ModelContractError("invalid_schema");
+    }
+    const serialized = JSON.stringify(envelope.result);
+    if (typeof serialized !== "string")
+        throw new AgentV2ModelContractError("invalid_schema");
+    const result = parseAgentV2ImplementationResult(serialized, task.taskId);
+    const generatedFiles = [...result.files].sort((left, right) => compareStrings(left.path, right.path));
     const files = createAgentV2FileAdapter({
         config: input.config,
         context: input.context,
     });
-    const write = files.writeFile({
-        path: "index.html",
-        content: deterministicImplementationSource(run, task, input.context),
-        mode: "create",
-        taskId: task.taskId,
-        now,
+    const authorizedPaths = generatedFiles.map((file) => {
+        const authorizedPath = files.validateWritePath(file.path);
+        if (authorizedPath !== file.path)
+            throw new AgentV2ModelContractError("unsafe_path");
+        return authorizedPath;
     });
-    const artifact = await Promise.resolve(input.store.upsertAgentV2Artifact({
+    assertNoWritePathCollisions(authorizedPaths, files.listFiles().files);
+    const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt);
+    const writes = generatedFiles.map((file) => files.writeFile({ path: file.path, content: file.content, mode: "rewrite", taskId: task.taskId, now }));
+    const artifacts = writes.map((write) => ({
         clientId: input.context.clientId,
         runId: input.runId,
         artifactId: write.artifact.artifactId,
@@ -78,31 +105,75 @@ async function executeImplementationTask(input, run, task, now) {
         path: write.artifact.path,
         mediaType: write.artifact.mediaType,
         checksum: write.artifact.checksum,
-        version: write.artifact.version,
+        version: write.artifact.checksum,
         sourceTaskId: write.artifact.sourceTaskId,
-        validationStatus: write.artifact.validationStatus,
-        metadataJson: write.artifact.metadataJson,
+        validationStatus: "pending",
+        metadataJson: { action: write.action },
         createdAt: now,
         updatedAt: now,
     }));
-    await advanceAgentV2Task({
-        store: input.store,
-        clientId: input.context.clientId,
-        runId: input.runId,
-        taskId: task.taskId,
+    const artifactIds = artifacts.map((artifact) => artifact.artifactId);
+    const changedFiles = artifacts.map((artifact) => artifact.path);
+    const transitioned = transitionAgentV2Task({
+        task,
         status: "succeeded",
         now,
         output: {
             ...task.output,
-            artifactIds: [artifact.artifactId],
-            changedFiles: [write.path],
+            artifactIds,
+            changedFiles,
             phase4: {
                 ...readPhase4TaskOutput(task.output),
-                implementationArtifactId: artifact.artifactId,
+                implementationArtifactIds: artifactIds,
                 completedBy: "agent-v2-execution-core",
             },
         },
     });
+    const phase = phaseForAgentV2Task(task, transitioned.status);
+    const usage = sanitizedUsage(envelope.usage);
+    const taskPayload = {
+        type: "agent_v2.task_updated",
+        taskId: task.taskId,
+        kind: task.kind,
+        status: transitioned.status,
+        phase,
+        at: now,
+    };
+    const artifactPayloads = artifacts.map((artifact) => ({
+        type: "agent_v2.artifact_indexed",
+        artifactId: artifact.artifactId,
+        path: artifact.path,
+        validationStatus: "pending",
+        revision: artifact.version,
+        at: now,
+    }));
+    const outputPayload = {
+        type: "agent_v2.output_recorded",
+        taskId: task.taskId,
+        summary: implementationOutputSummary(artifacts.length),
+        provider: trustedModel.provider,
+        model: trustedModel.id,
+        ...(usage ? { usage } : {}),
+        at: now,
+    };
+    const mutation = await Promise.resolve(input.store.commitAgentV2ExecutionMutation({
+        clientId: input.context.clientId,
+        runId: input.runId,
+        expectedRun: expectedRunState(run),
+        expectedTasks: [{ taskId: task.taskId, status: task.status, updatedAt: task.updatedAt }],
+        updatedAt: now,
+        nextRunPhase: phase,
+        tasks: [toUpsertTaskInput(input.context.clientId, input.runId, transitioned)],
+        artifacts,
+        events: [taskPayload, ...artifactPayloads, outputPayload].map((payload) => ({
+            type: payload.type,
+            payload: payload,
+            createdAt: now,
+        })),
+    }));
+    if (!mutation.applied) {
+        return { status: "task_conflict", taskId: task.taskId, diagnosticIds: [] };
+    }
     return {
         status: "task_succeeded",
         taskId: task.taskId,
@@ -212,29 +283,95 @@ async function executeValidationTask(input, state) {
         diagnosticIds: [diagnosticId],
     };
 }
-function deterministicImplementationSource(run, task, context) {
-    const prompt = typeof run.input.prompt === "string" ? run.input.prompt : "Static application";
-    return [
-        "<!doctype html>",
-        '<html lang="en">',
-        "<head>",
-        '  <meta charset="utf-8">',
-        '  <meta name="viewport" content="width=device-width, initial-scale=1">',
-        `  <title>${escapeHtml(context.title)}</title>`,
-        "</head>",
-        "<body>",
-        "  <main>",
-        `    <h1>${escapeHtml(context.title)}</h1>`,
-        `    <p>${escapeHtml(prompt)}</p>`,
-        `    <small data-task-id="${escapeHtml(task.taskId)}">Generated by agent v2.</small>`,
-        "  </main>",
-        "</body>",
-        "</html>",
-        "",
-    ].join("\n");
+function expectedRunState(run) {
+    return {
+        status: run.status,
+        phase: run.phase,
+        attempt: run.attempt,
+        workerId: run.workerId ?? null,
+        updatedAt: run.updatedAt,
+    };
 }
-function escapeHtml(value) {
-    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function toUpsertTaskInput(clientId, runId, task) {
+    return {
+        clientId,
+        runId,
+        taskId: task.taskId,
+        parentTaskId: task.parentTaskId,
+        kind: task.kind,
+        title: task.title,
+        status: task.status,
+        dependsOn: task.dependsOn,
+        acceptanceCriteria: task.acceptanceCriteria,
+        input: task.input,
+        output: task.output,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        startedAt: task.startedAt,
+        endedAt: task.endedAt,
+        error: task.error,
+    };
+}
+function nextExecutionRevision(proposed, ...current) {
+    const proposedMs = canonicalTimestamp(proposed);
+    const currentMs = current.map(canonicalTimestamp);
+    return new Date(Math.max(proposedMs, ...currentMs.map((value) => value + 1))).toISOString();
+}
+function canonicalTimestamp(value) {
+    const epoch = Date.parse(value);
+    if (!Number.isFinite(epoch) || new Date(epoch).toISOString() !== value) {
+        throw new Error("Agent v2 execution revision must be a canonical UTC millisecond timestamp");
+    }
+    return epoch;
+}
+function sanitizedUsage(value) {
+    if (!value)
+        return undefined;
+    const entries = [value.input, value.output, value.totalTokens, value.costTotal];
+    if (entries.some((entry) => !Number.isFinite(entry) || entry < 0 || entry > Number.MAX_SAFE_INTEGER))
+        return undefined;
+    return {
+        input: value.input,
+        output: value.output,
+        totalTokens: value.totalTokens,
+        costTotal: value.costTotal,
+    };
+}
+function assertNoWritePathCollisions(generatedPaths, existingFiles) {
+    const generated = generatedPaths.map((path) => ({ path, key: collisionKey(path) }));
+    for (let index = 0; index < generated.length; index += 1) {
+        const left = generated[index];
+        for (let candidateIndex = index + 1; candidateIndex < generated.length; candidateIndex += 1) {
+            const right = generated[candidateIndex];
+            if (pathsShareFileIdentity(left.key, right.key))
+                throw new AgentV2ModelContractError("duplicate_path");
+        }
+    }
+    for (const candidate of generated) {
+        for (const existingPath of existingFiles) {
+            const existing = { path: existingPath, key: collisionKey(existingPath) };
+            if (candidate.key === existing.key) {
+                if (candidate.path !== existing.path)
+                    throw new AgentV2ModelContractError("duplicate_path");
+                continue;
+            }
+            if (pathsShareFileIdentity(candidate.key, existing.key)) {
+                throw new AgentV2ModelContractError("duplicate_path");
+            }
+        }
+    }
+}
+function collisionKey(path) {
+    return path.normalize("NFC").toLocaleLowerCase("en-US");
+}
+function pathsShareFileIdentity(left, right) {
+    return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+function implementationOutputSummary(fileCount) {
+    return `Generated ${fileCount} ${fileCount === 1 ? "file" : "files"}.`;
+}
+function compareStrings(left, right) {
+    return left < right ? -1 : left > right ? 1 : 0;
 }
 function nextValidationRepairAttempt(taskOutput) {
     const phase4Attempt = positiveInteger(readPhase4TaskOutput(taskOutput).validationRepairAttempt);

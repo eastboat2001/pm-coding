@@ -1,3 +1,4 @@
+import { DurableAgentV2InputMaterializer } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
 import type { AgentV2ProductionStore, StorageConfig } from "@mariozechner/pi-web-workspace/runtime-infra";
 import { describe, expect, it, vi } from "vitest";
 import { AgentV2PiModelExecution } from "../src/worker/agent-v2-pi-model-execution.js";
@@ -17,6 +18,7 @@ describe("agent v2 worker production composition", () => {
 		);
 
 		expect(execution.modelExecution).toBeInstanceOf(AgentV2PiModelExecution);
+		expect(execution.materializer).toBeInstanceOf(DurableAgentV2InputMaterializer);
 		expect(readSettingsFile).toHaveBeenCalledTimes(1);
 		expect(getEnvApiKey).not.toHaveBeenCalled();
 	});

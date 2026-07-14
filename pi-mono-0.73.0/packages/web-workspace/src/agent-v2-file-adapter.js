@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { extname } from "node:path";
 import { createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
-import { WorkspacePathAuthorizationError } from "./workspace-path-guard.js";
+import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 export function createAgentV2FileAdapter(input) {
     const files = input.files ?? new WorkspaceFileService(input.config);
     const context = {
@@ -10,6 +10,8 @@ export function createAgentV2FileAdapter(input) {
         sessionId: input.context.sessionId,
         title: input.context.title,
     };
+    const projectRoot = files.ensureProjectWorkspace(context).projectRoot;
+    const writePathGuard = WorkspacePathGuard.forProjectContent(projectRoot);
     const artifactFor = (path, content, taskId, checksum = `sha256:${createHash("sha256").update(content).digest("hex")}`) => ({
         artifactId: `file:${normalizeV2Path(path)}`,
         kind: "source",
@@ -36,6 +38,14 @@ export function createAgentV2FileAdapter(input) {
     };
     const publicPath = (path) => normalizeV2Path(path);
     return {
+        validateWritePath(path) {
+            try {
+                return publicPath(writePathGuard.authorizeNew(path).relativePath);
+            }
+            catch (error) {
+                return mapError(error, path);
+            }
+        },
         listFiles() {
             const result = files.handle({ ...context, command: "list" });
             return { files: Array.isArray(result.files) ? result.files.map((path) => publicPath(String(path))) : [] };

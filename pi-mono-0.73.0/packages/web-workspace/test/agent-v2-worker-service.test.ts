@@ -260,6 +260,36 @@ describe("AgentV2WorkerService", () => {
 		);
 	});
 
+	it("stops after one unchanged execution CAS conflict instead of hot-looping or reporting success", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-task-conflict");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-task-conflict" }]);
+		const executeNextTask = vi.fn(async () => ({
+			status: "task_conflict" as const,
+			taskId: "implement",
+			diagnosticIds: [],
+		}));
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: { executeNextTask },
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-08T09:01:10.000Z", "2026-07-08T09:01:11.000Z"),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(executeNextTask).toHaveBeenCalledTimes(1);
+		expect(store.getRunSnapshot("client-a", "run-task-conflict")).toMatchObject({
+			status: "failed",
+			phase: "failed",
+			error: {
+				code: "agent_v2.worker_task_conflict",
+				retryable: true,
+			},
+		});
+	});
+
 	it("leaves runs cancelled when cancellation already happened before claim processing", async () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-cancelled-before-claim");

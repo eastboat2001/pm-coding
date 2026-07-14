@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
+import { executeAgentV2NextTask } from "../src/agent-v2-execution-core.js";
 import {
 	AgentV2InputMaterializationError,
+	type AgentV2InputMaterializer,
 	type AgentV2InputMaterializerStore,
 	DurableAgentV2InputMaterializer,
 } from "../src/agent-v2-input-materializer.js";
@@ -13,6 +15,7 @@ import { AGENT_V2_RESET_CONFIRMATION, resetAgentV2RuntimeData } from "../src/age
 import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import { InMemoryAgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
+import { parseAgentV2RunContext } from "../src/agent-v2-run-input-contract.js";
 import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "../src/agent-v2-run-queue.js";
 import type { AgentV2WorkerExecutionInput } from "../src/agent-v2-worker-service.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
@@ -29,10 +32,11 @@ describe("agent v2 production chain rehearsal", () => {
 	let diagnostics: WorkspaceDiagnosticLogService;
 	let runtimeDb: RuntimeDbStore;
 	let sessions: WorkspaceSessionService;
+	let config: ReturnType<typeof loadStorageConfig>;
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "pi-agent-v2-production-chain-"));
-		const config = { ...loadStorageConfig(dir), loggingEnabled: true, logStdoutEnabled: false };
+		config = { ...loadStorageConfig(dir), loggingEnabled: true, logStdoutEnabled: false };
 		runtimeDb = new RuntimeDbStore(config.runtimeDbFile);
 		runtimeDb.ensureAgentV2Schema();
 		diagnostics = new WorkspaceDiagnosticLogService(config);
@@ -133,7 +137,7 @@ describe("agent v2 production chain rehearsal", () => {
 			store: runtimeDb,
 			queue,
 			events: eventLog,
-			execution: new MaterializingExecution(runtimeDb, model),
+			execution: new ProductionExecution(config, runtimeDb, new DurableAgentV2InputMaterializer(runtimeDb), model),
 			workerId: "worker-materialized-chain",
 			now: timestampSequence("2026-07-09T01:00:02.000Z", "2026-07-09T01:00:03.000Z"),
 		});
@@ -167,6 +171,14 @@ describe("agent v2 production chain rehearsal", () => {
 			{ kind: "image", reference: { kind: "attachment", logicalPath: "assets/logo.png" }, mediaType: "image/png" },
 		]);
 		expect(await api.getRun(CLIENT_ID, "run-materialized-chain")).toMatchObject({ status: "succeeded" });
+		expect(runtimeDb.listAgentV2Artifacts(CLIENT_ID, "run-materialized-chain")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ path: "index.html", sourceTaskId: "implement", validationStatus: "pending" }),
+			]),
+		);
+		expect(runtimeDb.listAgentV2RunEvents(CLIENT_ID, "run-materialized-chain", 0).map((event) => event.type)).toEqual(
+			expect.arrayContaining(["agent_v2.task_updated", "agent_v2.artifact_indexed", "agent_v2.output_recorded"]),
+		);
 	});
 
 	it("records a sanitized non-retryable worker diagnostic and never calls the model when materialization fails", async () => {
@@ -198,7 +210,12 @@ describe("agent v2 production chain rehearsal", () => {
 			store: runtimeDb,
 			queue,
 			events: eventLog,
-			execution: new MaterializingExecution(rejectingStore, model),
+			execution: new ProductionExecution(
+				config,
+				runtimeDb,
+				new DurableAgentV2InputMaterializer(rejectingStore),
+				model,
+			),
 			workerId: "worker-rejected-input-chain",
 			now: timestampSequence("2026-07-09T02:00:02.000Z", "2026-07-09T02:00:03.000Z"),
 		});
@@ -314,7 +331,12 @@ class RecordingModelExecution {
 	async generateImplementation(input: AgentV2ModelExecutionInput) {
 		this.calls.push(input);
 		return {
-			result: { version: 1 as const, taskId: "production-chain-task", summary: "recorded", files: [] },
+			result: {
+				version: 1 as const,
+				taskId: input.task.taskId,
+				summary: "recorded",
+				files: [{ path: "index.html", content: "<!doctype html><main>Production v2 chain</main>\n" }],
+			},
 			provider: "test",
 			model: "v2-test-model",
 		};
@@ -325,26 +347,24 @@ class RecordingModelExecution {
 	}
 }
 
-class MaterializingExecution {
-	private readonly materializer: DurableAgentV2InputMaterializer;
-
+class ProductionExecution {
 	constructor(
-		store: AgentV2InputMaterializerStore,
+		private readonly config: ReturnType<typeof loadStorageConfig>,
+		private readonly store: RuntimeDbStore,
+		private readonly materializer: AgentV2InputMaterializer,
 		private readonly model: AgentV2ModelExecution,
-	) {
-		this.materializer = new DurableAgentV2InputMaterializer(store);
-	}
+	) {}
 
 	async executeNextTask(input: AgentV2WorkerExecutionInput): Promise<AgentV2ExecutionStepResult> {
-		const inputs = await this.materializer.materialize({ run: input.run, signal: input.signal });
-		await this.model.generateImplementation({
-			run: input.run,
-			inputs,
+		return await executeAgentV2NextTask({
+			store: this.store,
+			config: this.config,
+			context: { clientId: input.run.clientId, ...parseAgentV2RunContext(input.run.input) },
+			runId: input.run.runId,
+			materializer: this.materializer,
+			modelExecution: this.model,
 			signal: input.signal,
-			contextPacket: {} as AgentV2ModelExecutionInput["contextPacket"],
-			task: { taskId: "production-chain-task" } as AgentV2ModelExecutionInput["task"],
 		});
-		return { status: "complete", diagnosticIds: [] };
 	}
 }
 

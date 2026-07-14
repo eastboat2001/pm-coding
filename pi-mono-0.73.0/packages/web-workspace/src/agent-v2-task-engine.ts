@@ -26,6 +26,21 @@ export interface AgentV2TaskTransitionInput {
 const TERMINAL_STATUSES = new Set<AgentV2TaskStatus>(["blocked", "succeeded", "failed", "cancelled"]);
 const FAILED_DEPENDENCY_ROOT_STATUSES = new Set<AgentV2TaskStatus>(["failed", "cancelled"]);
 const ERROR_REQUIRED_STATUSES = new Set<AgentV2TaskStatus>(["blocked", "failed"]);
+const TASK_TRANSITIONS: Readonly<Record<AgentV2TaskStatus, ReadonlySet<AgentV2TaskStatus>>> = {
+	pending: new Set(["pending", "ready", "running", "blocked", "succeeded", "failed", "cancelled"]),
+	ready: new Set(["ready", "running", "blocked", "succeeded", "failed", "cancelled"]),
+	running: new Set(["running", "ready", "blocked", "succeeded", "failed", "cancelled"]),
+	blocked: new Set(["ready", "cancelled"]),
+	succeeded: new Set(),
+	failed: new Set(["ready", "running", "cancelled"]),
+	cancelled: new Set(),
+};
+
+export function assertAgentV2TaskTransition(from: AgentV2TaskStatus, to: AgentV2TaskStatus): void {
+	if (!TASK_TRANSITIONS[from].has(to)) {
+		throw new Error(`Invalid Agent v2 task transition: ${from} -> ${to}`);
+	}
+}
 
 export function selectNextAgentV2Task(tasks: AgentV2TaskNode[]): AgentV2TaskSelection {
 	if (tasks.length === 0) return selection("empty_graph");
@@ -103,6 +118,7 @@ export function selectNextAgentV2Task(tasks: AgentV2TaskNode[]): AgentV2TaskSele
 }
 
 export function transitionAgentV2Task(input: AgentV2TaskTransitionInput): AgentV2TaskNode {
+	assertAgentV2TaskTransition(input.task.status, input.status);
 	if (ERROR_REQUIRED_STATUSES.has(input.status) && !input.error) {
 		throw new Error("Agent v2 blocked and failed task transitions require an error");
 	}

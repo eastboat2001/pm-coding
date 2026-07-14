@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeAgentV2NextTask } from "../src/agent-v2-execution-core.js";
+import type { AgentV2InputMaterializer } from "../src/agent-v2-input-materializer.js";
+import type { AgentV2ModelExecution } from "../src/agent-v2-model-execution.js";
 import { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap } from "../src/agent-v2-planning-bootstrap.js";
 import type { AgentV2ExecutionStore } from "../src/agent-v2-runtime-store.js";
 import { createAgentV2ToolRegistry } from "../src/agent-v2-tool-governance.js";
@@ -37,6 +39,7 @@ describe("agent v2 execution core", () => {
 		);
 
 		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
 			store: forbidLegacyRuntimeReads(store),
 			config: testConfig(root),
 			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
@@ -87,6 +90,7 @@ describe("agent v2 execution core", () => {
 		});
 
 		const first = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
 			store: forbidLegacyRuntimeReads(store),
 			config: testConfig(root),
 			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
@@ -143,6 +147,7 @@ describe("agent v2 execution core", () => {
 		expect(firstPersistedTask?.error).toBeUndefined();
 
 		const second = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
 			store: forbidLegacyRuntimeReads(store),
 			config: testConfig(root),
 			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
@@ -199,6 +204,7 @@ describe("agent v2 execution core", () => {
 
 		await expect(
 			executeAgentV2NextTask({
+				...unusedExecutionDependencies(),
 				store: forbidLegacyRuntimeReads(store),
 				config: testConfig(root),
 				context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
@@ -240,6 +246,7 @@ describe("agent v2 execution core", () => {
 		});
 
 		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
 			store: forbidLegacyRuntimeReads(store),
 			config: testConfig(root),
 			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
@@ -329,6 +336,7 @@ describe("agent v2 execution core", () => {
 		writeProjectFile(root, "index.html", "<!doctype html><main><h1>Ready</h1></main>");
 
 		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
 			store: forbidLegacyRuntimeReads(store),
 			config: testConfig(root),
 			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
@@ -363,14 +371,14 @@ describe("agent v2 execution core", () => {
 		expect(persistedTask?.error).toBeUndefined();
 	});
 
-	it("writes implementation artifacts through the v2 file adapter and persists source records", async () => {
+	it("materializes committed inputs, executes the model, writes all files, and commits task/artifacts/events atomically", async () => {
 		const root = tempRoot();
 		const store = createStore(root);
 		store.createAgentV2Run({
 			clientId: "client-a",
 			runId: "run-implementation",
-			input: { prompt: "Build a static app" },
-			model: { provider: "test" },
+			input: { objective: "Build a static app" },
+			model: { provider: "test", id: "v2-test-model" },
 			createdAt: "2026-07-08T00:00:00.000Z",
 		});
 		store.upsertAgentV2Task({
@@ -388,11 +396,66 @@ describe("agent v2 execution core", () => {
 			updatedAt: "2026-07-08T00:00:00.000Z",
 		});
 
+		const callOrder: string[] = [];
+		const materializer: AgentV2InputMaterializer = {
+			materialize: vi.fn(async () => {
+				callOrder.push("materialize");
+				return [
+					{
+						kind: "text" as const,
+						reference: {
+							kind: "project_file" as const,
+							inputId: "input-1",
+							logicalPath: "notes.txt",
+							mediaType: "text/plain",
+							byteLength: 7,
+							checksum: "sha256:verified",
+						},
+						text: "MATERIALIZED_INPUT_SENTINEL",
+						checksum: "sha256:verified",
+					},
+				];
+			}),
+		};
+		const generateImplementation = vi.fn(async (input) => {
+			callOrder.push("model");
+			expect(input.run.input.objective).toBe("Build a static app");
+			expect(input.run.model).toEqual({ provider: "test", id: "v2-test-model" });
+			expect(input.inputs).toMatchObject([{ kind: "text", text: "MATERIALIZED_INPUT_SENTINEL" }]);
+			expect(input.task.taskId).toBe("implement");
+			expect(input.contextPacket.run.runId).toBe("run-implementation");
+			return {
+				result: {
+					version: 1 as const,
+					taskId: "implement",
+					summary: "MATERIALIZED_INPUT_SENTINEL RAW_FILE_SENTINEL sk-model-summary-key-1234567890",
+					files: [
+						{ path: "src/app.js", content: "export const secret = 'RAW_FILE_SENTINEL';\n" },
+						{ path: "index.html", content: "<!doctype html><main>Ready</main>\n" },
+					],
+				},
+				provider: "test",
+				model: "v2-test-model",
+				usage: { input: 10, output: 20, totalTokens: 30, costTotal: 0.01 },
+			};
+		});
+		const modelExecution: AgentV2ModelExecution = {
+			generateImplementation,
+			generateRepair: vi.fn(async () => {
+				throw new Error("repair is outside Task 7");
+			}),
+		};
+		const commit = vi.spyOn(store, "commitAgentV2ExecutionMutation");
+		const directArtifactWrite = vi.spyOn(store, "upsertAgentV2Artifact");
+		const directTaskWrite = vi.spyOn(store, "upsertAgentV2Task");
+
 		const result = await executeAgentV2NextTask({
 			store: forbidLegacyRuntimeReads(store),
 			config: testConfig(root),
 			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
 			runId: "run-implementation",
+			materializer,
+			modelExecution,
 			now: () => "2026-07-08T00:02:00.000Z",
 		});
 
@@ -401,26 +464,56 @@ describe("agent v2 execution core", () => {
 			taskId: "implement",
 			diagnosticIds: [],
 		});
-		expect(existsSync(projectFile(root, "index.html"))).toBe(true);
-		expect(readFileSync(projectFile(root, "index.html"), "utf8")).toContain("Build a static app");
-		expect(store.listAgentV2Artifacts("client-a", "run-implementation")).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					artifactId: "file:index.html",
-					kind: "source",
-					path: "index.html",
-					sourceTaskId: "implement",
-				}),
-			]),
-		);
+		expect(callOrder).toEqual(["materialize", "model"]);
+		expect(materializer.materialize).toHaveBeenCalledTimes(1);
+		expect(generateImplementation).toHaveBeenCalledTimes(1);
+		expect(readFileSync(projectFile(root, "index.html"), "utf8")).toContain("Ready");
+		expect(readFileSync(projectFile(root, "src/app.js"), "utf8")).toContain("RAW_FILE_SENTINEL");
+		expect(commit).toHaveBeenCalledTimes(1);
+		expect(directArtifactWrite).not.toHaveBeenCalled();
+		expect(directTaskWrite).not.toHaveBeenCalled();
+		expect(store.listAgentV2Artifacts("client-a", "run-implementation")).toEqual([
+			expect.objectContaining({ artifactId: "file:index.html", path: "index.html", validationStatus: "pending" }),
+			expect.objectContaining({ artifactId: "file:src/app.js", path: "src/app.js", validationStatus: "pending" }),
+		]);
 		expect(store.listAgentV2Tasks("client-a", "run-implementation")[0]).toMatchObject({
 			taskId: "implement",
 			status: "succeeded",
 			output: expect.objectContaining({
-				artifactIds: ["file:index.html"],
-				changedFiles: ["index.html"],
+				artifactIds: ["file:index.html", "file:src/app.js"],
+				changedFiles: ["index.html", "src/app.js"],
 			}),
 		});
+		expect(store.getAgentV2Run("client-a", "run-implementation")).toMatchObject({ phase: "validation" });
+		const events = store.listAgentV2RunEvents("client-a", "run-implementation", 0);
+		expect(events.map((event) => event.type)).toEqual([
+			"agent_v2.task_updated",
+			"agent_v2.artifact_indexed",
+			"agent_v2.artifact_indexed",
+			"agent_v2.output_recorded",
+		]);
+		expect(events.at(-1)?.payload).toMatchObject({
+			summary: "Generated 2 files.",
+			provider: "test",
+			model: "v2-test-model",
+			usage: { input: 10, output: 20, totalTokens: 30, costTotal: 0.01 },
+		});
+		const outbox = store.leaseAgentV2Outbox({
+			ownerId: "task7-red",
+			kinds: ["live_event"],
+			limit: 10,
+			now: "2026-07-08T00:03:00.000Z",
+			leaseTtlMs: 30_000,
+		});
+		const durableBoundary = JSON.stringify({
+			events,
+			outbox,
+			tasks: store.listAgentV2Tasks("client-a", "run-implementation"),
+		});
+		expect(durableBoundary).not.toContain("MATERIALIZED_INPUT_SENTINEL");
+		expect(durableBoundary).not.toContain("RAW_FILE_SENTINEL");
+		expect(durableBoundary).not.toContain("sk-model-summary-key-1234567890");
+		expect(store.listAgentV2Tasks("client-a", "run-implementation")[0]?.error).toBeUndefined();
 	});
 
 	it("blocks implementation file writes through restrictive production tool governance", async () => {
@@ -450,6 +543,7 @@ describe("agent v2 execution core", () => {
 
 		await expect(
 			executeAgentV2NextTask({
+				...unusedExecutionDependencies(),
 				store: forbidLegacyRuntimeReads(store),
 				config: testConfig(root),
 				context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
@@ -460,6 +554,139 @@ describe("agent v2 execution core", () => {
 		).rejects.toThrow("Agent v2 tool is not registered: file.write");
 		expect(existsSync(projectFile(root, "index.html"))).toBe(false);
 		expect(store.listAgentV2Artifacts("client-a", "run-governance")).toEqual([]);
+	});
+
+	it("does not call the model, write files, or mutate durable state when materialization fails", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createImplementationTask(store, "run-materializer-failure");
+		const modelExecution = recordingModelExecution("implement", [{ path: "index.html", content: "never" }]);
+		const commit = vi.spyOn(store, "commitAgentV2ExecutionMutation");
+
+		await expect(
+			executeAgentV2NextTask({
+				store: forbidLegacyRuntimeReads(store),
+				config: testConfig(root),
+				context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+				runId: "run-materializer-failure",
+				materializer: { materialize: async () => Promise.reject(new Error("stable materialization failure")) },
+				modelExecution,
+				now: () => "2026-07-08T00:02:00.000Z",
+			}),
+		).rejects.toThrow("stable materialization failure");
+
+		expect(modelExecution.generateImplementation).not.toHaveBeenCalled();
+		expect(commit).not.toHaveBeenCalled();
+		expect(existsSync(projectFile(root, "index.html"))).toBe(false);
+		expect(store.listAgentV2Artifacts("client-a", "run-materializer-failure")).toEqual([]);
+		expect(store.listAgentV2Tasks("client-a", "run-materializer-failure")[0]?.status).toBe("ready");
+	});
+
+	it("preflights the complete parsed model file set before the first authorized write", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createImplementationTask(store, "run-invalid-model-output");
+		const modelExecution = recordingModelExecution("implement", [
+			{ path: "index.html", content: "first" },
+			{ path: "INDEX.HTML", content: "collision" },
+		]);
+		const commit = vi.spyOn(store, "commitAgentV2ExecutionMutation");
+
+		await expect(
+			executeAgentV2NextTask({
+				store: forbidLegacyRuntimeReads(store),
+				config: testConfig(root),
+				context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+				runId: "run-invalid-model-output",
+				materializer: { materialize: async () => [] },
+				modelExecution,
+				now: () => "2026-07-08T00:02:00.000Z",
+			}),
+		).rejects.toThrow("colliding output paths");
+
+		expect(commit).not.toHaveBeenCalled();
+		expect(existsSync(projectFile(root, "index.html"))).toBe(false);
+		expect(store.listAgentV2Artifacts("client-a", "run-invalid-model-output")).toEqual([]);
+	});
+
+	it("rejects generated ancestor and descendant paths before the first write", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createImplementationTask(store, "run-ancestor-collision");
+		const commit = vi.spyOn(store, "commitAgentV2ExecutionMutation");
+
+		await expect(
+			executeAgentV2NextTask({
+				store: forbidLegacyRuntimeReads(store),
+				config: testConfig(root),
+				context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+				runId: "run-ancestor-collision",
+				materializer: { materialize: async () => [] },
+				modelExecution: recordingModelExecution("implement", [
+					{ path: "foo", content: "first" },
+					{ path: "foo/bar.js", content: "second" },
+				]),
+				now: () => "2026-07-08T00:02:00.000Z",
+			}),
+		).rejects.toThrow("colliding output paths");
+
+		expect(commit).not.toHaveBeenCalled();
+		expect(existsSync(projectFile(root, "foo"))).toBe(false);
+		expect(store.listAgentV2Artifacts("client-a", "run-ancestor-collision")).toEqual([]);
+	});
+
+	it("rejects generated case aliases of existing workspace files before writing", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createImplementationTask(store, "run-existing-case-alias");
+		mkdirSync(projectFile(root, "src"), { recursive: true });
+		writeProjectFile(root, "src/app.js", "existing");
+		const commit = vi.spyOn(store, "commitAgentV2ExecutionMutation");
+
+		await expect(
+			executeAgentV2NextTask({
+				store: forbidLegacyRuntimeReads(store),
+				config: testConfig(root),
+				context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+				runId: "run-existing-case-alias",
+				materializer: { materialize: async () => [] },
+				modelExecution: recordingModelExecution("implement", [{ path: "SRC/App.js", content: "replacement" }]),
+				now: () => "2026-07-08T00:02:00.000Z",
+			}),
+		).rejects.toThrow("colliding output paths");
+
+		expect(commit).not.toHaveBeenCalled();
+		expect(readFileSync(projectFile(root, "src/app.js"), "utf8")).toBe("existing");
+		expect(store.listAgentV2Artifacts("client-a", "run-existing-case-alias")).toEqual([]);
+	});
+
+	it("returns a stable conflict and never performs a second durable write when execution CAS misses", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createImplementationTask(store, "run-cas-conflict");
+		const commit = vi.spyOn(store, "commitAgentV2ExecutionMutation").mockImplementation(() => ({
+			applied: false,
+			run: store.getAgentV2Run("client-a", "run-cas-conflict")!,
+			tasks: store.listAgentV2Tasks("client-a", "run-cas-conflict"),
+			artifacts: [],
+			events: [],
+			outboxIntentIds: [],
+		}));
+
+		const result = await executeAgentV2NextTask({
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-cas-conflict",
+			materializer: { materialize: async () => [] },
+			modelExecution: recordingModelExecution("implement", [{ path: "index.html", content: "written once" }]),
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result).toEqual({ status: "task_conflict", taskId: "implement", diagnosticIds: [] });
+		expect(commit).toHaveBeenCalledTimes(1);
+		expect(store.listAgentV2Tasks("client-a", "run-cas-conflict")[0]?.status).toBe("ready");
+		expect(store.listAgentV2Artifacts("client-a", "run-cas-conflict")).toEqual([]);
 	});
 });
 
@@ -484,6 +711,67 @@ function writeProjectFile(root: string, relativePath: string, content: string): 
 
 function projectFile(root: string, relativePath: string): string {
 	return join(root, "data", "clients", "client-a", "sessions", "session-a", "project", ...relativePath.split("/"));
+}
+
+function createImplementationTask(store: RuntimeDbStore, runId: string): void {
+	store.createAgentV2Run({
+		clientId: "client-a",
+		runId,
+		input: { objective: "Build a static app" },
+		model: { provider: "test", id: "v2-test-model" },
+		createdAt: "2026-07-08T00:00:00.000Z",
+	});
+	store.upsertAgentV2Task({
+		clientId: "client-a",
+		runId,
+		taskId: "implement",
+		kind: "implementation",
+		title: "Implement static app",
+		status: "ready",
+		dependsOn: [],
+		acceptanceCriteria: [],
+		input: {},
+		output: {},
+		createdAt: "2026-07-08T00:00:00.000Z",
+		updatedAt: "2026-07-08T00:00:00.000Z",
+	});
+}
+
+function recordingModelExecution(
+	taskId: string,
+	files: Array<{ path: string; content: string }>,
+): AgentV2ModelExecution & { generateImplementation: ReturnType<typeof vi.fn> } {
+	return {
+		generateImplementation: vi.fn(async () => ({
+			result: { version: 1 as const, taskId, summary: "Generated files", files },
+			provider: "test",
+			model: "v2-test-model",
+		})),
+		generateRepair: vi.fn(async () => {
+			throw new Error("repair is outside Task 7");
+		}),
+	};
+}
+
+function unusedExecutionDependencies(): {
+	materializer: AgentV2InputMaterializer;
+	modelExecution: AgentV2ModelExecution;
+} {
+	return {
+		materializer: {
+			materialize: async () => {
+				throw new Error("materializer must not be called for this task");
+			},
+		},
+		modelExecution: {
+			generateImplementation: async () => {
+				throw new Error("implementation model must not be called for this task");
+			},
+			generateRepair: async () => {
+				throw new Error("repair model must not be called for this task");
+			},
+		},
+	};
 }
 
 function forbidLegacyRuntimeReads(store: RuntimeDbStore): AgentV2ExecutionStore {

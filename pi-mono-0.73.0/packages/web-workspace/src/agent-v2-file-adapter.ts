@@ -3,7 +3,7 @@ import { extname } from "node:path";
 import { createAgentV2ToolFailure } from "./agent-v2-tool-governance.js";
 import type { StorageConfig } from "./types.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
-import { WorkspacePathAuthorizationError } from "./workspace-path-guard.js";
+import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
 
 export interface AgentV2FileAdapterContext {
 	clientId: string;
@@ -40,6 +40,7 @@ export interface AgentV2FileWriteResult {
 export interface AgentV2FileAdapter {
 	listFiles(): { files: string[] };
 	readFile(path: string): { path: string; content: string; truncated: boolean };
+	validateWritePath(path: string): string;
 	writeFile(input: {
 		path: string;
 		content: string;
@@ -63,6 +64,8 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 		sessionId: input.context.sessionId,
 		title: input.context.title,
 	};
+	const projectRoot = files.ensureProjectWorkspace(context).projectRoot;
+	const writePathGuard = WorkspacePathGuard.forProjectContent(projectRoot);
 	const artifactFor = (
 		path: string,
 		content: string,
@@ -101,6 +104,13 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 	const publicPath = (path: string): string => normalizeV2Path(path);
 
 	return {
+		validateWritePath(path) {
+			try {
+				return publicPath(writePathGuard.authorizeNew(path).relativePath);
+			} catch (error) {
+				return mapError(error, path);
+			}
+		},
 		listFiles() {
 			const result = files.handle({ ...context, command: "list" });
 			return { files: Array.isArray(result.files) ? result.files.map((path) => publicPath(String(path))) : [] };

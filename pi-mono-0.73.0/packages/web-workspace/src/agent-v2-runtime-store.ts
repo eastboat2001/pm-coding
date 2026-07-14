@@ -1,4 +1,5 @@
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import type { AgentV2ExecutionMutationInput, AgentV2ExecutionMutationResult } from "./agent-v2-durable-store.js";
 import type {
 	AgentV2ArtifactRecord,
 	AgentV2DocumentRecord,
@@ -39,6 +40,9 @@ export interface AgentV2RuntimeSnapshotStore {
 }
 
 export interface AgentV2ExecutionStore extends AgentV2RuntimeSnapshotStore {
+	commitAgentV2ExecutionMutation(
+		input: AgentV2ExecutionMutationInput,
+	): AgentV2StoreResult<AgentV2ExecutionMutationResult>;
 	upsertAgentV2Artifact(input: UpsertAgentV2ArtifactInput): AgentV2StoreResult<AgentV2ArtifactRecord>;
 	appendAgentV2ValidationAttempt(
 		input: AppendAgentV2ValidationAttemptInput,

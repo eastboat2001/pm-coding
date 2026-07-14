@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { selectNextAgentV2Task, transitionAgentV2Task } from "../src/agent-v2-task-engine.js";
+import {
+	assertAgentV2TaskTransition,
+	selectNextAgentV2Task,
+	transitionAgentV2Task,
+} from "../src/agent-v2-task-engine.js";
 import type { AgentV2TaskNode } from "../src/agent-v2-types.js";
 
 const CREATED_AT = "2026-07-08T00:00:00.000Z";
@@ -175,6 +179,17 @@ describe("agent v2 task engine", () => {
 				now: "2026-07-08T00:04:00.000Z",
 			}),
 		).toThrow("Agent v2 blocked and failed task transitions require an error");
+	});
+
+	it("rejects invalid task transitions through the centralized matrix", () => {
+		expect(() => assertAgentV2TaskTransition("succeeded", "running")).toThrow("succeeded -> running");
+		expect(() =>
+			transitionAgentV2Task({
+				task: task({ taskId: "done", status: "succeeded" }),
+				status: "running",
+				now: "2026-07-08T00:04:00.000Z",
+			}),
+		).toThrow("succeeded -> running");
 	});
 
 	it("requires an error for blocked transitions", () => {

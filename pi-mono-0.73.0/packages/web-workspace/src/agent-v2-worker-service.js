@@ -240,6 +240,7 @@ export class AgentV2WorkerService {
                     await this.cancelRequestedRun(current);
                     return;
                 }
+                const executionRevision = current.updatedAt;
                 const step = await this.execution.executeNextTask({
                     store: this.store,
                     run: current,
@@ -263,6 +264,12 @@ export class AgentV2WorkerService {
                 });
                 if (current.status === "cancelling" || queueCancelRequested) {
                     await this.cancelRequestedRun(current);
+                    return;
+                }
+                if (step.status === "task_conflict") {
+                    if (current.updatedAt !== executionRevision)
+                        continue;
+                    await this.failRun(current, "agent_v2.worker_task_conflict", "Agent v2 execution lost its durable compare-and-set expectation.", true);
                     return;
                 }
                 if (step.status === "complete") {
@@ -312,7 +319,7 @@ export class AgentV2WorkerService {
             this.activeAbortControllers.delete(key);
         }
     }
-    async failRun(run, code, message) {
+    async failRun(run, code, message, retryable = false) {
         const failed = await this.transitionRun(run, {
             status: "failed",
             phase: "failed",
@@ -320,7 +327,7 @@ export class AgentV2WorkerService {
             error: {
                 code,
                 message,
-                retryable: false,
+                retryable,
             },
             expectedStatuses: ["running"],
         });

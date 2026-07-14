@@ -22,6 +22,49 @@ export function advanceAgentV2Phase(phase) {
     }
     return AGENT_V2_PHASES[index + 1] ?? phase;
 }
+export function phaseForAgentV2Task(task, outcome) {
+    if (outcome === "failed")
+        return "failed";
+    if (outcome === "blocked")
+        return "blocked";
+    if (outcome === "cancelled")
+        return "cancelled";
+    if (outcome === "succeeded") {
+        switch (task.kind) {
+            case "capability":
+            case "spec":
+                return "plan_draft";
+            case "plan":
+                return "task_generation";
+            case "implementation":
+            case "repair":
+                return "validation";
+            case "validation":
+            case "artifact":
+                return "preview";
+            case "delivery":
+                return "delivery";
+        }
+    }
+    switch (task.kind) {
+        case "capability":
+            return "capability_routing";
+        case "spec":
+            return "spec_draft";
+        case "plan":
+            return "plan_draft";
+        case "implementation":
+            return "implementation";
+        case "validation":
+            return "validation";
+        case "repair":
+            return "repair";
+        case "artifact":
+            return "preview";
+        case "delivery":
+            return "delivery";
+    }
+}
 export function createAgentV2RunSnapshot(input) {
     const timestamp = input.createdAt ?? input.updatedAt ?? new Date().toISOString();
     const snapshot = {

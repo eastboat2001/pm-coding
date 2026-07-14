@@ -1,6 +1,20 @@
 const TERMINAL_STATUSES = new Set(["blocked", "succeeded", "failed", "cancelled"]);
 const FAILED_DEPENDENCY_ROOT_STATUSES = new Set(["failed", "cancelled"]);
 const ERROR_REQUIRED_STATUSES = new Set(["blocked", "failed"]);
+const TASK_TRANSITIONS = {
+    pending: new Set(["pending", "ready", "running", "blocked", "succeeded", "failed", "cancelled"]),
+    ready: new Set(["ready", "running", "blocked", "succeeded", "failed", "cancelled"]),
+    running: new Set(["running", "ready", "blocked", "succeeded", "failed", "cancelled"]),
+    blocked: new Set(["ready", "cancelled"]),
+    succeeded: new Set(),
+    failed: new Set(["ready", "running", "cancelled"]),
+    cancelled: new Set(),
+};
+export function assertAgentV2TaskTransition(from, to) {
+    if (!TASK_TRANSITIONS[from].has(to)) {
+        throw new Error(`Invalid Agent v2 task transition: ${from} -> ${to}`);
+    }
+}
 export function selectNextAgentV2Task(tasks) {
     if (tasks.length === 0)
         return selection("empty_graph");
@@ -57,6 +71,7 @@ export function selectNextAgentV2Task(tasks) {
     return selection("complete");
 }
 export function transitionAgentV2Task(input) {
+    assertAgentV2TaskTransition(input.task.status, input.status);
     if (ERROR_REQUIRED_STATUSES.has(input.status) && !input.error) {
         throw new Error("Agent v2 blocked and failed task transitions require an error");
     }

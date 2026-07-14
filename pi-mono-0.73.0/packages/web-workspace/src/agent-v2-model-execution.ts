@@ -1,6 +1,8 @@
 import type { AgentV2ContextPacket } from "./agent-v2-context-packet.js";
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
-import type { AgentV2RunSnapshot, AgentV2TaskNode } from "./agent-v2-types.js";
+import type { AgentV2ModelUsageSummary, AgentV2RunSnapshot, AgentV2TaskNode } from "./agent-v2-types.js";
+
+export type { AgentV2ModelUsageSummary } from "./agent-v2-types.js";
 
 const MAX_JSON_CODE_UNITS_PER_SCALAR = 12;
 const MAX_JSON_STRUCTURAL_CODE_UNITS = 65_536;
@@ -93,13 +95,6 @@ export interface AgentV2RepairResult {
 	summary: string;
 	files: AgentV2GeneratedFile[];
 	addressedDiagnosticIds: string[];
-}
-
-export interface AgentV2ModelUsageSummary {
-	input: number;
-	output: number;
-	totalTokens: number;
-	costTotal: number;
 }
 
 export interface AgentV2ModelExecutionEnvelope<T> {

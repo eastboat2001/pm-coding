@@ -3,11 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
+import {
+	AgentV2InputMaterializationError,
+	type AgentV2InputMaterializerStore,
+	DurableAgentV2InputMaterializer,
+} from "../src/agent-v2-input-materializer.js";
+import type { AgentV2ModelExecution, AgentV2ModelExecutionInput } from "../src/agent-v2-model-execution.js";
 import { AGENT_V2_RESET_CONFIRMATION, resetAgentV2RuntimeData } from "../src/agent-v2-reset.js";
 import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import { InMemoryAgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "../src/agent-v2-run-queue.js";
+import type { AgentV2WorkerExecutionInput } from "../src/agent-v2-worker-service.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
 import { loadStorageConfig } from "../src/config.js";
 import { WorkspaceDiagnosticExportService } from "../src/diagnostic-export-service.js";
@@ -109,6 +116,127 @@ describe("agent v2 production chain rehearsal", () => {
 		expect(await api.listRuns(CLIENT_ID)).toEqual([]);
 		expect(await eventLog.list(CLIENT_ID, "run-production-chain", 0)).toEqual([]);
 	});
+
+	it("materializes committed objective, project text, and image attachment before the model seam", async () => {
+		const bus = new InMemoryAgentV2RunEventBus();
+		const eventLog = new AgentV2RunEventLog({ store: runtimeDb, bus });
+		const queue = new LocalAgentV2RunQueue();
+		const api = new AgentV2RunApiService({
+			store: runtimeDb,
+			events: eventLog,
+			queueName: "agent-v2-materialized-chain",
+			createRunId: () => "run-materialized-chain",
+			now: timestampSequence("2026-07-09T01:00:00.000Z", "2026-07-09T01:00:01.000Z"),
+		});
+		const model = new RecordingModelExecution();
+		const worker = new AgentV2WorkerService({
+			store: runtimeDb,
+			queue,
+			events: eventLog,
+			execution: new MaterializingExecution(runtimeDb, model),
+			workerId: "worker-materialized-chain",
+			now: timestampSequence("2026-07-09T01:00:02.000Z", "2026-07-09T01:00:03.000Z"),
+		});
+		const image = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+			"base64",
+		).toString("base64");
+
+		await api.startRun(CLIENT_ID, {
+			input: {
+				objective: "Build only from committed durable inputs",
+				sessionId: "session-materialized",
+				title: "Materialized Chain",
+				projectFiles: [
+					{ filename: "src/note.txt", content: "committed text" },
+					{ filename: "assets/logo.png", content: image, encoding: "base64" },
+				],
+				attachments: [
+					{ type: "image", fileName: "logo.png", mimeType: "image/png", projectFilePath: "assets/logo.png" },
+				],
+			},
+			model: { provider: "test", id: "v2-test-model" },
+		});
+		await deliverPendingRunEnqueue(runtimeDb, queue, "2026-07-09T01:00:01.500Z");
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(model.calls).toHaveLength(1);
+		expect(model.calls[0]?.run.input.objective).toBe("Build only from committed durable inputs");
+		expect(model.calls[0]?.inputs).toMatchObject([
+			{ kind: "text", reference: { kind: "project_file", logicalPath: "src/note.txt" }, text: "committed text" },
+			{ kind: "image", reference: { kind: "attachment", logicalPath: "assets/logo.png" }, mediaType: "image/png" },
+		]);
+		expect(await api.getRun(CLIENT_ID, "run-materialized-chain")).toMatchObject({ status: "succeeded" });
+	});
+
+	it("records a sanitized non-retryable worker diagnostic and never calls the model when materialization fails", async () => {
+		const sentinel = "RAW_DURABLE_STORE_SECRET_SENTINEL";
+		const bus = new InMemoryAgentV2RunEventBus();
+		const eventLog = new AgentV2RunEventLog({ store: runtimeDb, bus });
+		const queue = new LocalAgentV2RunQueue();
+		const api = new AgentV2RunApiService({
+			store: runtimeDb,
+			events: eventLog,
+			queueName: "agent-v2-rejected-input-chain",
+			createRunId: () => "run-rejected-input-chain",
+			now: timestampSequence("2026-07-09T02:00:00.000Z", "2026-07-09T02:00:01.000Z"),
+		});
+		const model = new RecordingModelExecution();
+		const forged = new AgentV2InputMaterializationError("authorization_mismatch");
+		Object.defineProperties(forged, {
+			message: { configurable: true, get: () => sentinel },
+			stack: { configurable: true, get: () => `${sentinel}_STACK` },
+			code: { configurable: true, enumerable: true, get: () => `${sentinel}_CODE` },
+		});
+		const rejectingStore: AgentV2InputMaterializerStore = {
+			listAgentV2InputReferences: (clientId, runId) => runtimeDb.listAgentV2InputReferences(clientId, runId),
+			readAgentV2InputBlob: async () => {
+				throw forged;
+			},
+		};
+		const worker = new AgentV2WorkerService({
+			store: runtimeDb,
+			queue,
+			events: eventLog,
+			execution: new MaterializingExecution(rejectingStore, model),
+			workerId: "worker-rejected-input-chain",
+			now: timestampSequence("2026-07-09T02:00:02.000Z", "2026-07-09T02:00:03.000Z"),
+		});
+
+		await api.startRun(CLIENT_ID, {
+			input: {
+				objective: "Reject changed durable input",
+				sessionId: "session-rejected",
+				title: "Rejected Input Chain",
+				projectFiles: [{ filename: "src/note.txt", content: "committed text" }],
+				attachments: [],
+			},
+			model: { provider: "test", id: "v2-test-model" },
+		});
+		await deliverPendingRunEnqueue(runtimeDb, queue, "2026-07-09T02:00:01.500Z");
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(model.calls).toHaveLength(0);
+		const failed = await api.getRun(CLIENT_ID, "run-rejected-input-chain");
+		expect(failed).toMatchObject({
+			status: "failed",
+			error: {
+				code: "agent_v2.worker_execution_failed",
+				message: "Agent v2 committed input store operation failed.",
+				retryable: false,
+			},
+		});
+		const storedDiagnostics = runtimeDb.listAgentV2Diagnostics(CLIENT_ID, "run-rejected-input-chain");
+		const workerDiagnostics = storedDiagnostics.filter(
+			(diagnostic) => diagnostic.code === "agent_v2.worker_execution_failed",
+		);
+		expect(workerDiagnostics).toHaveLength(1);
+		expect(workerDiagnostics[0]).toMatchObject({
+			code: "agent_v2.worker_execution_failed",
+			message: "Agent v2 committed input store operation failed.",
+		});
+		expect(JSON.stringify({ failed, storedDiagnostics })).not.toContain(sentinel);
+	});
 });
 
 async function deliverPendingRunEnqueue(
@@ -177,6 +305,46 @@ class SequencedExecution {
 	constructor(private readonly steps: AgentV2ExecutionStepResult[]) {}
 	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
 		return this.steps[this.index++] ?? { status: "complete", diagnosticIds: [] };
+	}
+}
+
+class RecordingModelExecution {
+	readonly calls: AgentV2ModelExecutionInput[] = [];
+
+	async generateImplementation(input: AgentV2ModelExecutionInput) {
+		this.calls.push(input);
+		return {
+			result: { version: 1 as const, taskId: "production-chain-task", summary: "recorded", files: [] },
+			provider: "test",
+			model: "v2-test-model",
+		};
+	}
+
+	async generateRepair(): Promise<never> {
+		throw new Error("Repair is outside this Task 6 fixture.");
+	}
+}
+
+class MaterializingExecution {
+	private readonly materializer: DurableAgentV2InputMaterializer;
+
+	constructor(
+		store: AgentV2InputMaterializerStore,
+		private readonly model: AgentV2ModelExecution,
+	) {
+		this.materializer = new DurableAgentV2InputMaterializer(store);
+	}
+
+	async executeNextTask(input: AgentV2WorkerExecutionInput): Promise<AgentV2ExecutionStepResult> {
+		const inputs = await this.materializer.materialize({ run: input.run, signal: input.signal });
+		await this.model.generateImplementation({
+			run: input.run,
+			inputs,
+			signal: input.signal,
+			contextPacket: {} as AgentV2ModelExecutionInput["contextPacket"],
+			task: { taskId: "production-chain-task" } as AgentV2ModelExecutionInput["task"],
+		});
+		return { status: "complete", diagnosticIds: [] };
 	}
 }
 

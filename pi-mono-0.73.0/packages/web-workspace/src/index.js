@@ -5,6 +5,7 @@ export { AGENT_V2_DIAGNOSTIC_CATEGORIES, createAgentV2DiagnosticEvent, toWorkspa
 export { buildAgentV2PlanDocument, buildAgentV2SpecDocument, buildAgentV2TaskGraph, renderAgentV2DocumentMarkdown, } from "./agent-v2-documents.js";
 export { executeAgentV2NextTask, } from "./agent-v2-execution-core.js";
 export { createAgentV2FileAdapter, } from "./agent-v2-file-adapter.js";
+export * from "./agent-v2-input-materializer.js";
 export { clearAgentV2GeneratedProjectWorkspaces, resetAgentV2Runtime, } from "./agent-v2-maintenance.js";
 export * from "./agent-v2-model-execution.js";
 export * from "./agent-v2-model-prompt.js";

@@ -5,6 +5,8 @@ export {
 	type ExecuteAgentV2NextTaskInput,
 	executeAgentV2NextTask,
 } from "./agent-v2-execution-core.js";
+export * from "./agent-v2-model-execution.js";
+export * from "./agent-v2-model-prompt.js";
 export type * from "./agent-v2-outbox.js";
 export {
 	type AgentV2RunEventBus,

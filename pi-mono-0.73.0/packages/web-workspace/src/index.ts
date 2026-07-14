@@ -52,6 +52,8 @@ export {
 	clearAgentV2GeneratedProjectWorkspaces,
 	resetAgentV2Runtime,
 } from "./agent-v2-maintenance.js";
+export * from "./agent-v2-model-execution.js";
+export * from "./agent-v2-model-prompt.js";
 export type * from "./agent-v2-outbox.js";
 export { agentV2OutboxIntentId } from "./agent-v2-outbox.js";
 export {

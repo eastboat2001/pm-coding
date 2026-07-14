@@ -1,9 +1,11 @@
+export type * from "./agent-v2-durable-store.js";
 export {
 	type AgentV2ExecutionStepResult,
 	type AgentV2ExecutionStepStatus,
 	type ExecuteAgentV2NextTaskInput,
 	executeAgentV2NextTask,
 } from "./agent-v2-execution-core.js";
+export type * from "./agent-v2-outbox.js";
 export {
 	type AgentV2RunEventBus,
 	agentV2RunEventStreamKey,

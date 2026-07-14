@@ -29,6 +29,7 @@ export {
 	buildAgentV2TaskGraph,
 	renderAgentV2DocumentMarkdown,
 } from "./agent-v2-documents.js";
+export type * from "./agent-v2-durable-store.js";
 export {
 	type AgentV2ExecutionStepResult,
 	type AgentV2ExecutionStepStatus,
@@ -51,6 +52,8 @@ export {
 	clearAgentV2GeneratedProjectWorkspaces,
 	resetAgentV2Runtime,
 } from "./agent-v2-maintenance.js";
+export type * from "./agent-v2-outbox.js";
+export { agentV2OutboxIntentId } from "./agent-v2-outbox.js";
 export {
 	type AgentV2PlanningBootstrap,
 	buildAgentV2PlanningBootstrap,

@@ -69,6 +69,50 @@ const statementIndex = (queryable: RecordingQueryable, pattern: RegExp): number 
 	queryable.queries.findIndex((query) => pattern.test(normalizeSql(query.sql)));
 
 describe("PostgresRuntimeStore", () => {
+	it("leases outbox intents in one SKIP LOCKED transaction", async () => {
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (sql.startsWith("WITH candidates AS") && sql.includes("FOR UPDATE SKIP LOCKED")) {
+				return {
+					rows: [
+						{
+							intent_id: "outbox:1",
+							dedupe_key: "live_event:client-a:run-a:1",
+							client_id: "client-a",
+							run_id: "run-a",
+							kind: "live_event",
+							status: "leased",
+							available_at: "2026-07-13T00:00:00.000Z",
+							created_at: "2026-07-13T00:00:00.000Z",
+							updated_at: "2026-07-13T00:00:01.000Z",
+							reference_json: { kind: "live_event", eventSeq: 1 },
+							attempt_count: 1,
+							lease_owner: "owner-a",
+							lease_expires_at: "2026-07-13T00:00:02.000Z",
+							last_error_code: null,
+							last_error_message: null,
+							delivered_at: null,
+						},
+					],
+				};
+			}
+			return undefined;
+		});
+		const store = new PostgresRuntimeStore({ queryable });
+		const leased = await store.leaseAgentV2Outbox({
+			ownerId: "owner-a",
+			limit: 1,
+			now: "2026-07-13T00:00:01.000Z",
+			leaseTtlMs: 1000,
+		});
+		expect(leased).toHaveLength(1);
+		expect(queryable.queries.map((query) => normalizeSql(query.sql))).toEqual([
+			"BEGIN",
+			expect.stringContaining("FOR UPDATE SKIP LOCKED"),
+			"COMMIT",
+		]);
+	});
+
 	it("can be constructed with a provided queryable and creates the runtime schema", async () => {
 		const queryable = new RecordingQueryable().on((query) => {
 			if (/^CREATE /i.test(normalizeSql(query.sql))) return { rowCount: 0 };
@@ -1564,5 +1608,74 @@ describe("PostgresRuntimeStore", () => {
 			expect(normalizeSql(query.sql)).toContain("WHERE client_id = $1 AND session_id = $2");
 			expect(query.values).toEqual(["client-a", "session-1"]);
 		}
+	});
+
+	it("rejects non-monotonic durable transition and cancel revisions before mutation queries", async () => {
+		const t0 = "2026-07-13T14:00:00.000Z";
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (sql.includes("FROM agent_v2_runs") && sql.includes("FOR UPDATE")) {
+				return {
+					rows: [
+						{
+							client_id: "client-a",
+							run_id: "run-a",
+							status: "queued",
+							phase: "implementation",
+							attempt: 1,
+							input_json: {},
+							model_json: {},
+							worker_id: null,
+							created_at: t0,
+							updated_at: t0,
+							started_at: null,
+							ended_at: null,
+							error_json: null,
+						},
+					],
+				};
+			}
+			if (sql.startsWith("SELECT intent_id FROM agent_v2_outbox")) return { rows: [] };
+			return undefined;
+		});
+		const store = new PostgresRuntimeStore({ queryable });
+		const expectedRun = {
+			status: "queued" as const,
+			phase: "implementation" as const,
+			attempt: 1,
+			workerId: null,
+			updatedAt: t0,
+		};
+
+		const transition = await store.commitAgentV2RunTransition({
+			expectedRun,
+			update: {
+				clientId: "client-a",
+				runId: "run-a",
+				expectedStatuses: ["queued"],
+				phase: "validation",
+				updatedAt: t0,
+			},
+			event: { type: "must_not_write", payload: {}, createdAt: t0 },
+		});
+		expect(transition.update.applied).toBe(false);
+		expect(queryable.statementsMatching(/^(UPDATE|INSERT) /i)).toEqual([]);
+
+		queryable.queries.length = 0;
+		await expect(
+			store.commitAgentV2RunCancel({
+				clientId: "client-a",
+				runId: "run-a",
+				expectedStatuses: ["queued"],
+				expectedRun,
+				queueName: "agent-v2",
+				cancelToken: "invalid-revision",
+				cancelledAt: "2026-07-13T14:00:00Z",
+			}),
+		).rejects.toThrow("compare-and-set conflict");
+		expect(queryable.statementsMatching(/^(UPDATE|INSERT) /i)).toEqual([]);
+		expect(queryable.queries.map((query) => normalizeSql(query.sql))).toEqual(
+			expect.arrayContaining(["BEGIN", "ROLLBACK"]),
+		);
 	});
 });

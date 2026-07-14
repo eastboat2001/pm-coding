@@ -1,3 +1,5 @@
+import type { AgentV2DurableCommitStore } from "./agent-v2-durable-store.js";
+import type { AgentV2OutboxStore } from "./agent-v2-outbox.js";
 import type {
 	AgentV2DiagnosticExportStore,
 	AgentV2ExecutionStore,
@@ -17,7 +19,9 @@ export type AgentV2ProductionStore = AgentV2SchemaStore &
 	AgentV2RunEventLogStore &
 	AgentV2DiagnosticExportStore &
 	AgentV2ExecutionStore &
-	AgentV2ResetStore & {
+	AgentV2ResetStore &
+	AgentV2DurableCommitStore &
+	AgentV2OutboxStore & {
 		close(): void | Promise<void>;
 	};
 

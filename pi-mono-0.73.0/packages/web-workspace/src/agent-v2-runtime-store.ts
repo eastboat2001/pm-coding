@@ -93,3 +93,6 @@ export interface AgentV2DiagnosticExportStore {
 	listAgentV2RunEvents(clientId: string, runId: string, afterSeq: number): AgentV2StoreResult<AgentV2RunEventRecord[]>;
 	listAgentV2Diagnostics(clientId: string, runId: string): AgentV2StoreResult<AgentV2DiagnosticEvent[]>;
 }
+
+export type { AgentV2DurableCommitStore } from "./agent-v2-durable-store.js";
+export type { AgentV2OutboxStore } from "./agent-v2-outbox.js";

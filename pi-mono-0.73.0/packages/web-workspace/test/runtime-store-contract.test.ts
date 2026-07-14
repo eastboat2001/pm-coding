@@ -30,6 +30,12 @@ type Equal<Left, Right> = (<Value>() => Value extends Left ? 1 : 2) extends <Val
 	? true
 	: false;
 type IsRequiredKey<T, K extends keyof T> = Record<never, never> extends Pick<T, K> ? false : true;
+type _LegacyRuntimeStoreHasNoDurableCommit = Expect<
+	Equal<"commitAgentV2RunStart" extends keyof RuntimeStore ? true : false, false>
+>;
+type _LegacyRuntimeStoreHasNoOutboxLease = Expect<
+	Equal<"leaseAgentV2Outbox" extends keyof RuntimeStore ? true : false, false>
+>;
 
 type _AgentV2RunApiStoreListsWithClientIdOnly = Expect<
 	Equal<Parameters<AgentV2RunApiStore["listAgentV2Runs"]>["length"], 1>

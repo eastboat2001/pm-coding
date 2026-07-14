@@ -1,4 +1,6 @@
 import pg from "pg";
+import { agentV2CancelReplayFingerprint, agentV2StartReplayFingerprint, equalAgentV2ProtocolValues, isCanonicalAgentV2Revision, isStrictlyNewerAgentV2Revision, matchesAgentV2ExpectedRun, } from "./agent-v2-durable-store.js";
+import { agentV2OutboxIntentId, assertAgentV2Timestamp, validateAgentV2OutboxDeliveryInput, validateAgentV2OutboxLeaseInput, validateAgentV2OutboxRescheduleInput, } from "./agent-v2-outbox.js";
 import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_RUN_EVENT_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, equalAgentV2ValidationRecords, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunEventRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_INDEXES, AGENT_V2_SCHEMA_RESET_REQUIRED, AGENT_V2_SCHEMA_TABLE_COLUMNS, AGENT_V2_SCHEMA_TABLES, AGENT_V2_SCHEMA_VERSION, } from "./agent-v2-types.js";
 const ACTIVE_RUN_STATUSES = ["queued", "running", "cancelling"];
@@ -1147,6 +1149,372 @@ export class PostgresRuntimeStore {
 			ORDER BY created_at ASC, diagnostic_id ASC`, [clientId, runId]);
         return rows.map(toAgentV2DiagnosticRecord);
     }
+    async commitAgentV2RunStart(input) {
+        assertAgentV2Timestamp(input.createdAt, "createdAt");
+        const initialRun = buildAgentV2Run(input.run);
+        const initialTasks = input.tasks.map(buildAgentV2Task);
+        if (!isCanonicalAgentV2Revision(input.createdAt) ||
+            !isCanonicalAgentV2Revision(initialRun.createdAt) ||
+            !isCanonicalAgentV2Revision(initialRun.updatedAt) ||
+            Date.parse(initialRun.updatedAt) < Date.parse(initialRun.createdAt) ||
+            initialTasks.some((task) => !isCanonicalAgentV2Revision(task.createdAt) ||
+                !isCanonicalAgentV2Revision(task.updatedAt) ||
+                Date.parse(task.updatedAt) < Date.parse(task.createdAt)))
+            throw new Error("Agent v2 run start revision must be a canonical UTC millisecond timestamp");
+        return this.withTransaction(async (tx) => {
+            if ([...input.documents, ...input.tasks, ...input.artifacts, ...input.diagnostics].some((child) => child.clientId !== input.run.clientId || child.runId !== input.run.runId))
+                throw new Error("Agent v2 run start child identity mismatch");
+            await this.query(tx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+                `agent-v2-start:${input.run.clientId}:${input.run.runId}`,
+            ]);
+            const startFingerprint = agentV2StartReplayFingerprint(input);
+            const existing = await this.getAgentV2RunWithQueryable(tx, input.run.clientId, input.run.runId, true);
+            if (existing) {
+                const expected = buildAgentV2Run(input.run);
+                const bootstrap = await this.queryOne(tx, "SELECT bootstrap_version, bootstrap_checksum FROM agent_v2_bootstraps WHERE client_id=$1 AND run_id=$2", [input.run.clientId, input.run.runId]);
+                if (existing.createdAt !== expected.createdAt ||
+                    !equalAgentV2ProtocolValues(existing.input, expected.input) ||
+                    !equalAgentV2ProtocolValues(existing.model, expected.model) ||
+                    bootstrap?.bootstrap_version !== input.bootstrapVersion ||
+                    bootstrap.bootstrap_checksum !== startFingerprint)
+                    throw new Error("Agent v2 run start replay conflict");
+                const events = await this.listAgentV2RunEventsWithQueryable(tx, input.run.clientId, input.run.runId, 0);
+                const runCreatedEvent = events[0];
+                const planningReadyEvent = events[1];
+                if (!runCreatedEvent ||
+                    !planningReadyEvent ||
+                    runCreatedEvent.seq !== 1 ||
+                    runCreatedEvent.type !== "run_created" ||
+                    runCreatedEvent.createdAt !== input.createdAt ||
+                    !equalAgentV2ProtocolValues(runCreatedEvent.payload, { status: "queued" }) ||
+                    planningReadyEvent.seq !== 2 ||
+                    planningReadyEvent.type !== "planning_ready" ||
+                    planningReadyEvent.createdAt !== input.createdAt ||
+                    !equalAgentV2ProtocolValues(planningReadyEvent.payload, { phase: input.readyPhase }))
+                    throw new Error("Agent v2 run start replay conflict");
+                const outboxIntentIds = [];
+                for (const reference of postgresStartOutboxReferences(input)) {
+                    const intentId = agentV2OutboxIntentId(postgresOutboxDedupeKey(input.run.clientId, input.run.runId, reference));
+                    const intent = await this.queryOne(tx, "SELECT * FROM agent_v2_outbox WHERE intent_id=$1", [
+                        intentId,
+                    ]);
+                    if (!intent ||
+                        intent.client_id !== input.run.clientId ||
+                        intent.run_id !== input.run.runId ||
+                        !equalAgentV2ProtocolValues(intent.reference_json, reference))
+                        throw new Error("Agent v2 run start replay conflict");
+                    outboxIntentIds.push(intentId);
+                }
+                return {
+                    run: existing,
+                    runCreatedEvent,
+                    planningReadyEvent,
+                    outboxIntentIds,
+                    replayed: true,
+                };
+            }
+            const run = buildAgentV2Run(input.run);
+            const row = await this.queryOne(tx, `INSERT INTO agent_v2_runs (client_id, run_id, status, phase, attempt, input_json, model_json, worker_id, created_at, updated_at, started_at, ended_at, error_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING ${AGENT_V2_RUN_COLUMNS}`, [
+                run.clientId,
+                run.runId,
+                run.status,
+                input.readyPhase,
+                run.attempt,
+                run.input,
+                run.model,
+                run.workerId ?? null,
+                run.createdAt,
+                run.updatedAt,
+                run.startedAt ?? null,
+                run.endedAt ?? null,
+                run.error ?? null,
+            ]);
+            for (const blob of input.inputBlobs)
+                await this.insertAgentV2InputBlobWithQueryable(tx, blob, run.clientId, run.runId);
+            for (const reference of input.inputReferences)
+                await this.insertAgentV2InputReferenceWithQueryable(tx, reference, run.clientId, run.runId);
+            await this.query(tx, "INSERT INTO agent_v2_bootstraps (client_id, run_id, bootstrap_version, bootstrap_checksum, created_at) VALUES ($1,$2,$3,$4,$5)", [run.clientId, run.runId, input.bootstrapVersion, startFingerprint, input.createdAt]);
+            for (const document of input.documents)
+                await this.upsertAgentV2DocumentWithQueryable(tx, document);
+            for (const task of input.tasks)
+                await this.upsertAgentV2TaskWithQueryable(tx, task);
+            for (const artifact of input.artifacts)
+                await this.upsertAgentV2ArtifactWithQueryable(tx, artifact);
+            for (const diagnostic of input.diagnostics)
+                await this.appendAgentV2DiagnosticWithQueryable(tx, diagnostic);
+            const runCreatedEvent = await this.appendAgentV2RunEventWithQueryable(tx, {
+                clientId: run.clientId,
+                runId: run.runId,
+                seq: 1,
+                type: "run_created",
+                payload: { status: run.status },
+                createdAt: input.createdAt,
+            });
+            const planningReadyEvent = await this.appendAgentV2RunEventWithQueryable(tx, {
+                clientId: run.clientId,
+                runId: run.runId,
+                seq: 2,
+                type: "planning_ready",
+                payload: { phase: input.readyPhase },
+                createdAt: input.createdAt,
+            });
+            const outboxIntentIds = [
+                await this.insertAgentV2OutboxWithQueryable(tx, run.clientId, run.runId, { kind: "live_event", eventSeq: 1 }, input.createdAt),
+                await this.insertAgentV2OutboxWithQueryable(tx, run.clientId, run.runId, { kind: "live_event", eventSeq: 2 }, input.createdAt),
+            ];
+            for (const diagnostic of input.diagnostics)
+                outboxIntentIds.push(...(await this.insertDiagnosticOutboxWithQueryable(tx, diagnostic)));
+            outboxIntentIds.push(await this.insertAgentV2OutboxWithQueryable(tx, run.clientId, run.runId, { kind: "run_enqueue", queueName: input.queueName }, input.createdAt));
+            return {
+                run: requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run"),
+                runCreatedEvent,
+                planningReadyEvent,
+                outboxIntentIds,
+                replayed: false,
+            };
+        });
+    }
+    async commitAgentV2RunTransition(input) {
+        if (input.diagnostic &&
+            (input.diagnostic.clientId !== input.update.clientId || input.diagnostic.runId !== input.update.runId)) {
+            throw new Error("Agent v2 run transition child identity mismatch");
+        }
+        return this.withTransaction(async (tx) => {
+            const current = requiredRecord(await this.getAgentV2RunWithQueryable(tx, input.update.clientId, input.update.runId, true), "agent v2 run");
+            if (!input.update.expectedStatuses?.includes(current.status) ||
+                !matchesAgentV2ExpectedRun(current, input.expectedRun) ||
+                !isCanonicalAgentV2Revision(input.expectedRun.updatedAt) ||
+                !isStrictlyNewerAgentV2Revision(input.update.updatedAt, current.updatedAt))
+                return { update: { run: current, applied: false }, outboxIntentIds: [] };
+            const next = applyAgentV2RunUpdate(current, input.update);
+            await this.updateAgentV2RunWithQueryable(tx, next);
+            const event = await this.appendAgentV2RunEventWithQueryable(tx, {
+                clientId: current.clientId,
+                runId: current.runId,
+                type: String(input.event.type),
+                payload: input.event.payload,
+                ...(typeof input.event.createdAt === "string" ? { createdAt: input.event.createdAt } : {}),
+            });
+            const outboxIntentIds = [
+                await this.insertAgentV2OutboxWithQueryable(tx, current.clientId, current.runId, { kind: "live_event", eventSeq: event.seq }, event.createdAt),
+            ];
+            if (input.diagnostic) {
+                await this.appendAgentV2DiagnosticWithQueryable(tx, input.diagnostic);
+                outboxIntentIds.push(...(await this.insertDiagnosticOutboxWithQueryable(tx, input.diagnostic)));
+            }
+            return { update: { run: next, applied: true }, event, outboxIntentIds };
+        });
+    }
+    async commitAgentV2RunCancel(input) {
+        return this.withTransaction(async (tx) => {
+            const current = requiredRecord(await this.getAgentV2RunWithQueryable(tx, input.clientId, input.runId, true), "agent v2 run");
+            const dedupeKey = `run_cancel:${input.clientId}:${input.runId}:${input.queueName}:${input.cancelToken}`;
+            const existing = await this.queryOne(tx, "SELECT intent_id FROM agent_v2_outbox WHERE dedupe_key = $1", [dedupeKey]);
+            if (existing) {
+                const cancelFingerprint = agentV2CancelReplayFingerprint(input);
+                const event = (await this.listAgentV2RunEventsWithQueryable(tx, input.clientId, input.runId, 0)).find((item) => item.type === "run_cancelled" &&
+                    item.createdAt === input.cancelledAt &&
+                    equalAgentV2ProtocolValues(item.payload, {
+                        ...(input.reason !== undefined ? { reason: input.reason } : {}),
+                        cancelFingerprint,
+                    }));
+                const liveReference = event
+                    ? { kind: "live_event", eventSeq: event.seq }
+                    : undefined;
+                const liveIntent = liveReference
+                    ? await this.queryOne(tx, "SELECT * FROM agent_v2_outbox WHERE intent_id=$1", [
+                        agentV2OutboxIntentId(postgresOutboxDedupeKey(input.clientId, input.runId, liveReference)),
+                    ])
+                    : undefined;
+                const cancelIntent = await this.queryOne(tx, "SELECT * FROM agent_v2_outbox WHERE intent_id=$1", [existing.intent_id]);
+                if (!event ||
+                    current.status !== "cancelled" ||
+                    current.phase !== "cancelled" ||
+                    current.attempt !== input.expectedRun.attempt ||
+                    (current.workerId ?? null) !== input.expectedRun.workerId ||
+                    current.updatedAt !== input.cancelledAt ||
+                    current.endedAt !== input.cancelledAt ||
+                    !liveReference ||
+                    !liveIntent ||
+                    !equalAgentV2ProtocolValues(liveIntent.reference_json, liveReference) ||
+                    !cancelIntent ||
+                    !equalAgentV2ProtocolValues(cancelIntent.reference_json, {
+                        kind: "run_cancel",
+                        queueName: input.queueName,
+                        cancelToken: input.cancelToken,
+                    }))
+                    throw new Error("Agent v2 cancel replay conflict");
+                return {
+                    run: current,
+                    cancelEvent: event,
+                    outboxIntentIds: [liveIntent.intent_id, existing.intent_id],
+                    replayed: true,
+                };
+            }
+            if (!(current.status === "queued" || current.status === "running") ||
+                !input.expectedStatuses.includes(current.status) ||
+                !matchesAgentV2ExpectedRun(current, input.expectedRun) ||
+                !isCanonicalAgentV2Revision(input.expectedRun.updatedAt) ||
+                !isStrictlyNewerAgentV2Revision(input.cancelledAt, current.updatedAt))
+                throw new Error("Agent v2 cancel compare-and-set conflict");
+            const next = applyAgentV2RunUpdate(current, {
+                clientId: input.clientId,
+                runId: input.runId,
+                expectedStatuses: input.expectedStatuses,
+                status: "cancelled",
+                phase: "cancelled",
+                updatedAt: input.cancelledAt,
+                endedAt: input.cancelledAt,
+            });
+            await this.updateAgentV2RunWithQueryable(tx, next);
+            const cancelEvent = await this.appendAgentV2RunEventWithQueryable(tx, {
+                clientId: input.clientId,
+                runId: input.runId,
+                type: "run_cancelled",
+                payload: {
+                    ...(input.reason !== undefined ? { reason: input.reason } : {}),
+                    cancelFingerprint: agentV2CancelReplayFingerprint(input),
+                },
+                createdAt: input.cancelledAt,
+            });
+            const outboxIntentIds = [
+                await this.insertAgentV2OutboxWithQueryable(tx, input.clientId, input.runId, { kind: "live_event", eventSeq: cancelEvent.seq }, input.cancelledAt),
+                await this.insertAgentV2OutboxWithQueryable(tx, input.clientId, input.runId, { kind: "run_cancel", queueName: input.queueName, cancelToken: input.cancelToken }, input.cancelledAt),
+            ];
+            return { run: next, cancelEvent, outboxIntentIds, replayed: false };
+        });
+    }
+    async commitAgentV2ExecutionMutation(input) {
+        return this.withTransaction(async (tx) => {
+            const run = requiredRecord(await this.getAgentV2RunWithQueryable(tx, input.clientId, input.runId, true), "agent v2 run");
+            const expectations = new Map(input.expectedTasks.map((task) => [task.taskId, task]));
+            const taskIds = new Set(input.tasks.map((task) => task.taskId));
+            const currentTasks = await this.listAgentV2TasksWithQueryable(tx, input.clientId, input.runId, true);
+            const childIdentityMismatch = [
+                ...input.tasks,
+                ...(input.artifacts ?? []),
+                ...(input.diagnostics ?? []),
+                ...(input.validation ? [input.validation] : []),
+            ].some((child) => child.clientId !== input.clientId || child.runId !== input.runId);
+            if (expectations.size !== input.expectedTasks.length ||
+                taskIds.size !== input.tasks.length ||
+                input.tasks.some((task) => !expectations.has(task.taskId)) ||
+                !isCanonicalAgentV2Revision(input.expectedRun.updatedAt) ||
+                !isCanonicalAgentV2Revision(run.updatedAt) ||
+                !isStrictlyNewerAgentV2Revision(input.updatedAt, run.updatedAt) ||
+                childIdentityMismatch ||
+                !matchesAgentV2ExpectedRun(run, input.expectedRun) ||
+                input.expectedTasks.some((expected) => {
+                    const task = currentTasks.find((candidate) => candidate.taskId === expected.taskId);
+                    return (!isCanonicalAgentV2Revision(expected.updatedAt) ||
+                        !task ||
+                        !isCanonicalAgentV2Revision(task.updatedAt) ||
+                        task.status !== expected.status ||
+                        task.updatedAt !== expected.updatedAt);
+                }) ||
+                input.tasks.some((task) => {
+                    const current = currentTasks.find((candidate) => candidate.taskId === task.taskId);
+                    return !current || !isStrictlyNewerAgentV2Revision(task.updatedAt, current.updatedAt);
+                }))
+                return { applied: false, run, tasks: currentTasks, artifacts: [], events: [], outboxIntentIds: [] };
+            const nextRun = applyAgentV2RunUpdate(run, {
+                clientId: input.clientId,
+                runId: input.runId,
+                ...(input.nextRunPhase ? { phase: input.nextRunPhase } : {}),
+                updatedAt: input.updatedAt,
+            });
+            await this.updateAgentV2RunWithQueryable(tx, nextRun);
+            for (const task of input.tasks)
+                await this.upsertAgentV2TaskWithQueryable(tx, task);
+            for (const artifact of input.artifacts ?? [])
+                await this.upsertAgentV2ArtifactWithQueryable(tx, artifact);
+            const validation = input.validation
+                ? await this.appendAgentV2ValidationWithQueryable(tx, input.validation)
+                : undefined;
+            for (const diagnostic of input.diagnostics ?? [])
+                await this.appendAgentV2DiagnosticWithQueryable(tx, diagnostic);
+            const events = [];
+            for (const event of input.events)
+                events.push(await this.appendAgentV2RunEventWithQueryable(tx, {
+                    clientId: input.clientId,
+                    runId: input.runId,
+                    type: String(event.type),
+                    payload: event.payload,
+                    ...(typeof event.createdAt === "string" ? { createdAt: event.createdAt } : {}),
+                }));
+            const outboxIntentIds = [];
+            for (const event of events)
+                outboxIntentIds.push(await this.insertAgentV2OutboxWithQueryable(tx, input.clientId, input.runId, { kind: "live_event", eventSeq: event.seq }, event.createdAt));
+            for (const diagnostic of input.diagnostics ?? [])
+                outboxIntentIds.push(...(await this.insertDiagnosticOutboxWithQueryable(tx, diagnostic)));
+            return {
+                applied: true,
+                run: nextRun,
+                tasks: await this.listAgentV2TasksWithQueryable(tx, input.clientId, input.runId),
+                artifacts: await this.listAgentV2ArtifactsWithQueryable(tx, input.clientId, input.runId),
+                validation,
+                events,
+                outboxIntentIds,
+            };
+        });
+    }
+    async commitAgentV2Diagnostic(input) {
+        return this.withTransaction(async (tx) => {
+            requiredRecord(await this.getAgentV2RunWithQueryable(tx, input.diagnostic.clientId, input.diagnostic.runId, true), "agent v2 run");
+            const diagnostic = await this.appendAgentV2DiagnosticWithQueryable(tx, input.diagnostic);
+            const outboxIntentIds = await this.insertDiagnosticOutboxWithQueryable(tx, diagnostic);
+            const existingEvent = (await this.listAgentV2RunEventsWithQueryable(tx, diagnostic.clientId, diagnostic.runId, 0)).find((event) => event.type === "diagnostic" && event.payload.diagnosticId === diagnostic.diagnosticId);
+            const event = input.emitRunEvent
+                ? (existingEvent ??
+                    (await this.appendAgentV2RunEventWithQueryable(tx, {
+                        clientId: diagnostic.clientId,
+                        runId: diagnostic.runId,
+                        type: "diagnostic",
+                        payload: { diagnosticId: diagnostic.diagnosticId },
+                        createdAt: diagnostic.createdAt,
+                    })))
+                : undefined;
+            if (event)
+                outboxIntentIds.push(await this.insertAgentV2OutboxWithQueryable(tx, diagnostic.clientId, diagnostic.runId, { kind: "live_event", eventSeq: event.seq }, event.createdAt));
+            return { diagnostic, event, outboxIntentIds };
+        });
+    }
+    async listAgentV2InputReferences(clientId, runId) {
+        return (await this.queryRows(this.queryable, "SELECT client_id, run_id, kind, ordinal, input_id, logical_path, display_name, media_type, byte_length, checksum FROM agent_v2_input_references WHERE client_id = $1 AND run_id = $2 ORDER BY kind, ordinal", [clientId, runId])).map(toPgInputReference);
+    }
+    async readAgentV2InputBlob(clientId, runId, inputId) {
+        const row = await this.queryOne(this.queryable, "SELECT client_id, run_id, input_id, logical_path, media_type, encoding, bytes, byte_length, checksum, created_at FROM agent_v2_input_blobs WHERE client_id = $1 AND run_id = $2 AND input_id = $3", [clientId, runId, inputId]);
+        return row ? toPgInputBlob(row) : undefined;
+    }
+    async leaseAgentV2Outbox(input) {
+        validateAgentV2OutboxLeaseInput(input);
+        return this.withTransaction(async (tx) => {
+            const values = [input.now, input.now];
+            const kinds = input.kinds?.length ? ` AND kind = ANY($${values.push([...input.kinds])}::text[])` : "";
+            const limitIndex = values.push(input.limit);
+            const ownerIndex = values.push(input.ownerId);
+            const expiryIndex = values.push(new Date(Date.parse(input.now) + input.leaseTtlMs).toISOString());
+            const updatedIndex = values.push(input.now);
+            const rows = await this.queryRows(tx, `WITH candidates AS (SELECT intent_id FROM agent_v2_outbox WHERE ((status = 'pending' AND available_at <= $1) OR (status = 'leased' AND lease_expires_at <= $2))${kinds} ORDER BY available_at, created_at, intent_id LIMIT $${limitIndex} FOR UPDATE SKIP LOCKED) UPDATE agent_v2_outbox AS outbox SET status='leased', lease_owner=$${ownerIndex}, lease_expires_at=$${expiryIndex}, attempt_count=outbox.attempt_count+1, updated_at=$${updatedIndex} FROM candidates WHERE outbox.intent_id=candidates.intent_id RETURNING outbox.*`, values);
+            return rows.map(toPgOutboxRecord).sort(compareOutboxRecords);
+        });
+    }
+    async markAgentV2OutboxDelivered(input) {
+        validateAgentV2OutboxDeliveryInput(input);
+        const result = await this.query(this.queryable, "UPDATE agent_v2_outbox SET status='delivered', delivered_at=$1, updated_at=$1, lease_owner=NULL, lease_expires_at=NULL WHERE intent_id=$2 AND status='leased' AND lease_owner=$3 AND attempt_count=$4 AND lease_expires_at>$1", [input.deliveredAt, input.intentId, input.ownerId, input.leaseAttempt]);
+        return result.rowCount === 1 ? "delivered" : "lease_lost";
+    }
+    async rescheduleAgentV2Outbox(input) {
+        validateAgentV2OutboxRescheduleInput(input);
+        return this.withTransaction(async (tx) => {
+            const row = await this.queryOne(tx, "SELECT attempt_count FROM agent_v2_outbox WHERE intent_id=$1 AND status='leased' AND lease_owner=$2 AND attempt_count=$3 AND lease_expires_at>$4 FOR UPDATE", [input.intentId, input.ownerId, input.leaseAttempt, input.updatedAt]);
+            if (!row)
+                return "lease_lost";
+            const status = toNumber(row.attempt_count) >= input.maxAttempts ? "dead_letter" : "pending";
+            await this.query(tx, "UPDATE agent_v2_outbox SET status=$1, available_at=$2, lease_owner=NULL, lease_expires_at=NULL, last_error_code=$3, last_error_message=$4, updated_at=$5 WHERE intent_id=$6", [status, input.availableAt, input.errorCode, input.errorMessage, input.updatedAt, input.intentId]);
+            return status;
+        });
+    }
     async resetAgentV2RuntimeData(options = {}) {
         const appliedAt = options.now?.() ?? now();
         return this.withTransaction(async (tx) => {
@@ -1240,6 +1608,194 @@ export class PostgresRuntimeStore {
 					AND table_name = $1
 			) AS present`, [table]);
         return rows[0]?.present === true;
+    }
+    async getAgentV2RunWithQueryable(queryable, clientId, runId, lock = false) {
+        const row = await this.queryOne(queryable, `SELECT ${AGENT_V2_RUN_COLUMNS} FROM agent_v2_runs WHERE client_id=$1 AND run_id=$2${lock ? " FOR UPDATE" : ""}`, [clientId, runId]);
+        return row ? toAgentV2RunRecord(row) : undefined;
+    }
+    async updateAgentV2RunWithQueryable(queryable, run) {
+        await this.query(queryable, "UPDATE agent_v2_runs SET status=$3, phase=$4, attempt=$5, worker_id=$6, updated_at=$7, started_at=$8, ended_at=$9, error_json=$10 WHERE client_id=$1 AND run_id=$2", [
+            run.clientId,
+            run.runId,
+            run.status,
+            run.phase,
+            run.attempt,
+            run.workerId ?? null,
+            run.updatedAt,
+            run.startedAt ?? null,
+            run.endedAt ?? null,
+            run.error ?? null,
+        ]);
+    }
+    async appendAgentV2RunEventWithQueryable(queryable, input) {
+        const seq = input.seq ??
+            toNumber((await this.queryOne(queryable, "SELECT COALESCE(MAX(seq),0)+1 AS seq FROM agent_v2_run_events WHERE client_id=$1 AND run_id=$2", [input.clientId, input.runId]))?.seq);
+        const createdAt = input.createdAt ?? now();
+        const row = await this.queryOne(queryable, `INSERT INTO agent_v2_run_events (client_id, run_id, seq, event_type, payload_json, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${AGENT_V2_RUN_EVENT_COLUMNS}`, [input.clientId, input.runId, seq, input.type, input.payload, createdAt]);
+        return requiredRecord(row ? toAgentV2RunEventRecord(row) : undefined, "agent v2 run event");
+    }
+    async listAgentV2RunEventsWithQueryable(queryable, clientId, runId, afterSeq) {
+        return (await this.queryRows(queryable, `SELECT ${AGENT_V2_RUN_EVENT_COLUMNS} FROM agent_v2_run_events WHERE client_id=$1 AND run_id=$2 AND seq>$3 ORDER BY seq`, [clientId, runId, afterSeq])).map(toAgentV2RunEventRecord);
+    }
+    async insertAgentV2InputBlobWithQueryable(queryable, input, clientId, runId) {
+        if (input.clientId !== clientId || input.runId !== runId || input.byteLength !== input.bytes.byteLength)
+            throw new Error("Agent v2 input blob identity or length mismatch");
+        await this.query(queryable, "INSERT INTO agent_v2_input_blobs (client_id, run_id, input_id, logical_path, media_type, encoding, bytes, byte_length, checksum, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", [
+            input.clientId,
+            input.runId,
+            input.inputId,
+            input.logicalPath,
+            input.mediaType,
+            input.encoding,
+            Buffer.from(input.bytes),
+            input.byteLength,
+            input.checksum,
+            input.createdAt,
+        ]);
+    }
+    async insertAgentV2InputReferenceWithQueryable(queryable, input, clientId, runId) {
+        if (input.clientId !== clientId || input.runId !== runId)
+            throw new Error("Agent v2 input reference identity mismatch");
+        await this.query(queryable, "INSERT INTO agent_v2_input_references (client_id, run_id, input_id, logical_path, media_type, checksum, kind, ordinal, display_name, byte_length) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", [
+            input.clientId,
+            input.runId,
+            input.inputId,
+            input.logicalPath,
+            input.mediaType,
+            input.checksum,
+            input.kind,
+            input.ordinal,
+            input.displayName ?? null,
+            input.byteLength,
+        ]);
+    }
+    async upsertAgentV2TaskWithQueryable(queryable, input) {
+        const task = buildAgentV2Task(input);
+        const row = await this.queryOne(queryable, `INSERT INTO agent_v2_tasks (client_id,run_id,task_id,parent_task_id,kind,title,status,depends_on_json,acceptance_criteria_json,input_json,output_json,created_at,updated_at,started_at,ended_at,error_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT(client_id,run_id,task_id) DO UPDATE SET parent_task_id=excluded.parent_task_id,kind=excluded.kind,title=excluded.title,status=excluded.status,depends_on_json=excluded.depends_on_json,acceptance_criteria_json=excluded.acceptance_criteria_json,input_json=excluded.input_json,output_json=excluded.output_json,updated_at=excluded.updated_at,started_at=excluded.started_at,ended_at=excluded.ended_at,error_json=excluded.error_json RETURNING ${AGENT_V2_TASK_COLUMNS}`, [
+            input.clientId,
+            input.runId,
+            task.taskId,
+            task.parentTaskId ?? null,
+            task.kind,
+            task.title,
+            task.status,
+            task.dependsOn,
+            task.acceptanceCriteria,
+            task.input,
+            task.output,
+            task.createdAt,
+            task.updatedAt,
+            task.startedAt ?? null,
+            task.endedAt ?? null,
+            task.error ?? null,
+        ]);
+        return requiredRecord(row ? toAgentV2TaskRecord(row) : undefined, "agent v2 task");
+    }
+    async listAgentV2TasksWithQueryable(queryable, clientId, runId, lock = false) {
+        return (await this.queryRows(queryable, `SELECT ${AGENT_V2_TASK_COLUMNS} FROM agent_v2_tasks WHERE client_id=$1 AND run_id=$2 ORDER BY created_at,task_id${lock ? " FOR UPDATE" : ""}`, [clientId, runId])).map(toAgentV2TaskRecord);
+    }
+    async upsertAgentV2ArtifactWithQueryable(queryable, input) {
+        const artifact = buildAgentV2Artifact(input);
+        const row = await this.queryOne(queryable, `INSERT INTO agent_v2_artifacts (client_id,run_id,artifact_id,kind,path,media_type,checksum,version,source_task_id,validation_status,metadata_json,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(client_id,run_id,artifact_id) DO UPDATE SET kind=excluded.kind,path=excluded.path,media_type=excluded.media_type,checksum=excluded.checksum,version=excluded.version,source_task_id=excluded.source_task_id,validation_status=excluded.validation_status,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at RETURNING ${AGENT_V2_ARTIFACT_COLUMNS}`, [
+            artifact.clientId,
+            artifact.runId,
+            artifact.artifactId,
+            artifact.kind,
+            artifact.path,
+            artifact.mediaType,
+            artifact.checksum,
+            artifact.version,
+            artifact.sourceTaskId ?? null,
+            artifact.validationStatus,
+            artifact.metadataJson,
+            artifact.createdAt,
+            artifact.updatedAt,
+        ]);
+        return requiredRecord(row ? toAgentV2ArtifactRecord(row) : undefined, "agent v2 artifact");
+    }
+    async listAgentV2ArtifactsWithQueryable(queryable, clientId, runId) {
+        return (await this.queryRows(queryable, `SELECT ${AGENT_V2_ARTIFACT_COLUMNS} FROM agent_v2_artifacts WHERE client_id=$1 AND run_id=$2 ORDER BY created_at,artifact_id`, [clientId, runId])).map(toAgentV2ArtifactRecord);
+    }
+    async upsertAgentV2DocumentWithQueryable(queryable, input) {
+        const document = buildAgentV2Document(input);
+        const row = await this.queryOne(queryable, `INSERT INTO agent_v2_documents (client_id,run_id,document_id,kind,version,content_markdown,content_json,source_task_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(client_id,run_id,document_id) DO UPDATE SET kind=excluded.kind,version=excluded.version,content_markdown=excluded.content_markdown,content_json=excluded.content_json,source_task_id=excluded.source_task_id,updated_at=excluded.updated_at RETURNING ${AGENT_V2_DOCUMENT_COLUMNS}`, [
+            document.clientId,
+            document.runId,
+            document.documentId,
+            document.kind,
+            document.version,
+            document.contentMarkdown,
+            document.contentJson,
+            document.sourceTaskId ?? null,
+            document.createdAt,
+            document.updatedAt,
+        ]);
+        return requiredRecord(row ? toAgentV2DocumentRecord(row) : undefined, "agent v2 document");
+    }
+    async appendAgentV2DiagnosticWithQueryable(queryable, input) {
+        const row = await this.queryOne(queryable, `INSERT INTO agent_v2_diagnostics (client_id,run_id,diagnostic_id,severity,category,code,phase,task_id,artifact_id,trace_id,message,data_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(client_id,run_id,diagnostic_id) DO NOTHING RETURNING ${AGENT_V2_DIAGNOSTIC_COLUMNS}`, [
+            input.clientId,
+            input.runId,
+            input.diagnosticId,
+            input.severity,
+            input.category,
+            input.code,
+            input.phase ?? null,
+            input.taskId ?? null,
+            input.artifactId ?? null,
+            input.traceId ?? null,
+            input.message,
+            input.data,
+            input.createdAt,
+        ]);
+        if (row)
+            return toAgentV2DiagnosticRecord(row);
+        const existingRow = await this.queryOne(queryable, `SELECT ${AGENT_V2_DIAGNOSTIC_COLUMNS} FROM agent_v2_diagnostics WHERE client_id=$1 AND run_id=$2 AND diagnostic_id=$3`, [input.clientId, input.runId, input.diagnosticId]);
+        const existing = existingRow ? toAgentV2DiagnosticRecord(existingRow) : undefined;
+        if (existing && equalAgentV2ProtocolValues(existing, input))
+            return existing;
+        throw new Error("Agent v2 diagnostic conflict");
+    }
+    async appendAgentV2ValidationWithQueryable(queryable, input) {
+        const validation = buildAgentV2Validation(input);
+        const row = await this.queryOne(queryable, `INSERT INTO agent_v2_validation_attempts (client_id,run_id,validation_id,attempt,task_id,artifact_id,status,summary,details_json,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(client_id,run_id,validation_id,attempt) DO NOTHING RETURNING ${AGENT_V2_VALIDATION_COLUMNS}`, [
+            validation.clientId,
+            validation.runId,
+            validation.validationId,
+            validation.attempt,
+            validation.taskId ?? null,
+            validation.artifactId ?? null,
+            validation.status,
+            validation.summary,
+            validation.details,
+            validation.createdAt,
+            validation.updatedAt,
+        ]);
+        if (row)
+            return toAgentV2ValidationRecord(row);
+        const existingRow = await this.queryOne(queryable, `SELECT ${AGENT_V2_VALIDATION_COLUMNS} FROM agent_v2_validation_attempts WHERE client_id=$1 AND run_id=$2 AND validation_id=$3 AND attempt=$4`, [validation.clientId, validation.runId, validation.validationId, validation.attempt]);
+        const existing = existingRow ? toAgentV2ValidationRecord(existingRow) : undefined;
+        if (existing && equalAgentV2ValidationRecords(existing, validation))
+            return existing;
+        throw new Error("Agent v2 validation attempt conflict");
+    }
+    async insertDiagnosticOutboxWithQueryable(queryable, diagnostic) {
+        return [
+            await this.insertAgentV2OutboxWithQueryable(queryable, diagnostic.clientId, diagnostic.runId, { kind: "workspace_diagnostic", diagnosticId: diagnostic.diagnosticId }, diagnostic.createdAt),
+            await this.insertAgentV2OutboxWithQueryable(queryable, diagnostic.clientId, diagnostic.runId, { kind: "langfuse_diagnostic", diagnosticId: diagnostic.diagnosticId }, diagnostic.createdAt),
+        ];
+    }
+    async insertAgentV2OutboxWithQueryable(queryable, clientId, runId, reference, createdAt) {
+        const dedupeKey = postgresOutboxDedupeKey(clientId, runId, reference);
+        const intentId = agentV2OutboxIntentId(dedupeKey);
+        const existing = await this.queryOne(queryable, "SELECT intent_id, reference_json FROM agent_v2_outbox WHERE dedupe_key=$1", [dedupeKey]);
+        if (existing) {
+            if (existing.intent_id !== intentId || !equalAgentV2ProtocolValues(existing.reference_json, reference))
+                throw new Error("Agent v2 outbox dedupe conflict");
+            return existing.intent_id;
+        }
+        await this.query(queryable, "INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$6,$6,$7,0)", [intentId, dedupeKey, clientId, runId, reference.kind, createdAt, reference]);
+        return intentId;
     }
     async withTransaction(callback) {
         const client = await this.connect();
@@ -1395,6 +1951,83 @@ function toNumber(value) {
         return Number.isFinite(parsed) ? parsed : 0;
     }
     return 0;
+}
+function toPgInputBlob(row) {
+    return {
+        clientId: row.client_id,
+        runId: row.run_id,
+        inputId: row.input_id,
+        logicalPath: row.logical_path,
+        mediaType: row.media_type,
+        encoding: row.encoding,
+        bytes: new Uint8Array(row.bytes),
+        byteLength: toNumber(row.byte_length),
+        checksum: row.checksum,
+        createdAt: toTimestamp(row.created_at),
+    };
+}
+function toPgInputReference(row) {
+    return {
+        clientId: row.client_id,
+        runId: row.run_id,
+        kind: row.kind,
+        ordinal: toNumber(row.ordinal),
+        inputId: row.input_id,
+        logicalPath: row.logical_path,
+        ...(row.display_name ? { displayName: row.display_name } : {}),
+        mediaType: row.media_type,
+        byteLength: toNumber(row.byte_length),
+        checksum: row.checksum,
+    };
+}
+function toPgOutboxRecord(row) {
+    return {
+        intentId: row.intent_id,
+        dedupeKey: row.dedupe_key,
+        clientId: row.client_id,
+        runId: row.run_id,
+        reference: row.reference_json,
+        status: row.status,
+        attemptCount: toNumber(row.attempt_count),
+        availableAt: toTimestamp(row.available_at),
+        ...(row.lease_owner ? { leaseOwner: row.lease_owner } : {}),
+        ...(row.lease_expires_at ? { leaseExpiresAt: toTimestamp(row.lease_expires_at) } : {}),
+        ...(row.last_error_code ? { lastErrorCode: row.last_error_code } : {}),
+        ...(row.last_error_message ? { lastErrorMessage: row.last_error_message } : {}),
+        createdAt: toTimestamp(row.created_at),
+        updatedAt: toTimestamp(row.updated_at),
+        ...(row.delivered_at ? { deliveredAt: toTimestamp(row.delivered_at) } : {}),
+    };
+}
+function compareOutboxRecords(a, b) {
+    return (a.availableAt.localeCompare(b.availableAt) ||
+        a.createdAt.localeCompare(b.createdAt) ||
+        a.intentId.localeCompare(b.intentId));
+}
+function postgresOutboxDedupeKey(clientId, runId, reference) {
+    switch (reference.kind) {
+        case "run_enqueue":
+            return `run_enqueue:${clientId}:${runId}:${reference.queueName}`;
+        case "run_cancel":
+            return `run_cancel:${clientId}:${runId}:${reference.queueName}:${reference.cancelToken}`;
+        case "live_event":
+            return `live_event:${clientId}:${runId}:${reference.eventSeq}`;
+        case "workspace_diagnostic":
+            return `workspace_diagnostic:${clientId}:${runId}:${reference.diagnosticId}`;
+        case "langfuse_diagnostic":
+            return `langfuse_diagnostic:${clientId}:${runId}:${reference.diagnosticId}`;
+    }
+}
+function postgresStartOutboxReferences(input) {
+    return [
+        { kind: "live_event", eventSeq: 1 },
+        { kind: "live_event", eventSeq: 2 },
+        ...input.diagnostics.flatMap((diagnostic) => [
+            { kind: "workspace_diagnostic", diagnosticId: diagnostic.diagnosticId },
+            { kind: "langfuse_diagnostic", diagnosticId: diagnostic.diagnosticId },
+        ]),
+        { kind: "run_enqueue", queueName: input.queueName },
+    ];
 }
 function toTimestamp(value) {
     return value instanceof Date ? value.toISOString() : value;

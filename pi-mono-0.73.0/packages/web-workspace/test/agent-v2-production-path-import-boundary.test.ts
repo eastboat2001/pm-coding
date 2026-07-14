@@ -222,6 +222,21 @@ describe("agent v2 production import boundary", () => {
 		expect(source).toContain("createRedisAgentV2RunQueue");
 	});
 
+	it("exports durable commit and outbox only through v2 production boundaries", () => {
+		const runtimeInfra = readFileSync(join(repoRoot, "packages/web-workspace/src/runtime-infra.ts"), "utf8");
+		const root = readFileSync(join(repoRoot, "packages/web-workspace/src/index.ts"), "utf8");
+		const factory = readFileSync(join(repoRoot, "packages/web-workspace/src/runtime-store-factory.ts"), "utf8");
+		const legacyStore = readFileSync(join(repoRoot, "packages/web-workspace/src/runtime-store.ts"), "utf8");
+		expect(runtimeInfra).toContain('export type * from "./agent-v2-durable-store.js"');
+		expect(runtimeInfra).toContain('export type * from "./agent-v2-outbox.js"');
+		expect(root).toContain('export type * from "./agent-v2-durable-store.js"');
+		expect(root).toContain('export type * from "./agent-v2-outbox.js"');
+		for (const contract of ["AgentV2DurableCommitStore", "AgentV2OutboxStore"]) {
+			expect(factory).toContain(contract);
+			expect(legacyStore).not.toContain(contract);
+		}
+	});
+
 	it("uses the composite agent v2 store factory across production entrypoints and barrels", () => {
 		const files = [
 			"packages/web-workspace/src/vite-plugin.ts",

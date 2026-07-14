@@ -64,7 +64,7 @@ describe("agent v2 execution core", () => {
 		});
 	});
 
-	it("keeps retryable validation failures selectable and retries them before max attempts", async () => {
+	it("atomically expands a retryable validation failure into repair and revalidation tasks", async () => {
 		const root = tempRoot();
 		const store = createStore(root);
 		store.createAgentV2Run({
@@ -88,6 +88,20 @@ describe("agent v2 execution core", () => {
 			createdAt: "2026-07-08T00:00:00.000Z",
 			updatedAt: "2026-07-08T00:00:00.000Z",
 		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-validation",
+			taskId: "deliver",
+			kind: "delivery",
+			title: "Deliver",
+			status: "pending",
+			dependsOn: ["validate"],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.001Z",
+			updatedAt: "2026-07-08T00:00:00.001Z",
+		});
 
 		const first = await executeAgentV2NextTask({
 			...unusedExecutionDependencies(),
@@ -109,70 +123,30 @@ describe("agent v2 execution core", () => {
 				taskId: "validate",
 			}),
 		]);
-		expect(store.listAgentV2Diagnostics("client-a", "run-validation")).toEqual(
+		expect(store.listAgentV2Diagnostics("client-a", "run-validation")).toEqual([
+			expect.objectContaining({
+				diagnosticId: "agent_v2.validation_failed:validate:1",
+				code: "agent_v2.validation_failed",
+				message: "Static validation failed.",
+				data: expect.objectContaining({ attempt: 1, maxAttempts: 3, failureCodes: expect.any(Array) }),
+			}),
+		]);
+		expect(store.listAgentV2Tasks("client-a", "run-validation")).toEqual(
 			expect.arrayContaining([
+				expect.objectContaining({ taskId: "validate", status: "succeeded" }),
 				expect.objectContaining({
-					diagnosticId: first.diagnosticIds[0],
-					category: "validation",
-					code: "agent_v2.validation_failed",
-					taskId: "validate",
-					severity: "error",
-					data: expect.objectContaining({
-						attempt: 1,
-						maxAttempts: 3,
-						failures: expect.any(Array),
-						repairActions: expect.arrayContaining([
-							expect.objectContaining({
-								type: "rerun_validation",
-								retryable: true,
-							}),
-						]),
-					}),
+					taskId: "repair:validate:1",
+					kind: "repair",
+					dependsOn: ["validate"],
 				}),
+				expect.objectContaining({
+					taskId: "revalidate:validate:2",
+					kind: "validation",
+					dependsOn: ["repair:validate:1"],
+				}),
+				expect.objectContaining({ taskId: "deliver", dependsOn: ["revalidate:validate:2"] }),
 			]),
 		);
-		const firstPersistedTask = store.listAgentV2Tasks("client-a", "run-validation")[0];
-		expect(firstPersistedTask).toMatchObject({
-			taskId: "validate",
-			status: "ready",
-			output: expect.objectContaining({
-				validationId: "static:validate",
-				repairActions: expect.any(Array),
-				phase4: expect.objectContaining({
-					validationRepairAttempt: 1,
-					validationMaxRepairAttempts: 3,
-				}),
-			}),
-		});
-		expect(firstPersistedTask?.error).toBeUndefined();
-
-		const second = await executeAgentV2NextTask({
-			...unusedExecutionDependencies(),
-			store: forbidLegacyRuntimeReads(store),
-			config: testConfig(root),
-			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
-			runId: "run-validation",
-			now: () => "2026-07-08T00:03:00.000Z",
-			maxRepairAttempts: 3,
-		});
-
-		expect(second).toMatchObject({
-			status: "task_failed",
-			taskId: "validate",
-		});
-		expect(store.listAgentV2Tasks("client-a", "run-validation")[0]).toMatchObject({
-			taskId: "validate",
-			status: "ready",
-			output: expect.objectContaining({
-				phase4: expect.objectContaining({
-					validationRepairAttempt: 2,
-					validationMaxRepairAttempts: 3,
-				}),
-			}),
-		});
-		expect(store.listAgentV2Validations("client-a", "run-validation").map((record) => record.attempt)).toEqual([
-			1, 2,
-		]);
 	});
 
 	it("stops before static validation when the execution signal is already aborted", async () => {
@@ -216,7 +190,7 @@ describe("agent v2 execution core", () => {
 		expect(store.listAgentV2Validations("client-a", "run-validation-aborted")).toEqual([]);
 	});
 
-	it("uses persisted validation repair attempts to stop retryable failures at max attempts", async () => {
+	it("records the terminal immutable attempt and creates no tasks at the repair limit", async () => {
 		const root = tempRoot();
 		const store = createStore(root);
 		store.createAgentV2Run({
@@ -229,20 +203,44 @@ describe("agent v2 execution core", () => {
 		store.upsertAgentV2Task({
 			clientId: "client-a",
 			runId: "run-validation-attempts",
-			taskId: "validate",
+			taskId: "revalidate:validate:3",
 			kind: "validation",
 			title: "Validate static app",
 			status: "ready",
+			dependsOn: ["repair:validate:2"],
+			acceptanceCriteria: [],
+			input: { baseValidationTaskId: "validate", validationAttempt: 3 },
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-validation-attempts",
+			taskId: "repair:validate:2",
+			kind: "repair",
+			title: "Previous repair",
+			status: "succeeded",
 			dependsOn: [],
 			acceptanceCriteria: [],
 			input: {},
-			output: {
-				phase4: {
-					validationRepairAttempt: 2,
-				},
-			},
-			createdAt: "2026-07-08T00:00:00.000Z",
-			updatedAt: "2026-07-08T00:00:00.000Z",
+			output: {},
+			createdAt: "2026-07-07T23:59:59.000Z",
+			updatedAt: "2026-07-07T23:59:59.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-validation-attempts",
+			taskId: "deliver",
+			kind: "delivery",
+			title: "Deliver",
+			status: "pending",
+			dependsOn: ["revalidate:validate:3"],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.001Z",
+			updatedAt: "2026-07-08T00:00:00.001Z",
 		});
 
 		const result = await executeAgentV2NextTask({
@@ -257,7 +255,7 @@ describe("agent v2 execution core", () => {
 
 		expect(result).toMatchObject({
 			status: "task_failed",
-			taskId: "validate",
+			taskId: "revalidate:validate:3",
 		});
 		expect(store.listAgentV2Diagnostics("client-a", "run-validation-attempts")).toEqual(
 			expect.arrayContaining([
@@ -267,19 +265,17 @@ describe("agent v2 execution core", () => {
 					data: expect.objectContaining({
 						attempt: 3,
 						maxAttempts: 3,
-						repairActions: [
-							expect.objectContaining({
-								type: "block_task",
-								retryable: false,
-								validationCode: "repair.max_attempts_exceeded",
-							}),
-						],
+						failureCodes: expect.any(Array),
 					}),
 				}),
 			]),
 		);
-		expect(store.listAgentV2Tasks("client-a", "run-validation-attempts")[0]).toMatchObject({
-			taskId: "validate",
+		expect(
+			store
+				.listAgentV2Tasks("client-a", "run-validation-attempts")
+				.find((task) => task.taskId === "revalidate:validate:3"),
+		).toMatchObject({
+			taskId: "revalidate:validate:3",
 			status: "failed",
 			error: expect.objectContaining({
 				code: "agent_v2.validation_failed",
@@ -289,20 +285,16 @@ describe("agent v2 execution core", () => {
 					maxAttempts: 3,
 				}),
 			}),
-			output: expect.objectContaining({
-				validationId: "static:validate",
-				repairActions: [
-					expect.objectContaining({
-						type: "block_task",
-						validationCode: "repair.max_attempts_exceeded",
-					}),
-				],
-				phase4: expect.objectContaining({
-					validationRepairAttempt: 3,
-					validationMaxRepairAttempts: 3,
-				}),
-			}),
+			output: expect.objectContaining({ validationId: "static:validate", attempt: 3, maxAttempts: 3 }),
 		});
+		expect(store.listAgentV2Validations("client-a", "run-validation-attempts")).toEqual([
+			expect.objectContaining({ validationId: "static:validate", attempt: 3, status: "failed" }),
+		]);
+		expect(
+			store
+				.listAgentV2Tasks("client-a", "run-validation-attempts")
+				.some((task) => task.taskId === "repair:validate:3"),
+		).toBe(false);
 	});
 
 	it("persists passed validation records and transitions validation tasks to succeeded", async () => {

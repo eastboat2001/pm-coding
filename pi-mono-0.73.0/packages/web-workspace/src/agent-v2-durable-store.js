@@ -43,6 +43,10 @@ export function agentV2StartReplayFingerprint(input) {
 export function agentV2CancelReplayFingerprint(input) {
     return protocolFingerprint(agentV2CancelReplayEvidence(input));
 }
+export function isAgentV2DeterministicExecutionTaskId(taskId) {
+    return (/^repair:[A-Za-z0-9][A-Za-z0-9._:~-]*:[1-9][0-9]*$/u.test(taskId) ||
+        /^revalidate:[A-Za-z0-9][A-Za-z0-9._:~-]*:[2-9][0-9]*$/u.test(taskId));
+}
 export function matchesAgentV2ExpectedRun(run, expected) {
     return (run.status === expected.status &&
         run.phase === expected.phase &&

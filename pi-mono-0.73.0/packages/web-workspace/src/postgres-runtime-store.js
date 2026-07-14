@@ -1,5 +1,5 @@
 import pg from "pg";
-import { agentV2CancelReplayFingerprint, agentV2StartReplayFingerprint, equalAgentV2ProtocolValues, isCanonicalAgentV2Revision, isStrictlyNewerAgentV2Revision, matchesAgentV2ExpectedRun, } from "./agent-v2-durable-store.js";
+import { agentV2CancelReplayFingerprint, agentV2StartReplayFingerprint, equalAgentV2ProtocolValues, isAgentV2DeterministicExecutionTaskId, isCanonicalAgentV2Revision, isStrictlyNewerAgentV2Revision, matchesAgentV2ExpectedRun, } from "./agent-v2-durable-store.js";
 import { agentV2OutboxIntentId, assertAgentV2Timestamp, validateAgentV2OutboxDeliveryInput, validateAgentV2OutboxLeaseInput, validateAgentV2OutboxRescheduleInput, } from "./agent-v2-outbox.js";
 import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_RUN_EVENT_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, equalAgentV2ValidationRecords, stringifyAgentV2Json, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunEventRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_INDEXES, AGENT_V2_SCHEMA_RESET_REQUIRED, AGENT_V2_SCHEMA_TABLE_COLUMNS, AGENT_V2_SCHEMA_TABLES, AGENT_V2_SCHEMA_VERSION, } from "./agent-v2-types.js";
@@ -1398,7 +1398,9 @@ export class PostgresRuntimeStore {
             ].some((child) => child.clientId !== input.clientId || child.runId !== input.runId);
             if (expectations.size !== input.expectedTasks.length ||
                 taskIds.size !== input.tasks.length ||
+                expectations.size !== taskIds.size ||
                 input.tasks.some((task) => !expectations.has(task.taskId)) ||
+                input.expectedTasks.some((expected) => "absent" in expected && !isAgentV2DeterministicExecutionTaskId(expected.taskId)) ||
                 !isCanonicalAgentV2Revision(input.expectedRun.updatedAt) ||
                 !isCanonicalAgentV2Revision(run.updatedAt) ||
                 !isStrictlyNewerAgentV2Revision(input.updatedAt, run.updatedAt) ||
@@ -1406,6 +1408,8 @@ export class PostgresRuntimeStore {
                 !matchesAgentV2ExpectedRun(run, input.expectedRun) ||
                 input.expectedTasks.some((expected) => {
                     const task = currentTasks.find((candidate) => candidate.taskId === expected.taskId);
+                    if ("absent" in expected)
+                        return task !== undefined;
                     return (!isCanonicalAgentV2Revision(expected.updatedAt) ||
                         !task ||
                         !isCanonicalAgentV2Revision(task.updatedAt) ||
@@ -1413,7 +1417,15 @@ export class PostgresRuntimeStore {
                         task.updatedAt !== expected.updatedAt);
                 }) ||
                 input.tasks.some((task) => {
+                    const expected = expectations.get(task.taskId);
                     const current = currentTasks.find((candidate) => candidate.taskId === task.taskId);
+                    if (!expected)
+                        return true;
+                    if ("absent" in expected) {
+                        return (current !== undefined ||
+                            !isCanonicalAgentV2Revision(task.updatedAt) ||
+                            task.updatedAt !== input.updatedAt);
+                    }
                     return !current || !isStrictlyNewerAgentV2Revision(task.updatedAt, current.updatedAt);
                 }))
                 return { applied: false, run, tasks: currentTasks, artifacts: [], events: [], outboxIntentIds: [] };

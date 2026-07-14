@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import {
 	type AgentV2ContextPacket,
 	type AgentV2DiagnosticEvent,
 	type AgentV2ModelExecutionInput,
+	type AgentV2RepairModelExecutionInput,
 	type AgentV2RunSnapshot,
 	type AgentV2TaskNode,
 	AGENT_V2_MODEL_ID_MAX_LENGTH,
@@ -667,15 +669,24 @@ describe("AgentV2PiModelExecution", () => {
 	});
 
 	it("uses the strict repair parser and rejects malformed output without exposing provider data", async () => {
-		const diagnostic = repairDiagnostic();
+		const input = repairExecutionInput();
+		const complete = vi.fn(async () => assistantMessage(repairJson()));
 		const valid = new AgentV2PiModelExecution({
 			modelRegistry: registry(trustedModel()),
 			resolveApiKey: () => SECRET_KEY,
-			complete: vi.fn(async () => assistantMessage(repairJson())),
+			complete,
 		});
-		await expect(valid.generateRepair({ ...executionInput(), diagnostics: [diagnostic] })).resolves.toMatchObject({
-			result: { taskId: "task-1", addressedDiagnosticIds: ["diag-1"] },
+		await expect(valid.generateRepair(input)).resolves.toMatchObject({
+			result: {
+				taskId: "repair:validate:1",
+				addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+			},
 		});
+		const repairContext = complete.mock.calls[0]?.[1];
+		expect(repairContext?.systemPrompt).toContain("Application Generation Agent v2 repair executor");
+		expect(repairContext?.messages[0]?.content).toContain("PI_REPAIR_WORKSPACE_SENTINEL");
+		expect(repairContext?.messages[0]?.content).toContain("static.loading_visible");
+		expect(JSON.stringify(repairContext)).not.toContain("RAW_VALIDATOR_MESSAGE");
 
 		const invalid = new AgentV2PiModelExecution({
 			modelRegistry: registry(trustedModel()),
@@ -929,11 +940,78 @@ function implementationJson(): string {
 function repairJson(): string {
 	return JSON.stringify({
 		version: 1,
-		taskId: "task-1",
+		taskId: "repair:validate:1",
 		summary: "repaired",
 		files: [{ path: "index.html", content: "fixed" }],
-		addressedDiagnosticIds: ["diag-1"],
+		addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
 	});
+}
+
+function repairExecutionInput(): AgentV2RepairModelExecutionInput {
+	const base = executionInput();
+	const content = "<!doctype html><main>PI_REPAIR_WORKSPACE_SENTINEL</main>";
+	const checksum = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+	const task: AgentV2TaskNode = {
+		taskId: "repair:validate:1",
+		parentTaskId: "validate",
+		kind: "repair",
+		title: "Repair validation attempt 1",
+		status: "ready",
+		dependsOn: ["validate"],
+		acceptanceCriteria: ["repair"],
+		input: {
+			baseValidationTaskId: "validate",
+			failedValidationTaskId: "validate",
+			validationId: "static:validate",
+			validationAttempt: 1,
+			diagnosticIds: ["agent_v2.validation_failed:validate:1"],
+		},
+		output: {},
+		createdAt: base.run.createdAt,
+		updatedAt: base.run.updatedAt,
+	};
+	const artifact = {
+		clientId: base.run.clientId,
+		runId: base.run.runId,
+		artifactId: "file:index.html",
+		kind: "source",
+		path: "index.html",
+		mediaType: "text/html",
+		checksum,
+		version: checksum,
+		sourceTaskId: "implement",
+		validationStatus: "failed",
+		metadataJson: {},
+		createdAt: base.run.createdAt,
+		updatedAt: base.run.updatedAt,
+	};
+	return {
+		...base,
+		task,
+		contextPacket: {
+			...base.contextPacket,
+			taskSelection: { task, reason: "running", blockedTaskIds: [], failedDependencyTaskIds: [] },
+			activeTask: task,
+			artifactIndex: {
+				artifacts: [artifact],
+				latestByPath: new Map([[artifact.path, artifact]]),
+				pendingValidation: [artifact],
+			},
+			activeTaskArtifacts: [],
+			openProblems: [],
+		},
+		diagnostics: [repairDiagnostic()],
+		workspaceFiles: [
+			{
+				artifactId: artifact.artifactId,
+				path: artifact.path,
+				mediaType: artifact.mediaType,
+				checksum,
+				byteLength: Buffer.byteLength(content, "utf8"),
+				content,
+			},
+		],
+	};
 }
 
 function executionInput(model: unknown = { provider: "trusted-provider", id: "trusted-model" }, signal?: AbortSignal): AgentV2ModelExecutionInput {
@@ -976,15 +1054,22 @@ function executionInput(model: unknown = { provider: "trusted-provider", id: "tr
 
 function repairDiagnostic(): AgentV2DiagnosticEvent {
 	return {
-		diagnosticId: "diag-1",
+		diagnosticId: "agent_v2.validation_failed:validate:1",
 		clientId: "client-a",
 		runId: "run-a",
 		severity: "error",
 		category: "validation",
-		code: "INVALID_HTML",
+		code: "agent_v2.validation_failed",
 		phase: "validation",
-		taskId: "task-1",
-		message: "Fix the HTML",
+		taskId: "validate",
+		message: "RAW_VALIDATOR_MESSAGE",
+		data: {
+			validationId: "static:validate",
+			attempt: 1,
+			failureCount: 1,
+			retryableFailureCount: 1,
+			failureCodes: ["static.loading_visible"],
+		},
 		createdAt: "2026-07-10T00:00:00.000Z",
 	};
 }

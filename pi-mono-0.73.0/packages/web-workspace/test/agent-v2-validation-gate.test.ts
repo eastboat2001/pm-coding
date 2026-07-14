@@ -156,14 +156,11 @@ describe("agent v2 validation gate", () => {
 		]);
 		expect(result.rawResult.task).toBe("build_static");
 		expect(failure?.data).toMatchObject({ sourceMessage: "Container build timed out." });
-		expect(result.validation.details).toMatchObject({
-			rawErrors: ["Container build timed out."],
-			buildResult: expect.objectContaining({
-				status: "failed",
-				failureCode: "build.timeout",
-				errors: ["Container build timed out."],
-				logs: ["sanitized timeout log"],
-			}),
+		expect(result.validation.details).toEqual({
+			failureCount: 1,
+			failureCodes: ["build.timeout"],
+			retryableFailureCount: 1,
+			usedBuildStep: true,
 		});
 	});
 
@@ -273,14 +270,11 @@ describe("agent v2 validation gate", () => {
 		expect(result.status).toBe("passed");
 		expect(result.failures).toEqual([]);
 		expect(result.rawResult.task).toBe("validate");
-		expect(result.validation.details).toMatchObject({
-			rawErrors: [],
-			initialRawErrors: [sourceMessage],
-			buildResult: expect.objectContaining({
-				task: "build_static",
-				status: "succeeded",
-				logs: ["built dist/index.html"],
-			}),
+		expect(result.validation.details).toEqual({
+			failureCount: 0,
+			failureCodes: [],
+			retryableFailureCount: 0,
+			usedBuildStep: true,
 		});
 	});
 
@@ -377,9 +371,13 @@ describe("agent v2 validation gate", () => {
 		expect(result.failures[0]?.data).toMatchObject({
 			sourceMessage,
 		});
-		expect(result.validation.details).toMatchObject({
-			rawErrors: [sourceMessage],
+		expect(result.validation.details).toEqual({
+			failureCount: 1,
+			failureCodes: ["static.validation_failed"],
+			retryableFailureCount: 1,
+			usedBuildStep: false,
 		});
+		expect(JSON.stringify(result.validation)).not.toContain(sourceMessage);
 	});
 });
 

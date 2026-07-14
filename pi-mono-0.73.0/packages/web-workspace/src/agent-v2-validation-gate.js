@@ -63,13 +63,10 @@ export async function runAgentV2StaticValidationGate(input) {
             status,
             summary: status === "passed" ? "Static validation passed" : "Static validation failed",
             details: {
-                failures,
-                rawErrors,
-                ...(buildResult ? { initialRawErrors, buildResult: buildResultSummary(buildResult) } : {}),
-                rawStatus: taskResult.status,
-                projectRoot: taskResult.projectRoot,
-                serveRoot: taskResult.serveRoot,
-                fileCount: taskResult.fileCount,
+                failureCount: failures.length,
+                failureCodes: [...new Set(failures.map((failure) => failure.code))].sort(),
+                retryableFailureCount: failures.filter((failure) => failure.retryable).length,
+                usedBuildStep: buildResult !== undefined,
             },
             createdAt: input.now,
             updatedAt: input.now,
@@ -82,19 +79,6 @@ function rawErrorsFor(result) {
 }
 function isBuildRequiredMessage(message) {
     return /^Static preview found a build source entry at .+?\. Run build_static before preview so PI can serve browser-ready dist\/build output\.$/.test(message.trim());
-}
-function buildResultSummary(result) {
-    return {
-        task: result.task,
-        status: result.status,
-        projectRoot: result.projectRoot,
-        serveRoot: result.serveRoot,
-        fileCount: result.fileCount,
-        files: result.files,
-        errors: rawErrorsFor(result),
-        logs: Array.isArray(result.logs) ? result.logs.map(String) : undefined,
-        failureCode: result.failureCode,
-    };
 }
 function classifyBuildRunnerFailure(result, taskId) {
     const code = result.failureCode ?? "build.execution_failed";

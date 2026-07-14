@@ -20,6 +20,7 @@ import {
 	agentV2CancelReplayFingerprint,
 	agentV2StartReplayFingerprint,
 	equalAgentV2ProtocolValues,
+	isAgentV2DeterministicExecutionTaskId,
 	isCanonicalAgentV2Revision,
 	isStrictlyNewerAgentV2Revision,
 	matchesAgentV2ExpectedRun,
@@ -1837,7 +1838,11 @@ export class RuntimeDbStore implements RuntimeStore {
 			if (
 				expectations.size !== input.expectedTasks.length ||
 				taskIds.size !== input.tasks.length ||
+				expectations.size !== taskIds.size ||
 				input.tasks.some((task) => !expectations.has(task.taskId)) ||
+				input.expectedTasks.some(
+					(expected) => "absent" in expected && !isAgentV2DeterministicExecutionTaskId(expected.taskId),
+				) ||
 				!isCanonicalAgentV2Revision(input.expectedRun.updatedAt) ||
 				!isCanonicalAgentV2Revision(run.updatedAt) ||
 				!isStrictlyNewerAgentV2Revision(input.updatedAt, run.updatedAt) ||
@@ -1845,6 +1850,7 @@ export class RuntimeDbStore implements RuntimeStore {
 				!matchesAgentV2ExpectedRun(run, input.expectedRun) ||
 				input.expectedTasks.some((expected) => {
 					const current = currentTasks.find((task) => task.taskId === expected.taskId);
+					if ("absent" in expected) return current !== undefined;
 					return (
 						!isCanonicalAgentV2Revision(expected.updatedAt) ||
 						!current ||
@@ -1854,7 +1860,16 @@ export class RuntimeDbStore implements RuntimeStore {
 					);
 				}) ||
 				input.tasks.some((task) => {
+					const expected = expectations.get(task.taskId);
 					const current = currentTasks.find((candidate) => candidate.taskId === task.taskId);
+					if (!expected) return true;
+					if ("absent" in expected) {
+						return (
+							current !== undefined ||
+							!isCanonicalAgentV2Revision(task.updatedAt) ||
+							task.updatedAt !== input.updatedAt
+						);
+					}
 					return !current || !isStrictlyNewerAgentV2Revision(task.updatedAt, current.updatedAt);
 				})
 			) {

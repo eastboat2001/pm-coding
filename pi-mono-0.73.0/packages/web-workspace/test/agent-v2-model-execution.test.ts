@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ import {
 	type AgentV2MaterializedInput,
 	AgentV2ModelContractError,
 	type AgentV2ModelExecutionInput,
+	type AgentV2RepairModelExecutionInput,
 	parseAgentV2ImplementationResult,
 	parseAgentV2RepairResult,
 } from "../src/agent-v2-model-execution.js";
@@ -337,19 +339,13 @@ describe("agent v2 model prompt renderer", () => {
 		}
 	});
 
-	it("renders only repair-relevant open diagnostics and the repair schema", () => {
-		const input = executionInput();
-		const rendered = renderAgentV2RepairPrompt({
-			...input,
-			diagnostics: [
-				diagnostic({ diagnosticId: "diag-info", severity: "info", message: "ignore informational" }),
-				diagnostic({ diagnosticId: "diag-open", severity: "error", message: "Fix missing label" }),
-			],
-		});
-		expect(rendered.userPrompt).toContain("diag-open");
-		expect(rendered.userPrompt).toContain("Fix missing label");
-		expect(rendered.userPrompt).not.toContain("diag-info");
-		expect(rendered.userPrompt).not.toContain("ignore informational");
+	it("renders only the trusted validation diagnostic, failure taxonomy and bounded current workspace", () => {
+		const input = repairPromptInput();
+		const rendered = renderAgentV2RepairPrompt(input);
+		expect(rendered.userPrompt).toContain("agent_v2.validation_failed:task-1:1");
+		expect(rendered.userPrompt).toContain("static.loading_visible");
+		expect(rendered.userPrompt).toContain("CURRENT_WORKSPACE_SENTINEL");
+		expect(rendered.userPrompt).not.toContain("RAW_VALIDATOR_MESSAGE");
 		expect(rendered.userPrompt).toContain("addressedDiagnosticIds");
 		expect(rendered.systemPrompt).toContain("repair");
 	});
@@ -410,48 +406,22 @@ describe("agent v2 model prompt renderer", () => {
 			expectPromptError(() => renderAgentV2ImplementationPrompt({ ...input, contextPacket }));
 		}
 
+		const repairInput = repairPromptInput();
+		const trustedDiagnostic = repairInput.diagnostics[0]!;
 		for (const invalidDiagnostic of [
-			diagnostic({
-				diagnosticId: "diag-client",
-				severity: "error",
-				message: "CROSS_CLIENT_SENTINEL",
-				clientId: "other",
-			}),
-			diagnostic({ diagnosticId: "diag-run", severity: "error", message: "CROSS_RUN_SENTINEL", runId: "other" }),
-			diagnostic({
-				diagnosticId: "diag-task",
-				severity: "error",
-				message: "CROSS_TASK_SENTINEL",
-				taskId: "task-other",
-			}),
-			diagnostic({
-				diagnosticId: "diag-artifact",
-				severity: "error",
-				message: "CROSS_ARTIFACT_SENTINEL",
-				artifactId: "artifact-other",
-			}),
+			{ ...trustedDiagnostic, clientId: "other", message: "CROSS_CLIENT_SENTINEL" },
+			{ ...trustedDiagnostic, runId: "other", message: "CROSS_RUN_SENTINEL" },
+			{ ...trustedDiagnostic, taskId: "task-other", message: "CROSS_TASK_SENTINEL" },
+			{ ...trustedDiagnostic, diagnosticId: "diag-other", message: "CROSS_DIAGNOSTIC_SENTINEL" },
 		]) {
 			expectPromptError(
-				() => renderAgentV2RepairPrompt({ ...input, diagnostics: [invalidDiagnostic] }),
+				() => renderAgentV2RepairPrompt({ ...repairInput, diagnostics: [invalidDiagnostic] }),
 				invalidDiagnostic.message,
 			);
 		}
 
-		const allowed = renderAgentV2RepairPrompt({
-			...input,
-			diagnostics: [
-				diagnostic({ diagnosticId: "diag-global", severity: "error", message: "global", taskId: undefined }),
-				diagnostic({
-					diagnosticId: "diag-current-artifact",
-					severity: "warn",
-					message: "artifact",
-					taskId: undefined,
-					artifactId: "artifact-current",
-				}),
-			],
-		});
-		expect(allowed.userPrompt).toContain("diag-global");
-		expect(allowed.userPrompt).toContain("diag-current-artifact");
+		const allowed = renderAgentV2RepairPrompt(repairInput);
+		expect(allowed.userPrompt).toContain(trustedDiagnostic.diagnosticId);
 	});
 
 	it("whitelists open problem fields and ignores cyclic or prototype-sensitive extras", () => {
@@ -821,6 +791,78 @@ function executionInput(): AgentV2ModelExecutionInput {
 	return { run, contextPacket, task, inputs, signal: new AbortController().signal };
 }
 
+function repairPromptInput(): AgentV2RepairModelExecutionInput {
+	const base = executionInput();
+	const content = "export const state = 'CURRENT_WORKSPACE_SENTINEL';";
+	const checksum = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+	const task: AgentV2TaskNode = {
+		taskId: "repair:task-1:1",
+		parentTaskId: "task-1",
+		kind: "repair",
+		title: "Repair validation attempt 1",
+		status: "ready",
+		dependsOn: ["task-1"],
+		acceptanceCriteria: ["Repair the current source"],
+		input: {
+			baseValidationTaskId: "task-1",
+			failedValidationTaskId: "task-1",
+			validationId: "static:task-1",
+			validationAttempt: 1,
+			diagnosticIds: ["agent_v2.validation_failed:task-1:1"],
+		},
+		output: {},
+		createdAt: base.run.createdAt,
+		updatedAt: base.run.updatedAt,
+	};
+	const artifact: AgentV2ArtifactRecord = {
+		...artifactRecord(),
+		checksum,
+		version: checksum,
+		validationStatus: "failed",
+	};
+	const diagnostic: AgentV2DiagnosticEvent = {
+		diagnosticId: "agent_v2.validation_failed:task-1:1",
+		clientId: base.run.clientId,
+		runId: base.run.runId,
+		severity: "error",
+		category: "validation",
+		code: "agent_v2.validation_failed",
+		phase: "validation",
+		taskId: "task-1",
+		message: "RAW_VALIDATOR_MESSAGE",
+		data: {
+			validationId: "static:task-1",
+			attempt: 1,
+			failureCount: 1,
+			retryableFailureCount: 1,
+			failureCodes: ["static.loading_visible"],
+		},
+		createdAt: base.run.createdAt,
+	};
+	return {
+		...base,
+		task,
+		contextPacket: {
+			...base.contextPacket,
+			taskSelection: { task, reason: "running", blockedTaskIds: [], failedDependencyTaskIds: [] },
+			activeTask: task,
+			artifactIndex: buildAgentV2ArtifactIndex([artifact]),
+			activeTaskArtifacts: [],
+		},
+		diagnostics: [diagnostic],
+		workspaceFiles: [
+			{
+				artifactId: artifact.artifactId,
+				path: artifact.path,
+				mediaType: artifact.mediaType,
+				checksum,
+				byteLength: Buffer.byteLength(content, "utf8"),
+				content,
+			},
+		],
+	};
+}
+
 function taskNode(): AgentV2TaskNode {
 	return {
 		taskId: "task-1",
@@ -880,25 +922,5 @@ function reference(kind: "attachment" | "project_file", logicalPath: string, med
 		mediaType,
 		byteLength,
 		checksum: `sha256:${logicalPath}`,
-	};
-}
-
-function diagnostic(
-	overrides: Partial<AgentV2DiagnosticEvent> & Pick<AgentV2DiagnosticEvent, "diagnosticId" | "severity" | "message">,
-): AgentV2DiagnosticEvent {
-	return {
-		diagnosticId: overrides.diagnosticId,
-		clientId: overrides.clientId ?? "client-a",
-		runId: overrides.runId ?? "run-a",
-		severity: overrides.severity,
-		category: "validation",
-		code: overrides.code ?? "VALIDATION_FAILED",
-		phase: "validation",
-		taskId: "taskId" in overrides ? overrides.taskId : "task-1",
-		artifactId: overrides.artifactId,
-		traceId: "trace-secret",
-		message: overrides.message,
-		data: { secret: "diagnostic-secret-data" },
-		createdAt: "2026-07-10T00:00:00.000Z",
 	};
 }

@@ -35,6 +35,12 @@ export const AGENT_V2_MODEL_RESULT_LIMITS = Object.freeze({
 	maxAddressedDiagnosticIds: MAX_ADDRESSED_DIAGNOSTIC_IDS,
 } as const);
 
+export const AGENT_V2_REPAIR_WORKSPACE_LIMITS = Object.freeze({
+	maxFiles: 32,
+	maxFileBytes: 24_000,
+	maxTotalBytes: 96_000,
+} as const);
+
 export type AgentV2ModelContractErrorCode =
 	| "invalid_protocol"
 	| "invalid_schema"
@@ -122,13 +128,25 @@ export interface AgentV2ModelExecutionInput {
 	signal: AbortSignal;
 }
 
+export interface AgentV2RepairWorkspaceFile {
+	artifactId: string;
+	path: string;
+	mediaType: string;
+	checksum: string;
+	byteLength: number;
+	content: string;
+}
+
+export interface AgentV2RepairModelExecutionInput extends AgentV2ModelExecutionInput {
+	diagnostics: readonly AgentV2DiagnosticEvent[];
+	workspaceFiles: readonly AgentV2RepairWorkspaceFile[];
+}
+
 export interface AgentV2ModelExecution {
 	generateImplementation(
 		input: AgentV2ModelExecutionInput,
 	): Promise<AgentV2ModelExecutionEnvelope<AgentV2ImplementationResult>>;
-	generateRepair(
-		input: AgentV2ModelExecutionInput & { diagnostics: readonly AgentV2DiagnosticEvent[] },
-	): Promise<AgentV2ModelExecutionEnvelope<AgentV2RepairResult>>;
+	generateRepair(input: AgentV2RepairModelExecutionInput): Promise<AgentV2ModelExecutionEnvelope<AgentV2RepairResult>>;
 }
 
 const IMPLEMENTATION_FIELDS = new Set(["version", "taskId", "summary", "files"]);
@@ -157,7 +175,7 @@ export function parseAgentV2RepairResult(text: string, expectedTaskId: string): 
 	) {
 		throw new AgentV2ModelContractError("limit_exceeded");
 	}
-	const common = parseCommonResult(value, taskId);
+	const common = parseCommonResult(value, taskId, true);
 	const seen = new Set<string>();
 	const parsedIds = addressedDiagnosticIds.map((candidate) => {
 		const diagnosticId = requireStableIdentifier(candidate);
@@ -190,7 +208,11 @@ function parseResponseObject(text: string): Record<string, unknown> {
 	return record;
 }
 
-function parseCommonResult(value: Record<string, unknown>, expectedTaskId: string): AgentV2ImplementationResult {
+function parseCommonResult(
+	value: Record<string, unknown>,
+	expectedTaskId: string,
+	allowEmptyFiles = false,
+): AgentV2ImplementationResult {
 	if (value.version !== 1 || value.taskId !== expectedTaskId) {
 		throw new AgentV2ModelContractError("invalid_schema");
 	}
@@ -203,7 +225,7 @@ function parseCommonResult(value: Record<string, unknown>, expectedTaskId: strin
 		throw new AgentV2ModelContractError("limit_exceeded");
 	}
 	const rawFiles = requireArray(value.files);
-	if (rawFiles.length === 0 || rawFiles.length > AGENT_V2_MODEL_RESULT_LIMITS.maxFiles) {
+	if ((!allowEmptyFiles && rawFiles.length === 0) || rawFiles.length > AGENT_V2_MODEL_RESULT_LIMITS.maxFiles) {
 		throw new AgentV2ModelContractError("limit_exceeded");
 	}
 	let aggregateChars = 0;

@@ -122,6 +122,16 @@ export interface AgentV2ExpectedRunState {
 	workerId: string | null;
 	updatedAt: string;
 }
+export type AgentV2ExpectedTaskState =
+	| { taskId: string; status: AgentV2TaskStatus; updatedAt: string }
+	| { taskId: string; absent: true };
+
+export function isAgentV2DeterministicExecutionTaskId(taskId: string): boolean {
+	return (
+		/^repair:[A-Za-z0-9][A-Za-z0-9._:~-]*:[1-9][0-9]*$/u.test(taskId) ||
+		/^revalidate:[A-Za-z0-9][A-Za-z0-9._:~-]*:[2-9][0-9]*$/u.test(taskId)
+	);
+}
 export interface AgentV2RunTransitionCommitInput {
 	update: UpdateAgentV2RunInput;
 	expectedRun: AgentV2ExpectedRunState;
@@ -153,7 +163,7 @@ export interface AgentV2ExecutionMutationInput {
 	clientId: string;
 	runId: string;
 	expectedRun: AgentV2ExpectedRunState;
-	expectedTasks: readonly { taskId: string; status: AgentV2TaskStatus; updatedAt: string }[];
+	expectedTasks: readonly AgentV2ExpectedTaskState[];
 	updatedAt: string;
 	nextRunPhase?: AgentV2Phase;
 	tasks: readonly UpsertAgentV2TaskInput[];

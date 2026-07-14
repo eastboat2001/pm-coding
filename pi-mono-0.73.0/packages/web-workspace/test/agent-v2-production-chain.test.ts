@@ -173,7 +173,7 @@ describe("agent v2 production chain rehearsal", () => {
 		expect(await api.getRun(CLIENT_ID, "run-materialized-chain")).toMatchObject({ status: "succeeded" });
 		expect(runtimeDb.listAgentV2Artifacts(CLIENT_ID, "run-materialized-chain")).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ path: "index.html", sourceTaskId: "implement", validationStatus: "pending" }),
+				expect.objectContaining({ path: "index.html", sourceTaskId: "implement", validationStatus: "passed" }),
 			]),
 		);
 		expect(runtimeDb.listAgentV2RunEvents(CLIENT_ID, "run-materialized-chain", 0).map((event) => event.type)).toEqual(

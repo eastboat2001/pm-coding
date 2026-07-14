@@ -1679,6 +1679,111 @@ describe("PostgresRuntimeStore", () => {
 		);
 	});
 
+	it("applies and rejects deterministic expected-absent task CAS before PostgreSQL writes", async () => {
+		const t0 = "2026-07-14T02:00:00.000Z";
+		const t1 = "2026-07-14T02:00:01.000Z";
+		const runRow = {
+			client_id: "client-a",
+			run_id: "run-a",
+			status: "running",
+			phase: "validation",
+			attempt: 1,
+			input_json: {},
+			model_json: { provider: "test", id: "model" },
+			worker_id: "worker-a",
+			created_at: t0,
+			updated_at: t0,
+			started_at: t0,
+			ended_at: null,
+			error_json: null,
+		};
+		const taskRow = {
+			client_id: "client-a",
+			run_id: "run-a",
+			task_id: "repair:validate:1",
+			parent_task_id: "validate",
+			kind: "repair",
+			title: "Repair",
+			status: "pending",
+			depends_on_json: ["validate"],
+			acceptance_criteria_json: [],
+			input_json: {},
+			output_json: {},
+			created_at: t1,
+			updated_at: t1,
+			started_at: null,
+			ended_at: null,
+			error_json: null,
+		};
+		const mutation = {
+			clientId: "client-a",
+			runId: "run-a",
+			expectedRun: {
+				status: "running" as const,
+				phase: "validation" as const,
+				attempt: 1,
+				workerId: "worker-a",
+				updatedAt: t0,
+			},
+			expectedTasks: [{ taskId: "repair:validate:1", absent: true as const }],
+			updatedAt: t1,
+			nextRunPhase: "repair" as const,
+			tasks: [
+				{
+					clientId: "client-a",
+					runId: "run-a",
+					taskId: "repair:validate:1",
+					parentTaskId: "validate",
+					kind: "repair" as const,
+					title: "Repair",
+					status: "pending" as const,
+					dependsOn: ["validate"],
+					acceptanceCriteria: [],
+					input: {},
+					output: {},
+					createdAt: t1,
+					updatedAt: t1,
+				},
+			],
+			events: [],
+		};
+		const success = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			if (/FROM agent_v2_runs .* FOR UPDATE$/i.test(sql)) return { rows: [runRow] };
+			if (/FROM agent_v2_tasks .* FOR UPDATE$/i.test(sql)) return { rows: [] };
+			if (/^UPDATE agent_v2_runs/i.test(sql)) return { rowCount: 1 };
+			if (/^INSERT INTO agent_v2_tasks/i.test(sql)) return { rows: [taskRow] };
+			if (/FROM agent_v2_tasks /i.test(sql)) return { rows: [taskRow] };
+			if (/FROM agent_v2_artifacts /i.test(sql)) return { rows: [] };
+			return undefined;
+		});
+		const applied = await new PostgresRuntimeStore({ queryable: success }).commitAgentV2ExecutionMutation(mutation);
+		expect(applied.applied).toBe(true);
+		expect(success.statementsMatching(/^INSERT INTO agent_v2_tasks/i)).toHaveLength(1);
+
+		for (const expectedTasks of [
+			mutation.expectedTasks,
+			[
+				{ taskId: "repair:validate:1", absent: true as const },
+				{ taskId: "repair:validate:1", status: "pending" as const, updatedAt: t1 },
+			],
+		]) {
+			const currentRows = expectedTasks.length === 1 ? [taskRow] : [];
+			const rejected = new RecordingQueryable().on((query) => {
+				const sql = normalizeSql(query.sql);
+				if (/FROM agent_v2_runs .* FOR UPDATE$/i.test(sql)) return { rows: [runRow] };
+				if (/FROM agent_v2_tasks .* FOR UPDATE$/i.test(sql)) return { rows: currentRows };
+				return undefined;
+			});
+			const result = await new PostgresRuntimeStore({ queryable: rejected }).commitAgentV2ExecutionMutation({
+				...mutation,
+				expectedTasks,
+			});
+			expect(result.applied).toBe(false);
+			expect(rejected.statementsMatching(/^(UPDATE|INSERT) /i)).toEqual([]);
+		}
+	});
+
 	it("binds every Agent v2 JSON slot as parseable JSON text with semantic round-trip", async () => {
 		const createdAt = "2026-07-13T15:00:00.000Z";
 		let runRow: Record<string, unknown> | undefined;

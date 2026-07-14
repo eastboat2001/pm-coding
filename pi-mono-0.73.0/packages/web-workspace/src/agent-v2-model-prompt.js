@@ -1,4 +1,5 @@
-import { AgentV2ModelContractError } from "./agent-v2-model-execution.js";
+import { createHash } from "node:crypto";
+import { AGENT_V2_REPAIR_WORKSPACE_LIMITS, AgentV2ModelContractError, } from "./agent-v2-model-execution.js";
 export const AGENT_V2_MODEL_PROMPT_LIMITS = Object.freeze({
     maxObjectiveChars: 32_768,
     maxSectionChars: 65_536,
@@ -71,13 +72,14 @@ function renderPrompt(input, mode) {
             source: promptString(problem.source),
             severity: promptString(problem.severity),
             code: promptString(problem.code),
-            message: promptString(problem.message),
+            message: mode === "implementation" ? promptString(problem.message) : undefined,
             taskId: promptOptionalString(problem.taskId),
             artifactId: promptOptionalString(problem.artifactId),
         })),
     });
     addMaterializedInputSections(prompt, input);
     if (mode === "repair") {
+        addRepairWorkspaceSections(prompt, input);
         const diagnostics = boundedItems(input.diagnostics ?? [])
             .filter((diagnostic) => diagnostic.severity === "warn" || diagnostic.severity === "error")
             .map(projectDiagnostic)
@@ -106,25 +108,84 @@ function validatePromptIdentity(input, mode) {
         assertRecordIdentity(artifact, clientId, runId);
         indexedArtifactIds.add(promptString(artifact.artifactId));
     }
-    const currentArtifactIds = new Set();
     for (const artifact of boundedItems(input.contextPacket.activeTaskArtifacts)) {
         assertRecordIdentity(artifact, clientId, runId);
         const artifactId = promptString(artifact.artifactId);
         if (promptString(artifact.sourceTaskId) !== taskId || !indexedArtifactIds.has(artifactId)) {
             throw new AgentV2ModelContractError("prompt_invalid");
         }
-        currentArtifactIds.add(artifactId);
     }
     if (mode === "repair") {
+        validateRepairPromptIdentity(input, indexedArtifactIds);
         for (const diagnostic of boundedItems(input.diagnostics ?? [])) {
             assertRecordIdentity(diagnostic, clientId, runId);
-            const diagnosticTaskId = promptOptionalString(diagnostic.taskId);
-            const artifactId = promptOptionalString(diagnostic.artifactId);
-            if ((diagnosticTaskId !== undefined && diagnosticTaskId !== taskId) ||
-                (artifactId !== undefined && !currentArtifactIds.has(artifactId))) {
-                throw new AgentV2ModelContractError("prompt_invalid");
-            }
         }
+    }
+}
+function validateRepairPromptIdentity(input, indexedArtifactIds) {
+    const task = input.task;
+    const baseValidationTaskId = promptStableIdentifier(task.input.baseValidationTaskId);
+    const failedValidationTaskId = promptStableIdentifier(task.input.failedValidationTaskId);
+    const validationId = promptStableIdentifier(task.input.validationId);
+    const validationAttempt = promptPositiveInteger(task.input.validationAttempt);
+    const diagnosticIds = boundedStringArrayFromUnknown(task.input.diagnosticIds);
+    const expectedDiagnosticId = `agent_v2.validation_failed:${baseValidationTaskId}:${String(validationAttempt)}`;
+    if (task.kind !== "repair" ||
+        task.taskId !== `repair:${baseValidationTaskId}:${String(validationAttempt)}` ||
+        task.parentTaskId !== failedValidationTaskId ||
+        task.dependsOn.length !== 1 ||
+        task.dependsOn[0] !== failedValidationTaskId ||
+        validationId !== `static:${baseValidationTaskId}` ||
+        diagnosticIds.length !== 1 ||
+        diagnosticIds[0] !== expectedDiagnosticId ||
+        input.diagnostics.length !== 1) {
+        throw new AgentV2ModelContractError("prompt_invalid");
+    }
+    const diagnostic = input.diagnostics[0];
+    const failureCodes = diagnosticFailureCodes(diagnostic);
+    if (diagnostic.diagnosticId !== expectedDiagnosticId ||
+        diagnostic.taskId !== failedValidationTaskId ||
+        diagnostic.category !== "validation" ||
+        diagnostic.code !== "agent_v2.validation_failed" ||
+        diagnostic.phase !== "validation" ||
+        diagnostic.data.validationId !== validationId ||
+        diagnostic.data.attempt !== validationAttempt ||
+        failureCodes.length === 0) {
+        throw new AgentV2ModelContractError("prompt_invalid");
+    }
+    validateRepairWorkspaceFiles(input, indexedArtifactIds);
+}
+function validateRepairWorkspaceFiles(input, indexedArtifactIds) {
+    if (!Array.isArray(input.workspaceFiles) ||
+        input.workspaceFiles.length === 0 ||
+        input.workspaceFiles.length > AGENT_V2_REPAIR_WORKSPACE_LIMITS.maxFiles) {
+        throw new AgentV2ModelContractError("prompt_limit_exceeded");
+    }
+    const artifactById = new Map(input.contextPacket.artifactIndex.artifacts.map((artifact) => [artifact.artifactId, artifact]));
+    const seenPaths = new Set();
+    let totalBytes = 0;
+    for (const file of input.workspaceFiles) {
+        const artifact = artifactById.get(promptString(file.artifactId));
+        const path = promptString(file.path);
+        const byteLength = promptPositiveIntegerOrZero(file.byteLength);
+        const content = requireBoundedText(file.content, AGENT_V2_REPAIR_WORKSPACE_LIMITS.maxFileBytes);
+        totalBytes += byteLength;
+        if (!artifact ||
+            !indexedArtifactIds.has(file.artifactId) ||
+            artifact.kind !== "source" ||
+            (artifact.validationStatus !== "failed" && artifact.validationStatus !== "pending") ||
+            artifact.path !== path ||
+            artifact.mediaType !== promptString(file.mediaType) ||
+            artifact.checksum !== promptString(file.checksum) ||
+            seenPaths.has(path) ||
+            !isStrictPromptText(content) ||
+            Buffer.byteLength(content, "utf8") !== byteLength ||
+            byteLength > AGENT_V2_REPAIR_WORKSPACE_LIMITS.maxFileBytes ||
+            totalBytes > AGENT_V2_REPAIR_WORKSPACE_LIMITS.maxTotalBytes ||
+            `sha256:${createHash("sha256").update(content).digest("hex")}` !== file.checksum) {
+            throw new AgentV2ModelContractError("prompt_invalid");
+        }
+        seenPaths.add(path);
     }
 }
 function assertRecordIdentity(record, clientId, runId) {
@@ -189,6 +250,20 @@ function addMaterializedInputSections(prompt, input) {
         }
     }
 }
+function addRepairWorkspaceSections(prompt, input) {
+    const orderedFiles = [...input.workspaceFiles].sort((left, right) => promptString(left.path).localeCompare(promptString(right.path)) ||
+        promptString(left.artifactId).localeCompare(promptString(right.artifactId)));
+    for (const [index, file] of orderedFiles.entries()) {
+        prompt.addUntrusted("CURRENT WORKSPACE FILE", {
+            position: index,
+            artifactId: promptString(file.artifactId),
+            path: promptString(file.path),
+            mediaType: promptString(file.mediaType),
+            checksum: promptString(file.checksum),
+            byteLength: promptFiniteNumber(file.byteLength),
+        }, requireBoundedText(file.content, AGENT_V2_REPAIR_WORKSPACE_LIMITS.maxFileBytes));
+    }
+}
 function projectArtifact(artifact) {
     return {
         artifactId: promptString(artifact.artifactId),
@@ -210,7 +285,9 @@ function projectDiagnostic(diagnostic) {
         phase: promptOptionalString(diagnostic.phase),
         taskId: promptOptionalString(diagnostic.taskId),
         artifactId: promptOptionalString(diagnostic.artifactId),
-        message: promptString(diagnostic.message),
+        failureCodes: diagnosticFailureCodes(diagnostic),
+        failureCount: promptOptionalNonNegativeInteger(diagnostic.data.failureCount),
+        retryableFailureCount: promptOptionalNonNegativeInteger(diagnostic.data.retryableFailureCount),
         createdAt: promptString(diagnostic.createdAt),
     };
 }
@@ -377,6 +454,57 @@ function promptFiniteNumber(value) {
         throw new AgentV2ModelContractError("prompt_invalid");
     }
     return value;
+}
+function promptPositiveInteger(value) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+        throw new AgentV2ModelContractError("prompt_invalid");
+    }
+    return value;
+}
+function promptPositiveIntegerOrZero(value) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+        throw new AgentV2ModelContractError("prompt_invalid");
+    }
+    return value;
+}
+function promptOptionalNonNegativeInteger(value) {
+    return value === undefined ? undefined : promptPositiveIntegerOrZero(value);
+}
+function promptStableIdentifier(value) {
+    const identifier = promptString(value);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:~-]{0,255}$/u.test(identifier)) {
+        throw new AgentV2ModelContractError("prompt_invalid");
+    }
+    return identifier;
+}
+function boundedStringArrayFromUnknown(value) {
+    if (!Array.isArray(value))
+        throw new AgentV2ModelContractError("prompt_invalid");
+    return boundedItems(value).map(promptStableIdentifier);
+}
+function diagnosticFailureCodes(diagnostic) {
+    const failureCodes = boundedStringArrayFromUnknown(diagnostic.data.failureCodes);
+    if (failureCodes.length === 0 || failureCodes.length > 64) {
+        throw new AgentV2ModelContractError("prompt_invalid");
+    }
+    return [...new Set(failureCodes)].sort((left, right) => left.localeCompare(right));
+}
+function isStrictPromptText(value) {
+    for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        if (code === 0 || (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f)
+            return false;
+        if (code >= 0xd800 && code <= 0xdbff) {
+            const next = value.charCodeAt(index + 1);
+            if (next < 0xdc00 || next > 0xdfff)
+                return false;
+            index += 1;
+        }
+        else if (code >= 0xdc00 && code <= 0xdfff) {
+            return false;
+        }
+    }
+    return true;
 }
 function boundedStringArray(values) {
     return boundedItems(values).map(promptString);

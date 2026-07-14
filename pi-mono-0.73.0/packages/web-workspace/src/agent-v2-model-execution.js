@@ -26,6 +26,11 @@ export const AGENT_V2_MODEL_RESULT_LIMITS = Object.freeze({
     maxIdChars: MAX_ID_CHARS,
     maxAddressedDiagnosticIds: MAX_ADDRESSED_DIAGNOSTIC_IDS,
 });
+export const AGENT_V2_REPAIR_WORKSPACE_LIMITS = Object.freeze({
+    maxFiles: 32,
+    maxFileBytes: 24_000,
+    maxTotalBytes: 96_000,
+});
 const ERROR_MESSAGES = Object.freeze({
     invalid_protocol: "Agent v2 model response does not follow the required JSON protocol.",
     invalid_schema: "Agent v2 model response does not match the required result schema.",
@@ -67,7 +72,7 @@ export function parseAgentV2RepairResult(text, expectedTaskId) {
         addressedDiagnosticIds.length > AGENT_V2_MODEL_RESULT_LIMITS.maxAddressedDiagnosticIds) {
         throw new AgentV2ModelContractError("limit_exceeded");
     }
-    const common = parseCommonResult(value, taskId);
+    const common = parseCommonResult(value, taskId, true);
     const seen = new Set();
     const parsedIds = addressedDiagnosticIds.map((candidate) => {
         const diagnosticId = requireStableIdentifier(candidate);
@@ -102,7 +107,7 @@ function parseResponseObject(text) {
     const record = requireRecord(parsed);
     return record;
 }
-function parseCommonResult(value, expectedTaskId) {
+function parseCommonResult(value, expectedTaskId, allowEmptyFiles = false) {
     if (value.version !== 1 || value.taskId !== expectedTaskId) {
         throw new AgentV2ModelContractError("invalid_schema");
     }
@@ -111,7 +116,7 @@ function parseCommonResult(value, expectedTaskId) {
         throw new AgentV2ModelContractError("limit_exceeded");
     }
     const rawFiles = requireArray(value.files);
-    if (rawFiles.length === 0 || rawFiles.length > AGENT_V2_MODEL_RESULT_LIMITS.maxFiles) {
+    if ((!allowEmptyFiles && rawFiles.length === 0) || rawFiles.length > AGENT_V2_MODEL_RESULT_LIMITS.maxFiles) {
         throw new AgentV2ModelContractError("limit_exceeded");
     }
     let aggregateChars = 0;

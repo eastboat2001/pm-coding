@@ -549,6 +549,147 @@ describe("agent v2 durable commit and outbox store", () => {
 		expect(store.listAgentV2Tasks("client-a", "run-a").map((task) => task.taskId)).toEqual(["task-a"]);
 	});
 
+	it("creates deterministic tasks only under explicit expected-absent CAS", () => {
+		const store = createStore();
+		const createdAt = "2026-07-13T12:10:00.000Z";
+		store.commitAgentV2RunStart({ ...startReplayInput(createdAt), tasks: [] });
+		const run = store.getAgentV2Run("client-a", "run-a");
+		if (!run) throw new Error("expected run");
+		const task = {
+			clientId: "client-a",
+			runId: "run-a",
+			taskId: "repair:validate:1",
+			kind: "repair" as const,
+			title: "Repair validation attempt 1",
+			status: "pending" as const,
+			dependsOn: ["validate"],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-13T12:10:01.000Z",
+			updatedAt: "2026-07-13T12:10:01.000Z",
+		};
+		const input = {
+			clientId: "client-a",
+			runId: "run-a",
+			expectedRun: {
+				status: run.status,
+				phase: run.phase,
+				attempt: run.attempt,
+				workerId: run.workerId ?? null,
+				updatedAt: run.updatedAt,
+			},
+			expectedTasks: [{ taskId: task.taskId, absent: true as const }],
+			updatedAt: task.updatedAt,
+			tasks: [task],
+			events: [],
+		};
+
+		expect(
+			store.commitAgentV2ExecutionMutation({
+				...input,
+				expectedTasks: [
+					{ taskId: task.taskId, absent: true as const },
+					{ taskId: task.taskId, status: "pending" as const, updatedAt: task.updatedAt },
+				],
+			}),
+		).toMatchObject({ applied: false });
+		expect(store.listAgentV2Tasks("client-a", "run-a")).toEqual([]);
+		expect(store.commitAgentV2ExecutionMutation(input).applied).toBe(true);
+		const afterFirst = store.listAgentV2Tasks("client-a", "run-a");
+		expect(afterFirst.map((candidate) => candidate.taskId)).toEqual([task.taskId]);
+		const currentRun = store.getAgentV2Run("client-a", "run-a");
+		if (!currentRun) throw new Error("expected current run");
+		expect(
+			store.commitAgentV2ExecutionMutation({
+				...input,
+				expectedRun: {
+					status: currentRun.status,
+					phase: currentRun.phase,
+					attempt: currentRun.attempt,
+					workerId: currentRun.workerId ?? null,
+					updatedAt: currentRun.updatedAt,
+				},
+				updatedAt: "2026-07-13T12:10:02.000Z",
+				tasks: [{ ...task, updatedAt: "2026-07-13T12:10:02.000Z" }],
+			}),
+		).toMatchObject({ applied: false });
+		expect(store.listAgentV2Tasks("client-a", "run-a")).toEqual(afterFirst);
+	});
+
+	it("rolls back the complete execution mutation on divergent immutable validation replay", () => {
+		const store = createStore();
+		const t0 = "2026-07-13T12:20:00.000Z";
+		const t1 = "2026-07-13T12:20:01.000Z";
+		store.commitAgentV2RunStart({
+			...startReplayInput(t0),
+			tasks: [
+				{
+					clientId: "client-a",
+					runId: "run-a",
+					taskId: "validate",
+					kind: "validation",
+					title: "Validate",
+					status: "ready",
+					dependsOn: [],
+					acceptanceCriteria: [],
+					input: {},
+					output: {},
+					createdAt: t0,
+					updatedAt: t0,
+				},
+			],
+		});
+		const existingValidation = {
+			clientId: "client-a",
+			runId: "run-a",
+			validationId: "static:validate",
+			attempt: 1,
+			taskId: "validate",
+			status: "failed" as const,
+			summary: "Static validation failed",
+			details: { failureCodes: ["static.loading_visible"] },
+			createdAt: t1,
+			updatedAt: t1,
+		};
+		store.appendAgentV2ValidationAttempt(existingValidation);
+		const run = store.getAgentV2Run("client-a", "run-a");
+		const task = store.listAgentV2Tasks("client-a", "run-a")[0];
+		if (!run || !task) throw new Error("expected state");
+		const beforeEvents = store.listAgentV2RunEvents("client-a", "run-a", 0);
+
+		expect(() =>
+			store.commitAgentV2ExecutionMutation({
+				clientId: "client-a",
+				runId: "run-a",
+				expectedRun: {
+					status: run.status,
+					phase: run.phase,
+					attempt: run.attempt,
+					workerId: run.workerId ?? null,
+					updatedAt: run.updatedAt,
+				},
+				expectedTasks: [{ taskId: task.taskId, status: task.status, updatedAt: task.updatedAt }],
+				updatedAt: "2026-07-13T12:20:02.000Z",
+				tasks: [
+					{
+						...task,
+						clientId: "client-a",
+						runId: "run-a",
+						status: "succeeded",
+						updatedAt: "2026-07-13T12:20:02.000Z",
+					},
+				],
+				validation: { ...existingValidation, summary: "divergent" },
+				events: [{ type: "must_not_write", payload: {}, createdAt: "2026-07-13T12:20:02.000Z" }],
+			}),
+		).toThrow("validation attempt conflict");
+		expect(store.getAgentV2Run("client-a", "run-a")).toEqual(run);
+		expect(store.listAgentV2Tasks("client-a", "run-a")[0]).toEqual(task);
+		expect(store.listAgentV2RunEvents("client-a", "run-a", 0)).toEqual(beforeEvents);
+		expect(store.listAgentV2Validations("client-a", "run-a")).toEqual([existingValidation]);
+	});
+
 	it("rejects malformed, non-canonical, equal, older and historical ABA revisions with zero writes", () => {
 		const store = createStore();
 		const t0 = "2026-07-13T12:30:00.000Z";

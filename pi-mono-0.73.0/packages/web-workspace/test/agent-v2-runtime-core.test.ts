@@ -21,7 +21,7 @@ describe("agent v2 runtime core", () => {
 		const run = store.createAgentV2Run({
 			clientId: "client-a",
 			runId: "run-v2-runtime",
-			input: { prompt: "Build a static planning board" },
+			input: { objective: "Build a static planning board" },
 			model: { provider: "test", model: "local" },
 			createdAt: "2026-07-08T00:00:00.000Z",
 		});

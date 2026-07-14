@@ -1,7 +1,7 @@
 import pg from "pg";
 import { agentV2CancelReplayFingerprint, agentV2StartReplayFingerprint, equalAgentV2ProtocolValues, isCanonicalAgentV2Revision, isStrictlyNewerAgentV2Revision, matchesAgentV2ExpectedRun, } from "./agent-v2-durable-store.js";
 import { agentV2OutboxIntentId, assertAgentV2Timestamp, validateAgentV2OutboxDeliveryInput, validateAgentV2OutboxLeaseInput, validateAgentV2OutboxRescheduleInput, } from "./agent-v2-outbox.js";
-import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_RUN_EVENT_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, equalAgentV2ValidationRecords, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunEventRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";
+import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_RUN_EVENT_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, equalAgentV2ValidationRecords, stringifyAgentV2Json, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunEventRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";
 import { AGENT_V2_SCHEMA_INDEXES, AGENT_V2_SCHEMA_RESET_REQUIRED, AGENT_V2_SCHEMA_TABLE_COLUMNS, AGENT_V2_SCHEMA_TABLES, AGENT_V2_SCHEMA_VERSION, } from "./agent-v2-types.js";
 const ACTIVE_RUN_STATUSES = ["queued", "running", "cancelling"];
 const TERMINAL_RUN_STATUSES = new Set(["cancelled", "completed", "failed", "interrupted"]);
@@ -813,14 +813,14 @@ export class PostgresRuntimeStore {
                 run.status,
                 run.phase,
                 run.attempt,
-                run.input,
-                run.model,
+                stringifyAgentV2Json(run.input),
+                stringifyAgentV2Json(run.model),
                 run.workerId ?? null,
                 run.createdAt,
                 run.updatedAt,
                 run.startedAt ?? null,
                 run.endedAt ?? null,
-                run.error ?? null,
+                run.error ? stringifyAgentV2Json(run.error) : null,
             ]);
             return requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run");
         });
@@ -879,7 +879,7 @@ export class PostgresRuntimeStore {
                 next.updatedAt,
                 next.startedAt ?? null,
                 next.endedAt ?? null,
-                next.error ?? null,
+                next.error ? stringifyAgentV2Json(next.error) : null,
             ]);
             return {
                 run: requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run"),
@@ -905,7 +905,7 @@ export class PostgresRuntimeStore {
 					payload_json,
 					created_at
 				) VALUES ($1, $2, $3, $4, $5, $6)
-				RETURNING ${AGENT_V2_RUN_EVENT_COLUMNS}`, [input.clientId, input.runId, seq, input.type, input.payload, createdAt]);
+				RETURNING ${AGENT_V2_RUN_EVENT_COLUMNS}`, [input.clientId, input.runId, seq, input.type, stringifyAgentV2Json(input.payload), createdAt]);
             return requiredRecord(row ? toAgentV2RunEventRecord(row) : undefined, "agent v2 run event");
         });
     }
@@ -957,15 +957,15 @@ export class PostgresRuntimeStore {
             task.kind,
             task.title,
             task.status,
-            task.dependsOn,
-            task.acceptanceCriteria,
-            task.input,
-            task.output,
+            stringifyAgentV2Json(task.dependsOn),
+            stringifyAgentV2Json(task.acceptanceCriteria),
+            stringifyAgentV2Json(task.input),
+            stringifyAgentV2Json(task.output),
             task.createdAt,
             task.updatedAt,
             task.startedAt ?? null,
             task.endedAt ?? null,
-            task.error ?? null,
+            task.error ? stringifyAgentV2Json(task.error) : null,
         ]);
         return requiredRecord(row ? toAgentV2TaskRecord(row) : undefined, "agent v2 task");
     }
@@ -1014,7 +1014,7 @@ export class PostgresRuntimeStore {
             artifact.version,
             artifact.sourceTaskId ?? null,
             artifact.validationStatus,
-            artifact.metadataJson,
+            stringifyAgentV2Json(artifact.metadataJson),
             artifact.createdAt,
             artifact.updatedAt,
         ]);
@@ -1055,7 +1055,7 @@ export class PostgresRuntimeStore {
             document.kind,
             document.version,
             document.contentMarkdown,
-            document.contentJson,
+            stringifyAgentV2Json(document.contentJson),
             document.sourceTaskId ?? null,
             document.createdAt,
             document.updatedAt,
@@ -1091,7 +1091,7 @@ export class PostgresRuntimeStore {
             validation.artifactId ?? null,
             validation.status,
             validation.summary,
-            validation.details,
+            stringifyAgentV2Json(validation.details),
             validation.createdAt,
             validation.updatedAt,
         ]);
@@ -1137,7 +1137,7 @@ export class PostgresRuntimeStore {
             input.artifactId ?? null,
             input.traceId ?? null,
             input.message,
-            input.data,
+            stringifyAgentV2Json(input.data),
             input.createdAt,
         ]);
         return requiredRecord(row ? toAgentV2DiagnosticRecord(row) : undefined, "agent v2 diagnostic");
@@ -1220,14 +1220,14 @@ export class PostgresRuntimeStore {
                 run.status,
                 input.readyPhase,
                 run.attempt,
-                run.input,
-                run.model,
+                stringifyAgentV2Json(run.input),
+                stringifyAgentV2Json(run.model),
                 run.workerId ?? null,
                 run.createdAt,
                 run.updatedAt,
                 run.startedAt ?? null,
                 run.endedAt ?? null,
-                run.error ?? null,
+                run.error ? stringifyAgentV2Json(run.error) : null,
             ]);
             for (const blob of input.inputBlobs)
                 await this.insertAgentV2InputBlobWithQueryable(tx, blob, run.clientId, run.runId);
@@ -1624,14 +1624,14 @@ export class PostgresRuntimeStore {
             run.updatedAt,
             run.startedAt ?? null,
             run.endedAt ?? null,
-            run.error ?? null,
+            run.error ? stringifyAgentV2Json(run.error) : null,
         ]);
     }
     async appendAgentV2RunEventWithQueryable(queryable, input) {
         const seq = input.seq ??
             toNumber((await this.queryOne(queryable, "SELECT COALESCE(MAX(seq),0)+1 AS seq FROM agent_v2_run_events WHERE client_id=$1 AND run_id=$2", [input.clientId, input.runId]))?.seq);
         const createdAt = input.createdAt ?? now();
-        const row = await this.queryOne(queryable, `INSERT INTO agent_v2_run_events (client_id, run_id, seq, event_type, payload_json, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${AGENT_V2_RUN_EVENT_COLUMNS}`, [input.clientId, input.runId, seq, input.type, input.payload, createdAt]);
+        const row = await this.queryOne(queryable, `INSERT INTO agent_v2_run_events (client_id, run_id, seq, event_type, payload_json, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${AGENT_V2_RUN_EVENT_COLUMNS}`, [input.clientId, input.runId, seq, input.type, stringifyAgentV2Json(input.payload), createdAt]);
         return requiredRecord(row ? toAgentV2RunEventRecord(row) : undefined, "agent v2 run event");
     }
     async listAgentV2RunEventsWithQueryable(queryable, clientId, runId, afterSeq) {
@@ -1679,15 +1679,15 @@ export class PostgresRuntimeStore {
             task.kind,
             task.title,
             task.status,
-            task.dependsOn,
-            task.acceptanceCriteria,
-            task.input,
-            task.output,
+            stringifyAgentV2Json(task.dependsOn),
+            stringifyAgentV2Json(task.acceptanceCriteria),
+            stringifyAgentV2Json(task.input),
+            stringifyAgentV2Json(task.output),
             task.createdAt,
             task.updatedAt,
             task.startedAt ?? null,
             task.endedAt ?? null,
-            task.error ?? null,
+            task.error ? stringifyAgentV2Json(task.error) : null,
         ]);
         return requiredRecord(row ? toAgentV2TaskRecord(row) : undefined, "agent v2 task");
     }
@@ -1707,7 +1707,7 @@ export class PostgresRuntimeStore {
             artifact.version,
             artifact.sourceTaskId ?? null,
             artifact.validationStatus,
-            artifact.metadataJson,
+            stringifyAgentV2Json(artifact.metadataJson),
             artifact.createdAt,
             artifact.updatedAt,
         ]);
@@ -1725,7 +1725,7 @@ export class PostgresRuntimeStore {
             document.kind,
             document.version,
             document.contentMarkdown,
-            document.contentJson,
+            stringifyAgentV2Json(document.contentJson),
             document.sourceTaskId ?? null,
             document.createdAt,
             document.updatedAt,
@@ -1745,7 +1745,7 @@ export class PostgresRuntimeStore {
             input.artifactId ?? null,
             input.traceId ?? null,
             input.message,
-            input.data,
+            stringifyAgentV2Json(input.data),
             input.createdAt,
         ]);
         if (row)
@@ -1767,7 +1767,7 @@ export class PostgresRuntimeStore {
             validation.artifactId ?? null,
             validation.status,
             validation.summary,
-            validation.details,
+            stringifyAgentV2Json(validation.details),
             validation.createdAt,
             validation.updatedAt,
         ]);
@@ -1794,7 +1794,7 @@ export class PostgresRuntimeStore {
                 throw new Error("Agent v2 outbox dedupe conflict");
             return existing.intent_id;
         }
-        await this.query(queryable, "INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$6,$6,$7,0)", [intentId, dedupeKey, clientId, runId, reference.kind, createdAt, reference]);
+        await this.query(queryable, "INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$6,$6,$7,0)", [intentId, dedupeKey, clientId, runId, reference.kind, createdAt, stringifyAgentV2Json(reference)]);
         return intentId;
     }
     async withTransaction(callback) {

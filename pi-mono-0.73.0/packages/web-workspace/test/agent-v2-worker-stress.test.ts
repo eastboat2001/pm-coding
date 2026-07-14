@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
-import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import {
 	type AgentV2RunQueue,
@@ -34,7 +33,6 @@ describe("agent v2 worker stress", () => {
 		const fastCancelTargets = new Set(["run-03", "run-04", "run-11"]);
 		const slowCancelTargets = new Set(["run-01", "run-02", "run-12"]);
 		const cancelledTargets = new Set([...fastCancelTargets, ...slowCancelTargets]);
-		const service = new AgentV2RunApiService({ store, queue, events, now });
 		const execution = new StressExecution({ fastCancelTargets, slowCancelTargets });
 		const worker = new AgentV2WorkerService({
 			store,
@@ -52,16 +50,12 @@ describe("agent v2 worker stress", () => {
 
 		for (let index = 1; index <= 20; index += 1) {
 			const runId = `run-${String(index).padStart(2, "0")}`;
-			await service.startRun("client-a", {
-				runId,
-				input: { prompt: `Prompt ${runId}`, sessionId: `session-${runId}`, title: `Session ${runId}` },
-				model: { provider: "test", id: "local" },
-			});
+			await seedQueuedRun(store, queue, now, runId);
 		}
 
 		await worker.start();
-		await cancelRunsWhenRunning(service, store, fastCancelTargets);
-		await cancelRunsWhenRunning(service, store, slowCancelTargets);
+		await cancelRunsWhenRunning(queue, store, fastCancelTargets);
+		await cancelRunsWhenRunning(queue, store, slowCancelTargets);
 		await waitFor(async () => {
 			const runs = await store.listAgentV2Runs("client-a");
 			if (runs.length !== 20) return false;
@@ -113,7 +107,6 @@ describe("agent v2 worker stress", () => {
 		const queue = new TrackingQueue(createAgentV2RunQueue());
 		const events = new RecordingEventLog();
 		const now = createTimestampSequence("2026-07-09T10:30:00.000Z");
-		const service = new AgentV2RunApiService({ store, queue, events, now });
 		const execution = new StressExecution({
 			fastCancelTargets: new Set(),
 			slowCancelTargets: new Set(["run-01", "run-02", "run-03", "run-04"]),
@@ -134,11 +127,7 @@ describe("agent v2 worker stress", () => {
 
 		for (let index = 1; index <= 8; index += 1) {
 			const runId = `run-${String(index).padStart(2, "0")}`;
-			await service.startRun("client-a", {
-				runId,
-				input: { prompt: `Prompt ${runId}`, sessionId: `session-${runId}`, title: `Session ${runId}` },
-				model: { provider: "test", id: "local" },
-			});
+			await seedQueuedRun(store, queue, now, runId);
 		}
 
 		await worker.start();
@@ -343,7 +332,7 @@ class StressExecution {
 }
 
 async function cancelRunsWhenRunning(
-	service: AgentV2RunApiService,
+	queue: TrackingQueue,
 	store: MemoryStressStore,
 	runIds: ReadonlySet<string>,
 ): Promise<void> {
@@ -352,12 +341,30 @@ async function cancelRunsWhenRunning(
 		for (const runId of [...pending]) {
 			const run = await store.getAgentV2Run("client-a", runId);
 			if (run?.status === "running") {
-				await service.cancelRun("client-a", runId);
+				await queue.requestCancel({ clientId: "client-a", runId });
 				pending.delete(runId);
 			}
 		}
 		return pending.size === 0;
 	}, 10_000);
+}
+
+async function seedQueuedRun(
+	store: MemoryStressStore,
+	queue: TrackingQueue,
+	now: () => string,
+	runId: string,
+): Promise<void> {
+	const createdAt = now();
+	await store.createAgentV2Run({
+		clientId: "client-a",
+		runId,
+		input: { objective: `Objective ${runId}`, sessionId: `session-${runId}`, title: `Session ${runId}` },
+		model: { provider: "test", id: "local" },
+		createdAt,
+		updatedAt: createdAt,
+	});
+	await queue.enqueue({ clientId: "client-a", runId });
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: number): Promise<void> {

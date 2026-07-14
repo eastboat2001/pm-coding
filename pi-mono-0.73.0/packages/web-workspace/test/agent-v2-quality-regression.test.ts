@@ -6,9 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import { AGENT_V2_RESET_CONFIRMATION, resetAgentV2Runtime } from "../src/agent-v2-maintenance.js";
-import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import { createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
-import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -24,21 +22,16 @@ describe("agent v2 quality regression", () => {
 	it("keeps v2 runtime state isolated from legacy rows across reset and id collisions", async () => {
 		const { root, store, dbFile } = createSqliteStore();
 		const queue = createAgentV2RunQueue();
-		const events = new RecordingEventLog();
-		const service = new AgentV2RunApiService({
-			store,
-			queue,
-			events,
-			createRunId: () => "shared-run",
-		});
 		seedLegacyRuntime(store, "shared-run");
 
-		await service.startRun("client-a", {
+		await store.createAgentV2Run({
+			clientId: "client-a",
 			runId: "shared-run",
-			input: { prompt: "Build the dashboard", sessionId: "agent-v2-session", title: "Dashboard" },
+			input: { objective: "Build the dashboard", sessionId: "agent-v2-session", title: "Dashboard" },
 			model: { provider: "test", id: "local" },
 			createdAt: "2026-07-09T09:00:00.000Z",
 		});
+		await queue.enqueue({ clientId: "client-a", runId: "shared-run" });
 		await store.updateAgentV2Run({
 			clientId: "client-a",
 			runId: "shared-run",
@@ -175,12 +168,6 @@ describe("agent v2 quality regression", () => {
 				payload: { taskId: "implement", status: "running" },
 			}),
 		]);
-		expect(events.appendCalls).toEqual([
-			expect.objectContaining({
-				type: "agent_v2.run_created",
-				payload: expect.objectContaining({ status: "queued", phase: "intake" }),
-			}),
-		]);
 		expect(countRows(dbFile, "runs")).toBe(1);
 		expect(countRows(dbFile, "run_events")).toBe(1);
 		expect(countRows(dbFile, "app_preview_goals")).toBe(1);
@@ -277,7 +264,7 @@ describe("agent v2 quality regression", () => {
 		const createdRun = store.createAgentV2Run({
 			clientId: "client-a",
 			runId: "schema-only-run",
-			input: { prompt: "schema only" },
+			input: { objective: "schema only" },
 			model: { provider: "test" },
 			createdAt: "2026-07-09T09:30:00.000Z",
 		});
@@ -598,33 +585,5 @@ function tableExists(dbFile: string, table: string): boolean {
 		return row?.present === 1;
 	} finally {
 		db.close();
-	}
-}
-
-class RecordingEventLog {
-	readonly appendCalls: AgentV2RunEventRecord[] = [];
-
-	async append(input: {
-		clientId: string;
-		runId: string;
-		seq?: number;
-		type: string;
-		payload: Record<string, unknown>;
-		createdAt?: string;
-	}): Promise<AgentV2RunEventRecord> {
-		const event = {
-			clientId: input.clientId,
-			runId: input.runId,
-			seq: input.seq ?? this.appendCalls.length + 1,
-			type: input.type,
-			payload: input.payload,
-			createdAt: input.createdAt ?? "2026-07-09T00:00:00.000Z",
-		} satisfies AgentV2RunEventRecord;
-		this.appendCalls.push(event);
-		return event;
-	}
-
-	async list(): Promise<AgentV2RunEventRecord[]> {
-		return [];
 	}
 }

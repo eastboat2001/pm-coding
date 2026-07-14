@@ -813,7 +813,7 @@ describe("PostgresRuntimeStore", () => {
 			"run-v2-events",
 			6,
 			"task_completed",
-			{ taskId: "task-1" },
+			'{"taskId":"task-1"}',
 			createdAt,
 		]);
 		const statements = client.queries.map((query) => normalizeSql(query.sql));
@@ -905,7 +905,7 @@ describe("PostgresRuntimeStore", () => {
 			"run-v2-explicit-seq",
 			27,
 			"run_finished",
-			{ status: "succeeded" },
+			'{"status":"succeeded"}',
 			createdAt,
 		]);
 		expect(client.queries.map((query) => normalizeSql(query.sql))).toEqual([
@@ -1677,5 +1677,362 @@ describe("PostgresRuntimeStore", () => {
 		expect(queryable.queries.map((query) => normalizeSql(query.sql))).toEqual(
 			expect.arrayContaining(["BEGIN", "ROLLBACK"]),
 		);
+	});
+
+	it("binds every Agent v2 JSON slot as parseable JSON text with semantic round-trip", async () => {
+		const createdAt = "2026-07-13T15:00:00.000Z";
+		let runRow: Record<string, unknown> | undefined;
+		const parseBoundJson = (value: unknown): unknown =>
+			typeof value === "string" ? (JSON.parse(value) as unknown) : value;
+		const queryable = new RecordingQueryable().on((query) => {
+			const sql = normalizeSql(query.sql);
+			const value = (index: number): unknown => query.values[index];
+			if (/^SELECT pg_advisory_xact_lock/i.test(sql)) return { rows: [{}] };
+			if (
+				/^SELECT .* FROM agent_v2_runs WHERE client_id\s*=\s*\$1 AND run_id\s*=\s*\$2(?: FOR UPDATE)?$/i.test(sql)
+			) {
+				return { rows: runRow ? [runRow] : [] };
+			}
+			if (/^INSERT INTO agent_v2_runs/i.test(sql)) {
+				runRow = {
+					client_id: value(0),
+					run_id: value(1),
+					status: value(2),
+					phase: value(3),
+					attempt: value(4),
+					input_json: parseBoundJson(value(5)),
+					model_json: parseBoundJson(value(6)),
+					worker_id: value(7),
+					created_at: value(8),
+					updated_at: value(9),
+					started_at: value(10),
+					ended_at: value(11),
+					error_json: value(12) === null ? null : parseBoundJson(value(12)),
+				};
+				return { rows: [runRow] };
+			}
+			if (/^UPDATE agent_v2_runs/i.test(sql)) {
+				if (!runRow) throw new Error("missing recorded run");
+				runRow = {
+					...runRow,
+					status: value(2),
+					phase: value(3),
+					attempt: value(4),
+					worker_id: value(5),
+					updated_at: value(6),
+					started_at: value(7),
+					ended_at: value(8),
+					error_json: value(9) === null ? null : parseBoundJson(value(9)),
+				};
+				return { rows: [runRow] };
+			}
+			if (/^INSERT INTO agent_v2_run_events/i.test(sql)) {
+				return {
+					rows: [
+						{
+							client_id: value(0),
+							run_id: value(1),
+							seq: value(2),
+							event_type: value(3),
+							payload_json: parseBoundJson(value(4)),
+							created_at: value(5),
+						},
+					],
+				};
+			}
+			if (/^INSERT INTO agent_v2_tasks/i.test(sql)) {
+				return {
+					rows: [
+						{
+							client_id: value(0),
+							run_id: value(1),
+							task_id: value(2),
+							parent_task_id: value(3),
+							kind: value(4),
+							title: value(5),
+							status: value(6),
+							depends_on_json: parseBoundJson(value(7)),
+							acceptance_criteria_json: parseBoundJson(value(8)),
+							input_json: parseBoundJson(value(9)),
+							output_json: parseBoundJson(value(10)),
+							created_at: value(11),
+							updated_at: value(12),
+							started_at: value(13),
+							ended_at: value(14),
+							error_json: value(15) === null ? null : parseBoundJson(value(15)),
+						},
+					],
+				};
+			}
+			if (/^INSERT INTO agent_v2_artifacts/i.test(sql)) {
+				return {
+					rows: [
+						{
+							client_id: value(0),
+							run_id: value(1),
+							artifact_id: value(2),
+							kind: value(3),
+							path: value(4),
+							media_type: value(5),
+							checksum: value(6),
+							version: value(7),
+							source_task_id: value(8),
+							validation_status: value(9),
+							metadata_json: parseBoundJson(value(10)),
+							created_at: value(11),
+							updated_at: value(12),
+						},
+					],
+				};
+			}
+			if (/^INSERT INTO agent_v2_documents/i.test(sql)) {
+				return {
+					rows: [
+						{
+							client_id: value(0),
+							run_id: value(1),
+							document_id: value(2),
+							kind: value(3),
+							version: value(4),
+							content_markdown: value(5),
+							content_json: parseBoundJson(value(6)),
+							source_task_id: value(7),
+							created_at: value(8),
+							updated_at: value(9),
+						},
+					],
+				};
+			}
+			if (/^INSERT INTO agent_v2_diagnostics/i.test(sql)) {
+				return {
+					rows: [
+						{
+							client_id: value(0),
+							run_id: value(1),
+							diagnostic_id: value(2),
+							severity: value(3),
+							category: value(4),
+							code: value(5),
+							phase: value(6),
+							task_id: value(7),
+							artifact_id: value(8),
+							trace_id: value(9),
+							message: value(10),
+							data_json: parseBoundJson(value(11)),
+							created_at: value(12),
+						},
+					],
+				};
+			}
+			if (/^INSERT INTO agent_v2_validation_attempts/i.test(sql)) {
+				return {
+					rows: [
+						{
+							client_id: value(0),
+							run_id: value(1),
+							validation_id: value(2),
+							attempt: value(3),
+							task_id: value(4),
+							artifact_id: value(5),
+							status: value(6),
+							summary: value(7),
+							details_json: parseBoundJson(value(8)),
+							created_at: value(9),
+							updated_at: value(10),
+						},
+					],
+				};
+			}
+			if (/^SELECT intent_id, reference_json FROM agent_v2_outbox/i.test(sql)) return { rows: [] };
+			if (/^INSERT INTO agent_v2_(bootstraps|outbox)/i.test(sql)) return { rowCount: 1 };
+			return undefined;
+		});
+		const store = new PostgresRuntimeStore({ queryable });
+		const runError = { code: "run_error", message: "run error", retryable: false, data: { causes: ["a"] } };
+		const updatedRunError = {
+			code: "updated_run_error",
+			message: "updated run error",
+			retryable: true,
+			data: { causes: ["updated"] },
+		};
+		const taskError = { code: "task_error", message: "task error", retryable: true, data: { causes: ["b"] } };
+		const documentContent = {
+			kind: "spec" as const,
+			title: "JSON spec",
+			objective: "verify JSON bindings",
+			summary: "Verify PostgreSQL JSON bindings",
+			scope: ["postgres-adapter"],
+			goals: ["round-trip"],
+			nonGoals: [],
+			assumptions: [],
+			requirements: ["r1"],
+			capabilityBoundaries: [],
+			acceptanceCriteria: ["all bindings are JSON text"],
+			platformContract: {
+				runtime: "browser",
+				framework: "none",
+				deliveryMode: "static_app" as const,
+				entrypoints: ["index.html"],
+				deliverables: ["static application"],
+				constraints: [],
+			},
+		};
+
+		await store.commitAgentV2RunStart({
+			run: {
+				clientId: "client-json",
+				runId: "run-json",
+				input: { sessionId: "session-json", title: "JSON", objective: "verify JSON bindings" },
+				model: { provider: "test", id: "model-json" },
+				createdAt,
+				updatedAt: createdAt,
+				error: runError,
+			},
+			bootstrapVersion: "agent-v2-planning-v1",
+			bootstrapChecksum: "sha256:bootstrap-json",
+			inputBlobs: [],
+			inputReferences: [],
+			readyPhase: "implementation",
+			documents: [
+				{
+					clientId: "client-json",
+					runId: "run-json",
+					documentId: "spec",
+					kind: "spec",
+					version: "v2",
+					contentMarkdown: "# Spec",
+					contentJson: documentContent,
+					sourceTaskId: "task-json",
+					createdAt,
+					updatedAt: createdAt,
+				},
+			],
+			tasks: [
+				{
+					clientId: "client-json",
+					runId: "run-json",
+					taskId: "task-json",
+					kind: "implementation",
+					title: "JSON task",
+					status: "pending",
+					dependsOn: ["capability"],
+					acceptanceCriteria: ["round-trips"],
+					input: { paths: ["src/index.ts"] },
+					output: { artifacts: ["artifact-json"] },
+					error: taskError,
+					createdAt,
+					updatedAt: createdAt,
+				},
+			],
+			artifacts: [
+				{
+					clientId: "client-json",
+					runId: "run-json",
+					artifactId: "artifact-json",
+					kind: "source",
+					path: "src/index.ts",
+					mediaType: "text/typescript",
+					checksum: "sha256:artifact-json",
+					version: "v2",
+					sourceTaskId: "task-json",
+					validationStatus: "pending",
+					metadataJson: { tags: ["source"] },
+					createdAt,
+					updatedAt: createdAt,
+				},
+			],
+			diagnostics: [
+				{
+					diagnosticId: "diagnostic-json",
+					clientId: "client-json",
+					runId: "run-json",
+					severity: "info",
+					category: "planning",
+					code: "agent_v2.test.json",
+					message: "JSON diagnostic",
+					data: { evidence: ["recording-queryable"] },
+					createdAt,
+				},
+			],
+			queueName: "agent-v2",
+			createdAt,
+		});
+		await store.updateAgentV2Run({
+			clientId: "client-json",
+			runId: "run-json",
+			updatedAt: "2026-07-13T15:00:01.000Z",
+			error: updatedRunError,
+		});
+		await store.upsertAgentV2Task({
+			clientId: "client-json",
+			runId: "run-json",
+			taskId: "task-json-null-error",
+			kind: "implementation",
+			title: "Null error task",
+			status: "pending",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt,
+			updatedAt: createdAt,
+		});
+		await store.appendAgentV2ValidationAttempt({
+			clientId: "client-json",
+			runId: "run-json",
+			validationId: "validation-json",
+			attempt: 1,
+			status: "passed",
+			summary: "JSON validation",
+			details: { checks: ["json-text"] },
+			createdAt,
+			updatedAt: createdAt,
+		});
+
+		const jsonBindings = queryable.queries.flatMap((query) => {
+			const sql = normalizeSql(query.sql);
+			const indexes = /^INSERT INTO agent_v2_runs/i.test(sql)
+				? [5, 6, 12]
+				: /^UPDATE agent_v2_runs/i.test(sql)
+					? [9]
+					: /^INSERT INTO agent_v2_run_events/i.test(sql)
+						? [4]
+						: /^INSERT INTO agent_v2_tasks/i.test(sql)
+							? [7, 8, 9, 10, 15]
+							: /^INSERT INTO agent_v2_artifacts/i.test(sql)
+								? [10]
+								: /^INSERT INTO agent_v2_documents/i.test(sql)
+									? [6]
+									: /^INSERT INTO agent_v2_diagnostics/i.test(sql)
+										? [11]
+										: /^INSERT INTO agent_v2_validation_attempts/i.test(sql)
+											? [8]
+											: /^INSERT INTO agent_v2_outbox/i.test(sql)
+												? [6]
+												: [];
+			return indexes.map((index) => query.values[index]).filter((value) => value !== null);
+		});
+		expect(jsonBindings.length).toBeGreaterThanOrEqual(24);
+		for (const binding of jsonBindings) {
+			expect(typeof binding).toBe("string");
+			expect(() => JSON.parse(binding as string)).not.toThrow();
+		}
+		expect(jsonBindings.map((binding) => JSON.parse(binding as string))).toEqual(
+			expect.arrayContaining([
+				["capability"],
+				["round-trips"],
+				{ paths: ["src/index.ts"] },
+				{ artifacts: ["artifact-json"] },
+				taskError,
+				updatedRunError,
+				{ tags: ["source"] },
+				documentContent,
+				{ evidence: ["recording-queryable"] },
+				{ checks: ["json-text"] },
+			]),
+		);
+		expect(
+			queryable.statementsMatching(/^INSERT INTO agent_v2_tasks/i).some((query) => query.values[15] === null),
+		).toBe(true);
 	});
 });

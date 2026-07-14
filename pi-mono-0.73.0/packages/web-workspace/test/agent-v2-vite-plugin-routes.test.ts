@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +7,10 @@ import type { Connect } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import type { AgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
-import type { AgentV2RunEventReadRequest } from "../src/agent-v2-run-events.js";
+import type { AgentV2RunEventReadRequest, AgentV2RunTransportEvent } from "../src/agent-v2-run-events.js";
 import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot } from "../src/agent-v2-types.js";
+import { RuntimeDbStore } from "../src/runtime-db.js";
 import type { JsonObject, StorageConfig } from "../src/types.js";
 import { createConfiguredStoragePluginForTest } from "../src/vite-plugin.js";
 
@@ -18,8 +19,10 @@ const PREFIX = "/api/agent-v2/runs";
 const LEGACY_RUN_API_PREFIXES = ["/api/runtime/runs", "/api/pi-runs", "/api/runs"] as const;
 const LEGACY_SESSION_API_PREFIXES = ["/api/pi-sessions"] as const;
 const cleanupRoots: string[] = [];
+const cleanupStores: RuntimeDbStore[] = [];
 
 afterEach(() => {
+	for (const store of cleanupStores.splice(0)) store.close();
 	for (const root of cleanupRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -28,7 +31,7 @@ describe("agent v2 Vite runtime routes", () => {
 		const api = new RecordingAgentV2RunApi();
 		api.startRunResult = runSnapshot({
 			runId: "run-started",
-			input: { prompt: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
+			input: { objective: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
 		});
 		const harness = createHarness({ agentV2RunApi: api });
 
@@ -36,7 +39,7 @@ describe("agent v2 Vite runtime routes", () => {
 			method: "POST",
 			url: `${PREFIX}/start`,
 			body: {
-				input: { prompt: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
+				input: { objective: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
 				model: { id: "test-model" },
 			},
 		});
@@ -47,7 +50,7 @@ describe("agent v2 Vite runtime routes", () => {
 			method: "startRun",
 			clientId: CLIENT_ID,
 			request: {
-				input: { prompt: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
+				input: { objective: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
 				model: { id: "test-model" },
 			},
 		});
@@ -59,11 +62,34 @@ describe("agent v2 Vite runtime routes", () => {
 		const response = await dispatch(harness.middleware, {
 			method: "POST",
 			url: `${PREFIX}/start`,
-			body: { input: { prompt: "Build a dashboard" }, model: { id: "test-model" } },
+			body: { input: { objective: "Build a dashboard" }, model: { id: "test-model" } },
 		});
 
 		expect(response.statusCode).toBe(400);
-		expect(JSON.parse(response.body).error).toContain("sessionId and title");
+		expect(JSON.parse(response.body).error).toContain("sessionId");
+	});
+
+	it("keeps HTTP start/cancel free of direct queue, cancel and event append seams", () => {
+		const source = readFileSync(join(process.cwd(), "src", "agent-v2-run-api-service.ts"), "utf8");
+		expect(source).not.toContain("agent-v2-run-queue");
+		expect(source).not.toMatch(/\.enqueue\s*\(/u);
+		expect(source).not.toMatch(/\.requestCancel\s*\(/u);
+		expect(source).not.toMatch(/\.append\s*\(/u);
+		expect(source).toContain("commitAgentV2RunStart");
+		expect(source).toContain("commitAgentV2RunCancel");
+	});
+
+	it("types planning_ready as a public transport event without changing durable event names", () => {
+		const event: AgentV2RunTransportEvent = {
+			type: "agent_v2.planning_ready",
+			phase: "implementation",
+			at: "2026-07-14T01:00:00.000Z",
+		};
+		expect(event).toEqual({
+			type: "agent_v2.planning_ready",
+			phase: "implementation",
+			at: "2026-07-14T01:00:00.000Z",
+		});
 	});
 
 	it("lists, gets, and cancels runs through the v2 service", async () => {
@@ -458,7 +484,7 @@ function runSnapshot(overrides: Partial<AgentV2RunSnapshot>): AgentV2RunSnapshot
 		status: "queued",
 		phase: "intake",
 		attempt: 1,
-		input: { prompt: "Build an app", sessionId: "session-a", title: "App" },
+		input: { objective: "Build an app", sessionId: "session-a", title: "App" },
 		model: { id: "test-model" },
 		createdAt: "2026-07-08T09:00:00.000Z",
 		updatedAt: "2026-07-08T09:00:00.000Z",
@@ -484,50 +510,16 @@ function runEvent(seq: number, overrides: Partial<AgentV2RunEventRecord> = {}): 
 }
 
 function createRealAgentV2RunApiForRouteTest(): AgentV2RunApiService {
+	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-route-service-"));
+	const store = new RuntimeDbStore(join(root, "runtime.sqlite"));
+	store.ensureAgentV2Schema();
+	cleanupRoots.push(root);
+	cleanupStores.push(store);
 	return new AgentV2RunApiService({
-		store: {
-			async createAgentV2Run(input) {
-				return runSnapshot({
-					clientId: input.clientId,
-					runId: input.runId,
-					input: input.input,
-					model: input.model,
-					createdAt: input.createdAt ?? "2026-07-08T09:00:00.000Z",
-					updatedAt: input.updatedAt ?? input.createdAt ?? "2026-07-08T09:00:00.000Z",
-				});
-			},
-			async getAgentV2Run() {
-				return undefined;
-			},
-			async listAgentV2Runs() {
-				return [];
-			},
-			async updateAgentV2RunWithResult() {
-				throw new Error("updateAgentV2RunWithResult should not be called by start route tests");
-			},
-		},
-		queue: {
-			enqueue: vi.fn(async () => undefined),
-			claim: vi.fn(async () => undefined),
-			complete: vi.fn(async () => undefined),
-			requeueActive: vi.fn(async () => 0),
-			renewLease: vi.fn(async () => true),
-			releaseExpiredClaims: vi.fn(async () => []),
-			requestCancel: vi.fn(async () => undefined),
-			isCancelRequested: vi.fn(async () => false),
-			clear: vi.fn(async () => ({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 })),
-			close: vi.fn(async () => undefined),
-		},
+		store,
+		queueName: "agent-v2-route-test",
 		events: {
-			append: vi.fn(async (input) => ({
-				clientId: input.clientId,
-				runId: input.runId,
-				seq: input.seq ?? 1,
-				type: input.type,
-				payload: input.payload,
-				createdAt: input.createdAt ?? "2026-07-08T09:00:00.000Z",
-			})),
-			list: vi.fn(async () => []),
+			list: vi.fn(async (clientId, runId, afterSeq) => store.listAgentV2RunEvents(clientId, runId, afterSeq)),
 		},
 		createRunId: () => "run-started",
 		now: () => "2026-07-08T09:00:00.000Z",

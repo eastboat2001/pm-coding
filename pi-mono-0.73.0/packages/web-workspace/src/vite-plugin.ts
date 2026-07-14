@@ -93,8 +93,8 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 	const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
 	const agentV2RunApi = new AgentV2RunApiService({
 		store: runtimeDb,
-		queue: agentV2RunQueue,
 		events: agentV2RunEventLog,
+		queueName: config.agentV2.queueName,
 	});
 	return createConfiguredStoragePlugin({
 		config,

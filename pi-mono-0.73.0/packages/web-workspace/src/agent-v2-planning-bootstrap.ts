@@ -49,6 +49,15 @@ export interface AgentV2PlanningBootstrap {
 	diagnostics: AgentV2DiagnosticEvent[];
 }
 
+export interface AgentV2PlanningCommitInput {
+	bootstrapVersion: "agent-v2-planning-v1";
+	bootstrapChecksum: string;
+	documents: readonly UpsertAgentV2DocumentInput[];
+	tasks: readonly UpsertAgentV2TaskInput[];
+	artifacts: readonly UpsertAgentV2ArtifactInput[];
+	diagnostics: readonly AgentV2DiagnosticEvent[];
+}
+
 export function buildAgentV2PlanningBootstrap(input: {
 	run: AgentV2RunSnapshot;
 	objective?: string;
@@ -207,6 +216,36 @@ export function buildAgentV2PlanningBootstrap(input: {
 	};
 }
 
+export function toAgentV2PlanningCommit(bootstrap: AgentV2PlanningBootstrap): AgentV2PlanningCommitInput {
+	const bootstrapVersion = "agent-v2-planning-v1" as const;
+	return {
+		bootstrapVersion,
+		bootstrapChecksum: checksumFor({
+			bootstrapVersion,
+			run: {
+				clientId: bootstrap.run.clientId,
+				runId: bootstrap.run.runId,
+				input: bootstrap.run.input,
+				model: bootstrap.run.model,
+				createdAt: bootstrap.run.createdAt,
+			},
+			objective: bootstrap.objective,
+			decision: bootstrap.decision,
+			spec: bootstrap.spec,
+			plan: bootstrap.plan,
+			taskGraph: bootstrap.taskGraph,
+			documents: bootstrap.documents,
+			tasks: bootstrap.tasks,
+			artifacts: bootstrap.artifacts,
+			diagnostics: bootstrap.diagnostics,
+		}),
+		documents: bootstrap.documents,
+		tasks: bootstrap.tasks,
+		artifacts: bootstrap.artifacts,
+		diagnostics: bootstrap.diagnostics,
+	};
+}
+
 export async function persistAgentV2PlanningBootstrap(
 	store: AgentV2PlanningStore,
 	bootstrap: AgentV2PlanningBootstrap,
@@ -249,15 +288,26 @@ const defaultNow: TimestampFactory = () => new Date().toISOString();
 
 function resolveObjective(run: AgentV2RunSnapshot, override?: string): string {
 	if (override?.trim()) return override.trim();
-	const prompt = run.input.prompt;
-	if (typeof prompt === "string" && prompt.trim()) return prompt.trim();
 	const objective = run.input.objective;
 	if (typeof objective === "string" && objective.trim()) return objective.trim();
-	return "";
+	throw new Error("Agent v2 planning objective is required");
 }
 
 function checksumFor(value: unknown): string {
-	return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
+	return `sha256:${createHash("sha256")
+		.update(JSON.stringify(canonicalValue(value)))
+		.digest("hex")}`;
+}
+
+function canonicalValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(canonicalValue);
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value as Record<string, unknown>)
+			.filter(([, child]) => child !== undefined)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, child]) => [key, canonicalValue(child)]),
+	);
 }
 
 function createTimestampSequence(baseTimestamp: string): TimestampFactory {

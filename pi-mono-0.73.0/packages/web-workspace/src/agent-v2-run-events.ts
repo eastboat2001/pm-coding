@@ -1,5 +1,12 @@
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
-import type { AgentV2Phase, AgentV2RunEventType, AgentV2RunStatus } from "./agent-v2-types.js";
+import type {
+	AgentV2Phase,
+	AgentV2PlanningReadyTransportEvent,
+	AgentV2RunEventType,
+	AgentV2RunStatus,
+} from "./agent-v2-types.js";
+
+export type { AgentV2PlanningReadyTransportEvent } from "./agent-v2-types.js";
 
 type AgentV2TransportEventBase = {
 	type: AgentV2RunEventType;
@@ -62,6 +69,7 @@ export type AgentV2DiagnosticRecordedTransportEvent = AgentV2TransportEventBase 
 
 export type AgentV2RunTransportEvent =
 	| AgentV2RunCreatedTransportEvent
+	| AgentV2PlanningReadyTransportEvent
 	| AgentV2PhaseChangedTransportEvent
 	| AgentV2TaskUpdatedTransportEvent
 	| AgentV2ArtifactIndexedTransportEvent

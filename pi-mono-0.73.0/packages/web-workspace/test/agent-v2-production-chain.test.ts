@@ -45,8 +45,8 @@ describe("agent v2 production chain rehearsal", () => {
 		const queue = new LocalAgentV2RunQueue();
 		const api = new AgentV2RunApiService({
 			store: runtimeDb,
-			queue,
 			events: eventLog,
+			queueName: "agent-v2-production-chain",
 			createRunId: () => "run-production-chain",
 			now: timestampSequence("2026-07-09T00:00:00.000Z", "2026-07-09T00:00:01.000Z"),
 		});
@@ -60,10 +60,17 @@ describe("agent v2 production chain rehearsal", () => {
 		});
 
 		const run = await api.startRun(CLIENT_ID, {
-			input: { prompt: "Build a reliable v2 app", sessionId: "session-production", title: "Production Chain" },
+			input: {
+				objective: "Build a reliable v2 app",
+				sessionId: "session-production",
+				title: "Production Chain",
+				projectFiles: [],
+				attachments: [],
+			},
 			model: { provider: "test", id: "v2-test-model" },
 		});
-		expect(run).toMatchObject({ runId: "run-production-chain", status: "queued", phase: "intake" });
+		expect(run).toMatchObject({ runId: "run-production-chain", status: "queued", phase: "implementation" });
+		await deliverPendingRunEnqueue(runtimeDb, queue, "2026-07-09T00:00:01.500Z");
 
 		await expect(worker.processOne()).resolves.toBe(true);
 		expect(await api.getRun(CLIENT_ID, "run-production-chain")).toMatchObject({
@@ -79,7 +86,8 @@ describe("agent v2 production chain rehearsal", () => {
 			blockMs: 1,
 		});
 		expect(replayed.map((event) => event.type)).toEqual([
-			"agent_v2.run_created",
+			"run_created",
+			"planning_ready",
 			"agent_v2.phase_changed",
 			"agent_v2.phase_changed",
 		]);
@@ -91,7 +99,7 @@ describe("agent v2 production chain rehearsal", () => {
 		});
 		expect(exported.runtime.runs).toHaveLength(1);
 		const exportedRunEvents = exported.runtime.runEventsByRunId as Record<string, unknown[]>;
-		expect(exportedRunEvents["run-production-chain"]).toHaveLength(3);
+		expect(exportedRunEvents["run-production-chain"]).toHaveLength(4);
 
 		const reset = await resetAgentV2RuntimeData(runtimeDb, {
 			confirmation: AGENT_V2_RESET_CONFIRMATION,
@@ -102,6 +110,29 @@ describe("agent v2 production chain rehearsal", () => {
 		expect(await eventLog.list(CLIENT_ID, "run-production-chain", 0)).toEqual([]);
 	});
 });
+
+async function deliverPendingRunEnqueue(
+	store: RuntimeDbStore,
+	queue: LocalAgentV2RunQueue,
+	now: string,
+): Promise<void> {
+	const intents = store.leaseAgentV2Outbox({
+		ownerId: "production-chain-test-dispatcher",
+		kinds: ["run_enqueue"],
+		limit: 1,
+		now,
+		leaseTtlMs: 1_000,
+	});
+	for (const intent of intents) {
+		await queue.enqueue({ clientId: intent.clientId, runId: intent.runId });
+		store.markAgentV2OutboxDelivered({
+			intentId: intent.intentId,
+			ownerId: "production-chain-test-dispatcher",
+			leaseAttempt: intent.attemptCount,
+			deliveredAt: now,
+		});
+	}
+}
 
 class LocalAgentV2RunQueue implements AgentV2RunQueue {
 	private readonly queued: AgentV2RunQueueIdentity[] = [];

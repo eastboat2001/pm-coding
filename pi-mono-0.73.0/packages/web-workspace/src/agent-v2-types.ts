@@ -185,6 +185,7 @@ export type AgentV2Phase = (typeof AGENT_V2_PHASES)[number];
 
 export const AGENT_V2_RUN_EVENT_TYPES = [
 	"agent_v2.run_created",
+	"agent_v2.planning_ready",
 	"agent_v2.phase_changed",
 	"agent_v2.task_updated",
 	"agent_v2.artifact_indexed",
@@ -192,6 +193,12 @@ export const AGENT_V2_RUN_EVENT_TYPES = [
 	"agent_v2.diagnostic_recorded",
 ] as const;
 export type AgentV2RunEventType = (typeof AGENT_V2_RUN_EVENT_TYPES)[number];
+
+export interface AgentV2PlanningReadyTransportEvent {
+	type: "agent_v2.planning_ready";
+	phase: AgentV2Phase;
+	at: string;
+}
 
 export const AGENT_V2_TASK_STATUSES = [
 	"pending",

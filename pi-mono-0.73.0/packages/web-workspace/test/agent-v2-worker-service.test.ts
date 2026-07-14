@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
-import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import type { AgentV2ActiveRunClaim, AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import {
@@ -580,20 +579,14 @@ describe("AgentV2WorkerService", () => {
 
 	it("emits cancelling before cancelled when only a post-step queue cancel key remains", async () => {
 		const store = new MemoryWorkerStore();
-		const staleQueued = store.createQueuedRun("client-a", "run-post-step-cancel-key");
+		store.createQueuedRun("client-a", "run-post-step-cancel-key");
 		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-post-step-cancel-key" }]);
 		const events = new RecordingEventLog();
-		const service = new AgentV2RunApiService({
-			store,
-			queue,
-			events,
-			now: () => "2026-07-08T09:04:04.000Z",
-		});
 		const worker = new AgentV2WorkerService({
 			store,
 			queue,
 			events,
-			execution: new ApiQueuedCancelDuringExecution(service, store, staleQueued),
+			execution: new QueuedCancelDuringExecution(queue, "client-a", "run-post-step-cancel-key"),
 			workerId: "worker-a",
 			now: timestampSequence(
 				"2026-07-08T09:04:01.000Z",
@@ -837,7 +830,7 @@ class MemoryWorkerStore {
 		const run = buildAgentV2Run({
 			clientId,
 			runId,
-			input: { prompt: `prompt:${runId}` },
+			input: { objective: `objective:${runId}` },
 			model: { provider: "test" },
 			createdAt: "2026-07-08T00:00:00.000Z",
 			updatedAt: "2026-07-08T00:00:00.000Z",
@@ -1212,16 +1205,15 @@ class ExternalInterruptedExecution {
 	}
 }
 
-class ApiQueuedCancelDuringExecution {
+class QueuedCancelDuringExecution {
 	constructor(
-		private readonly service: AgentV2RunApiService,
-		private readonly store: MemoryWorkerStore,
-		private readonly staleQueued: AgentV2RunSnapshot,
+		private readonly queue: RecordingQueue,
+		private readonly clientId: string,
+		private readonly runId: string,
 	) {}
 
 	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
-		this.store.returnStaleSnapshotOnNextRead(this.staleQueued);
-		await this.service.cancelRun(this.staleQueued.clientId, this.staleQueued.runId);
+		await this.queue.requestCancel({ clientId: this.clientId, runId: this.runId });
 		return { status: "complete", diagnosticIds: [] };
 	}
 }

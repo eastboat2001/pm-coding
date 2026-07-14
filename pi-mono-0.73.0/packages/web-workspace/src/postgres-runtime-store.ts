@@ -66,6 +66,7 @@ import {
 	buildAgentV2Validation,
 	type CreateAgentV2RunInput,
 	equalAgentV2ValidationRecords,
+	stringifyAgentV2Json,
 	toAgentV2ArtifactRecord,
 	toAgentV2DiagnosticRecord,
 	toAgentV2DocumentRecord,
@@ -1304,14 +1305,14 @@ export class PostgresRuntimeStore implements RuntimeStore {
 					run.status,
 					run.phase,
 					run.attempt,
-					run.input,
-					run.model,
+					stringifyAgentV2Json(run.input),
+					stringifyAgentV2Json(run.model),
 					run.workerId ?? null,
 					run.createdAt,
 					run.updatedAt,
 					run.startedAt ?? null,
 					run.endedAt ?? null,
-					run.error ?? null,
+					run.error ? stringifyAgentV2Json(run.error) : null,
 				],
 			);
 			return requiredRecord(row ? toAgentV2RunRecord(row) : undefined, "agent v2 run");
@@ -1395,7 +1396,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 					next.updatedAt,
 					next.startedAt ?? null,
 					next.endedAt ?? null,
-					next.error ?? null,
+					next.error ? stringifyAgentV2Json(next.error) : null,
 				],
 			);
 			return {
@@ -1439,7 +1440,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 					created_at
 				) VALUES ($1, $2, $3, $4, $5, $6)
 				RETURNING ${AGENT_V2_RUN_EVENT_COLUMNS}`,
-				[input.clientId, input.runId, seq, input.type, input.payload, createdAt],
+				[input.clientId, input.runId, seq, input.type, stringifyAgentV2Json(input.payload), createdAt],
 			);
 			return requiredRecord(row ? toAgentV2RunEventRecord(row) : undefined, "agent v2 run event");
 		});
@@ -1501,15 +1502,15 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				task.kind,
 				task.title,
 				task.status,
-				task.dependsOn,
-				task.acceptanceCriteria,
-				task.input,
-				task.output,
+				stringifyAgentV2Json(task.dependsOn),
+				stringifyAgentV2Json(task.acceptanceCriteria),
+				stringifyAgentV2Json(task.input),
+				stringifyAgentV2Json(task.output),
 				task.createdAt,
 				task.updatedAt,
 				task.startedAt ?? null,
 				task.endedAt ?? null,
-				task.error ?? null,
+				task.error ? stringifyAgentV2Json(task.error) : null,
 			],
 		);
 		return requiredRecord(row ? toAgentV2TaskRecord(row) : undefined, "agent v2 task");
@@ -1568,7 +1569,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				artifact.version,
 				artifact.sourceTaskId ?? null,
 				artifact.validationStatus,
-				artifact.metadataJson,
+				stringifyAgentV2Json(artifact.metadataJson),
 				artifact.createdAt,
 				artifact.updatedAt,
 			],
@@ -1619,7 +1620,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				document.kind,
 				document.version,
 				document.contentMarkdown,
-				document.contentJson,
+				stringifyAgentV2Json(document.contentJson),
 				document.sourceTaskId ?? null,
 				document.createdAt,
 				document.updatedAt,
@@ -1674,7 +1675,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				validation.artifactId ?? null,
 				validation.status,
 				validation.summary,
-				validation.details,
+				stringifyAgentV2Json(validation.details),
 				validation.createdAt,
 				validation.updatedAt,
 			],
@@ -1730,7 +1731,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				input.artifactId ?? null,
 				input.traceId ?? null,
 				input.message,
-				input.data,
+				stringifyAgentV2Json(input.data),
 				input.createdAt,
 			],
 		);
@@ -1844,14 +1845,14 @@ export class PostgresRuntimeStore implements RuntimeStore {
 					run.status,
 					input.readyPhase,
 					run.attempt,
-					run.input,
-					run.model,
+					stringifyAgentV2Json(run.input),
+					stringifyAgentV2Json(run.model),
 					run.workerId ?? null,
 					run.createdAt,
 					run.updatedAt,
 					run.startedAt ?? null,
 					run.endedAt ?? null,
-					run.error ?? null,
+					run.error ? stringifyAgentV2Json(run.error) : null,
 				],
 			);
 			for (const blob of input.inputBlobs)
@@ -2457,7 +2458,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				run.updatedAt,
 				run.startedAt ?? null,
 				run.endedAt ?? null,
-				run.error ?? null,
+				run.error ? stringifyAgentV2Json(run.error) : null,
 			],
 		);
 	}
@@ -2481,7 +2482,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		const row = await this.queryOne<AgentV2RunEventRow>(
 			queryable,
 			`INSERT INTO agent_v2_run_events (client_id, run_id, seq, event_type, payload_json, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${AGENT_V2_RUN_EVENT_COLUMNS}`,
-			[input.clientId, input.runId, seq, input.type, input.payload, createdAt],
+			[input.clientId, input.runId, seq, input.type, stringifyAgentV2Json(input.payload), createdAt],
 		);
 		return requiredRecord(row ? toAgentV2RunEventRecord(row) : undefined, "agent v2 run event");
 	}
@@ -2569,15 +2570,15 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				task.kind,
 				task.title,
 				task.status,
-				task.dependsOn,
-				task.acceptanceCriteria,
-				task.input,
-				task.output,
+				stringifyAgentV2Json(task.dependsOn),
+				stringifyAgentV2Json(task.acceptanceCriteria),
+				stringifyAgentV2Json(task.input),
+				stringifyAgentV2Json(task.output),
 				task.createdAt,
 				task.updatedAt,
 				task.startedAt ?? null,
 				task.endedAt ?? null,
-				task.error ?? null,
+				task.error ? stringifyAgentV2Json(task.error) : null,
 			],
 		);
 		return requiredRecord(row ? toAgentV2TaskRecord(row) : undefined, "agent v2 task");
@@ -2617,7 +2618,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				artifact.version,
 				artifact.sourceTaskId ?? null,
 				artifact.validationStatus,
-				artifact.metadataJson,
+				stringifyAgentV2Json(artifact.metadataJson),
 				artifact.createdAt,
 				artifact.updatedAt,
 			],
@@ -2654,7 +2655,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				document.kind,
 				document.version,
 				document.contentMarkdown,
-				document.contentJson,
+				stringifyAgentV2Json(document.contentJson),
 				document.sourceTaskId ?? null,
 				document.createdAt,
 				document.updatedAt,
@@ -2682,7 +2683,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				input.artifactId ?? null,
 				input.traceId ?? null,
 				input.message,
-				input.data,
+				stringifyAgentV2Json(input.data),
 				input.createdAt,
 			],
 		);
@@ -2714,7 +2715,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 				validation.artifactId ?? null,
 				validation.status,
 				validation.summary,
-				validation.details,
+				stringifyAgentV2Json(validation.details),
 				validation.createdAt,
 				validation.updatedAt,
 			],
@@ -2774,7 +2775,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		await this.query(
 			queryable,
 			"INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$6,$6,$7,0)",
-			[intentId, dedupeKey, clientId, runId, reference.kind, createdAt, reference],
+			[intentId, dedupeKey, clientId, runId, reference.kind, createdAt, stringifyAgentV2Json(reference)],
 		);
 		return intentId;
 	}

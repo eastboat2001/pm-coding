@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { AgentV2RunInputContractError, validateAgentV2RunInput } from "./agent-v2-run-input-contract.js";
+import { createHash, randomUUID } from "node:crypto";
+import { buildAgentV2PlanningBootstrap, toAgentV2PlanningCommit } from "./agent-v2-planning-bootstrap.js";
+import { AgentV2StartInputError, bindAgentV2StartPayload, normalizeAgentV2RunId, normalizeAgentV2StartPayload, } from "./agent-v2-start-input.js";
 export class AgentV2RunApiError extends Error {
     statusCode;
     constructor(message, statusCode) {
@@ -12,83 +13,79 @@ export class AgentV2RunApiService {
     createRunId;
     events;
     now;
-    queue;
+    queueName;
     store;
+    wakeDispatcher;
     constructor(options) {
         this.store = options.store;
-        this.queue = options.queue;
         this.events = options.events;
+        this.queueName = requireQueueName(options.queueName);
+        this.wakeDispatcher = options.wakeDispatcher;
         this.now = options.now ?? (() => new Date().toISOString());
         this.createRunId = options.createRunId ?? (() => randomUUID());
     }
     async startRun(clientId, request) {
-        const input = validateStartRunInput(request.input);
-        const createdAt = request.createdAt ?? this.now();
-        const run = await this.store.createAgentV2Run({
-            clientId,
-            runId: request.runId ?? this.createRunId(),
-            input,
-            model: request.model ?? {},
-            createdAt,
-            updatedAt: request.updatedAt ?? createdAt,
-        });
+        const hasExplicitRunId = request.runId !== undefined;
+        const runId = normalizeRunId(request.runId ?? this.createRunId());
+        const payload = normalizeStartPayload(request, runId);
+        const existing = hasExplicitRunId ? await this.store.getAgentV2Run(clientId, runId) : undefined;
+        const createdAt = existing?.createdAt ?? this.now();
+        let committed;
         try {
-            await this.queue.enqueue({ clientId: run.clientId, runId: run.runId });
+            committed = await this.store.commitAgentV2RunStart(buildStartCommitInput(payload, { clientId, runId, createdAt }, this.queueName));
         }
         catch (error) {
-            throw await this.handleEnqueueFailure(run, error);
+            if (!existing && hasExplicitRunId && isStartReplayConflict(error)) {
+                const winner = await this.store.getAgentV2Run(clientId, runId);
+                if (winner) {
+                    try {
+                        committed = await this.store.commitAgentV2RunStart(buildStartCommitInput(payload, { clientId, runId, createdAt: winner.createdAt }, this.queueName));
+                    }
+                    catch (retryError) {
+                        throw mapStartConflict(retryError);
+                    }
+                }
+                else {
+                    throw mapStartConflict(error);
+                }
+            }
+            else {
+                throw mapStartConflict(error);
+            }
         }
-        await this.events.append({
-            clientId: run.clientId,
-            runId: run.runId,
-            type: "agent_v2.run_created",
-            payload: {
-                type: "agent_v2.run_created",
-                status: run.status,
-                phase: run.phase,
-                attempt: run.attempt,
-                at: run.updatedAt,
-            },
-            createdAt: run.updatedAt,
-        });
-        return run;
+        await this.wakeDispatcherSafely();
+        return committed.run;
     }
     async cancelRun(clientId, runId) {
         const run = await this.requireRun(clientId, runId);
-        if (isTerminalRun(run.status)) {
+        if (isTerminalRun(run.status) || run.status === "cancelling")
             return run;
+        if (run.status !== "queued" && run.status !== "running") {
+            throw new AgentV2RunApiError("Agent v2 run cannot be cancelled from its current state", 409);
         }
-        await this.queue.requestCancel({ clientId, runId });
-        const updatedAt = this.now();
-        if (run.status === "queued") {
-            const cancelled = await this.store.updateAgentV2RunWithResult({
+        const cancelledAt = nextCanonicalTimestamp(this.now(), run.updatedAt);
+        try {
+            const result = await this.store.commitAgentV2RunCancel({
                 clientId,
                 runId,
-                status: "cancelled",
-                phase: "cancelled",
-                updatedAt,
-                endedAt: updatedAt,
-                expectedStatuses: ["queued"],
+                expectedStatuses: [run.status],
+                expectedRun: expectedRunState(run),
+                queueName: this.queueName,
+                cancelToken: deterministicCancelToken(clientId, runId),
+                cancelledAt,
+                reason: "user_requested",
             });
-            if (cancelled.applied) {
-                await this.appendPhaseEvent(cancelled.run, "cancelled");
+            await this.wakeDispatcherSafely();
+            return result.run;
+        }
+        catch (error) {
+            if (isCancelConflict(error)) {
+                const current = await this.store.getAgentV2Run(clientId, runId);
+                if (current && isTerminalRun(current.status))
+                    return current;
             }
-            return cancelled.run;
+            throw mapCancelConflict(error);
         }
-        if (run.status === "cancelling") {
-            return run;
-        }
-        const cancelling = await this.store.updateAgentV2RunWithResult({
-            clientId,
-            runId,
-            status: "cancelling",
-            updatedAt,
-            expectedStatuses: ["running"],
-        });
-        if (cancelling.applied) {
-            await this.appendPhaseEvent(cancelling.run, cancelling.run.status);
-        }
-        return cancelling.run;
     }
     async getRun(clientId, runId) {
         return await this.store.getAgentV2Run(clientId, runId);
@@ -99,67 +96,125 @@ export class AgentV2RunApiService {
     async listRunEvents(clientId, runId, afterSeq) {
         return await this.events.list(clientId, runId, afterSeq);
     }
-    async handleEnqueueFailure(run, error) {
-        const updatedAt = this.now();
-        const message = errorMessage(error);
-        const interrupted = await this.store.updateAgentV2RunWithResult({
-            clientId: run.clientId,
-            runId: run.runId,
-            status: "interrupted",
-            updatedAt,
-            endedAt: updatedAt,
-            error: {
-                code: "agent_v2.run_enqueue_failed",
-                message,
-                retryable: true,
-            },
-            expectedStatuses: ["queued"],
-        });
-        if (interrupted.applied) {
-            await this.appendPhaseEvent(interrupted.run, interrupted.run.status);
-        }
-        return new AgentV2RunApiError(`Failed to enqueue agent v2 run: ${message}`, 503);
-    }
-    async appendPhaseEvent(run, status) {
-        await this.events.append({
-            clientId: run.clientId,
-            runId: run.runId,
-            type: "agent_v2.phase_changed",
-            payload: {
-                type: "agent_v2.phase_changed",
-                phase: run.phase,
-                status,
-                attempt: run.attempt,
-                at: run.updatedAt,
-            },
-            createdAt: run.updatedAt,
-        });
-    }
     async requireRun(clientId, runId) {
         const run = await this.store.getAgentV2Run(clientId, runId);
-        if (!run) {
+        if (!run)
             throw new AgentV2RunApiError("Agent v2 run not found", 404);
-        }
         return run;
     }
+    async wakeDispatcherSafely() {
+        if (!this.wakeDispatcher)
+            return;
+        await Promise.resolve()
+            .then(() => this.wakeDispatcher?.())
+            .catch(() => undefined);
+    }
+}
+function normalizeStartPayload(request, runId) {
+    try {
+        return normalizeAgentV2StartPayload(request, runId);
+    }
+    catch (error) {
+        if (error instanceof AgentV2StartInputError)
+            throw new AgentV2RunApiError(error.message, 400);
+        throw error;
+    }
+}
+function buildStartCommitInput(payload, identity, queueName) {
+    const normalized = bindAgentV2StartPayload(payload, identity);
+    const initialRun = {
+        clientId: identity.clientId,
+        runId: identity.runId,
+        status: "queued",
+        phase: "intake",
+        attempt: 1,
+        input: normalized.runInput,
+        model: normalized.model,
+        createdAt: identity.createdAt,
+        updatedAt: identity.createdAt,
+    };
+    const bootstrap = buildAgentV2PlanningBootstrap({ run: initialRun, now: () => identity.createdAt });
+    const planning = toAgentV2PlanningCommit(bootstrap);
+    return {
+        run: {
+            clientId: identity.clientId,
+            runId: identity.runId,
+            input: normalized.runInput,
+            model: normalized.model,
+            createdAt: identity.createdAt,
+            updatedAt: identity.createdAt,
+        },
+        bootstrapVersion: planning.bootstrapVersion,
+        bootstrapChecksum: planning.bootstrapChecksum,
+        inputBlobs: normalized.inputBlobs,
+        inputReferences: normalized.inputReferences,
+        readyPhase: "implementation",
+        documents: planning.documents,
+        tasks: planning.tasks,
+        artifacts: planning.artifacts,
+        diagnostics: planning.diagnostics,
+        queueName,
+        createdAt: identity.createdAt,
+    };
+}
+function normalizeRunId(value) {
+    try {
+        return normalizeAgentV2RunId(value);
+    }
+    catch (error) {
+        if (error instanceof AgentV2StartInputError)
+            throw new AgentV2RunApiError(error.message, 400);
+        throw error;
+    }
+}
+function expectedRunState(run) {
+    return {
+        status: run.status,
+        phase: run.phase,
+        attempt: run.attempt,
+        workerId: run.workerId ?? null,
+        updatedAt: run.updatedAt,
+    };
+}
+function deterministicCancelToken(clientId, runId) {
+    return `cancel:${createHash("sha256").update(`${clientId}\0${runId}\0cancel`).digest("hex")}`;
+}
+function nextCanonicalTimestamp(proposed, current) {
+    const proposedMs = canonicalTimestamp(proposed, "cancelledAt");
+    const currentMs = canonicalTimestamp(current, "current run revision");
+    return new Date(Math.max(proposedMs, currentMs + 1)).toISOString();
+}
+function canonicalTimestamp(value, label) {
+    const epoch = Date.parse(value);
+    if (!Number.isFinite(epoch) || new Date(epoch).toISOString() !== value) {
+        throw new AgentV2RunApiError(`Agent v2 ${label} must be a canonical UTC millisecond timestamp`, 500);
+    }
+    return epoch;
+}
+function requireQueueName(value) {
+    if (typeof value !== "string" || !value.trim())
+        throw new Error("Agent v2 queueName is required");
+    return value.trim();
 }
 function isTerminalRun(status) {
     return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
 }
-function validateStartRunInput(input) {
-    try {
-        return validateAgentV2RunInput(input);
-    }
-    catch (error) {
-        if (error instanceof AgentV2RunInputContractError) {
-            throw new AgentV2RunApiError(error.message, 400);
-        }
-        throw error;
-    }
+function isStartReplayConflict(error) {
+    return error instanceof Error && error.message === "Agent v2 run start replay conflict";
 }
-function errorMessage(error) {
-    if (error instanceof Error)
-        return error.message;
-    return String(error);
+function isCancelConflict(error) {
+    return (error instanceof Error &&
+        (error.message === "Agent v2 cancel replay conflict" ||
+            error.message === "Agent v2 cancel compare-and-set conflict"));
+}
+function mapStartConflict(error) {
+    if (isStartReplayConflict(error))
+        return new AgentV2RunApiError("Agent v2 durable request conflicts with existing state", 409);
+    return error;
+}
+function mapCancelConflict(error) {
+    if (isCancelConflict(error))
+        return new AgentV2RunApiError("Agent v2 durable request conflicts with existing state", 409);
+    return error;
 }
 //# sourceMappingURL=agent-v2-run-api-service.js.map

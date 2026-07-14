@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type AgentV2DurableCommitStore, agentV2StartReplayFingerprint } from "../src/agent-v2-durable-store.js";
 import type { AgentV2OutboxStore } from "../src/agent-v2-outbox.js";
+import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
+import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
 import { PostgresRuntimeStore, type Queryable } from "../src/postgres-runtime-store.js";
 import { createPostgresTestSchema, type PostgresTestSchema } from "./helpers/postgres-test-schema.js";
 
@@ -71,6 +73,108 @@ describe("agent v2 PostgreSQL durable store", () => {
 			"SELECT COUNT(*)::text AS count FROM agent_v2_runs WHERE client_id='client-a' AND run_id='run-concurrent'",
 		);
 		expect(rows.rows[0]?.count).toBe("1");
+	});
+
+	it("reconciles two service starts with different clocks through one bounded replay without duplicate rows", async () => {
+		const isolated = await createIsolated();
+		let begun = 0;
+		let releaseBegins!: () => void;
+		const beginsReleased = new Promise<void>((resolve) => {
+			releaseBegins = resolve;
+		});
+		const barrierQueryable: Queryable & { connect(): Promise<Queryable & { release(): void }> } = {
+			query: (sql, values) => isolated.pool.query(sql, values ? [...values] : undefined),
+			async connect() {
+				const client = await isolated.pool.connect();
+				return {
+					async query(sql, values) {
+						const result = await client.query(sql, values ? [...values] : undefined);
+						if (sql.trim() === "BEGIN") {
+							begun += 1;
+							if (begun === 2) releaseBegins();
+							await beginsReleased;
+						}
+						return result;
+					},
+					release: () => client.release(),
+				};
+			},
+		};
+		const schemaStore = new PostgresRuntimeStore({ queryable: isolated.pool });
+		stores.push(schemaStore);
+		await schemaStore.ensureAgentV2Schema();
+		const store = new PostgresRuntimeStore({ queryable: barrierQueryable }) as PostgresRuntimeStore &
+			AgentV2DurableCommitStore;
+		stores.push(store);
+		const originalCommit = store.commitAgentV2RunStart.bind(store);
+		const replayed: boolean[] = [];
+		const commit = vi.spyOn(store, "commitAgentV2RunStart").mockImplementation(async (input) => {
+			const result = await originalCommit(input);
+			replayed.push(result.replayed);
+			return result;
+		});
+		const createService = (now: string) =>
+			new AgentV2RunApiService({
+				store,
+				events: {
+					list: async (clientId: string, runId: string, afterSeq: number): Promise<AgentV2RunEventRecord[]> =>
+						store.listAgentV2RunEvents(clientId, runId, afterSeq),
+				},
+				queueName: "agent-v2-postgres-test",
+				now: () => now,
+			});
+		const request = {
+			runId: "run-service-concurrent",
+			input: {
+				sessionId: "session-a",
+				title: "PostgreSQL concurrency",
+				objective: "Build a durable static application",
+				projectFiles: [{ filename: "src/main.ts", content: "export const ready = true;" }],
+				attachments: [
+					{
+						type: "file",
+						fileName: "main.ts",
+						mimeType: "application/typescript",
+						projectFilePath: "src/main.ts",
+					},
+				],
+			},
+			model: { provider: "test", id: "model-a" },
+		};
+		const timeout = new Promise<never>((_, reject) =>
+			setTimeout(() => reject(new Error("service concurrent start timed out")), 5000),
+		);
+		const runs = await Promise.race([
+			Promise.all([
+				createService("2026-07-13T10:55:00.000Z").startRun("client-a", request),
+				createService("2026-07-13T10:56:00.000Z").startRun("client-a", request),
+			]),
+			timeout,
+		]);
+
+		expect(runs[1]).toEqual(runs[0]);
+		expect(commit).toHaveBeenCalledTimes(3);
+		expect(replayed.sort()).toEqual([false, true]);
+		const counts = await isolated.pool.query<{ table_name: string; count: string }>(`
+			SELECT 'runs' AS table_name, COUNT(*)::text AS count FROM agent_v2_runs WHERE client_id='client-a' AND run_id='run-service-concurrent'
+			UNION ALL SELECT 'blobs', COUNT(*)::text FROM agent_v2_input_blobs WHERE client_id='client-a' AND run_id='run-service-concurrent'
+			UNION ALL SELECT 'references', COUNT(*)::text FROM agent_v2_input_references WHERE client_id='client-a' AND run_id='run-service-concurrent'
+			UNION ALL SELECT 'documents', COUNT(*)::text FROM agent_v2_documents WHERE client_id='client-a' AND run_id='run-service-concurrent'
+			UNION ALL SELECT 'tasks', COUNT(*)::text FROM agent_v2_tasks WHERE client_id='client-a' AND run_id='run-service-concurrent'
+			UNION ALL SELECT 'artifacts', COUNT(*)::text FROM agent_v2_artifacts WHERE client_id='client-a' AND run_id='run-service-concurrent'
+			UNION ALL SELECT 'diagnostics', COUNT(*)::text FROM agent_v2_diagnostics WHERE client_id='client-a' AND run_id='run-service-concurrent'
+			UNION ALL SELECT 'events', COUNT(*)::text FROM agent_v2_run_events WHERE client_id='client-a' AND run_id='run-service-concurrent'
+		`);
+		expect(Object.fromEntries(counts.rows.map((row) => [row.table_name, Number(row.count)]))).toEqual({
+			runs: 1,
+			blobs: 1,
+			references: 2,
+			documents: 4,
+			tasks: 6,
+			artifacts: 4,
+			diagnostics: 1,
+			events: 2,
+		});
 	});
 
 	it("uses SKIP LOCKED across two real connections and never overlaps a held candidate", async () => {

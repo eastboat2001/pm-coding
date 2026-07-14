@@ -231,6 +231,12 @@
 | `vite-plugin.ts` 中 v1 SSE union | 私有调用链仍声明旧 record 合法 | v2 SSE 类型测试固定后删 union/import，不删除仍被其他 legacy store 使用的全局类型 |
 | provider-key legacy fallback | 有明确部署配置切换语义和测试 | 新部署配置切换并验证完成、且有 fail-fast 测试后再删；不得直接破坏部署输入，这不涉及旧业务数据迁移 |
 
+Phase 10 Task 5 为 v2 worker 新增了独立的 provider-only 全局密钥边界；生产组装不导入也不调用 client-scoped fallback。旧 `apps/pi-coding-web/src/worker/provider-keys.ts` 仍仅因远程部署配置尚未取得外部切换证据而保留，删除必须等待部署侧确认、fail-fast 验证和独立评审，不能在本地 preflight 中提前执行。
+
+Task 5 remediation 将全局 settings 改为 worker 启动时单次、有界读取的不可变快照；canonical endpoint、model capability、认证策略与对应 key 必须由同一快照派生，避免并发执行跨配置版本配对。此边界有意不支持进程内热更新：修改全局 provider/model/key 配置后必须重启 worker 才会生效。auto-discovery provider 不在 worker 中重新联网发现；仅当同一快照的 `selectedModel` 与 durable `{provider,id}` 精确匹配时，使用其经严格校验的 token/input 元数据，并从 provider 配置重建网络目标，否则 fail closed。
+
+同一任务为 `@mariozechner/pi-ai` 增加精确的 worker 所需子路径，并以 `complete-simple` 窄 facade 在运行时动态加载既有 `stream`。原因是静态引用 `stream.d.ts` 会沿其 built-in provider 副作用声明扩张到所有 provider SDK，污染 Node worker 的全局 fetch 类型；facade 不移动注册逻辑、不改变 stream 语义，且由无网络 faux-provider 测试、导入边界测试和 worker build 共同固定。不得重新开放 `./stream` 子路径来绕过该边界。
+
 ### 6.3 明确不得删除或恢复
 
 - `packages/web-workspace/src/agent-v2-types.ts` 是当前 v2 核心类型，不是已删除的旧 `apps/.../agent-v2/types.ts`；

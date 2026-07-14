@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
+	type AgentV2ModelExecution,
 	AgentV2RunEventLog,
 	type AgentV2RunQueue,
 	type AgentV2RunSnapshot,
@@ -23,6 +24,12 @@ import {
 	type StorageConfig,
 	WorkspaceDiagnosticLogService,
 } from "@mariozechner/pi-web-workspace/runtime-infra";
+import { AgentV2PiModelExecution, ConfiguredAgentV2ServerModelRegistry } from "./agent-v2-pi-model-execution.js";
+import {
+	createGlobalProviderApiKeyResolver,
+	type GlobalProviderApiKeySources,
+	loadAgentV2ServerSettingsSnapshot,
+} from "./global-provider-keys.js";
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 
@@ -50,8 +57,22 @@ export function createAgentV2WorkerRunEventOptions(config: StorageConfig): {
 export function createAgentV2WorkerExecution(
 	config: StorageConfig,
 	store: AgentV2ProductionStore,
-): AgentV2WorkerExecution {
+	dependencies: {
+		settingsSources?: GlobalProviderApiKeySources;
+		complete?: ConstructorParameters<typeof AgentV2PiModelExecution>[0]["complete"];
+	} = {},
+): AgentV2WorkerExecution & { readonly modelExecution: AgentV2ModelExecution } {
+	// Settings are intentionally a restart-scoped snapshot: endpoint, capabilities and credentials
+	// must never be paired across two file versions while concurrent tasks are executing.
+	const settingsSnapshot = loadAgentV2ServerSettingsSnapshot(config, dependencies.settingsSources);
+	const modelExecution = new AgentV2PiModelExecution({
+		modelRegistry: new ConfiguredAgentV2ServerModelRegistry(settingsSnapshot),
+		resolveApiKey: createGlobalProviderApiKeyResolver(settingsSnapshot),
+		complete: dependencies.complete,
+		maxOutputTokens: config.modelMaxOutputTokens,
+	});
 	return {
+		modelExecution,
 		async executeNextTask(
 			input: AgentV2WorkerExecutionInput,
 		): Promise<Awaited<ReturnType<typeof executeAgentV2NextTask>>> {

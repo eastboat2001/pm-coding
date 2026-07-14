@@ -51,6 +51,13 @@ export type {
 	AgentV2WorkerStore,
 	MaybeAsyncIterable,
 } from "./agent-v2-runtime-store.js";
+export {
+	AGENT_V2_MODEL_ID_MAX_LENGTH,
+	AGENT_V2_MODEL_PROVIDER_MAX_LENGTH,
+	type AgentV2ModelReference,
+	normalizeAgentV2ModelReference,
+	normalizeAgentV2StartPayload,
+} from "./agent-v2-start-input.js";
 export type { AgentV2RunSnapshot } from "./agent-v2-types.js";
 export {
 	type AgentV2WorkerExecution,

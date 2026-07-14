@@ -10,6 +10,22 @@
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
+		"./complete-simple": {
+			"types": "./dist/complete-simple.d.ts",
+			"import": "./dist/complete-simple.js"
+		},
+		"./env-api-keys": {
+			"types": "./dist/env-api-keys.d.ts",
+			"import": "./dist/env-api-keys.js"
+		},
+		"./models": {
+			"types": "./dist/models.d.ts",
+			"import": "./dist/models.js"
+		},
+		"./types": {
+			"types": "./dist/types.d.ts",
+			"import": "./dist/types.js"
+		},
 		"./anthropic": {
 			"types": "./dist/providers/anthropic.d.ts",
 			"import": "./dist/providers/anthropic.js"

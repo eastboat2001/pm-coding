@@ -214,6 +214,37 @@ describe("agent v2 production import boundary", () => {
 		expect(runtimeInfraImport).toContain("type AgentV2SchemaStore");
 	});
 
+	it("composes the PI AI model adapter without client-scoped key or deterministic generation fallbacks", () => {
+		const source = readFileSync(join(repoRoot, "apps/pi-coding-web/src/worker/main.ts"), "utf8");
+		const adapter = readFileSync(
+			join(repoRoot, "apps/pi-coding-web/src/worker/agent-v2-pi-model-execution.ts"),
+			"utf8",
+		);
+		const globalKeys = readFileSync(join(repoRoot, "apps/pi-coding-web/src/worker/global-provider-keys.ts"), "utf8");
+		const aiPackage = JSON.parse(readFileSync(join(repoRoot, "packages/ai/package.json"), "utf8")) as {
+			exports: Record<string, unknown>;
+		};
+		const completeSimpleFacade = readFileSync(join(repoRoot, "packages/ai/src/complete-simple.ts"), "utf8");
+		expect(source).toContain("AgentV2PiModelExecution");
+		expect(source).toContain("createGlobalProviderApiKeyResolver");
+		expect(source).not.toContain('from "./provider-keys.js"');
+		expect(source).not.toContain("readServerProviderApiKey");
+		expect(source).not.toContain("SequencedExecution");
+		expect(source).not.toContain("deterministicGeneration");
+		for (const workerSource of [adapter, globalKeys]) {
+			expect(workerSource).not.toContain('from "@mariozechner/pi-ai"');
+			expect(workerSource).not.toContain("@mariozechner/pi-ai/stream");
+		}
+		for (const subpath of ["./complete-simple", "./env-api-keys", "./models", "./types"]) {
+			expect(aiPackage.exports).toHaveProperty(subpath);
+		}
+		expect(aiPackage.exports).not.toHaveProperty("./stream");
+		expect(adapter).toContain("@mariozechner/pi-ai/complete-simple");
+		expect(globalKeys).toContain("@mariozechner/pi-ai/env-api-keys");
+		expect(completeSimpleFacade).toContain('await import("./stream.js")');
+		expect(completeSimpleFacade).not.toMatch(/^import .*from ["']\.\/stream\.js["'];$/m);
+	});
+
 	it("keeps the runtime-infra subpath limited to v2 queue exports", () => {
 		const source = readFileSync(join(repoRoot, "packages", "web-workspace", "src", "runtime-infra.ts"), "utf8");
 

@@ -6,6 +6,8 @@ export const AGENT_V2_INPUT_LIMITS = {
     maxTotalBytes: 8_388_608,
 };
 export const AGENT_V2_RUN_ID_MAX_LENGTH = 128;
+export const AGENT_V2_MODEL_PROVIDER_MAX_LENGTH = 128;
+export const AGENT_V2_MODEL_ID_MAX_LENGTH = 256;
 export class AgentV2StartInputError extends Error {
     constructor(message) {
         super(message);
@@ -36,7 +38,7 @@ export function normalizeAgentV2StartPayload(value, runId) {
     const sessionId = requireNonEmptyString(input.sessionId, "Agent v2 start input sessionId");
     const title = requireNonEmptyString(input.title, "Agent v2 start input title");
     const objective = requireNonEmptyString(input.objective, "Agent v2 start input objective");
-    const model = normalizeModel(request.model);
+    const model = normalizeAgentV2ModelReference(request.model);
     const projectFiles = optionalArray(input.projectFiles, "Agent v2 projectFiles");
     const attachments = optionalArray(input.attachments, "Agent v2 attachments");
     if (projectFiles.length + attachments.length > AGENT_V2_INPUT_LIMITS.maxEntries) {
@@ -171,12 +173,12 @@ export function bindAgentV2StartPayload(payload, identity) {
         inputReferences,
     };
 }
-function normalizeModel(value) {
+export function normalizeAgentV2ModelReference(value) {
     const model = requireRecord(value, "Agent v2 model reference");
     assertExactFields(model, MODEL_FIELDS, "Agent v2 model reference");
     return {
-        provider: requireStableModelIdentifier(model.provider, "Agent v2 model provider", 128),
-        id: requireStableModelIdentifier(model.id, "Agent v2 model id", 256),
+        provider: requireStableModelIdentifier(model.provider, "Agent v2 model provider", AGENT_V2_MODEL_PROVIDER_MAX_LENGTH),
+        id: requireStableModelIdentifier(model.id, "Agent v2 model id", AGENT_V2_MODEL_ID_MAX_LENGTH),
     };
 }
 function normalizeLogicalPath(value) {

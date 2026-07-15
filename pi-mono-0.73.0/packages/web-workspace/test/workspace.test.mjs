@@ -1263,6 +1263,60 @@ await test("WorkspacePreviewService rejects build source entries before build_st
 	assert.match(result.logs.join(""), /project_task build_static/);
 });
 
+await test("WorkspaceTaskService emits v2 build guidance without legacy tool names", async () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const fileService = new WorkspaceFileService(config);
+	const taskService = new WorkspaceTaskService(config, unusedBuildRunner);
+	const context = { clientId: "client-a", sessionId: "session-v2-build-guidance", title: "V2 Build" };
+
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "index.html",
+		content: '<div id="root"></div><script type="module" src="/src/main.tsx"></script>',
+	});
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "src/main.tsx",
+		content: "console.log('tsx source');",
+	});
+
+	const result = await taskService.run({ ...context, task: "validate" });
+	const message = result.errors?.join("\n") ?? "";
+
+	assert.match(message, /Run build_static before preview/);
+	assert.doesNotMatch(message, /project_task/);
+});
+
+await test("WorkspaceTaskService requires build output for a package project without a root entry", async () => {
+	const root = tempRoot();
+	const config = testConfig(root);
+	const fileService = new WorkspaceFileService(config);
+	const taskService = new WorkspaceTaskService(config, unusedBuildRunner);
+	const context = { clientId: "client-a", sessionId: "session-package-build", title: "Package Build" };
+
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "package.json",
+		content: JSON.stringify({ name: "package-build", scripts: { build: "node build.mjs" } }),
+	});
+	fileService.handle({
+		...context,
+		command: "create",
+		filename: "src/index.html",
+		content: "<!doctype html><main>Source entry</main>",
+	});
+
+	const result = await taskService.run({ ...context, task: "validate" });
+	const message = result.errors?.join("\n") ?? "";
+
+	assert.match(message, /build source entry at .*package\.json/);
+	assert.match(message, /Run build_static before preview/);
+});
+
 await test("WorkspaceTaskService rejects Node services without a static entry", async () => {
 	const root = tempRoot();
 	const config = testConfig(root);

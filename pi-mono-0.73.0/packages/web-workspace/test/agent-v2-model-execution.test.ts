@@ -302,6 +302,12 @@ describe("agent v2 model prompt renderer", () => {
 		expect(first).toEqual(second);
 		expect(first.systemPrompt).toContain("Application Generation Agent v2");
 		expect(first.systemPrompt).toContain("JSON");
+		expect(first.systemPrompt).toContain(
+			"For static_app delivery, produce a browser-ready root index.html without package.json or a build step.",
+		);
+		expect(first.systemPrompt).toContain(
+			"If dependencies are declared, include a valid package-lock.json; otherwise use dependency-free browser assets.",
+		);
 		expect(first.userPrompt).toContain("Build an accessible static dashboard");
 		expect(first.userPrompt).toContain("Static application capability");
 		expect(first.userPrompt).toContain("Spec evidence");
@@ -344,6 +350,8 @@ describe("agent v2 model prompt renderer", () => {
 		const rendered = renderAgentV2RepairPrompt(input);
 		expect(rendered.userPrompt).toContain("agent_v2.validation_failed:task-1:1");
 		expect(rendered.userPrompt).toContain("static.loading_visible");
+		expect(rendered.userPrompt).toContain("Static validation found a visible loading placeholder that is never cleared: #load.");
+		expect(rendered.userPrompt).toContain("path=index.html");
 		expect(rendered.userPrompt).toContain("CURRENT_WORKSPACE_SENTINEL");
 		expect(rendered.userPrompt).not.toContain("RAW_VALIDATOR_MESSAGE");
 		expect(rendered.userPrompt).toContain("addressedDiagnosticIds");
@@ -836,6 +844,15 @@ function repairPromptInput(): AgentV2RepairModelExecutionInput {
 			failureCount: 1,
 			retryableFailureCount: 1,
 			failureCodes: ["static.loading_visible"],
+			failureDetails: [
+				{
+					code: "static.loading_visible",
+					message: "Static validation found a visible loading placeholder that is never cleared: #load.",
+					retryable: true,
+					source: "static_quality",
+					path: "index.html",
+				},
+			],
 		},
 		createdAt: base.run.createdAt,
 	};

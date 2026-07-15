@@ -164,6 +164,42 @@ describe("agent v2 validation gate", () => {
 		});
 	});
 
+	it("keeps generated manifest policy failures repairable", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const sourceMessage =
+			"Static preview found a build source entry at ./package.json. Run build_static before preview so PI can serve browser-ready dist/build output.";
+		const tasks = mockTaskSequence([
+			taskResult({ task: "validate", status: "failed", valid: false, errors: [sourceMessage], serveRoot: "" }),
+			taskResult({
+				task: "build_static",
+				status: "failed",
+				failureCode: "build.policy_rejected",
+				valid: false,
+				errors: ["Dependencies require package-lock.json."],
+				serveRoot: "",
+			}),
+		]);
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-15T00:00:00.000Z",
+			tasks,
+		});
+
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "build.policy_rejected",
+				message: "Dependencies require package-lock.json.",
+				retryable: true,
+			}),
+		]);
+		expect(result.validation.details).toMatchObject({ retryableFailureCount: 1 });
+	});
+
 	it("stops after an untyped failed build and normalizes its classification", async () => {
 		const config = testConfig(tempRoot());
 		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
@@ -276,6 +312,41 @@ describe("agent v2 validation gate", () => {
 			retryableFailureCount: 0,
 			usedBuildStep: true,
 		});
+	});
+
+	it("uses the current formal workspace build-required message", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const sourceMessage =
+			"Static preview found a build source entry at C:\\demo\\project\\index.html. Run build_static before preview so PI can serve browser-ready dist/build output.";
+		const tasks = mockTaskSequence([
+			taskResult({ task: "validate", status: "failed", valid: false, errors: [sourceMessage], serveRoot: "" }),
+			taskResult({
+				task: "build_static",
+				status: "failed",
+				valid: false,
+				errors: ["build_static requires package.json."],
+				serveRoot: "",
+			}),
+		]);
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-15T00:00:00.000Z",
+			tasks,
+		});
+
+		expect(tasks.calls).toEqual(["validate", "build_static"]);
+		expect(result.rawResult.task).toBe("build_static");
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "build.execution_failed",
+				message: "build_static requires package.json.",
+			}),
+		]);
 	});
 
 	it("passes the cancellation signal to every static validation workspace task", async () => {

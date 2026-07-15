@@ -38,8 +38,13 @@ import type {
 	AgentV2TaskUpdatedPayload,
 	AgentV2ValidationRecordedPayload,
 } from "./agent-v2-types.js";
-import { type AgentV2ValidationGateContext, runAgentV2StaticValidationGate } from "./agent-v2-validation-gate.js";
+import {
+	type AgentV2ValidationFailure,
+	type AgentV2ValidationGateContext,
+	runAgentV2StaticValidationGate,
+} from "./agent-v2-validation-gate.js";
 import type { StorageConfig } from "./types.js";
+import { WorkspacePreviewService } from "./workspace-preview-service.js";
 
 export type AgentV2ExecutionStepStatus =
 	| "task_succeeded"
@@ -106,6 +111,9 @@ export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput)
 			now,
 		);
 	}
+	if (task.kind === "delivery") {
+		return executeDeliveryTask(input, task, now);
+	}
 
 	await advanceAgentV2Task({
 		store: input.store,
@@ -128,6 +136,37 @@ export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput)
 		taskId: task.taskId,
 		diagnosticIds: [],
 	};
+}
+
+async function executeDeliveryTask(
+	input: ExecuteAgentV2NextTaskInput,
+	task: AgentV2TaskNode,
+	now: string,
+): Promise<AgentV2ExecutionStepResult> {
+	const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
+	assertAgentV2ToolAllowed(registry, "preview.publish", "delivery");
+	throwIfAborted(input.signal);
+	const preview = await new WorkspacePreviewService(input.config).preview(input.context, { headers: {} });
+	throwIfAborted(input.signal);
+	if (preview.status !== "running" || !preview.previewUrl) {
+		throw new Error("Agent v2 preview publish failed.");
+	}
+	await advanceAgentV2Task({
+		store: input.store,
+		clientId: input.context.clientId,
+		runId: input.runId,
+		taskId: task.taskId,
+		status: "succeeded",
+		now,
+		output: {
+			...task.output,
+			projectId: preview.projectId,
+			previewUrl: preview.previewUrl,
+			serveRoot: preview.serveRoot,
+			fileCount: preview.fileCount,
+		},
+	});
+	return { status: "task_succeeded", taskId: task.taskId, diagnosticIds: [] };
 }
 
 async function executeImplementationTask(
@@ -369,6 +408,7 @@ async function executeValidationTask(
 			maxAttempts,
 			failureCount: result.failures.length,
 			failureCodes,
+			failureDetails: validationFailureDetails(result.failures),
 			retryableFailureCount: result.failures.filter((failure) => failure.retryable).length,
 		},
 		createdAt: now,
@@ -451,6 +491,16 @@ async function executeValidationTask(
 	return mutation.applied
 		? { status: "task_failed", taskId: task.taskId, diagnosticIds: [diagnosticId] }
 		: { status: "task_conflict", taskId: task.taskId, diagnosticIds: [] };
+}
+
+function validationFailureDetails(failures: readonly AgentV2ValidationFailure[]) {
+	return failures.slice(0, 16).map((failure) => ({
+		code: failure.code,
+		message: failure.message.slice(0, 1_000),
+		retryable: failure.retryable,
+		source: failure.source,
+		...(failure.path ? { path: failure.path.slice(0, 512) } : {}),
+	}));
 }
 
 async function executeRepairTask(

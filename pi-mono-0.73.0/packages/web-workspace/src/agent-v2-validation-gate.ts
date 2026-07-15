@@ -149,11 +149,23 @@ function classifyBuildRunnerFailure(result: ProjectTaskResult, taskId: string): 
 	return createFailure({
 		code,
 		message: sourceMessage,
-		retryable: !["build.config_missing", "build.policy_rejected", "build.output_escape"].includes(code),
+		retryable: isBuildFailureRepairable(code, sourceMessage),
 		source: "static_validate",
 		taskId,
 		sourceMessage,
 	});
+}
+
+function isBuildFailureRepairable(code: string, message: string): boolean {
+	if (code === "build.config_missing" || code === "build.output_escape") return false;
+	if (code !== "build.policy_rejected") return true;
+	return ![
+		"Registry allowlist contains an invalid origin.",
+		"Registry allowlist requires pure HTTPS origins.",
+		"Build and proxy images must be pinned by sha256 digest.",
+		"No authorized build output is available.",
+		"Container build identifier is invalid.",
+	].includes(message);
 }
 
 function classifyStaticValidationFailure(message: string, taskId: string): AgentV2ValidationFailure {

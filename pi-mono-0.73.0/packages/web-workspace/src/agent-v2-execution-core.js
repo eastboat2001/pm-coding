@@ -8,7 +8,8 @@ import { normalizeAgentV2ModelReference } from "./agent-v2-start-input.js";
 import { phaseForAgentV2Task } from "./agent-v2-state-machine.js";
 import { transitionAgentV2Task } from "./agent-v2-task-engine.js";
 import { assertAgentV2ToolAllowed, createAgentV2ToolRegistry, } from "./agent-v2-tool-governance.js";
-import { runAgentV2StaticValidationGate } from "./agent-v2-validation-gate.js";
+import { runAgentV2StaticValidationGate, } from "./agent-v2-validation-gate.js";
+import { WorkspacePreviewService } from "./workspace-preview-service.js";
 export async function executeAgentV2NextTask(input) {
     throwIfAborted(input.signal);
     const now = input.now?.() ?? new Date().toISOString();
@@ -38,6 +39,9 @@ export async function executeAgentV2NextTask(input) {
     if (task.kind === "repair") {
         return executeRepairTask(input, snapshot.run, snapshot.contextPacket, snapshot.artifacts, snapshot.diagnostics, task, now);
     }
+    if (task.kind === "delivery") {
+        return executeDeliveryTask(input, task, now);
+    }
     await advanceAgentV2Task({
         store: input.store,
         clientId: input.context.clientId,
@@ -58,6 +62,32 @@ export async function executeAgentV2NextTask(input) {
         taskId: task.taskId,
         diagnosticIds: [],
     };
+}
+async function executeDeliveryTask(input, task, now) {
+    const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
+    assertAgentV2ToolAllowed(registry, "preview.publish", "delivery");
+    throwIfAborted(input.signal);
+    const preview = await new WorkspacePreviewService(input.config).preview(input.context, { headers: {} });
+    throwIfAborted(input.signal);
+    if (preview.status !== "running" || !preview.previewUrl) {
+        throw new Error("Agent v2 preview publish failed.");
+    }
+    await advanceAgentV2Task({
+        store: input.store,
+        clientId: input.context.clientId,
+        runId: input.runId,
+        taskId: task.taskId,
+        status: "succeeded",
+        now,
+        output: {
+            ...task.output,
+            projectId: preview.projectId,
+            previewUrl: preview.previewUrl,
+            serveRoot: preview.serveRoot,
+            fileCount: preview.fileCount,
+        },
+    });
+    return { status: "task_succeeded", taskId: task.taskId, diagnosticIds: [] };
 }
 async function executeImplementationTask(input, run, contextPacket, task, proposedNow) {
     const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
@@ -271,6 +301,7 @@ async function executeValidationTask(input, run, tasks, artifacts, task, propose
             maxAttempts,
             failureCount: result.failures.length,
             failureCodes,
+            failureDetails: validationFailureDetails(result.failures),
             retryableFailureCount: result.failures.filter((failure) => failure.retryable).length,
         },
         createdAt: now,
@@ -348,6 +379,15 @@ async function executeValidationTask(input, run, tasks, artifacts, task, propose
     return mutation.applied
         ? { status: "task_failed", taskId: task.taskId, diagnosticIds: [diagnosticId] }
         : { status: "task_conflict", taskId: task.taskId, diagnosticIds: [] };
+}
+function validationFailureDetails(failures) {
+    return failures.slice(0, 16).map((failure) => ({
+        code: failure.code,
+        message: failure.message.slice(0, 1_000),
+        retryable: failure.retryable,
+        source: failure.source,
+        ...(failure.path ? { path: failure.path.slice(0, 512) } : {}),
+    }));
 }
 async function executeRepairTask(input, run, contextPacket, artifacts, diagnostics, task, proposedNow) {
     const registry = input.toolRegistry ?? createAgentV2ToolRegistry();

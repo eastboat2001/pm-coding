@@ -124,12 +124,24 @@ describe("agent v2 execution core", () => {
 			}),
 		]);
 		expect(store.listAgentV2Diagnostics("client-a", "run-validation")).toEqual([
-			expect.objectContaining({
-				diagnosticId: "agent_v2.validation_failed:validate:1",
-				code: "agent_v2.validation_failed",
-				message: "Static validation failed.",
-				data: expect.objectContaining({ attempt: 1, maxAttempts: 3, failureCodes: expect.any(Array) }),
-			}),
+				expect.objectContaining({
+					diagnosticId: "agent_v2.validation_failed:validate:1",
+					code: "agent_v2.validation_failed",
+					message: "Static validation failed.",
+					data: expect.objectContaining({
+						attempt: 1,
+						maxAttempts: 3,
+						failureCodes: expect.any(Array),
+						failureDetails: expect.arrayContaining([
+							expect.objectContaining({
+								code: "static.workspace_empty",
+								message: "Workspace has no project files to validate.",
+								retryable: true,
+								source: "static_validate",
+							}),
+						]),
+					}),
+				}),
 		]);
 		expect(store.listAgentV2Tasks("client-a", "run-validation")).toEqual(
 			expect.arrayContaining([
@@ -679,6 +691,58 @@ describe("agent v2 execution core", () => {
 		expect(commit).toHaveBeenCalledTimes(1);
 		expect(store.listAgentV2Tasks("client-a", "run-cas-conflict")[0]?.status).toBe("ready");
 		expect(store.listAgentV2Artifacts("client-a", "run-cas-conflict")).toEqual([]);
+	});
+
+	it("publishes a browser-ready preview before succeeding the delivery task", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-delivery-preview",
+			input: { objective: "Build a static app" },
+			model: { provider: "test", id: "v2-test-model" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-delivery-preview",
+			taskId: "deliver",
+			kind: "delivery",
+			title: "Publish static preview",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: ["Publish a browser-ready preview URL."],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+		writeProjectFile(root, "index.html", "<!doctype html><main><h1>Ready</h1></main>");
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-delivery-preview",
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result).toEqual({ status: "task_succeeded", taskId: "deliver", diagnosticIds: [] });
+		const metadataPath = projectFile(root, ".pi-project.json");
+		expect(existsSync(metadataPath)).toBe(true);
+		const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+		expect(metadata).toMatchObject({
+			status: "running",
+			previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
+		});
+		expect(store.listAgentV2Tasks("client-a", "run-delivery-preview")[0]).toMatchObject({
+			status: "succeeded",
+			output: expect.objectContaining({
+				previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
+				projectId: "project-client-a-session-",
+			}),
+		});
 	});
 });
 

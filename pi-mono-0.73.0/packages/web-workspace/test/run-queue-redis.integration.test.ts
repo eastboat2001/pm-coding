@@ -88,6 +88,76 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 		});
 	});
 
+	it("does not confirm or renew an expired unreclaimed claim", async () => {
+		const queue = createRedisAgentV2RunQueue({
+			redisUrl: redisUrl!,
+			queueName: uniqueQueueName(),
+			claimLeaseTtlMs: 20,
+		});
+		await usingQueue(queue, async () => {
+			await queue.enqueue({ clientId: "client-a", runId: "expired-unreclaimed" });
+			const claim = (await queue.claim("w1", 1))!;
+			await new Promise((resolve) => setTimeout(resolve, 30));
+
+			await expect(queue.confirmOwnership(claim, 100)).resolves.toBe("lost");
+			await expect(queue.renewLease(claim)).resolves.toEqual({ status: "lost" });
+			await expect(queue.requeueExpiredClaims()).resolves.toEqual([expect.objectContaining(claim)]);
+			await expect(queue.claim("w2", 1)).resolves.toMatchObject({ runId: "expired-unreclaimed", workerId: "w2" });
+		});
+	});
+
+	it("recovers a dropped renew response by confirming the exact token, then renewing", async () => {
+		const proxy = await createRedisFaultProxy(redisUrl!);
+		const queue = createRedisAgentV2RunQueue({
+			redisUrl: proxy.url,
+			queueName: uniqueQueueName(),
+			claimLeaseTtlMs: 1_000,
+		});
+		try {
+			await queue.enqueue({ clientId: "client-a", runId: "renew-response-drop" });
+			const claim = (await queue.claim("w1", 1))!;
+			proxy.dropNextEvalResponse();
+
+			await expect(queue.renewLease(claim)).resolves.toEqual({
+				status: "uncertain",
+				errorCode: "agent_v2.redis_lease_uncertain",
+			});
+			await expect(queue.confirmOwnership(claim, 100)).resolves.toBe("owned");
+			await expect(queue.renewLease(claim)).resolves.toMatchObject({ status: "renewed" });
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await proxy.close();
+		}
+	});
+
+	it("reports lost after another token replaces the active claim", async () => {
+		const queueName = uniqueQueueName();
+		const queue = createRedisAgentV2RunQueue({ redisUrl: redisUrl!, queueName, claimLeaseTtlMs: 1_000 });
+		const inspection = createClient({ url: redisUrl! });
+		await inspection.connect();
+		try {
+			await queue.enqueue({ clientId: "client-a", runId: "token-replaced" });
+			const claim = (await queue.claim("w1", 1))!;
+			await inspection.hSet(
+				`${queueName}:active`,
+				JSON.stringify([claim.clientId, claim.runId]),
+				JSON.stringify({ ...claim, workerId: "w2", claimToken: "replacement" }),
+			);
+
+			await expect(queue.confirmOwnership(claim, 100)).resolves.toBe("lost");
+			await expect(queue.renewLease(claim)).resolves.toEqual({ status: "lost" });
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await inspection.quit();
+		}
+	});
+
 	it("quarantines poisoned active records without blocking valid expired reclaim", async () => {
 		const queueName = uniqueQueueName();
 		const queue = createRedisAgentV2RunQueue({ redisUrl: redisUrl!, queueName, claimLeaseTtlMs: 20 });
@@ -311,6 +381,97 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 			await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
 		});
 	});
+
+	it("lets the worker confirm and renew after a real Redis renew response is dropped", async () => {
+		const proxy = await createRedisFaultProxy(redisUrl!);
+		const queue = createRedisAgentV2RunQueue({
+			redisUrl: proxy.url,
+			queueName: uniqueQueueName(),
+			claimLeaseTtlMs: 1_000,
+		});
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-worker-renew-drop");
+		try {
+			await queue.enqueue({ clientId: "client-a", runId: "run-worker-renew-drop" });
+			let dropRenewResponse = true;
+			const workerQueue = withRenewHook(queue, () => {
+				if (!dropRenewResponse) return;
+				dropRenewResponse = false;
+				proxy.dropNextEvalResponse();
+			});
+			const worker = new AgentV2WorkerService({
+				store,
+				queue: workerQueue,
+				events: new RecordingEventLog(),
+				execution: {
+					executeNextTask: async () => {
+						await new Promise((resolve) => setTimeout(resolve, 30));
+						return { status: "complete", diagnosticIds: [] };
+					},
+				},
+				workerId: "w1",
+				now: timestampSequence("2026-07-15T02:00:00.000Z", "2026-07-15T02:00:01.000Z", "2026-07-15T02:00:02.000Z"),
+				leaseHeartbeatIntervalMs: 5,
+				cancelPollIntervalMs: 50,
+				controlOperationTimeoutMs: 100,
+			});
+
+			await expect(worker.processOne()).resolves.toBe(true);
+			expect(store.getRunSnapshot("client-a", "run-worker-renew-drop")).toMatchObject({ status: "succeeded" });
+			expect(store.diagnostics).toContainEqual(expect.objectContaining({ code: "agent_v2.worker_lease_uncertain" }));
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await proxy.close();
+		}
+	});
+
+	it("interrupts the worker when a real Redis active claim is replaced by another token", async () => {
+		const queueName = uniqueQueueName();
+		const queue = createRedisAgentV2RunQueue({ redisUrl: redisUrl!, queueName, claimLeaseTtlMs: 1_000 });
+		const inspection = createClient({ url: redisUrl! });
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-worker-token-replaced");
+		await inspection.connect();
+		try {
+			await queue.enqueue({ clientId: "client-a", runId: "run-worker-token-replaced" });
+			const worker = new AgentV2WorkerService({
+				store,
+				queue,
+				events: new RecordingEventLog(),
+				execution: {
+					executeNextTask: async () => {
+						const active = await inspection.hGetAll(`${queueName}:active`);
+						const [field, raw] = Object.entries(active)[0]!;
+						await inspection.hSet(
+							`${queueName}:active`,
+							field,
+							JSON.stringify({ ...JSON.parse(raw), workerId: "w2", claimToken: "replacement" }),
+						);
+						await new Promise((resolve) => setTimeout(resolve, 20));
+						return { status: "complete", diagnosticIds: [] };
+					},
+				},
+				workerId: "w1",
+				now: timestampSequence("2026-07-15T02:01:00.000Z", "2026-07-15T02:01:01.000Z"),
+				leaseHeartbeatIntervalMs: 5,
+				cancelPollIntervalMs: 50,
+				controlOperationTimeoutMs: 100,
+			});
+
+			await expect(worker.processOne()).resolves.toBe(true);
+			expect(store.getRunSnapshot("client-a", "run-worker-token-replaced")).toMatchObject({ status: "interrupted" });
+			expect(store.diagnostics).toContainEqual(expect.objectContaining({ code: "agent_v2.worker_lease_lost" }));
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await inspection.quit();
+		}
+	});
 });
 
 function createQueue(): AgentV2RunQueue {
@@ -333,6 +494,21 @@ async function usingQueue(queue: AgentV2RunQueue, fn: () => Promise<void>): Prom
 		} catch {}
 		await queue.close();
 	}
+}
+
+function withRenewHook(queue: AgentV2RunQueue, onRenew: () => void): AgentV2RunQueue {
+	return new Proxy(queue, {
+		get(target, property) {
+			if (property === "renewLease") {
+				return async (claim: Parameters<AgentV2RunQueue["renewLease"]>[0]) => {
+					onRenew();
+					return await target.renewLease(claim);
+				};
+			}
+			const value = target[property as keyof AgentV2RunQueue];
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
 }
 
 class MemoryWorkerStore {

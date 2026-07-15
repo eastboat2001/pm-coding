@@ -9,11 +9,13 @@ import type { AgentV2Phase, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent
 
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 50;
+const DEFAULT_CONTROL_OPERATION_TIMEOUT_MS = 1_000;
 const DEFAULT_EXPIRED_CLAIM_RECOVERY_INTERVAL_MS = 5_000;
 const DEFAULT_IDLE_SLEEP_MS = 25;
 const DEFAULT_MAX_IDLE_SLEEP_MS = 1_000;
 const DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_STEPS_PER_RUN = 256;
+const OWNERSHIP_CONTROL_ABORT_REASON = Symbol("agent-v2-ownership-control");
 
 export type { AgentV2WorkerStore } from "./agent-v2-runtime-store.js";
 
@@ -38,6 +40,7 @@ export interface AgentV2WorkerServiceOptions {
 	concurrency?: number;
 	claimTimeoutMs?: number;
 	cancelPollIntervalMs?: number;
+	controlOperationTimeoutMs?: number;
 	expiredClaimRecoveryIntervalMs?: number;
 	idleSleepMs?: number;
 	maxIdleSleepMs?: number;
@@ -47,12 +50,32 @@ export interface AgentV2WorkerServiceOptions {
 
 type AgentV2RunTransitionResult = AgentV2RunTransitionCommitResult["update"];
 
+interface AgentV2ClaimControlDiagnostic {
+	code: string;
+	message: string;
+	retryable: boolean;
+}
+
+interface AgentV2ClaimControlSession {
+	abortController: AbortController;
+	claim: AgentV2ClaimedRun;
+	controlAbortController: AbortController;
+	controlPromise: Promise<void>;
+	currentStepAbortController?: AbortController;
+	cancelRequested: boolean;
+	ownership: "owned" | "uncertain" | "lost";
+	ownershipResolutionPromise?: Promise<boolean>;
+	pendingDiagnostics: AgentV2ClaimControlDiagnostic[];
+	unsafe: boolean;
+}
+
 export class AgentV2WorkerService {
 	private readonly activeAbortControllers = new Map<string, AbortController>();
 	private readonly activeProcessOneCalls = new Set<Promise<void>>();
 	private readonly cancelPollIntervalMs: number;
 	private readonly claimTimeoutMs: number;
 	private readonly concurrency: number;
+	private readonly controlOperationTimeoutMs: number;
 	private readonly execution: AgentV2WorkerExecution;
 	private readonly expiredClaimRecoveryIntervalMs: number;
 	private readonly idleSleepMs: number;
@@ -67,6 +90,7 @@ export class AgentV2WorkerService {
 	private running = false;
 	private readonly store: AgentV2WorkerStore;
 	private stopping = false;
+	private readonly unsafeClaimTokens = new Set<string>();
 	private readonly workerId: string;
 
 	constructor(options: AgentV2WorkerServiceOptions) {
@@ -77,14 +101,21 @@ export class AgentV2WorkerService {
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.concurrency = options.concurrency ?? 1;
 		this.claimTimeoutMs = options.claimTimeoutMs ?? DEFAULT_CLAIM_TIMEOUT_MS;
-		this.cancelPollIntervalMs = options.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS;
+		this.cancelPollIntervalMs = Math.max(1, options.cancelPollIntervalMs ?? DEFAULT_CANCEL_POLL_INTERVAL_MS);
+		this.controlOperationTimeoutMs = Math.max(
+			1,
+			options.controlOperationTimeoutMs ?? DEFAULT_CONTROL_OPERATION_TIMEOUT_MS,
+		);
 		this.expiredClaimRecoveryIntervalMs = Math.max(
 			1,
 			options.expiredClaimRecoveryIntervalMs ?? DEFAULT_EXPIRED_CLAIM_RECOVERY_INTERVAL_MS,
 		);
 		this.idleSleepMs = options.idleSleepMs ?? DEFAULT_IDLE_SLEEP_MS;
 		this.maxIdleSleepMs = Math.max(this.idleSleepMs, options.maxIdleSleepMs ?? DEFAULT_MAX_IDLE_SLEEP_MS);
-		this.leaseHeartbeatIntervalMs = options.leaseHeartbeatIntervalMs ?? DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS;
+		this.leaseHeartbeatIntervalMs = Math.max(
+			1,
+			options.leaseHeartbeatIntervalMs ?? DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS,
+		);
 		this.maxStepsPerRun = options.maxStepsPerRun ?? DEFAULT_MAX_STEPS_PER_RUN;
 	}
 
@@ -161,7 +192,8 @@ export class AgentV2WorkerService {
 			safelyCompleteClaim = durable !== undefined && isTerminalRun(durable.status);
 			return true;
 		} finally {
-			if (safelyCompleteClaim) await this.queue.complete(claimed);
+			const ownershipSafeToComplete = !this.unsafeClaimTokens.delete(claimed.claimToken);
+			if (safelyCompleteClaim && ownershipSafeToComplete) await this.queue.complete(claimed);
 		}
 	}
 
@@ -224,81 +256,104 @@ export class AgentV2WorkerService {
 		const key = runKey(initialRun);
 		const abortController = new AbortController();
 		this.activeAbortControllers.set(key, abortController);
-
+		const control = this.startClaimControl(claim, abortController);
 		let current = initialRun;
-		let cancelRequested = false;
-		let leaseLost = false;
-		const cancelPoll = setInterval(() => {
-			void this.pollCancellation(current, abortController).then((wasRequested) => {
-				cancelRequested ||= wasRequested;
-			});
-		}, this.cancelPollIntervalMs);
-		const leaseHeartbeat = setInterval(() => {
-			void this.queue.renewLease(claim).then((renewal) => {
-				if (renewal.status === "renewed" || leaseLost) return;
-				leaseLost = true;
-				abortController.abort();
-			});
-		}, this.leaseHeartbeatIntervalMs);
 
 		try {
 			for (let steps = 0; steps < this.maxStepsPerRun; steps += 1) {
 				if (this.stopping) {
+					await this.stopClaimControl(control);
 					await this.interruptRun(current);
 					return;
 				}
 				current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
 				if (isTerminalRun(current.status)) return;
-				if (leaseLost) {
-					await this.interruptRun(current);
+				await control.ownershipResolutionPromise;
+				if (isControlUnsafe(control)) {
+					await this.finishUnsafeControl(control, current);
 					return;
 				}
 				if (current.status === "cancelling") {
-					await this.cancelRun(current);
+					control.cancelRequested = true;
+					await this.finishCancellation(control, current);
 					return;
 				}
-				cancelRequested ||= await this.pollCancellation(current, abortController);
-				if (cancelRequested) {
-					current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
-					if (isTerminalRun(current.status)) return;
-					if (this.stopping) {
-						await this.interruptRun(current);
-						return;
-					}
-					await this.cancelRequestedRun(current);
+				if (control.cancelRequested) {
+					await this.finishCancellation(control, current);
 					return;
 				}
 
 				const executionRevision = current.updatedAt;
-				const step = await this.execution.executeNextTask({
-					store: this.store,
-					run: current,
-					workerId: this.workerId,
-					signal: abortController.signal,
-				});
+				const stepAbort = createLinkedAbortController(abortController.signal);
+				control.currentStepAbortController = stepAbort.controller;
+				let step: AgentV2ExecutionStepResult;
+				try {
+					step = await this.execution.executeNextTask({
+						store: this.store,
+						run: current,
+						workerId: this.workerId,
+						signal: stepAbort.controller.signal,
+					});
+				} catch (error) {
+					if (!isOwnershipControlAbort(stepAbort.controller.signal)) throw error;
+					await control.ownershipResolutionPromise;
+					current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
+					if (isControlUnsafe(control)) {
+						await this.finishUnsafeControl(control, current);
+						return;
+					}
+					if (this.stopping) {
+						await this.stopClaimControl(control);
+						await this.interruptRun(current);
+						return;
+					}
+					if (control.cancelRequested || current.status === "cancelling") {
+						control.cancelRequested = true;
+						await this.finishCancellation(control, current);
+						return;
+					}
+					steps -= 1;
+					continue;
+				} finally {
+					stepAbort.dispose();
+					if (control.currentStepAbortController === stepAbort.controller) {
+						control.currentStepAbortController = undefined;
+					}
+				}
+				if (isOwnershipControlAbort(stepAbort.controller.signal)) {
+					await control.ownershipResolutionPromise;
+					current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
+					if (isControlUnsafe(control)) {
+						await this.finishUnsafeControl(control, current);
+						return;
+					}
+					steps -= 1;
+					continue;
+				}
 
 				current = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
 				if (isTerminalRun(current.status)) return;
-				if (leaseLost) {
-					await this.interruptRun(current);
+				await control.ownershipResolutionPromise;
+				if (isControlUnsafe(control)) {
+					await this.finishUnsafeControl(control, current);
 					return;
 				}
 				if (this.stopping) {
+					await this.stopClaimControl(control);
 					await this.interruptRun(current);
 					return;
 				}
-				const queueCancelRequested = await this.queue.isCancelRequested({
-					clientId: current.clientId,
-					runId: current.runId,
-				});
-				if (current.status === "cancelling" || queueCancelRequested) {
-					await this.cancelRequestedRun(current);
+				if (current.status === "cancelling" || control.cancelRequested) {
+					control.cancelRequested = true;
+					await this.finishCancellation(control, current);
 					return;
 				}
 				if (step.status === "task_conflict") {
 					if (current.updatedAt !== executionRevision) continue;
+					const terminal = await this.prepareOwnedTerminal(control, current);
+					if (!terminal) return;
 					await this.failRun(
-						current,
+						terminal,
 						"agent_v2.worker_task_conflict",
 						"Agent v2 execution lost its durable compare-and-set expectation.",
 						true,
@@ -307,53 +362,344 @@ export class AgentV2WorkerService {
 				}
 
 				if (step.status === "complete") {
-					await this.succeedRun(current);
+					const terminal = await this.prepareOwnedTerminal(control, current);
+					if (!terminal) return;
+					await this.succeedRun(terminal);
 					return;
 				}
 				if (step.status === "task_succeeded" || step.status === "task_failed") {
 					continue;
 				}
 				if (step.status === "task_blocked") {
-					await this.failRun(current, "agent_v2.worker_task_blocked", "Agent v2 task graph is blocked.");
+					const terminal = await this.prepareOwnedTerminal(control, current);
+					if (!terminal) return;
+					await this.failRun(terminal, "agent_v2.worker_task_blocked", "Agent v2 task graph is blocked.");
 					return;
 				}
 				if (step.status === "no_task") {
-					await this.failRun(current, "agent_v2.worker_no_task", "Agent v2 worker found no runnable task.");
+					const terminal = await this.prepareOwnedTerminal(control, current);
+					if (!terminal) return;
+					await this.failRun(terminal, "agent_v2.worker_no_task", "Agent v2 worker found no runnable task.");
 					return;
 				}
 			}
 
+			const terminal = await this.prepareOwnedTerminal(control, current);
+			if (!terminal) return;
 			await this.failRun(
-				current,
+				terminal,
 				"agent_v2.worker_step_limit_exceeded",
 				`Agent v2 worker exceeded ${this.maxStepsPerRun} execution steps without reaching a terminal state.`,
 			);
 		} catch (error) {
-			if (error instanceof AgentV2WorkerCommitError) throw error;
+			if (error instanceof AgentV2WorkerCommitError) {
+				await this.stopClaimControl(control);
+				throw error;
+			}
 			const latest = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
 			if (isTerminalRun(latest.status)) return;
-			if (leaseLost) {
-				await this.interruptRun(latest);
+			if (isControlUnsafe(control)) {
+				await this.finishUnsafeControl(control, latest);
 				return;
 			}
 			if (this.stopping) {
+				await this.stopClaimControl(control);
 				await this.interruptRun(latest);
 				return;
 			}
-			cancelRequested ||= latest.status === "cancelling";
-			const aborted = abortController.signal.aborted;
-			cancelRequested ||=
-				aborted && (await this.queue.isCancelRequested({ clientId: latest.clientId, runId: latest.runId }));
-			if (cancelRequested) {
-				await this.cancelRequestedRun(latest);
+			if (control.cancelRequested || latest.status === "cancelling") {
+				control.cancelRequested = true;
+				await this.finishCancellation(control, latest);
 			} else {
-				await this.failRun(latest, "agent_v2.worker_execution_failed", errorMessage(error));
+				const terminal = await this.prepareOwnedTerminal(control, latest);
+				if (terminal) await this.failRun(terminal, "agent_v2.worker_execution_failed", errorMessage(error));
 			}
 		} finally {
-			clearInterval(cancelPoll);
-			clearInterval(leaseHeartbeat);
+			await this.stopClaimControl(control);
 			this.activeAbortControllers.delete(key);
 		}
+	}
+
+	private startClaimControl(claim: AgentV2ClaimedRun, abortController: AbortController): AgentV2ClaimControlSession {
+		const control: AgentV2ClaimControlSession = {
+			abortController,
+			claim: { ...claim },
+			controlAbortController: new AbortController(),
+			controlPromise: Promise.resolve(),
+			currentStepAbortController: undefined,
+			cancelRequested: false,
+			ownership: "owned",
+			ownershipResolutionPromise: undefined,
+			pendingDiagnostics: [],
+			unsafe: false,
+		};
+		control.controlPromise = this.runClaimControlLoop(control);
+		return control;
+	}
+
+	private async runClaimControlLoop(control: AgentV2ClaimControlSession): Promise<void> {
+		const signal = control.controlAbortController.signal;
+		let nextCancelAt = Date.now();
+		let nextLeaseAt = Date.now() + this.leaseHeartbeatIntervalMs;
+		while (!signal.aborted && !control.cancelRequested && !isControlUnsafe(control)) {
+			const now = Date.now();
+			const waitMs = Math.max(0, Math.min(nextCancelAt, nextLeaseAt) - now);
+			if (waitMs > 0) await interruptibleSleep(waitMs, signal);
+			if (signal.aborted) return;
+
+			const tickAt = Date.now();
+			if (tickAt >= nextLeaseAt) {
+				if (!(await this.monitorLease(control, signal))) return;
+				nextLeaseAt = Date.now() + this.leaseHeartbeatIntervalMs;
+			}
+			if (signal.aborted || isControlUnsafe(control)) return;
+			if (Date.now() >= nextCancelAt) {
+				if (!(await this.monitorCancellation(control))) return;
+				nextCancelAt = Date.now() + this.cancelPollIntervalMs;
+			}
+		}
+	}
+
+	private async monitorLease(control: AgentV2ClaimControlSession, signal: AbortSignal): Promise<boolean> {
+		const renewal = await runBoundedControl(this.queue.renewLease(control.claim), this.controlOperationTimeoutMs);
+		if (renewal.kind === "timeout") {
+			this.markControlUnsafe(
+				control,
+				"agent_v2.worker_lease_renew_timeout",
+				"Agent v2 lease renewal timed out; the run was stopped safely.",
+			);
+			return false;
+		}
+		if (renewal.kind === "rejected") {
+			this.addControlDiagnostic(
+				control,
+				"agent_v2.worker_lease_uncertain",
+				"Agent v2 lease renewal was uncertain and required ownership confirmation.",
+				true,
+			);
+			this.markOwnershipUncertain(control);
+			return await this.trackOwnershipResolution(control, signal);
+		}
+		if (renewal.value.status === "renewed") {
+			control.claim = { ...control.claim, leaseExpiresAtMs: renewal.value.leaseExpiresAtMs };
+			control.ownership = "owned";
+			return true;
+		}
+		if (renewal.value.status === "lost") {
+			this.markLeaseLost(control);
+			return false;
+		}
+		this.addControlDiagnostic(
+			control,
+			"agent_v2.worker_lease_uncertain",
+			"Agent v2 lease renewal was uncertain and required ownership confirmation.",
+			true,
+		);
+		this.markOwnershipUncertain(control);
+		return await this.trackOwnershipResolution(control, signal);
+	}
+
+	private async trackOwnershipResolution(control: AgentV2ClaimControlSession, signal: AbortSignal): Promise<boolean> {
+		const resolution = this.resolveUncertainOwnership(control, signal);
+		control.ownershipResolutionPromise = resolution;
+		try {
+			return await resolution;
+		} finally {
+			if (control.ownershipResolutionPromise === resolution) control.ownershipResolutionPromise = undefined;
+		}
+	}
+
+	private async monitorCancellation(control: AgentV2ClaimControlSession): Promise<boolean> {
+		const poll = await runBoundedControl(
+			this.queue.isCancelRequested({ clientId: control.claim.clientId, runId: control.claim.runId }),
+			this.controlOperationTimeoutMs,
+		);
+		if (poll.kind === "timeout") {
+			this.markControlUnsafe(
+				control,
+				"agent_v2.worker_cancel_poll_timeout",
+				"Agent v2 cancellation monitoring timed out; the run was stopped safely.",
+			);
+			return false;
+		}
+		if (poll.kind === "rejected") {
+			this.markControlUnsafe(
+				control,
+				"agent_v2.worker_cancel_poll_failed",
+				"Agent v2 cancellation monitoring failed; the run was stopped safely.",
+			);
+			return false;
+		}
+		if (!poll.value) return true;
+		control.cancelRequested = true;
+		control.abortController.abort();
+		return false;
+	}
+
+	private async resolveUncertainOwnership(
+		control: AgentV2ClaimControlSession,
+		signal?: AbortSignal,
+	): Promise<boolean> {
+		while (!signal?.aborted) {
+			const remainingMs = control.claim.leaseExpiresAtMs - Date.now();
+			if (remainingMs <= 0) {
+				this.markControlUnsafe(
+					control,
+					"agent_v2.worker_lease_confirmation_timeout",
+					"Agent v2 lease ownership could not be confirmed before its safety deadline.",
+				);
+				return false;
+			}
+			const ownership = await runBoundedControl(
+				this.queue.confirmOwnership(control.claim, Math.min(this.controlOperationTimeoutMs, remainingMs)),
+				Math.min(this.controlOperationTimeoutMs, remainingMs),
+			);
+			if (ownership.kind === "timeout") {
+				this.markControlUnsafe(
+					control,
+					"agent_v2.worker_lease_confirmation_timeout",
+					"Agent v2 lease ownership could not be confirmed before its safety deadline.",
+				);
+				return false;
+			}
+			if (ownership.kind === "value" && ownership.value === "lost") {
+				this.markLeaseLost(control);
+				return false;
+			}
+			if (ownership.kind === "value" && ownership.value === "owned") {
+				const renewal = await runBoundedControl(
+					this.queue.renewLease(control.claim),
+					Math.min(this.controlOperationTimeoutMs, remainingMs),
+				);
+				if (renewal.kind === "timeout") {
+					this.markControlUnsafe(
+						control,
+						"agent_v2.worker_lease_renew_timeout",
+						"Agent v2 lease renewal timed out; the run was stopped safely.",
+					);
+					return false;
+				}
+				if (renewal.kind === "value" && renewal.value.status === "lost") {
+					this.markLeaseLost(control);
+					return false;
+				}
+				if (renewal.kind === "value" && renewal.value.status === "renewed") {
+					control.claim = { ...control.claim, leaseExpiresAtMs: renewal.value.leaseExpiresAtMs };
+					control.ownership = "owned";
+					return true;
+				}
+			}
+			const retryMs = Math.min(25, Math.max(1, control.claim.leaseExpiresAtMs - Date.now()));
+			await interruptibleSleep(retryMs, signal ?? new AbortController().signal);
+		}
+		return false;
+	}
+
+	private async prepareOwnedTerminal(
+		control: AgentV2ClaimControlSession,
+		run: AgentV2RunSnapshot,
+	): Promise<AgentV2RunSnapshot | undefined> {
+		await this.stopClaimControl(control);
+		if (!control.cancelRequested && !isControlUnsafe(control)) {
+			await this.monitorCancellation(control);
+		}
+		await this.flushControlDiagnostics(run, control);
+		const latest = (await this.store.getAgentV2Run(run.clientId, run.runId)) ?? run;
+		if (isTerminalRun(latest.status)) return undefined;
+		if (control.cancelRequested || latest.status === "cancelling") {
+			control.cancelRequested = true;
+			await this.finishCancellation(control, latest);
+			return undefined;
+		}
+		if (isControlUnsafe(control)) {
+			await this.interruptRun(latest);
+			return undefined;
+		}
+		control.ownership = "uncertain";
+		if (!(await this.resolveUncertainOwnership(control))) {
+			await this.flushControlDiagnostics(latest, control);
+			await this.interruptRun(latest);
+			return undefined;
+		}
+		await this.flushControlDiagnostics(latest, control);
+		return (await this.store.getAgentV2Run(latest.clientId, latest.runId)) ?? latest;
+	}
+
+	private async finishCancellation(control: AgentV2ClaimControlSession, run: AgentV2RunSnapshot): Promise<void> {
+		await this.stopClaimControl(control);
+		await this.flushControlDiagnostics(run, control);
+		const latest = (await this.store.getAgentV2Run(run.clientId, run.runId)) ?? run;
+		if (isTerminalRun(latest.status)) return;
+		if (isControlUnsafe(control)) {
+			await this.interruptRun(latest);
+			return;
+		}
+		control.ownership = "uncertain";
+		if (!(await this.resolveUncertainOwnership(control))) {
+			await this.flushControlDiagnostics(latest, control);
+			await this.interruptRun(latest);
+			return;
+		}
+		await this.flushControlDiagnostics(latest, control);
+		await this.cancelRequestedRun((await this.store.getAgentV2Run(latest.clientId, latest.runId)) ?? latest);
+	}
+
+	private async finishUnsafeControl(control: AgentV2ClaimControlSession, run: AgentV2RunSnapshot): Promise<void> {
+		await this.stopClaimControl(control);
+		await this.flushControlDiagnostics(run, control);
+		const latest = (await this.store.getAgentV2Run(run.clientId, run.runId)) ?? run;
+		if (!isTerminalRun(latest.status)) await this.interruptRun(latest);
+	}
+
+	private async stopClaimControl(control: AgentV2ClaimControlSession): Promise<void> {
+		control.controlAbortController.abort();
+		await control.controlPromise;
+	}
+
+	private async flushControlDiagnostics(run: AgentV2RunSnapshot, control: AgentV2ClaimControlSession): Promise<void> {
+		for (const diagnostic of control.pendingDiagnostics.splice(0)) {
+			try {
+				await this.appendDiagnostic(run, diagnostic.code, diagnostic.message, diagnostic.retryable);
+			} catch {
+				console.error(
+					"[agent_v2.worker_control_diagnostic_failed] Agent v2 worker could not persist a control diagnostic.",
+				);
+			}
+		}
+	}
+
+	private markControlUnsafe(control: AgentV2ClaimControlSession, code: string, message: string): void {
+		this.addControlDiagnostic(control, code, message, true);
+		control.unsafe = true;
+		this.unsafeClaimTokens.add(control.claim.claimToken);
+		control.abortController.abort();
+	}
+
+	private markLeaseLost(control: AgentV2ClaimControlSession): void {
+		this.addControlDiagnostic(
+			control,
+			"agent_v2.worker_lease_lost",
+			"Agent v2 worker lost exact claim ownership; the run was interrupted.",
+			true,
+		);
+		control.ownership = "lost";
+		this.unsafeClaimTokens.add(control.claim.claimToken);
+		control.abortController.abort();
+	}
+
+	private markOwnershipUncertain(control: AgentV2ClaimControlSession): void {
+		control.ownership = "uncertain";
+		control.currentStepAbortController?.abort(OWNERSHIP_CONTROL_ABORT_REASON);
+	}
+
+	private addControlDiagnostic(
+		control: AgentV2ClaimControlSession,
+		code: string,
+		message: string,
+		retryable: boolean,
+	): void {
+		if (control.pendingDiagnostics.some((diagnostic) => diagnostic.code === code)) return;
+		control.pendingDiagnostics.push({ code, message, retryable });
 	}
 
 	private async failRun(run: AgentV2RunSnapshot, code: string, message: string, retryable = false): Promise<void> {
@@ -409,18 +755,6 @@ export class AgentV2WorkerService {
 				await this.interruptRun(run);
 			}
 		}
-	}
-
-	private async pollCancellation(run: AgentV2RunSnapshot, abortController: AbortController): Promise<boolean> {
-		const requested = await this.queue.isCancelRequested({ clientId: run.clientId, runId: run.runId });
-		if (!requested) return false;
-
-		const latest = await this.store.getAgentV2Run(run.clientId, run.runId);
-		if (latest?.status === "running") {
-			await this.transitionRun(latest, { status: "cancelling", expectedStatuses: ["running"] });
-		}
-		abortController.abort();
-		return true;
 	}
 
 	private async runExpiredClaimMaintenance(signal: AbortSignal): Promise<void> {
@@ -589,6 +923,28 @@ function isTerminalRun(status: AgentV2RunStatus): boolean {
 	return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
 }
 
+function isControlUnsafe(control: AgentV2ClaimControlSession): boolean {
+	return control.unsafe || control.ownership === "lost";
+}
+
+function isOwnershipControlAbort(signal: AbortSignal): boolean {
+	return signal.aborted && signal.reason === OWNERSHIP_CONTROL_ABORT_REASON;
+}
+
+function createLinkedAbortController(parent: AbortSignal): {
+	controller: AbortController;
+	dispose: () => void;
+} {
+	const controller = new AbortController();
+	const onAbort = () => controller.abort(parent.reason);
+	if (parent.aborted) onAbort();
+	else parent.addEventListener("abort", onAbort, { once: true });
+	return {
+		controller,
+		dispose: () => parent.removeEventListener("abort", onAbort),
+	};
+}
+
 function runKey(run: AgentV2RunQueueIdentity): string {
 	return `${run.clientId}:${run.runId}`;
 }
@@ -628,5 +984,24 @@ function settleOrAbort(operation: Promise<void>, signal: AbortSignal): Promise<b
 		signal.addEventListener("abort", onAbort, { once: true });
 		void operation.then(() => finish(true));
 		if (signal.aborted) onAbort();
+	});
+}
+
+type BoundedControlResult<T> = { kind: "value"; value: T } | { kind: "rejected" } | { kind: "timeout" };
+
+function runBoundedControl<T>(operation: Promise<T>, timeoutMs: number): Promise<BoundedControlResult<T>> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = (result: BoundedControlResult<T>) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve(result);
+		};
+		const timer = setTimeout(() => finish({ kind: "timeout" }), Math.max(1, timeoutMs));
+		void operation.then(
+			(value) => finish({ kind: "value", value }),
+			() => finish({ kind: "rejected" }),
+		);
 	});
 }

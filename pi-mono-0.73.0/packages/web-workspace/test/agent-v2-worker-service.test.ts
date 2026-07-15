@@ -18,7 +18,7 @@ import {
 	type CreateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
-import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
+import { type AgentV2WorkerExecution, AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
 
 describe("AgentV2WorkerService", () => {
 	afterEach(() => {
@@ -919,6 +919,327 @@ describe("AgentV2WorkerService", () => {
 		});
 	});
 
+	it("serializes lease and cancel control operations without accumulating stalled ticks", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-serial-control");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-serial-control" }]);
+		queue.cancelOutcomes.push("stall");
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: delayedComplete(40),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:00:00.000Z", "2026-07-15T01:00:01.000Z"),
+			cancelPollIntervalMs: 5,
+			leaseHeartbeatIntervalMs: 5,
+			controlOperationTimeoutMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(15);
+		queue.releaseStalls();
+		await vi.advanceTimersByTimeAsync(40);
+		await expect(processing).resolves.toBe(true);
+
+		expect(queue.maxControlCallsInFlight).toBe(1);
+		expect(store.getRunSnapshot("client-a", "run-serial-control")).toMatchObject({ status: "interrupted" });
+		expect(store.diagnostics).toContainEqual(
+			expect.objectContaining({
+				code: "agent_v2.worker_cancel_poll_timeout",
+				message: "Agent v2 cancellation monitoring timed out; the run was stopped safely.",
+			}),
+		);
+	});
+
+	it("confirms an uncertain renewal and immediately renews before continuing", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-renew-confirmed");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-renew-confirmed" }]);
+		queue.renewOutcomes.push({ status: "uncertain", errorCode: "agent_v2.redis_lease_uncertain" });
+		queue.confirmOutcomes.push("owned");
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: delayedComplete(30),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:01:00.000Z", "2026-07-15T01:01:01.000Z", "2026-07-15T01:01:02.000Z"),
+			cancelPollIntervalMs: 50,
+			leaseHeartbeatIntervalMs: 5,
+			controlOperationTimeoutMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(80);
+		await expect(processing).resolves.toBe(true);
+
+		expect(queue.confirmOwnershipCalls).toBeGreaterThan(0);
+		expect(queue.renewLeaseCalls.length).toBeGreaterThanOrEqual(2);
+		expect(store.getRunSnapshot("client-a", "run-renew-confirmed")).toMatchObject({ status: "succeeded" });
+		expect(store.diagnostics).toContainEqual(expect.objectContaining({ code: "agent_v2.worker_lease_uncertain" }));
+	});
+
+	it("recovers a rejected renewal through the same bounded ownership confirmation", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-renew-rejected");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-renew-rejected" }]);
+		queue.renewOutcomes.push(new Error("redis://user:secret@127.0.0.1/internal token=secret"));
+		queue.confirmOutcomes.push("owned");
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: delayedComplete(30),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:01:10.000Z", "2026-07-15T01:01:11.000Z", "2026-07-15T01:01:12.000Z"),
+			cancelPollIntervalMs: 50,
+			leaseHeartbeatIntervalMs: 5,
+			controlOperationTimeoutMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(80);
+		await expect(processing).resolves.toBe(true);
+
+		expect(queue.confirmOwnershipCalls).toBeGreaterThan(0);
+		expect(store.getRunSnapshot("client-a", "run-renew-rejected")).toMatchObject({ status: "succeeded" });
+		const diagnostic = store.diagnostics.find((item) => item.code === "agent_v2.worker_lease_uncertain");
+		expect(JSON.stringify(diagnostic)).not.toContain("secret");
+		expect(JSON.stringify(diagnostic)).not.toContain("redis://");
+	});
+
+	it("fails closed without overlapping work when lease renewal stalls", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-renew-stall");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-renew-stall" }]);
+		queue.renewOutcomes.push("stall");
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: delayedComplete(40),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:01:20.000Z", "2026-07-15T01:01:21.000Z"),
+			cancelPollIntervalMs: 50,
+			leaseHeartbeatIntervalMs: 5,
+			controlOperationTimeoutMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(20);
+		queue.releaseStalls();
+		await vi.advanceTimersByTimeAsync(30);
+		await expect(processing).resolves.toBe(true);
+
+		expect(queue.maxControlCallsInFlight).toBe(1);
+		expect(store.getRunSnapshot("client-a", "run-renew-stall")).toMatchObject({ status: "interrupted" });
+		expect(store.diagnostics).toContainEqual(
+			expect.objectContaining({ code: "agent_v2.worker_lease_renew_timeout" }),
+		);
+	});
+
+	it("fails closed after uncertain ownership reaches the claim safety deadline", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-uncertain-deadline");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-uncertain-deadline" }]);
+		queue.claimLeaseMs = 20;
+		queue.renewOutcomes.push({ status: "uncertain", errorCode: "agent_v2.redis_lease_uncertain" });
+		queue.defaultConfirmOutcome = "uncertain";
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: delayedComplete(40),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:02:00.000Z", "2026-07-15T01:02:01.000Z"),
+			cancelPollIntervalMs: 50,
+			leaseHeartbeatIntervalMs: 5,
+			controlOperationTimeoutMs: 5,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(50);
+		await expect(processing).resolves.toBe(true);
+
+		expect(queue.confirmOwnershipCalls).toBeGreaterThan(0);
+		expect(store.getRunSnapshot("client-a", "run-uncertain-deadline")).toMatchObject({ status: "interrupted" });
+		expect(store.diagnostics).toContainEqual(
+			expect.objectContaining({ code: "agent_v2.worker_lease_confirmation_timeout" }),
+		);
+	});
+
+	it("does not start the next execution step while exact ownership remains uncertain", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-uncertain-pauses-next-step");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-uncertain-pauses-next-step" }]);
+		queue.renewOutcomes.push({ status: "uncertain", errorCode: "agent_v2.redis_lease_uncertain" });
+		queue.confirmOutcomes.push("uncertain", "owned");
+		const executeNextTask = vi
+			.fn<AgentV2WorkerExecution["executeNextTask"]>()
+			.mockImplementationOnce(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return { status: "task_succeeded", taskId: "first", diagnosticIds: [] };
+			})
+			.mockResolvedValueOnce({ status: "complete", diagnosticIds: [] });
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: { executeNextTask },
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:02:10.000Z", "2026-07-15T01:02:11.000Z", "2026-07-15T01:02:12.000Z"),
+			cancelPollIntervalMs: 50,
+			leaseHeartbeatIntervalMs: 5,
+			controlOperationTimeoutMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(20);
+		expect(executeNextTask).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(30);
+		await expect(processing).resolves.toBe(true);
+		expect(executeNextTask).toHaveBeenCalledTimes(2);
+		expect(store.getRunSnapshot("client-a", "run-uncertain-pauses-next-step")).toMatchObject({
+			status: "succeeded",
+		});
+	});
+
+	it.each([
+		["lost", "lost" as const, 30],
+		["confirmation timeout", "stall" as const, 7],
+	])("aborts in-flight execution before mutation when ownership ends %s", async (_case, confirmation, delayMs) => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", `run-inflight-${_case}`);
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: `run-inflight-${_case}` }]);
+		queue.claimLeaseMs = 25;
+		queue.renewOutcomes.push({ status: "uncertain", errorCode: "agent_v2.redis_lease_uncertain" });
+		queue.confirmOutcomes.push(confirmation);
+		let sentinelMutations = 0;
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: {
+				executeNextTask: async ({ signal }) => {
+					await abortableDelay(delayMs, signal);
+					sentinelMutations += 1;
+					return { status: "complete", diagnosticIds: [] };
+				},
+			},
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:02:20.000Z", "2026-07-15T01:02:21.000Z"),
+			cancelPollIntervalMs: 50,
+			leaseHeartbeatIntervalMs: 5,
+			controlOperationTimeoutMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(40);
+		queue.releaseStalls();
+		await expect(processing).resolves.toBe(true);
+
+		expect(sentinelMutations).toBe(0);
+		expect(store.getRunSnapshot("client-a", `run-inflight-${_case}`)).toMatchObject({ status: "interrupted" });
+		expect(queue.completeCalls).toEqual([]);
+	});
+
+	it("retries the same step after uncertain ownership is confirmed and renewed, with one mutation", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-inflight-owned-retry");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-inflight-owned-retry" }]);
+		queue.renewOutcomes.push({ status: "uncertain", errorCode: "agent_v2.redis_lease_uncertain" });
+		queue.confirmOutcomes.push("owned");
+		let durableMutations = 0;
+		const executeNextTask = vi.fn<AgentV2WorkerExecution["executeNextTask"]>(async ({ signal }) => {
+			await abortableDelay(20, signal);
+			durableMutations += 1;
+			return { status: "complete", diagnosticIds: [] };
+		});
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: { executeNextTask },
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:02:30.000Z", "2026-07-15T01:02:31.000Z", "2026-07-15T01:02:32.000Z"),
+			cancelPollIntervalMs: 50,
+			leaseHeartbeatIntervalMs: 5,
+			controlOperationTimeoutMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(50);
+		await expect(processing).resolves.toBe(true);
+
+		expect(executeNextTask).toHaveBeenCalledTimes(2);
+		expect(durableMutations).toBe(1);
+		expect(store.getRunSnapshot("client-a", "run-inflight-owned-retry")).toMatchObject({ status: "succeeded" });
+		expect(queue.completeCalls).toHaveLength(1);
+	});
+
+	it("reconfirms the same claim before a terminal commit and prevents stale success", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-terminal-ownership-gate");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-terminal-ownership-gate" }]);
+		queue.defaultConfirmOutcome = "lost";
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:03:00.000Z", "2026-07-15T01:03:01.000Z"),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(queue.confirmOwnershipCalls).toBeGreaterThan(0);
+		expect(store.getRunSnapshot("client-a", "run-terminal-ownership-gate")).toMatchObject({ status: "interrupted" });
+		expect(store.committedEvents.some((event) => (event.payload as { status?: string }).status === "succeeded")).toBe(
+			false,
+		);
+	});
+
+	it("turns cancellation poll rejection into a sanitized canonical diagnostic", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-cancel-poll-reject");
+		const queue = new ControlledQueue([{ clientId: "client-a", runId: "run-cancel-poll-reject" }]);
+		queue.cancelOutcomes.push(new Error("redis://user:secret@127.0.0.1/internal claim-token=secret"));
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: delayedComplete(30),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-15T01:04:00.000Z", "2026-07-15T01:04:01.000Z"),
+			cancelPollIntervalMs: 5,
+			leaseHeartbeatIntervalMs: 50,
+			controlOperationTimeoutMs: 10,
+		});
+
+		const processing = worker.processOne();
+		await vi.advanceTimersByTimeAsync(40);
+		await expect(processing).resolves.toBe(true);
+
+		expect(store.getRunSnapshot("client-a", "run-cancel-poll-reject")).toMatchObject({ status: "interrupted" });
+		const diagnostic = store.diagnostics.find((item) => item.code === "agent_v2.worker_cancel_poll_failed");
+		expect(diagnostic).toMatchObject({
+			message: "Agent v2 cancellation monitoring failed; the run was stopped safely.",
+		});
+		expect(JSON.stringify(diagnostic)).not.toContain("secret");
+		expect(JSON.stringify(diagnostic)).not.toContain("redis://");
+	});
+
 	it("interrupts a run and avoids stale success when lease renewal is lost during execution", async () => {
 		vi.useFakeTimers();
 		const store = new MemoryWorkerStore();
@@ -947,7 +1268,7 @@ describe("AgentV2WorkerService", () => {
 		expect(store.getRunSnapshot("client-a", "run-lease-lost")).toMatchObject({
 			status: "interrupted",
 		});
-		expect(queue.completeCalls).toEqual([{ clientId: "client-a", runId: "run-lease-lost", workerId: "worker-a" }]);
+		expect(queue.completeCalls).toEqual([]);
 	});
 
 	it("lets a replacement worker reclaim an expired queued claim after the first worker disappears", async () => {
@@ -1281,7 +1602,7 @@ class RecordingQueue implements AgentV2RunQueue {
 		return true;
 	}
 
-	async confirmOwnership(): Promise<"owned"> {
+	async confirmOwnership(): ReturnType<AgentV2RunQueue["confirmOwnership"]> {
 		return "owned";
 	}
 
@@ -1290,7 +1611,7 @@ class RecordingQueue implements AgentV2RunQueue {
 		return 2;
 	}
 
-	async renewLease(claim: AgentV2ClaimedRun) {
+	async renewLease(claim: AgentV2ClaimedRun): ReturnType<AgentV2RunQueue["renewLease"]> {
 		this.renewLeaseCalls.push({ clientId: claim.clientId, runId: claim.runId, workerId: claim.workerId });
 		if (this.failNextRenewLease) {
 			this.failNextRenewLease = false;
@@ -1348,6 +1669,83 @@ class RecordingQueue implements AgentV2RunQueue {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		}
 	}
+}
+
+type ControlledRenewOutcome = Awaited<ReturnType<AgentV2RunQueue["renewLease"]>> | Error | "stall";
+type ControlledConfirmOutcome = Awaited<ReturnType<AgentV2RunQueue["confirmOwnership"]>> | Error | "stall";
+type ControlledCancelOutcome = boolean | Error | "stall";
+
+class ControlledQueue extends RecordingQueue {
+	claimLeaseMs = 30_000;
+	confirmOwnershipCalls = 0;
+	controlCallsInFlight = 0;
+	defaultConfirmOutcome: ControlledConfirmOutcome = "owned";
+	maxControlCallsInFlight = 0;
+	readonly cancelOutcomes: ControlledCancelOutcome[] = [];
+	readonly confirmOutcomes: ControlledConfirmOutcome[] = [];
+	readonly renewOutcomes: ControlledRenewOutcome[] = [];
+	private readonly stallResolvers: Array<() => void> = [];
+
+	override async claim(workerId: string): Promise<AgentV2ClaimedRun | undefined> {
+		const claim = await super.claim(workerId);
+		return claim ? { ...claim, leaseExpiresAtMs: Date.now() + this.claimLeaseMs } : undefined;
+	}
+
+	override async confirmOwnership(): Promise<"owned" | "lost" | "uncertain"> {
+		this.confirmOwnershipCalls += 1;
+		return await this.controlled(this.confirmOutcomes.shift() ?? this.defaultConfirmOutcome);
+	}
+
+	override async renewLease(claim: AgentV2ClaimedRun) {
+		this.renewLeaseCalls.push({ clientId: claim.clientId, runId: claim.runId, workerId: claim.workerId });
+		return await this.controlled(
+			this.renewOutcomes.shift() ?? { status: "renewed" as const, leaseExpiresAtMs: Date.now() + this.claimLeaseMs },
+		);
+	}
+
+	override async isCancelRequested(): Promise<boolean> {
+		return await this.controlled(this.cancelOutcomes.shift() ?? false);
+	}
+
+	releaseStalls(): void {
+		for (const resolve of this.stallResolvers.splice(0)) resolve();
+	}
+
+	private async controlled<T>(outcome: T | Error | "stall"): Promise<T> {
+		this.controlCallsInFlight += 1;
+		this.maxControlCallsInFlight = Math.max(this.maxControlCallsInFlight, this.controlCallsInFlight);
+		try {
+			if (outcome === "stall") await new Promise<void>((resolve) => this.stallResolvers.push(resolve));
+			if (outcome instanceof Error) throw outcome;
+			return (outcome === "stall" ? false : outcome) as T;
+		} finally {
+			this.controlCallsInFlight -= 1;
+		}
+	}
+}
+
+function delayedComplete(delayMs: number): AgentV2WorkerExecution {
+	return {
+		executeNextTask: async () => {
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+			return { status: "complete", diagnosticIds: [] };
+		},
+	};
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+	if (signal.aborted) return Promise.reject(signal.reason);
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(signal.reason);
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, delayMs);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
 }
 
 class RecordingEventLog implements Pick<AgentV2RunEventLog, "append"> {

@@ -82,7 +82,14 @@ const CONFIRM_OWNERSHIP_SCRIPT = `
 local raw = redis.call("HGET", KEYS[1], ARGV[1])
 if not raw then return 0 end
 local ok, claim = pcall(cjson.decode, raw)
-if not ok or claim["workerId"] ~= ARGV[2] or claim["claimToken"] ~= ARGV[3] then return 0 end
+if not ok or type(claim) ~= "table" or claim["workerId"] ~= ARGV[2] or claim["claimToken"] ~= ARGV[3] then
+	return 0
+end
+local expiry = claim["leaseExpiresAtMs"]
+if type(expiry) ~= "number" or expiry ~= expiry or expiry == math.huge or expiry == -math.huge then return 0 end
+local serverTime = redis.call("TIME")
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+if expiry <= now then return 0 end
 return 1
 `;
 
@@ -91,11 +98,19 @@ const RENEW_LEASE_SCRIPT = `
 local raw = redis.call("HGET", KEYS[1], ARGV[1])
 if not raw then return 0 end
 local ok, claim = pcall(cjson.decode, raw)
-if not ok or claim["workerId"] ~= ARGV[2] or claim["claimToken"] ~= ARGV[3] then return 0 end
-claim["heartbeatAtMs"] = tonumber(ARGV[4])
-claim["leaseExpiresAtMs"] = tonumber(ARGV[5])
+if not ok or type(claim) ~= "table" or claim["workerId"] ~= ARGV[2] or claim["claimToken"] ~= ARGV[3] then
+	return 0
+end
+local expiry = claim["leaseExpiresAtMs"]
+if type(expiry) ~= "number" or expiry ~= expiry or expiry == math.huge or expiry == -math.huge then return 0 end
+local serverTime = redis.call("TIME")
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+if expiry <= now then return 0 end
+local leaseExpiresAtMs = now + tonumber(ARGV[4])
+claim["heartbeatAtMs"] = now
+claim["leaseExpiresAtMs"] = leaseExpiresAtMs
 redis.call("HSET", KEYS[1], ARGV[1], cjson.encode(claim))
-return ARGV[5]
+return leaseExpiresAtMs
 `;
 
 const REQUEUE_ACTIVE_BY_OWNER_SCRIPT = `
@@ -301,7 +316,8 @@ export class InMemoryAgentV2RunQueue implements AgentV2RunQueue {
 
 	async confirmOwnership(claim: AgentV2ClaimedRun, _timeoutMs: number): Promise<AgentV2ClaimOwnership> {
 		this.assertOpen();
-		return sameOwner(this.active.get(runKey(claim)), claim) ? "owned" : "lost";
+		const current = this.active.get(runKey(claim));
+		return sameOwner(current, claim) && current!.leaseExpiresAtMs > this.now() ? "owned" : "lost";
 	}
 
 	async requeueActive(workerId: string): Promise<number> {
@@ -323,8 +339,8 @@ export class InMemoryAgentV2RunQueue implements AgentV2RunQueue {
 		this.assertOpen();
 		const key = runKey(claim);
 		const current = this.active.get(key);
-		if (!sameOwner(current, claim)) return { status: "lost" };
 		const now = this.now();
+		if (!sameOwner(current, claim) || current!.leaseExpiresAtMs <= now) return { status: "lost" };
 		const leaseExpiresAtMs = now + this.claimLeaseTtlMs;
 		this.active.set(key, { ...current!, heartbeatAtMs: now, leaseExpiresAtMs });
 		return { status: "renewed", leaseExpiresAtMs };
@@ -534,14 +550,13 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 
 	async renewLease(claim: AgentV2ClaimedRun): Promise<AgentV2LeaseRenewalResult> {
 		this.assertOpen();
-		const now = Date.now();
-		const leaseExpiresAtMs = now + this.claimLeaseTtlMs;
 		try {
 			const result = await (await this.connectedClient()).eval(RENEW_LEASE_SCRIPT, {
 				keys: [this.activeKey],
-				arguments: [runKey(claim), claim.workerId, claim.claimToken, String(now), String(leaseExpiresAtMs)],
+				arguments: [runKey(claim), claim.workerId, claim.claimToken, String(this.claimLeaseTtlMs)],
 			});
-			return toCount(result) > 0 ? { status: "renewed", leaseExpiresAtMs } : { status: "lost" };
+			const leaseExpiresAtMs = toFiniteTimestamp(result);
+			return leaseExpiresAtMs === undefined ? { status: "lost" } : { status: "renewed", leaseExpiresAtMs };
 		} catch {
 			return { status: "uncertain", errorCode: "agent_v2.redis_lease_uncertain" };
 		}
@@ -786,6 +801,11 @@ function toUtf8String(value: unknown): string | undefined {
 
 function toCount(value: unknown): number {
 	return typeof value === "number" ? value : Number(value) || 0;
+}
+
+function toFiniteTimestamp(value: unknown): number | undefined {
+	const timestamp = typeof value === "number" ? value : Number(value);
+	return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
 }
 
 function parseClearResult(value: unknown): AgentV2RunQueueClearResult {

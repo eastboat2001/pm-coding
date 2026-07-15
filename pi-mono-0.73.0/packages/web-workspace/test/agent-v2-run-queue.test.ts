@@ -56,6 +56,23 @@ describe("InMemoryAgentV2RunQueue", () => {
 		expect(next?.claimToken).not.toBe(claim.claimToken);
 	});
 
+	it("treats an expired but unreclaimed claim as lost and never revives it", async () => {
+		let now = 1_000;
+		const queue = createAgentV2RunQueue({ claimLeaseTtlMs: 100, now: () => now });
+		await queue.enqueue({ clientId: "client-a", runId: "expired-owned" });
+		const claim = (await queue.claim("worker-a", 0))!;
+		now = claim.leaseExpiresAtMs;
+
+		await expect(queue.confirmOwnership(claim, 1)).resolves.toBe("lost");
+		await expect(queue.renewLease(claim)).resolves.toEqual({ status: "lost" });
+		await expect(queue.requeueExpiredClaims()).resolves.toEqual([expect.objectContaining(claim)]);
+		await expect(queue.claim("worker-b", 0)).resolves.toMatchObject({
+			clientId: "client-a",
+			runId: "expired-owned",
+			workerId: "worker-b",
+		});
+	});
+
 	it("requeues all claims for one recovering worker without duplicating ready state", async () => {
 		const queue = createAgentV2RunQueue();
 		await queue.enqueue({ clientId: "client-a", runId: "stale" });

@@ -1,4 +1,5 @@
 import pg from "pg";
+import { canonicalizeAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { agentV2CancelReplayFingerprint, agentV2StartReplayFingerprint, equalAgentV2ProtocolValues, isAgentV2DeterministicExecutionTaskId, isCanonicalAgentV2Revision, isStrictlyNewerAgentV2Revision, matchesAgentV2ExpectedRun, } from "./agent-v2-durable-store.js";
 import { agentV2OutboxIntentId, assertAgentV2Timestamp, validateAgentV2OutboxDeliveryInput, validateAgentV2OutboxLeaseInput, validateAgentV2OutboxRescheduleInput, } from "./agent-v2-outbox.js";
 import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_RUN_EVENT_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, equalAgentV2ValidationRecords, stringifyAgentV2Json, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunEventRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";
@@ -1110,6 +1111,7 @@ export class PostgresRuntimeStore {
         return rows.map(toAgentV2ValidationRecord);
     }
     async appendAgentV2Diagnostic(input) {
+        input = canonicalizeAgentV2DiagnosticEvent(input);
         const row = await this.queryOne(this.queryable, `INSERT INTO agent_v2_diagnostics (
 				client_id,
 				run_id,
@@ -1745,6 +1747,7 @@ export class PostgresRuntimeStore {
         return requiredRecord(row ? toAgentV2DocumentRecord(row) : undefined, "agent v2 document");
     }
     async appendAgentV2DiagnosticWithQueryable(queryable, input) {
+        input = canonicalizeAgentV2DiagnosticEvent(input);
         const row = await this.queryOne(queryable, `INSERT INTO agent_v2_diagnostics (client_id,run_id,diagnostic_id,severity,category,code,phase,task_id,artifact_id,trace_id,message,data_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(client_id,run_id,diagnostic_id) DO NOTHING RETURNING ${AGENT_V2_DIAGNOSTIC_COLUMNS}`, [
             input.clientId,
             input.runId,

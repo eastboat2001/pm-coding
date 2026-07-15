@@ -1,5 +1,5 @@
 import pg from "pg";
-import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import { type AgentV2DiagnosticEvent, canonicalizeAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type {
 	AgentV2CancelRunCommitInput,
 	AgentV2CancelRunCommitResult,
@@ -1702,6 +1702,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 	}
 
 	async appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): Promise<AgentV2DiagnosticEvent> {
+		input = canonicalizeAgentV2DiagnosticEvent(input);
 		const row = await this.queryOne<AgentV2DiagnosticRow>(
 			this.queryable,
 			`INSERT INTO agent_v2_diagnostics (
@@ -2683,6 +2684,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		queryable: Queryable,
 		input: AgentV2DiagnosticEvent,
 	): Promise<AgentV2DiagnosticEvent> {
+		input = canonicalizeAgentV2DiagnosticEvent(input);
 		const row = await this.queryOne<AgentV2DiagnosticRow>(
 			queryable,
 			`INSERT INTO agent_v2_diagnostics (client_id,run_id,diagnostic_id,severity,category,code,phase,task_id,artifact_id,trace_id,message,data_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(client_id,run_id,diagnostic_id) DO NOTHING RETURNING ${AGENT_V2_DIAGNOSTIC_COLUMNS}`,

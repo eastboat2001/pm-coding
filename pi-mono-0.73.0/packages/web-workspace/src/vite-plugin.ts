@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import type { Connect, Plugin } from "vite";
+import { createAgentV2DiagnosticProjectionAdapters } from "./agent-v2-diagnostic-projections.js";
 import { AgentV2OutboxDispatcher } from "./agent-v2-outbox-dispatcher.js";
 import { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
 import { type AgentV2RunEventBus, RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
@@ -99,6 +100,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 		queue: agentV2RunQueue,
 		queueName: config.agentV2.queueName,
 		bus: agentV2RunEventBus,
+		additionalAdapters: createAgentV2DiagnosticProjectionAdapters({ store: runtimeDb, diagnostics }),
 		onError: (event) => {
 			diagnostics.writeEvents({
 				events: [{ level: "error", category: "system", eventType: event.code, data: { message: event.message } }],

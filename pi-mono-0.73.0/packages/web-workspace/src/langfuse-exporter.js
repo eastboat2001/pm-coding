@@ -20,7 +20,7 @@ const RAW_STREAM_EVENTS = new Set([
 export class LangfuseDiagnosticExporter {
     config;
     flushTimer;
-    flushing = false;
+    flushPromise;
     lastFlushAt;
     lastError;
     queue = [];
@@ -55,44 +55,77 @@ export class LangfuseDiagnosticExporter {
         this.capQueue();
         this.scheduleFlush();
     }
-    async flush() {
+    async flush(signal = new AbortController().signal) {
         this.clearTimer();
-        if (!this.config.langfuseEnabled || this.queue.length === 0 || this.flushing)
+        if (this.flushPromise)
+            return await this.flushPromise;
+        if (!this.config.langfuseEnabled || this.queue.length === 0)
             return;
         const fetchImpl = this.fetchImpl;
         if (!this.isConfigured() || !fetchImpl) {
-            this.lastError = "Langfuse OTEL exporter is enabled but host/public key/secret key/fetch is not configured.";
+            this.lastError = "agent_v2.langfuse_not_configured";
             return;
         }
-        this.flushing = true;
         const batches = this.queue.splice(0, this.config.langfuseBatchSize);
+        const operation = this.flushQueuedBatches(batches, fetchImpl, signal);
+        this.flushPromise = operation;
         try {
-            const response = await fetchImpl(this.otelEndpoint(), {
-                method: "POST",
-                headers: {
-                    Authorization: `Basic ${Buffer.from(`${this.config.langfusePublicKey}:${this.config.langfuseSecretKey}`).toString("base64")}`,
-                    "Content-Type": "application/json",
-                    "x-langfuse-ingestion-version": "4",
-                },
-                body: JSON.stringify(toOtlpExportRequest(batches, this.config)),
-            });
-            const body = await readResponseBody(response);
-            if (!response.ok) {
-                throw new Error(`Langfuse OTEL export failed with HTTP ${response.status}: ${body.rawText}`);
-            }
-            this.lastFlushAt = new Date().toISOString();
-            this.lastError = otlpPartialSuccessSummary(body.json);
-        }
-        catch (error) {
-            this.queue.unshift(...batches);
-            this.capQueue();
-            this.lastError = errorMessage(error);
+            await operation;
         }
         finally {
-            this.flushing = false;
+            if (this.flushPromise === operation)
+                this.flushPromise = undefined;
+        }
+    }
+    async deliver(events, signal) {
+        if (!this.config.langfuseEnabled)
+            return;
+        const fetchImpl = this.fetchImpl;
+        if (!this.isConfigured() || !fetchImpl) {
+            this.lastError = "agent_v2.langfuse_not_configured";
+            throw new Error("agent_v2.langfuse_delivery_failed");
+        }
+        const batches = toOtlpTraceBatches(events, this.config);
+        if (batches.length === 0)
+            return;
+        try {
+            await this.sendBatches(batches, fetchImpl, signal);
+        }
+        catch {
+            this.lastError = "agent_v2.langfuse_delivery_failed";
+            throw new Error("agent_v2.langfuse_delivery_failed");
+        }
+    }
+    async flushQueuedBatches(batches, fetchImpl, signal) {
+        try {
+            await this.sendBatches(batches, fetchImpl, signal);
+        }
+        catch {
+            this.queue.unshift(...batches);
+            this.capQueue();
+            this.lastError = "agent_v2.langfuse_delivery_failed";
+        }
+        finally {
             if (this.queue.length > 0)
                 this.scheduleFlush();
         }
+    }
+    async sendBatches(batches, fetchImpl, signal) {
+        const response = await fetchImpl(this.otelEndpoint(), {
+            method: "POST",
+            headers: {
+                Authorization: `Basic ${Buffer.from(`${this.config.langfusePublicKey}:${this.config.langfuseSecretKey}`).toString("base64")}`,
+                "Content-Type": "application/json",
+                "x-langfuse-ingestion-version": "4",
+            },
+            body: JSON.stringify(toOtlpExportRequest(batches, this.config)),
+            signal,
+        });
+        const body = await readResponseBody(response);
+        if (!response.ok || otlpPartialSuccessSummary(body.json))
+            throw new Error("agent_v2.langfuse_delivery_failed");
+        this.lastFlushAt = new Date().toISOString();
+        this.lastError = undefined;
     }
     isConfigured() {
         return Boolean(this.config.langfuseEnabled &&
@@ -553,8 +586,5 @@ function otlpPartialSuccessSummary(value) {
     if (!Number.isFinite(rejectedSpans) || rejectedSpans <= 0)
         return undefined;
     return `Langfuse OTEL export partially rejected ${rejectedSpans} span(s): ${response.partialSuccess.errorMessage ?? ""}`.trim();
-}
-function errorMessage(error) {
-    return error instanceof Error ? error.message : String(error);
 }
 //# sourceMappingURL=langfuse-exporter.js.map

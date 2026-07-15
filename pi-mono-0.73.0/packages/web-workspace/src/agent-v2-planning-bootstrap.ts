@@ -274,7 +274,7 @@ export async function persistAgentV2PlanningBootstrap(
 		if (existingDiagnosticIds.has(diagnostic.diagnosticId)) {
 			continue;
 		}
-		await Promise.resolve(store.appendAgentV2Diagnostic(diagnostic));
+		await Promise.resolve(store.commitAgentV2Diagnostic({ diagnostic, emitRunEvent: false }));
 		existingDiagnosticIds.add(diagnostic.diagnosticId);
 	}
 

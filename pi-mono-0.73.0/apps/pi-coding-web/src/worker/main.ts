@@ -10,6 +10,7 @@ import {
 	type AgentV2WorkerExecution,
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
+	createAgentV2DiagnosticProjectionAdapters,
 	DurableAgentV2InputMaterializer,
 	executeAgentV2NextTask,
 	parseAgentV2RunContext,
@@ -148,6 +149,7 @@ async function main(): Promise<void> {
 			queue,
 			queueName: config.agentV2.queueName,
 			bus: agentV2RunEventBus,
+			additionalAdapters: createAgentV2DiagnosticProjectionAdapters({ store: runtimeDb, diagnostics }),
 			onError: (event) => {
 				writeWorkerProcessDiagnostic(config, diagnostics, event.code, "error", { message: event.message });
 			},

@@ -69,6 +69,7 @@ export class AgentV2OutboxDispatcher {
 		bus: Pick<AgentV2RunEventBus, "project">;
 		now?: () => string;
 		onError?: (event: AgentV2OutboxDispatcherErrorEvent) => void | Promise<void>;
+		additionalAdapters?: readonly AgentV2OutboxDeliveryAdapter[];
 	}): AgentV2OutboxDispatcher {
 		return new AgentV2OutboxDispatcher({
 			store: options.store,
@@ -78,6 +79,7 @@ export class AgentV2OutboxDispatcher {
 				queueEnqueueAdapter(options.queue, options.queueName),
 				queueCancelAdapter(options.queue, options.queueName),
 				liveEventAdapter(options.store, options.bus),
+				...(options.additionalAdapters ?? []),
 			],
 		});
 	}

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import { type AgentV2DiagnosticEvent, canonicalizeAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type {
 	AgentV2CancelRunCommitInput,
 	AgentV2CancelRunCommitResult,
@@ -1450,6 +1450,7 @@ export class RuntimeDbStore implements RuntimeStore {
 	}
 
 	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): AgentV2DiagnosticEvent {
+		input = canonicalizeAgentV2DiagnosticEvent(input);
 		this.open()
 			.prepare(
 				`INSERT INTO agent_v2_diagnostics (
@@ -2279,6 +2280,7 @@ export class RuntimeDbStore implements RuntimeStore {
 		db: DatabaseSync,
 		input: AgentV2DiagnosticEvent,
 	): AgentV2DiagnosticEvent {
+		input = canonicalizeAgentV2DiagnosticEvent(input);
 		const existingRow = db
 			.prepare(
 				`SELECT ${AGENT_V2_DIAGNOSTIC_COLUMNS} FROM agent_v2_diagnostics WHERE client_id=? AND run_id=? AND diagnostic_id=?`,

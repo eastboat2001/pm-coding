@@ -100,18 +100,21 @@ function toUpsertTaskInput(clientId, runId, task) {
     };
 }
 async function appendRuntimeDiagnostic(store, clientId, runId, input) {
-    await store.appendAgentV2Diagnostic(createAgentV2DiagnosticEvent({
-        diagnosticId: `${input.code}:${input.taskId ?? "run"}:${input.createdAt}:${randomUUID()}`,
-        clientId,
-        runId,
-        severity: input.severity,
-        category: "task_graph",
-        code: input.code,
-        taskId: input.taskId,
-        message: input.message,
-        data: input.data ?? {},
-        createdAt: input.createdAt,
-    }));
+    await store.commitAgentV2Diagnostic({
+        diagnostic: createAgentV2DiagnosticEvent({
+            diagnosticId: `${input.code}:${input.taskId ?? "run"}:${input.createdAt}:${randomUUID()}`,
+            clientId,
+            runId,
+            severity: input.severity,
+            category: "task_graph",
+            code: input.code,
+            taskId: input.taskId,
+            message: input.message,
+            data: input.data ?? {},
+            createdAt: input.createdAt,
+        }),
+        emitRunEvent: false,
+    });
 }
 async function appendRuntimeDiagnosticBestEffort(store, clientId, runId, input) {
     try {

@@ -54,6 +54,7 @@ export interface AgentV2ExecutionStore extends AgentV2RuntimeSnapshotStore {
 	appendAgentV2ValidationAttempt(
 		input: AppendAgentV2ValidationAttemptInput,
 	): AgentV2StoreResult<AgentV2ValidationRecord>;
+	commitAgentV2Diagnostic(input: AgentV2DiagnosticCommitInput): AgentV2StoreResult<AgentV2DiagnosticCommitResult>;
 }
 
 export interface AgentV2PlanningStore {
@@ -62,6 +63,7 @@ export interface AgentV2PlanningStore {
 	upsertAgentV2Artifact(input: UpsertAgentV2ArtifactInput): AgentV2StoreResult<AgentV2ArtifactRecord>;
 	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): AgentV2StoreResult<AgentV2DiagnosticEvent>;
 	listAgentV2Diagnostics(clientId: string, runId: string): AgentV2StoreResult<AgentV2DiagnosticEvent[]>;
+	commitAgentV2Diagnostic(input: AgentV2DiagnosticCommitInput): AgentV2StoreResult<AgentV2DiagnosticCommitResult>;
 }
 
 export interface AgentV2RunEventLogStore {

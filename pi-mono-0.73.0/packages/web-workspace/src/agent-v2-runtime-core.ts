@@ -25,7 +25,8 @@ export interface LoadAgentV2RuntimeSnapshotInput {
 }
 
 export interface AdvanceAgentV2TaskInput extends Omit<AgentV2TaskTransitionInput, "task"> {
-	store: AgentV2RuntimeStore;
+	store: AgentV2RuntimeStore &
+		Pick<import("./agent-v2-durable-store.js").AgentV2DurableCommitStore, "commitAgentV2Diagnostic">;
 	clientId: string;
 	runId: string;
 	taskId: string;
@@ -138,7 +139,8 @@ function toUpsertTaskInput(clientId: string, runId: string, task: AgentV2TaskNod
 }
 
 async function appendRuntimeDiagnostic(
-	store: AgentV2RuntimeStore,
+	store: AgentV2RuntimeStore &
+		Pick<import("./agent-v2-durable-store.js").AgentV2DurableCommitStore, "commitAgentV2Diagnostic">,
 	clientId: string,
 	runId: string,
 	input: {
@@ -150,8 +152,8 @@ async function appendRuntimeDiagnostic(
 		createdAt: string;
 	},
 ): Promise<void> {
-	await store.appendAgentV2Diagnostic(
-		createAgentV2DiagnosticEvent({
+	await store.commitAgentV2Diagnostic({
+		diagnostic: createAgentV2DiagnosticEvent({
 			diagnosticId: `${input.code}:${input.taskId ?? "run"}:${input.createdAt}:${randomUUID()}`,
 			clientId,
 			runId,
@@ -163,11 +165,13 @@ async function appendRuntimeDiagnostic(
 			data: input.data ?? {},
 			createdAt: input.createdAt,
 		}),
-	);
+		emitRunEvent: false,
+	});
 }
 
 async function appendRuntimeDiagnosticBestEffort(
-	store: AgentV2RuntimeStore,
+	store: AgentV2RuntimeStore &
+		Pick<import("./agent-v2-durable-store.js").AgentV2DurableCommitStore, "commitAgentV2Diagnostic">,
 	clientId: string,
 	runId: string,
 	input: {

@@ -1,4 +1,5 @@
 import type { AgentV2Phase } from "./agent-v2-types.js";
+import type { JsonObject } from "./types.js";
 
 export const AGENT_V2_DIAGNOSTIC_CATEGORIES = [
 	"schema",
@@ -51,13 +52,15 @@ export interface CreateAgentV2DiagnosticEventInput {
 	createdAt: string;
 }
 
-export interface WorkspaceDiagnosticEvent {
+export interface WorkspaceDiagnosticEvent extends JsonObject {
+	timestamp: string;
+	clientId: string;
 	level: AgentV2DiagnosticSeverity;
 	category: "agent";
 	eventType: string;
 	sessionId?: string;
 	traceId?: string;
-	data: Record<string, unknown>;
+	data: JsonObject;
 }
 
 const MAX_STRING_LENGTH = 4000;
@@ -66,8 +69,7 @@ const MAX_OBJECT_KEYS = 200;
 const MAX_DEPTH = 8;
 const REDACTED = "[redacted]";
 
-const SENSITIVE_KEY_PATTERN =
-	/(^|[-_.])(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|cookie|password|secret|credential|bearer)([-_.]|$)/i;
+const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>]+/giu;
 
 export function createAgentV2DiagnosticEvent(input: CreateAgentV2DiagnosticEventInput): AgentV2DiagnosticEvent {
 	assertAgentV2DiagnosticCategory(input.category);
@@ -83,10 +85,14 @@ export function createAgentV2DiagnosticEvent(input: CreateAgentV2DiagnosticEvent
 		taskId: input.taskId,
 		artifactId: input.artifactId,
 		traceId: input.traceId,
-		message: input.message,
-		data: input.data ?? {},
+		message: sanitizeDiagnosticString(input.message),
+		data: sanitizeDiagnosticData(input.data ?? {}),
 		createdAt: input.createdAt,
 	};
+}
+
+export function canonicalizeAgentV2DiagnosticEvent(input: AgentV2DiagnosticEvent): AgentV2DiagnosticEvent {
+	return createAgentV2DiagnosticEvent(input);
 }
 
 export function toWorkspaceDiagnosticEvent(event: AgentV2DiagnosticEvent): WorkspaceDiagnosticEvent {
@@ -107,11 +113,13 @@ export function toWorkspaceDiagnosticEvent(event: AgentV2DiagnosticEvent): Works
 	});
 
 	return {
+		timestamp: event.createdAt,
+		clientId: event.clientId,
 		level: event.severity,
 		category: "agent",
 		eventType: event.code,
 		traceId: event.traceId,
-		data,
+		data: data as JsonObject,
 	};
 }
 
@@ -126,27 +134,107 @@ function isAgentV2DiagnosticCategory(value: string): value is AgentV2DiagnosticC
 }
 
 function sanitizeDiagnosticData(value: Record<string, unknown>): Record<string, unknown> {
-	const sanitized = sanitizeDiagnosticValue(value, 0);
+	const sanitized = sanitizeDiagnosticValue(value, 0, "", new WeakSet<object>());
 	return isRecord(sanitized) ? sanitized : {};
 }
 
-function sanitizeDiagnosticValue(value: unknown, depth: number, key = ""): unknown {
-	if (SENSITIVE_KEY_PATTERN.test(key)) return REDACTED;
+function sanitizeDiagnosticValue(value: unknown, depth: number, key: string, seen: WeakSet<object>): unknown {
+	if (isSensitiveDiagnosticKey(key)) return REDACTED;
 	if (depth > MAX_DEPTH) return "[max-depth]";
-	if (typeof value === "string") return truncateString(value);
+	if (typeof value === "string") return sanitizeDiagnosticString(value);
 	if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+	if (typeof value === "bigint") return value.toString();
+	if (typeof value === "symbol" || typeof value === "function") return `[${typeof value}]`;
+	if (value === undefined) return undefined;
+	if (typeof value !== "object") return sanitizeDiagnosticString(String(value));
+	if (seen.has(value)) return "[circular]";
+	seen.add(value);
 	if (Array.isArray(value)) {
-		return value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitizeDiagnosticValue(item, depth + 1));
+		return value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitizeDiagnosticValue(item, depth + 1, "", seen));
 	}
 	if (isRecord(value)) {
 		const result: Record<string, unknown> = {};
-		for (const [childKey, childValue] of Object.entries(value).slice(0, MAX_OBJECT_KEYS)) {
-			result[childKey] = sanitizeDiagnosticValue(childValue, depth + 1, childKey);
+		const descriptors = Object.entries(Object.getOwnPropertyDescriptors(value)).slice(0, MAX_OBJECT_KEYS);
+		for (const [childKey, descriptor] of descriptors) {
+			if (!("value" in descriptor)) {
+				result[childKey] = "[accessor]";
+				continue;
+			}
+			result[childKey] = sanitizeDiagnosticValue(descriptor.value, depth + 1, childKey, seen);
 		}
 		return result;
 	}
-	if (value === undefined) return undefined;
-	return String(value);
+	return sanitizeDiagnosticString(String(value));
+}
+
+function sanitizeDiagnosticString(value: string): string {
+	let sanitized = value.replace(URL_PATTERN, sanitizeUrlMatch);
+	sanitized = sanitized.replace(/\b(Bearer\s+)[^\s,;]+/giu, "$1[redacted]");
+	sanitized = sanitized.replace(/\b(Basic\s+)[A-Za-z0-9+/]{16,}={0,2}\b/gu, "$1[redacted]");
+	sanitized = sanitized.replace(
+		/\b(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret|credential)\s*[:=]\s*[^\s,;]+/giu,
+		"$1=[redacted]",
+	);
+	sanitized = sanitized.replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, REDACTED);
+	sanitized = sanitized.replace(/\bsk-(?:(?:proj|ant)-)?[A-Za-z0-9_-]{16,}\b/gu, REDACTED);
+	sanitized = sanitized.replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/gu, REDACTED);
+	sanitized = sanitized.replace(/\bhf_[A-Za-z0-9]{12,}\b/gu, REDACTED);
+	sanitized = sanitized.replace(/\bAIza[A-Za-z0-9_-]{20,}\b/gu, REDACTED);
+	sanitized = sanitized.replace(/\bxox[baprs]-[A-Za-z0-9-]{20,}\b/gu, REDACTED);
+	return truncateString(sanitized);
+}
+
+function isSensitiveDiagnosticKey(key: string): boolean {
+	if (!key) return false;
+	const words = key
+		.replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+		.toLowerCase()
+		.split(/[^a-z0-9]+/u)
+		.filter(Boolean);
+	if (words.length === 0) return false;
+	if (
+		words.some((word) =>
+			[
+				"auth",
+				"authorization",
+				"bearer",
+				"cookie",
+				"cookies",
+				"credential",
+				"credentials",
+				"header",
+				"headers",
+				"password",
+				"secret",
+				"stderr",
+				"stdout",
+			].includes(word),
+		)
+	) {
+		return true;
+	}
+	if (words.some((word, index) => word === "api" && words[index + 1] === "key")) return true;
+	if (words.some((word, index) => word === "provider" && words[index + 1] === "payload")) return true;
+	const tokenIndex = words.indexOf("token");
+	if (tokenIndex < 0) return false;
+	const suffix = words.slice(tokenIndex + 1);
+	return (
+		suffix.length === 0 || !suffix.every((word) => ["count", "counts", "length", "budget", "limit"].includes(word))
+	);
+}
+
+function sanitizeUrlMatch(value: string): string {
+	try {
+		const url = new URL(value);
+		if (url.username || url.password) {
+			url.username = "redacted";
+			url.password = "";
+		}
+		if (url.search) url.search = "?[redacted]";
+		return url.toString();
+	} catch {
+		return REDACTED;
+	}
 }
 
 function truncateString(value: string): string {

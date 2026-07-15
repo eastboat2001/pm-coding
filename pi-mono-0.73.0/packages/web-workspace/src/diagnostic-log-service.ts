@@ -203,8 +203,46 @@ export class WorkspaceDiagnosticLogService {
 		return { accepted: normalizedEvents.length, dropped: events.length - normalizedEvents.length };
 	}
 
-	async flushLangfuse(): Promise<void> {
-		await this.langfuse.flush();
+	writeProjectedEvent(projectionKey: string, event: DiagnosticLogEventInput): "projected" | "already_projected" {
+		if (!projectionKey.trim()) throw new Error("Diagnostic projection key is required");
+		if (!this.config.loggingEnabled) return "projected";
+		const normalized = normalizeEvent(event);
+		const result = this.open()
+			.prepare(`
+				INSERT OR IGNORE INTO diagnostic_events (
+					projection_key, timestamp, client_id, level, category, event_type, session_id, trace_id,
+					span_id, parent_span_id, request_id, provider, model, duration_ms, data_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`)
+			.run(
+				projectionKey,
+				normalized.timestamp,
+				normalized.clientId ?? null,
+				normalized.level,
+				normalized.category,
+				normalized.eventType,
+				normalized.sessionId ?? null,
+				normalized.traceId ?? null,
+				normalized.spanId ?? null,
+				normalized.parentSpanId ?? null,
+				normalized.requestId ?? null,
+				normalized.provider ?? null,
+				normalized.model ?? null,
+				normalized.durationMs ?? null,
+				JSON.stringify(normalized.data),
+			);
+		if (runChanges(result) === 0) return "already_projected";
+		this.writeStdoutSummary(normalized);
+		this.cleanupAfterWrite();
+		return "projected";
+	}
+
+	async deliverLangfuse(events: DiagnosticLogEventInput[], signal: AbortSignal): Promise<void> {
+		await this.langfuse.deliver(events.map(normalizeEvent), signal);
+	}
+
+	async flushLangfuse(signal?: AbortSignal): Promise<void> {
+		await this.langfuse.flush(signal);
 	}
 
 	close(): void {
@@ -329,6 +367,7 @@ export class WorkspaceDiagnosticLogService {
 			this.database.exec(`
 				CREATE TABLE IF NOT EXISTS diagnostic_events (
 					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					projection_key TEXT,
 					timestamp TEXT NOT NULL,
 					client_id TEXT,
 					level TEXT NOT NULL,
@@ -356,8 +395,10 @@ export class WorkspaceDiagnosticLogService {
 				);
 			`);
 			this.ensureClientIdColumn();
+			this.ensureProjectionKeyColumn();
 			this.database.exec(
-				"CREATE INDEX IF NOT EXISTS idx_diagnostic_events_client_id ON diagnostic_events(client_id);",
+				`CREATE INDEX IF NOT EXISTS idx_diagnostic_events_client_id ON diagnostic_events(client_id);
+				 CREATE UNIQUE INDEX IF NOT EXISTS idx_diagnostic_events_projection_key ON diagnostic_events(projection_key) WHERE projection_key IS NOT NULL;`,
 			);
 		}
 		return this.database;
@@ -368,6 +409,13 @@ export class WorkspaceDiagnosticLogService {
 		const columns = db.prepare("PRAGMA table_info(diagnostic_events)").all() as TableInfoRow[];
 		if (columns.some((column) => column.name === "client_id")) return;
 		db.exec("ALTER TABLE diagnostic_events ADD COLUMN client_id TEXT;");
+	}
+
+	private ensureProjectionKeyColumn(): void {
+		const db = this.open();
+		const columns = db.prepare("PRAGMA table_info(diagnostic_events)").all() as TableInfoRow[];
+		if (columns.some((column) => column.name === "projection_key")) return;
+		db.exec("ALTER TABLE diagnostic_events ADD COLUMN projection_key TEXT;");
 	}
 
 	private cleanupAfterWrite(): void {

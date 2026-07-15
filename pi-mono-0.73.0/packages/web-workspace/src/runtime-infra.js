@@ -1,3 +1,4 @@
+export * from "./agent-v2-diagnostic-projections.js";
 export * from "./agent-v2-outbox-dispatcher.js";
 export { createAgentV2RunQueue, createRedisAgentV2RunQueue, InMemoryAgentV2RunQueue, RedisAgentV2RunQueue, } from "./agent-v2-run-queue.js";
 export { loadStorageConfig } from "./config.js";

@@ -1,3 +1,4 @@
+export * from "./agent-v2-diagnostic-projections.js";
 export type * from "./agent-v2-durable-store.js";
 export type * from "./agent-v2-outbox.js";
 export * from "./agent-v2-outbox-dispatcher.js";

@@ -1,3 +1,4 @@
+export * from "./agent-v2-diagnostic-projections.js";
 export type * from "./agent-v2-durable-store.js";
 export {
 	type AgentV2ExecutionStepResult,

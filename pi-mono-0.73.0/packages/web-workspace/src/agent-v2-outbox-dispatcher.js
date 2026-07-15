@@ -30,6 +30,7 @@ export class AgentV2OutboxDispatcher {
                 queueEnqueueAdapter(options.queue, options.queueName),
                 queueCancelAdapter(options.queue, options.queueName),
                 liveEventAdapter(options.store, options.bus),
+                ...(options.additionalAdapters ?? []),
             ],
         });
     }

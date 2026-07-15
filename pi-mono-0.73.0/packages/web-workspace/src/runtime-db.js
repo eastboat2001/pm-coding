@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { canonicalizeAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { agentV2CancelReplayFingerprint, agentV2StartReplayFingerprint, equalAgentV2ProtocolValues, isAgentV2DeterministicExecutionTaskId, isCanonicalAgentV2Revision, isStrictlyNewerAgentV2Revision, matchesAgentV2ExpectedRun, } from "./agent-v2-durable-store.js";
 import { agentV2OutboxIntentId, assertAgentV2Timestamp, validateAgentV2OutboxDeliveryInput, validateAgentV2OutboxLeaseInput, validateAgentV2OutboxRescheduleInput, } from "./agent-v2-outbox.js";
 import { AGENT_V2_ARTIFACT_COLUMNS, AGENT_V2_DIAGNOSTIC_COLUMNS, AGENT_V2_DOCUMENT_COLUMNS, AGENT_V2_RUN_COLUMNS, AGENT_V2_TASK_COLUMNS, AGENT_V2_VALIDATION_COLUMNS, applyAgentV2RunUpdate, buildAgentV2Artifact, buildAgentV2Document, buildAgentV2Run, buildAgentV2Task, buildAgentV2Validation, equalAgentV2ValidationRecords, stringifyAgentV2Json, toAgentV2ArtifactRecord, toAgentV2DiagnosticRecord, toAgentV2DocumentRecord, toAgentV2RunRecord, toAgentV2TaskRecord, toAgentV2ValidationRecord, } from "./agent-v2-store.js";
@@ -920,6 +921,7 @@ export class RuntimeDbStore {
         return rows.map(toAgentV2ValidationRecord);
     }
     appendAgentV2Diagnostic(input) {
+        input = canonicalizeAgentV2DiagnosticEvent(input);
         this.open()
             .prepare(`INSERT INTO agent_v2_diagnostics (
 					client_id,
@@ -1417,6 +1419,7 @@ export class RuntimeDbStore {
         return document;
     }
     appendAgentV2DiagnosticWithDatabase(db, input) {
+        input = canonicalizeAgentV2DiagnosticEvent(input);
         const existingRow = db
             .prepare(`SELECT ${AGENT_V2_DIAGNOSTIC_COLUMNS} FROM agent_v2_diagnostics WHERE client_id=? AND run_id=? AND diagnostic_id=?`)
             .get(input.clientId, input.runId, input.diagnosticId);

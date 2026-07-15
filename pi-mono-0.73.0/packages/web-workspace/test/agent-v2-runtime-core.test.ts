@@ -277,7 +277,7 @@ function createTempRuntimeDbStoreWithV2Schema(cleanupRoots: string[], cleanupSto
 function forbidLegacyRuntimeReads(
 	store: RuntimeDbStore,
 	options: { failAgentV2DiagnosticWrites?: boolean } = {},
-): AgentV2RuntimeSnapshotStore {
+): AgentV2RuntimeSnapshotStore & Pick<RuntimeDbStore, "commitAgentV2Diagnostic"> {
 	const legacyReadMethods = new Set([
 		"getSession",
 		"listSessions",
@@ -314,12 +314,12 @@ function forbidLegacyRuntimeReads(
 			if (legacyReadMethods.has(property)) {
 				throw new Error(`legacy runtime read is forbidden in agent v2 runtime core: ${property}`);
 			}
-			if (options.failAgentV2DiagnosticWrites && property === "appendAgentV2Diagnostic") {
+			if (options.failAgentV2DiagnosticWrites && property === "commitAgentV2Diagnostic") {
 				return () => {
 					throw new Error("diagnostic write failed");
 				};
 			}
 			return Reflect.get(target, property, receiver);
 		},
-	}) as AgentV2RuntimeSnapshotStore;
+	}) as AgentV2RuntimeSnapshotStore & Pick<RuntimeDbStore, "commitAgentV2Diagnostic">;
 }

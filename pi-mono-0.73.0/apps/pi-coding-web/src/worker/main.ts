@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import {
 	type AgentV2InputMaterializer,
 	type AgentV2ModelExecution,
+	AgentV2OutboxDispatcher,
 	AgentV2RunEventLog,
 	type AgentV2RunQueue,
 	type AgentV2RunSnapshot,
@@ -129,6 +130,8 @@ async function main(): Promise<void> {
 	let runtimeDb: AgentV2ProductionStore | undefined;
 	let agentV2RunEventBus: RedisAgentV2RunEventBus | undefined;
 	let worker: AgentV2WorkerService | undefined;
+	let outboxDispatcherAbort: AbortController | undefined;
+	let outboxDispatcherPromise: Promise<void> | undefined;
 	try {
 		runtimeDb = createAgentV2RuntimeStore(config);
 		await ensureRuntimeSchemas(runtimeDb);
@@ -140,6 +143,27 @@ async function main(): Promise<void> {
 		});
 		agentV2RunEventBus = new RedisAgentV2RunEventBus(options.bus);
 		const events = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
+		const outboxDispatcher = AgentV2OutboxDispatcher.forQueueAndLive({
+			store: runtimeDb,
+			queue,
+			queueName: config.agentV2.queueName,
+			bus: agentV2RunEventBus,
+			onError: (event) => {
+				writeWorkerProcessDiagnostic(config, diagnostics, event.code, "error", { message: event.message });
+			},
+		});
+		outboxDispatcherAbort = new AbortController();
+		outboxDispatcherPromise = outboxDispatcher
+			.start({
+				ownerId: `worker:${config.workerId}`,
+				intervalMs: 250,
+				signal: outboxDispatcherAbort.signal,
+			})
+			.catch(() => {
+				writeWorkerProcessDiagnostic(config, diagnostics, "agent_v2.outbox_dispatcher_failed", "error", {
+					message: "Agent v2 outbox dispatcher stopped unexpectedly",
+				});
+			});
 		worker = new AgentV2WorkerService({
 			store: runtimeDb,
 			queue,
@@ -158,7 +182,14 @@ async function main(): Promise<void> {
 			shuttingDown = true;
 			console.log(`PI worker received ${signal}; stopping.`);
 			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopping", "info", { signal });
-			const exitCode = await stopWorkerRuntime({ worker, agentV2RunEventBus, runtimeDb, diagnostics });
+			const exitCode = await stopWorkerRuntime({
+				worker,
+				agentV2RunEventBus,
+				runtimeDb,
+				diagnostics,
+				outboxDispatcherAbort,
+				outboxDispatcherPromise,
+			});
 			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopped", exitCode === 0 ? "info" : "error", {
 				signal,
 				exitCode,
@@ -184,7 +215,14 @@ async function main(): Promise<void> {
 			...diagnosticErrorData(error),
 			hint: "The agent v2 worker process failed before it could stay online and claim queued runs.",
 		});
-		await stopWorkerRuntime({ worker, agentV2RunEventBus, runtimeDb, diagnostics });
+		await stopWorkerRuntime({
+			worker,
+			agentV2RunEventBus,
+			runtimeDb,
+			diagnostics,
+			outboxDispatcherAbort,
+			outboxDispatcherPromise,
+		});
 		removeProcessLifecycleDiagnostics();
 		removeFatalDiagnostics();
 		throw error;
@@ -196,8 +234,17 @@ export async function stopWorkerRuntime(input: {
 	agentV2RunEventBus?: RedisAgentV2RunEventBus;
 	runtimeDb?: AgentV2ProductionStore;
 	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse">;
+	outboxDispatcherAbort?: AbortController;
+	outboxDispatcherPromise?: Promise<void>;
 }): Promise<number> {
 	let exitCode = 0;
+	input.outboxDispatcherAbort?.abort();
+	try {
+		await input.outboxDispatcherPromise;
+	} catch (error) {
+		exitCode = 1;
+		logCleanupError("outboxDispatcher.stop", error);
+	}
 	try {
 		await input.worker?.stop();
 	} catch (error) {

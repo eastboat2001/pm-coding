@@ -9,8 +9,10 @@ export * from "./agent-v2-input-materializer.js";
 export * from "./agent-v2-model-execution.js";
 export * from "./agent-v2-model-prompt.js";
 export type * from "./agent-v2-outbox.js";
+export * from "./agent-v2-outbox-dispatcher.js";
 export {
 	type AgentV2RunEventBus,
+	AgentV2RunEventProjectionConflictError,
 	agentV2RunEventStreamKey,
 	RedisAgentV2RunEventBus,
 	type RedisAgentV2RunEventBusClient,
@@ -26,6 +28,7 @@ export {
 } from "./agent-v2-run-input-contract.js";
 export {
 	type AgentV2ActiveRunClaim,
+	type AgentV2CancelRequestResult,
 	type AgentV2ClaimedRun,
 	type AgentV2ClaimOwnership,
 	type AgentV2LeaseRenewalResult,

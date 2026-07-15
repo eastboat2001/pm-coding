@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { AgentV2OutboxDispatcher } from "./agent-v2-outbox-dispatcher.js";
 import { AgentV2RunApiError, AgentV2RunApiService } from "./agent-v2-run-api-service.js";
 import { RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
@@ -42,10 +43,22 @@ export function configuredStoragePlugin(envFile) {
         ttlSeconds: config.agentV2.eventStreamTtlSeconds,
     });
     const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
+    const agentV2OutboxDispatcher = AgentV2OutboxDispatcher.forQueueAndLive({
+        store: runtimeDb,
+        queue: agentV2RunQueue,
+        queueName: config.agentV2.queueName,
+        bus: agentV2RunEventBus,
+        onError: (event) => {
+            diagnostics.writeEvents({
+                events: [{ level: "error", category: "system", eventType: event.code, data: { message: event.message } }],
+            });
+        },
+    });
     const agentV2RunApi = new AgentV2RunApiService({
         store: runtimeDb,
         events: agentV2RunEventLog,
         queueName: config.agentV2.queueName,
+        wakeDispatcher: () => agentV2OutboxDispatcher.wake(),
     });
     return createConfiguredStoragePlugin({
         config,
@@ -61,15 +74,18 @@ export function configuredStoragePlugin(envFile) {
         agentV2RunEventBus,
         agentV2RunEventLog,
         agentV2RunQueue,
+        agentV2OutboxDispatcher,
     });
 }
 export function createConfiguredStoragePluginForTest(services) {
     return createConfiguredStoragePlugin(services);
 }
-function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, previews, tasks, skills, runtimeDb, diagnosticExports, agentV2RunApi, agentV2RunEventBus, agentV2RunEventLog, agentV2RunQueue, }) {
+function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, previews, tasks, skills, runtimeDb, diagnosticExports, agentV2RunApi, agentV2RunEventBus, agentV2RunEventLog, agentV2RunQueue, agentV2OutboxDispatcher, }) {
     let startupDiagnosticsWritten = false;
     let storageDirsReady = false;
     let storageDirsPromise;
+    const dispatcherAbort = new AbortController();
+    let dispatcherPromise;
     const ensureStorageDirs = async () => {
         if (storageDirsReady)
             return;
@@ -80,6 +96,23 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             mkdirSync(config.defaultSkillsDir, { recursive: true });
             diagnostics.ensureDirs();
             await runtimeDb.ensureAgentV2Schema();
+            if (agentV2OutboxDispatcher && !dispatcherPromise) {
+                dispatcherPromise = agentV2OutboxDispatcher
+                    .start({ ownerId: `web:${process.pid}`, intervalMs: 250, signal: dispatcherAbort.signal })
+                    .catch((error) => {
+                    diagnostics.writeEvents({
+                        events: [
+                            {
+                                level: "error",
+                                category: "system",
+                                eventType: "agent_v2.outbox_dispatcher_failed",
+                                data: { message: "Agent v2 outbox dispatcher stopped unexpectedly" },
+                            },
+                        ],
+                    });
+                    void error;
+                });
+            }
             writeStartupDiagnosticsOnce();
             storageDirsReady = true;
         })().catch((error) => {
@@ -173,7 +206,9 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
     };
     let runEventBusClosePromise;
     const closeRunEventBusOnce = () => {
+        dispatcherAbort.abort();
         runEventBusClosePromise ??= Promise.all([
+            dispatcherPromise,
             Promise.resolve(agentV2RunEventBus?.close()).catch(() => undefined),
             Promise.resolve(agentV2RunQueue?.close()).catch(() => undefined),
         ]).then(() => undefined);

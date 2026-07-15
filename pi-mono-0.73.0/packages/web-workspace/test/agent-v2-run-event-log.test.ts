@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { AgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import type { AgentV2RunEventRecord, AppendAgentV2RunEventInput } from "../src/agent-v2-store.js";
 
@@ -19,10 +18,9 @@ function event(seq: number, type = "agent_v2.phase_changed"): AgentV2RunEventRec
 }
 
 describe("AgentV2RunEventLog", () => {
-	it("appends to the v2 store and publishes the stored event to the live bus", async () => {
+	it("appends only to the durable store and never projects synchronously", async () => {
 		const store = new RecordingStore();
-		const bus = new RecordingBus();
-		const log = new AgentV2RunEventLog({ store, bus });
+		const log = new AgentV2RunEventLog({ store });
 
 		const appended = await log.append({
 			clientId: "client-a",
@@ -41,7 +39,6 @@ describe("AgentV2RunEventLog", () => {
 				createdAt: "2026-07-08T00:01:00.000Z",
 			},
 		]);
-		expect(bus.publishCalls).toEqual([appended]);
 		expect(appended.seq).toBe(1);
 	});
 
@@ -91,14 +88,13 @@ class RecordingStore {
 	}
 }
 
-class RecordingBus implements AgentV2RunEventBus {
-	readonly publishCalls: AgentV2RunEventRecord[] = [];
+class RecordingBus {
 	readonly readCalls: Array<{ clientId: string; runId: string; afterSeq: number; blockMs?: number }> = [];
 
 	constructor(private readonly readResult: AgentV2RunEventRecord[] = []) {}
 
-	async publish(event: AgentV2RunEventRecord): Promise<void> {
-		this.publishCalls.push(event);
+	async project(): Promise<"projected"> {
+		return "projected";
 	}
 
 	async read(request: {

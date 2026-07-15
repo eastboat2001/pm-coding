@@ -241,8 +241,8 @@ class TrackingQueue implements AgentV2RunQueue {
 		return await this.inner.requeueExpiredClaims(nowMs);
 	}
 
-	async requestCancel(run: AgentV2RunQueueIdentity): Promise<void> {
-		await this.inner.requestCancel(run);
+	async requestCancel(run: AgentV2RunQueueIdentity, cancelToken: string) {
+		return await this.inner.requestCancel(run, cancelToken);
 	}
 
 	async isCancelRequested(run: AgentV2RunQueueIdentity): Promise<boolean> {
@@ -352,7 +352,7 @@ async function cancelRunsWhenRunning(
 		for (const runId of [...pending]) {
 			const run = await store.getAgentV2Run("client-a", runId);
 			if (run?.status === "running") {
-				await queue.requestCancel({ clientId: "client-a", runId });
+				await queue.requestCancel({ clientId: "client-a", runId }, `cancel:${runId}`);
 				pending.delete(runId);
 			}
 		}

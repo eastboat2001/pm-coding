@@ -30,9 +30,9 @@ describe("agentV2RunEventStreamKey", () => {
 describe("InMemoryAgentV2RunEventBus", () => {
 	it("only reads events with a sequence greater than afterSeq", async () => {
 		const bus = new InMemoryAgentV2RunEventBus();
-		await bus.publish(event(1));
-		await bus.publish(event(2));
-		await bus.publish(event(3));
+		await bus.project(event(1));
+		await bus.project(event(2));
+		await bus.project(event(3));
 
 		await expect(bus.read({ ...identity, afterSeq: 1 })).resolves.toEqual([event(2), event(3)]);
 		await expect(bus.read({ ...identity, afterSeq: 3 })).resolves.toEqual([]);
@@ -41,19 +41,19 @@ describe("InMemoryAgentV2RunEventBus", () => {
 	it("refuses future reads and writes after close", async () => {
 		const bus = new InMemoryAgentV2RunEventBus();
 
-		await bus.publish(event(1));
+		await bus.project(event(1));
 		await bus.close();
 
-		await expect(bus.publish(event(2))).rejects.toThrow("Agent v2 run event bus is closed");
+		await expect(bus.project(event(2))).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.read({ ...identity, afterSeq: 0 })).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.purge({ clientId: "client-a" })).rejects.toThrow("Agent v2 run event bus is closed");
 	});
 
 	it("purges streams by client id", async () => {
 		const bus = new InMemoryAgentV2RunEventBus();
-		await bus.publish(event(1));
-		await bus.publish({ ...event(2), runId: "run-b" });
-		await bus.publish({ ...event(3), clientId: "client-b", runId: "run-c" });
+		await bus.project(event(1));
+		await bus.project({ ...event(2), runId: "run-b" });
+		await bus.project({ ...event(3), clientId: "client-b", runId: "run-c" });
 
 		await expect(bus.purge({ clientId: "client-a" })).resolves.toEqual({ streamsDeleted: 2 });
 		await expect(bus.read({ ...identity, afterSeq: 0 })).resolves.toEqual([]);
@@ -61,6 +61,18 @@ describe("InMemoryAgentV2RunEventBus", () => {
 		await expect(bus.read({ clientId: "client-b", runId: "run-c", afterSeq: 0 })).resolves.toEqual([
 			{ ...event(3), clientId: "client-b", runId: "run-c" },
 		]);
+	});
+
+	it("treats the same sequence and payload as idempotent but rejects a conflict", async () => {
+		const bus = new InMemoryAgentV2RunEventBus();
+		await expect(bus.project(event(1))).resolves.toBe("projected");
+		await expect(bus.project(event(1))).resolves.toBe("already_projected");
+		await expect(bus.project({ ...event(1), payload: { changed: true } })).rejects.toMatchObject({
+			name: "AgentV2RunEventProjectionConflictError",
+			code: "agent_v2.live_projection_conflict",
+		});
+		await expect(bus.project(event(3))).resolves.toBe("projected");
+		await expect(bus.project(event(2))).resolves.toBe("already_projected");
 	});
 });
 
@@ -74,7 +86,7 @@ describe("RedisAgentV2RunEventBus", () => {
 			createClient: () => client,
 		});
 
-		await bus.publish(event(4));
+		await expect(bus.project(event(4))).resolves.toBe("projected");
 		client.xReadResults.push([
 			{
 				name: "pi:agent-v2:runs:client-a:run-a:events",
@@ -83,12 +95,10 @@ describe("RedisAgentV2RunEventBus", () => {
 		]);
 
 		await expect(bus.read({ ...identity, afterSeq: 3 })).resolves.toEqual([event(4)]);
-		expect(client.xAddCalls).toEqual([
+		expect(client.evalCalls).toEqual([
 			{
-				key: "pi:agent-v2:runs:client-a:run-a:events",
-				id: "4-0",
-				message: { event: JSON.stringify(event(4)) },
-				options: { TRIM: { strategy: "MAXLEN", strategyModifier: "~", threshold: 10 } },
+				keys: ["pi:agent-v2:runs:client-a:run-a:events"],
+				arguments: ["4-0", JSON.stringify(event(4)), "10", "4"],
 			},
 		]);
 		expect(client.xReadCalls).toEqual([
@@ -107,7 +117,7 @@ describe("RedisAgentV2RunEventBus", () => {
 
 		await bus.close();
 
-		await expect(bus.publish(event(1))).rejects.toThrow("Agent v2 run event bus is closed");
+		await expect(bus.project(event(1))).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.read({ ...identity, afterSeq: 0 })).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.purge({ clientId: "client-a" })).rejects.toThrow("Agent v2 run event bus is closed");
 	});
@@ -144,6 +154,7 @@ describe("RedisAgentV2RunEventBus", () => {
 });
 
 interface FakeRedisState {
+	readonly evalCalls: Array<{ keys: string[]; arguments: string[] }>;
 	readonly expireCalls: Array<{ key: string; seconds: number }>;
 	readonly xAddCalls: Array<{
 		key: string;
@@ -166,6 +177,7 @@ class FakeRedisClient {
 
 	constructor(
 		private readonly state: FakeRedisState = {
+			evalCalls: [],
 			expireCalls: [],
 			xAddCalls: [],
 			xReadCalls: [],
@@ -176,6 +188,10 @@ class FakeRedisClient {
 			usedKeysCommand: false,
 		},
 	) {}
+
+	get evalCalls(): Array<{ keys: string[]; arguments: string[] }> {
+		return this.state.evalCalls;
+	}
 
 	get expireCalls(): Array<{ key: string; seconds: number }> {
 		return this.state.expireCalls;
@@ -241,6 +257,11 @@ class FakeRedisClient {
 	async xAdd(key: string, id: string, message: Record<string, string>, options: unknown): Promise<string> {
 		this.xAddCalls.push({ key, id, message, options });
 		return id;
+	}
+
+	async eval(_script: string, options: { keys: string[]; arguments: string[] }): Promise<number> {
+		this.evalCalls.push(options);
+		return 1;
 	}
 
 	async xRead(streams: unknown, options: unknown): Promise<unknown> {

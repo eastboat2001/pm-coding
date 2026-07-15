@@ -6,9 +6,7 @@ export class AgentV2RunEventLog {
         this.bus = options.bus;
     }
     async append(input) {
-        const event = await this.store.appendAgentV2RunEvent(input);
-        await this.bus.publish(event);
-        return event;
+        return await this.store.appendAgentV2RunEvent(input);
     }
     async list(clientId, runId, afterSeq) {
         return await this.store.listAgentV2RunEvents(clientId, runId, afterSeq);
@@ -18,7 +16,7 @@ export class AgentV2RunEventLog {
         if (durableEvents.length > 0) {
             return durableEvents;
         }
-        return await this.bus.read(request);
+        return this.bus ? await this.bus.read(request) : [];
     }
 }
 //# sourceMappingURL=agent-v2-run-event-log.js.map

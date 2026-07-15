@@ -10,11 +10,12 @@ export { clearAgentV2GeneratedProjectWorkspaces, resetAgentV2Runtime, } from "./
 export * from "./agent-v2-model-execution.js";
 export * from "./agent-v2-model-prompt.js";
 export { agentV2OutboxIntentId } from "./agent-v2-outbox.js";
+export * from "./agent-v2-outbox-dispatcher.js";
 export { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap, } from "./agent-v2-planning-bootstrap.js";
 export { planAgentV2RepairActions, } from "./agent-v2-repair-engine.js";
 export { AGENT_V2_RESET_CONFIRMATION, assertAgentV2ResetConfirmation, resetAgentV2RuntimeData, } from "./agent-v2-reset.js";
 export { AgentV2RunApiError, AgentV2RunApiService } from "./agent-v2-run-api-service.js";
-export { agentV2RunEventStreamKey, InMemoryAgentV2RunEventBus, RedisAgentV2RunEventBus, } from "./agent-v2-run-event-bus.js";
+export { AgentV2RunEventProjectionConflictError, agentV2RunEventStreamKey, InMemoryAgentV2RunEventBus, RedisAgentV2RunEventBus, } from "./agent-v2-run-event-bus.js";
 export { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 export { createAgentV2RunQueue, createRedisAgentV2RunQueue, } from "./agent-v2-run-queue.js";
 export { advanceAgentV2Task, loadAgentV2RuntimeSnapshot, } from "./agent-v2-runtime-core.js";

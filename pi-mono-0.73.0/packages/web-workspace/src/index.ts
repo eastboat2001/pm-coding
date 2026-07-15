@@ -57,6 +57,7 @@ export * from "./agent-v2-model-execution.js";
 export * from "./agent-v2-model-prompt.js";
 export type * from "./agent-v2-outbox.js";
 export { agentV2OutboxIntentId } from "./agent-v2-outbox.js";
+export * from "./agent-v2-outbox-dispatcher.js";
 export {
 	type AgentV2PlanningBootstrap,
 	buildAgentV2PlanningBootstrap,
@@ -81,6 +82,7 @@ export {
 	type AgentV2RunEventBus,
 	type AgentV2RunEventBusPurgeOptions,
 	type AgentV2RunEventBusPurgeResult,
+	AgentV2RunEventProjectionConflictError,
 	agentV2RunEventStreamKey,
 	InMemoryAgentV2RunEventBus,
 	RedisAgentV2RunEventBus,
@@ -100,6 +102,7 @@ export type {
 	AgentV2ValidationRecordedTransportEvent,
 } from "./agent-v2-run-events.js";
 export {
+	type AgentV2CancelRequestResult,
 	type AgentV2ClaimedRun,
 	type AgentV2ClaimOwnership,
 	type AgentV2LeaseRenewalResult,

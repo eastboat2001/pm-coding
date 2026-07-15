@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { dirname } from "node:path";
 import type { Connect, Plugin } from "vite";
+import { AgentV2OutboxDispatcher } from "./agent-v2-outbox-dispatcher.js";
 import { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
 import { type AgentV2RunEventBus, RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
@@ -68,6 +69,7 @@ export interface ConfiguredStoragePluginTestServices {
 	agentV2RunEventBus?: AgentV2RunEventBus;
 	agentV2RunEventLog?: Pick<AgentV2RunEventLog, "list">;
 	agentV2RunQueue?: AgentV2RunQueue;
+	agentV2OutboxDispatcher?: AgentV2OutboxDispatcher;
 }
 
 export function configuredStoragePlugin(envFile?: string): Plugin {
@@ -91,10 +93,22 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 		ttlSeconds: config.agentV2.eventStreamTtlSeconds,
 	});
 	const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
+	const agentV2OutboxDispatcher = AgentV2OutboxDispatcher.forQueueAndLive({
+		store: runtimeDb,
+		queue: agentV2RunQueue,
+		queueName: config.agentV2.queueName,
+		bus: agentV2RunEventBus,
+		onError: (event) => {
+			diagnostics.writeEvents({
+				events: [{ level: "error", category: "system", eventType: event.code, data: { message: event.message } }],
+			});
+		},
+	});
 	const agentV2RunApi = new AgentV2RunApiService({
 		store: runtimeDb,
 		events: agentV2RunEventLog,
 		queueName: config.agentV2.queueName,
+		wakeDispatcher: () => agentV2OutboxDispatcher.wake(),
 	});
 	return createConfiguredStoragePlugin({
 		config,
@@ -110,6 +124,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 		agentV2RunEventBus,
 		agentV2RunEventLog,
 		agentV2RunQueue,
+		agentV2OutboxDispatcher,
 	});
 }
 
@@ -131,10 +146,13 @@ function createConfiguredStoragePlugin({
 	agentV2RunEventBus,
 	agentV2RunEventLog,
 	agentV2RunQueue,
+	agentV2OutboxDispatcher,
 }: ConfiguredStoragePluginTestServices): Plugin {
 	let startupDiagnosticsWritten = false;
 	let storageDirsReady = false;
 	let storageDirsPromise: Promise<void> | undefined;
+	const dispatcherAbort = new AbortController();
+	let dispatcherPromise: Promise<void> | undefined;
 
 	const ensureStorageDirs = async () => {
 		if (storageDirsReady) return;
@@ -145,6 +163,23 @@ function createConfiguredStoragePlugin({
 			mkdirSync(config.defaultSkillsDir, { recursive: true });
 			diagnostics.ensureDirs();
 			await runtimeDb.ensureAgentV2Schema();
+			if (agentV2OutboxDispatcher && !dispatcherPromise) {
+				dispatcherPromise = agentV2OutboxDispatcher
+					.start({ ownerId: `web:${process.pid}`, intervalMs: 250, signal: dispatcherAbort.signal })
+					.catch((error) => {
+						diagnostics.writeEvents({
+							events: [
+								{
+									level: "error",
+									category: "system",
+									eventType: "agent_v2.outbox_dispatcher_failed",
+									data: { message: "Agent v2 outbox dispatcher stopped unexpectedly" },
+								},
+							],
+						});
+						void error;
+					});
+			}
 			writeStartupDiagnosticsOnce();
 			storageDirsReady = true;
 		})().catch((error) => {
@@ -251,7 +286,9 @@ function createConfiguredStoragePlugin({
 	};
 	let runEventBusClosePromise: Promise<void> | undefined;
 	const closeRunEventBusOnce = (): Promise<void> => {
+		dispatcherAbort.abort();
 		runEventBusClosePromise ??= Promise.all([
+			dispatcherPromise,
 			Promise.resolve(agentV2RunEventBus?.close()).catch(() => undefined),
 			Promise.resolve(agentV2RunQueue?.close()).catch(() => undefined),
 		]).then(() => undefined);

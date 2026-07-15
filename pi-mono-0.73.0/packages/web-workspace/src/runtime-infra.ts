@@ -1,6 +1,8 @@
 export type * from "./agent-v2-durable-store.js";
 export type * from "./agent-v2-outbox.js";
+export * from "./agent-v2-outbox-dispatcher.js";
 export {
+	type AgentV2CancelRequestResult,
 	type AgentV2RunQueue,
 	type AgentV2RunQueueClearResult,
 	type AgentV2RunQueueOptions,

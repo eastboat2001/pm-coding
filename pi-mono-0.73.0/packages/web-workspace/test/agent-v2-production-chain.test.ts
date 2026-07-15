@@ -371,8 +371,10 @@ class LocalAgentV2RunQueue implements AgentV2RunQueue {
 	async requeueExpiredClaims(): Promise<[]> {
 		return [];
 	}
-	async requestCancel(run: AgentV2RunQueueIdentity): Promise<void> {
+	async requestCancel(run: AgentV2RunQueueIdentity, cancelToken: string): Promise<"requested"> {
 		this.cancelKeys.add(`${run.clientId}:${run.runId}`);
+		void cancelToken;
+		return "requested";
 	}
 	async isCancelRequested(run: AgentV2RunQueueIdentity): Promise<boolean> {
 		return this.cancelKeys.has(`${run.clientId}:${run.runId}`);

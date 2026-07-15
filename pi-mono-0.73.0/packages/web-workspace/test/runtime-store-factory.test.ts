@@ -244,7 +244,7 @@ function createPluginHarness(options: { ensureAgentV2Schema: () => void | Promis
 		runtimeDb: { ensureAgentV2Schema } as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
 		agentV2RunEventBus: {
-			publish: vi.fn(),
+			project: vi.fn(),
 			read: vi.fn(),
 			close: vi.fn(),
 		} as unknown as TestServices["agentV2RunEventBus"],
@@ -296,7 +296,7 @@ function createPluginServices(options: { ensureAgentV2Schema: () => void | Promi
 		runtimeDb: { ensureAgentV2Schema: options.ensureAgentV2Schema } as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
 		agentV2RunEventBus: {
-			publish: vi.fn(),
+			project: vi.fn(),
 			read: vi.fn(),
 			close: vi.fn(),
 		} as unknown as TestServices["agentV2RunEventBus"],

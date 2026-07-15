@@ -137,11 +137,88 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 		const inspection = createClient({ url: redisUrl! });
 		await inspection.connect();
 		try {
-			await queue.requestCancel({ clientId: "client-a", runId: "cancelled" });
+			await expect(queue.requestCancel({ clientId: "client-a", runId: "cancelled" }, "cancel-a")).resolves.toBe(
+				"requested",
+			);
+			const originalExpiry = await inspection.zScore(`${queueName}:cancel`, '["client-a","cancelled"]');
+			await expect(queue.requestCancel({ clientId: "client-a", runId: "cancelled" }, "cancel-a")).resolves.toBe(
+				"already_requested",
+			);
+			await expect(queue.requestCancel({ clientId: "client-a", runId: "cancelled" }, "cancel-stale")).resolves.toBe(
+				"stale",
+			);
+			expect(await inspection.zScore(`${queueName}:cancel`, '["client-a","cancelled"]')).toBe(originalExpiry);
 			expect(await inspection.ttl(`${queueName}:cancel`)).toBeGreaterThan(0);
 			await inspection.zAdd(`${queueName}:cancel`, { score: 1, value: '["client-a","expired"]' });
+			await inspection.hSet(`${queueName}:cancel-token`, '["client-a","expired"]', "expired-token");
 			await expect(queue.isCancelRequested({ clientId: "client-a", runId: "expired" })).resolves.toBe(false);
 			expect(await inspection.zScore(`${queueName}:cancel`, '["client-a","expired"]')).toBeNull();
+			expect(await inspection.hGet(`${queueName}:cancel-token`, '["client-a","expired"]')).toBeNull();
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await inspection.quit();
+		}
+	});
+
+	it("consumes cancel tokens idempotently for an active claim after response loss", async () => {
+		const proxy = await createRedisFaultProxy(redisUrl!);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: proxy.url, queueName: uniqueQueueName() });
+		const run = { clientId: "client-a", runId: "active-cancel-token" };
+		try {
+			await queue.enqueue(run);
+			const claim = await queue.claim("worker-a", 1);
+			proxy.dropNextEvalResponse();
+			await expect(queue.requestCancel(run, "cancel-active-a")).rejects.toBeDefined();
+			await expect(queue.requestCancel(run, "cancel-active-a")).resolves.toBe("already_requested");
+			await expect(queue.requestCancel(run, "cancel-active-stale")).resolves.toBe("stale");
+			await expect(queue.isCancelRequested(run)).resolves.toBe(true);
+			await expect(queue.confirmOwnership(claim!, 100)).resolves.toBe("owned");
+			await expect(queue.complete(claim!)).resolves.toBe(true);
+			await expect(queue.isCancelRequested(run)).resolves.toBe(false);
+			await expect(queue.requestCancel(run, "cancel-active-a")).resolves.toBe("already_requested");
+			await expect(queue.requestCancel(run, "cancel-after-complete-stale")).resolves.toBe("stale");
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await proxy.close();
+		}
+	});
+
+	it("prunes an expired completed token when another cancellation refreshes shared Redis TTL", async () => {
+		const queueName = uniqueQueueName();
+		const queue = createRedisAgentV2RunQueue({ redisUrl: redisUrl!, queueName, cancelTtlSeconds: 1 });
+		const inspection = createClient({ url: redisUrl! });
+		const runA = { clientId: "client-a", runId: "completed-token-a" };
+		const runB = { clientId: "client-a", runId: "active-token-b" };
+		await inspection.connect();
+		try {
+			await queue.enqueue(runA);
+			const claimA = await queue.claim("worker-a", 1);
+			await expect(queue.requestCancel(runA, "cancel-a")).resolves.toBe("requested");
+			await expect(queue.complete(claimA!)).resolves.toBe(true);
+			await expect(queue.isCancelRequested(runA)).resolves.toBe(false);
+			expect(
+				await inspection.hExists(`${queueName}:cancel-token`, JSON.stringify([runA.clientId, runA.runId])),
+			).toBe(true);
+
+			await new Promise((resolve) => setTimeout(resolve, 600));
+			await expect(queue.requestCancel(runB, "cancel-b")).resolves.toBe("requested");
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			expect(
+				await inspection.hExists(`${queueName}:cancel-token`, JSON.stringify([runA.clientId, runA.runId])),
+			).toBe(true);
+			await expect(queue.isCancelRequested(runB)).resolves.toBe(true);
+
+			expect(
+				await inspection.hExists(`${queueName}:cancel-token`, JSON.stringify([runA.clientId, runA.runId])),
+			).toBe(false);
+			await expect(queue.isCancelRequested(runA)).resolves.toBe(false);
+			await expect(queue.isCancelRequested(runB)).resolves.toBe(true);
 		} finally {
 			try {
 				await queue.clear();

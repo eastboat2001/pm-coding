@@ -71,7 +71,10 @@ describe("InMemoryAgentV2RunQueue", () => {
 		const queue = createAgentV2RunQueue({ cancelTtlSeconds: 1, now: () => now });
 		const run = { clientId: "client-a", runId: "run-a" };
 		await queue.enqueue(run);
-		await queue.requestCancel(run);
+		await expect(queue.requestCancel(run, "cancel-a")).resolves.toBe("requested");
+		now = 1_500;
+		await expect(queue.requestCancel(run, "cancel-a")).resolves.toBe("already_requested");
+		await expect(queue.requestCancel(run, "stale-token")).resolves.toBe("stale");
 		await expect(queue.claim("worker-a", 0)).resolves.toBeUndefined();
 		await expect(queue.isCancelRequested(run)).resolves.toBe(true);
 		now = 2_000;
@@ -84,7 +87,7 @@ describe("InMemoryAgentV2RunQueue", () => {
 		await queue.enqueue({ clientId: "client-a", runId: "ready" });
 		await queue.enqueue({ clientId: "client-a", runId: "active" });
 		await queue.claim("worker-a", 0);
-		await queue.requestCancel({ clientId: "client-a", runId: "cancelled" });
+		await queue.requestCancel({ clientId: "client-a", runId: "cancelled" }, "cancel-a");
 		await expect(queue.clear()).resolves.toEqual({
 			queueItemsDeleted: 1,
 			activeClaimsDeleted: 1,

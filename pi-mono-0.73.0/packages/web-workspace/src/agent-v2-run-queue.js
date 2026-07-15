@@ -59,7 +59,14 @@ if not raw then return 0 end
 local ok, claim = pcall(cjson.decode, raw)
 if not ok or claim["workerId"] ~= ARGV[2] or claim["claimToken"] ~= ARGV[3] then return 0 end
 redis.call("HDEL", KEYS[1], ARGV[1])
-redis.call("ZREM", KEYS[2], ARGV[1])
+local cancelRaw = redis.call("HGET", KEYS[3], ARGV[1])
+if cancelRaw then
+	local cancelOk, cancel = pcall(cjson.decode, cancelRaw)
+	if cancelOk and type(cancel) == "table" then
+		cancel["active"] = false
+		redis.call("HSET", KEYS[3], ARGV[1], cjson.encode(cancel))
+	end
+end
 return 1
 `;
 const CONFIRM_OWNERSHIP_SCRIPT = `
@@ -123,17 +130,38 @@ return reclaimed
 `;
 const REQUEST_CANCEL_SCRIPT = `
 -- agent-v2-request-cancel
+local expired = redis.call("ZRANGEBYSCORE", KEYS[3], "-inf", ARGV[4])
+for _, runKey in ipairs(expired) do redis.call("HDEL", KEYS[4], runKey) end
 redis.call("ZREMRANGEBYSCORE", KEYS[3], "-inf", ARGV[4])
+local existingRaw = redis.call("HGET", KEYS[4], ARGV[1])
+if existingRaw then
+	local ok, existing = pcall(cjson.decode, existingRaw)
+	if ok and type(existing) == "table" and type(existing["token"]) == "string" and
+		type(existing["expiresAtMs"]) == "number" and existing["expiresAtMs"] > tonumber(ARGV[4]) then
+		if existing["token"] == ARGV[5] then return "already_requested" end
+		return "stale"
+	end
+	redis.call("HDEL", KEYS[4], ARGV[1])
+end
+redis.call("HSET", KEYS[4], ARGV[1], cjson.encode({ token = ARGV[5], expiresAtMs = tonumber(ARGV[2]), active = true }))
 redis.call("ZADD", KEYS[3], ARGV[2], ARGV[1])
 redis.call("EXPIRE", KEYS[3], ARGV[3])
+redis.call("EXPIRE", KEYS[4], ARGV[3])
 redis.call("SREM", KEYS[2], ARGV[1])
-return redis.call("LREM", KEYS[1], 0, ARGV[1])
+redis.call("LREM", KEYS[1], 0, ARGV[1])
+return "requested"
 `;
 const CHECK_CANCEL_SCRIPT = `
 -- agent-v2-check-cancel
+local expired = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[2])
+for _, runKey in ipairs(expired) do redis.call("HDEL", KEYS[2], runKey) end
 redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[2])
 local expiresAtMs = redis.call("ZSCORE", KEYS[1], ARGV[1])
 if not expiresAtMs then return 0 end
+local cancelRaw = redis.call("HGET", KEYS[2], ARGV[1])
+if not cancelRaw then return 0 end
+local ok, cancel = pcall(cjson.decode, cancelRaw)
+if not ok or type(cancel) ~= "table" or cancel["active"] ~= true then return 0 end
 return tonumber(expiresAtMs) > tonumber(ARGV[2]) and 1 or 0
 `;
 const CLEAR_SCRIPT = `
@@ -142,7 +170,7 @@ local queueItemsDeleted = redis.call("SCARD", KEYS[2])
 local activeClaimsDeleted = redis.call("HLEN", KEYS[3])
 redis.call("ZREMRANGEBYSCORE", KEYS[4], "-inf", ARGV[1])
 local cancelKeysDeleted = redis.call("ZCARD", KEYS[4])
-redis.call("DEL", KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
+redis.call("DEL", KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5], KEYS[6])
 return { queueItemsDeleted, activeClaimsDeleted, cancelKeysDeleted }
 `;
 export class InMemoryAgentV2RunQueue {
@@ -193,7 +221,9 @@ export class InMemoryAgentV2RunQueue {
         if (!sameOwner(this.active.get(key), claim))
             return false;
         this.active.delete(key);
-        this.cancelRequests.delete(key);
+        const cancel = this.cancelRequests.get(key);
+        if (cancel)
+            this.cancelRequests.set(key, { ...cancel, active: false });
         return true;
     }
     async confirmOwnership(claim, _timeoutMs) {
@@ -241,24 +271,30 @@ export class InMemoryAgentV2RunQueue {
         }
         return reclaimed;
     }
-    async requestCancel(run) {
+    async requestCancel(run, cancelToken) {
         this.assertOpen();
         const key = runKey(run);
-        this.cancelRequests.set(key, this.now() + this.cancelTtlSeconds * 1_000);
+        const token = requireCancelToken(cancelToken);
+        this.purgeExpiredCancelRequests();
+        const existing = this.cancelRequests.get(key);
+        if (existing)
+            return existing.token === token ? "already_requested" : "stale";
+        this.cancelRequests.set(key, { token, expiresAtMs: this.now() + this.cancelTtlSeconds * 1_000, active: true });
         this.ready.delete(key);
         for (let index = this.queued.length - 1; index >= 0; index -= 1) {
             if (runKey(this.queued[index]) === key)
                 this.queued.splice(index, 1);
         }
+        return "requested";
     }
     async isCancelRequested(run) {
         this.assertOpen();
         const key = runKey(run);
-        const expiresAt = this.cancelRequests.get(key);
-        if (expiresAt === undefined)
+        const request = this.cancelRequests.get(key);
+        if (request === undefined)
             return false;
-        if (expiresAt > this.now())
-            return true;
+        if (request.expiresAtMs > this.now())
+            return request.active;
         this.cancelRequests.delete(key);
         return false;
     }
@@ -268,7 +304,7 @@ export class InMemoryAgentV2RunQueue {
         const result = {
             queueItemsDeleted: this.ready.size,
             activeClaimsDeleted: this.active.size,
-            cancelKeysDeleted: this.cancelRequests.size,
+            cancelKeysDeleted: [...this.cancelRequests.values()].filter((request) => request.active).length,
         };
         this.queued.length = 0;
         this.ready.clear();
@@ -291,8 +327,8 @@ export class InMemoryAgentV2RunQueue {
     }
     purgeExpiredCancelRequests() {
         const now = this.now();
-        for (const [key, expiresAt] of this.cancelRequests) {
-            if (expiresAt <= now)
+        for (const [key, request] of this.cancelRequests) {
+            if (request.expiresAtMs <= now)
                 this.cancelRequests.delete(key);
         }
     }
@@ -300,6 +336,7 @@ export class InMemoryAgentV2RunQueue {
 export class RedisAgentV2RunQueue {
     activeKey;
     cancelIndexKey;
+    cancelTokenKey;
     cancelTtlSeconds;
     client;
     clientConnectPromise;
@@ -320,6 +357,7 @@ export class RedisAgentV2RunQueue {
         this.readyKey = `${options.queueName}:ready`;
         this.activeKey = `${options.queueName}:active`;
         this.cancelIndexKey = `${options.queueName}:cancel`;
+        this.cancelTokenKey = `${options.queueName}:cancel-token`;
         this.invalidActiveKey = `${options.queueName}:invalid-active`;
         this.cancelTtlSeconds = options.cancelTtlSeconds ?? DEFAULT_CANCEL_TTL_SECONDS;
         this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
@@ -386,7 +424,7 @@ export class RedisAgentV2RunQueue {
         this.assertOpen();
         try {
             const result = await (await this.connectedClient()).eval(COMPLETE_IF_OWNER_SCRIPT, {
-                keys: [this.activeKey, this.cancelIndexKey],
+                keys: [this.activeKey, this.cancelIndexKey, this.cancelTokenKey],
                 arguments: [runKey(claim), claim.workerId, claim.claimToken],
             });
             return toCount(result) === 1;
@@ -439,23 +477,25 @@ export class RedisAgentV2RunQueue {
         });
         return Array.isArray(result) ? result.map(parseClaim).filter(isClaim) : [];
     }
-    async requestCancel(run) {
+    async requestCancel(run, cancelToken) {
         this.assertOpen();
         const now = Date.now();
-        await (await this.connectedClient()).eval(REQUEST_CANCEL_SCRIPT, {
-            keys: [this.queueName, this.readyKey, this.cancelIndexKey],
+        const result = await (await this.connectedClient()).eval(REQUEST_CANCEL_SCRIPT, {
+            keys: [this.queueName, this.readyKey, this.cancelIndexKey, this.cancelTokenKey],
             arguments: [
                 runKey(run),
                 String(now + this.cancelTtlSeconds * 1_000),
                 String(this.cancelTtlSeconds),
                 String(now),
+                requireCancelToken(cancelToken),
             ],
         });
+        return parseCancelRequestResult(result);
     }
     async isCancelRequested(run) {
         this.assertOpen();
         const result = await (await this.connectedClient()).eval(CHECK_CANCEL_SCRIPT, {
-            keys: [this.cancelIndexKey],
+            keys: [this.cancelIndexKey, this.cancelTokenKey],
             arguments: [runKey(run), String(Date.now())],
         });
         return toCount(result) === 1;
@@ -463,7 +503,14 @@ export class RedisAgentV2RunQueue {
     async clear() {
         this.assertOpen();
         const result = await (await this.connectedClient()).eval(CLEAR_SCRIPT, {
-            keys: [this.queueName, this.readyKey, this.activeKey, this.cancelIndexKey, this.invalidActiveKey],
+            keys: [
+                this.queueName,
+                this.readyKey,
+                this.activeKey,
+                this.cancelIndexKey,
+                this.invalidActiveKey,
+                this.cancelTokenKey,
+            ],
             arguments: [String(Date.now())],
         });
         return parseClearResult(result);
@@ -618,6 +665,17 @@ function parseEnqueueResult(value) {
     if (result === "enqueued" || result === "already_ready" || result === "already_active")
         return result;
     throw new Error("Redis returned an invalid Agent v2 enqueue result");
+}
+function parseCancelRequestResult(value) {
+    const result = toUtf8String(value);
+    if (result === "requested" || result === "already_requested" || result === "stale")
+        return result;
+    throw new Error("Redis returned an invalid Agent v2 cancel result");
+}
+function requireCancelToken(value) {
+    if (typeof value !== "string" || !value.trim())
+        throw new Error("Agent v2 cancelToken is required");
+    return value;
 }
 function toUtf8String(value) {
     if (typeof value === "string")

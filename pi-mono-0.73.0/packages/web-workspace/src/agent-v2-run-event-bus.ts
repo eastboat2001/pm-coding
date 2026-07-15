@@ -10,8 +10,41 @@ const DEFAULT_EVENT_STREAM_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_READ_BLOCK_MS = 250;
 const DEFAULT_READ_COUNT = 100;
 
+const PROJECT_EVENT_SCRIPT = `
+-- agent-v2-project-live-event
+local existing = redis.call("XRANGE", KEYS[1], ARGV[1], ARGV[1], "COUNT", 1)
+if #existing > 0 then
+	local fields = existing[1][2]
+	for index = 1, #fields, 2 do
+		if fields[index] == "event" then
+			if fields[index + 1] == ARGV[2] then return 0 end
+			return -1
+		end
+	end
+	return -1
+end
+local latest = redis.call("XREVRANGE", KEYS[1], "+", "-", "COUNT", 1)
+if #latest > 0 then
+	local separator = string.find(latest[1][1], "-")
+	local latestSeq = separator and tonumber(string.sub(latest[1][1], 1, separator - 1)) or nil
+	local requestedSeq = tonumber(ARGV[4])
+	if latestSeq and requestedSeq and requestedSeq < latestSeq then return 0 end
+end
+redis.call("XADD", KEYS[1], "MAXLEN", "~", ARGV[3], ARGV[1], "event", ARGV[2])
+return 1
+`;
+
+export class AgentV2RunEventProjectionConflictError extends Error {
+	readonly code = "agent_v2.live_projection_conflict";
+
+	constructor() {
+		super("Agent v2 live event projection conflicts with the canonical sequence");
+		this.name = "AgentV2RunEventProjectionConflictError";
+	}
+}
+
 export interface AgentV2RunEventBus {
-	publish(event: AgentV2LiveRunEvent): Promise<void>;
+	project(event: AgentV2LiveRunEvent): Promise<"projected" | "already_projected">;
 	read(request: AgentV2RunEventReadRequest): Promise<AgentV2LiveRunEvent[]>;
 	purge(options?: AgentV2RunEventBusPurgeOptions): Promise<AgentV2RunEventBusPurgeResult>;
 	close(): Promise<void>;
@@ -34,15 +67,23 @@ export class InMemoryAgentV2RunEventBus implements AgentV2RunEventBus {
 	private closed = false;
 	private readonly eventsByStream = new Map<string, AgentV2LiveRunEvent[]>();
 
-	async publish(event: AgentV2LiveRunEvent): Promise<void> {
+	async project(event: AgentV2LiveRunEvent): Promise<"projected" | "already_projected"> {
 		this.assertOpen();
 		const key = agentV2RunEventStreamKey(event);
 		const events = this.eventsByStream.get(key);
 		if (events === undefined) {
 			this.eventsByStream.set(key, [event]);
-			return;
+			return "projected";
 		}
+		const existing = events.find((candidate) => candidate.seq === event.seq);
+		if (existing) {
+			if (JSON.stringify(existing) === JSON.stringify(event)) return "already_projected";
+			throw new AgentV2RunEventProjectionConflictError();
+		}
+		if (events.some((candidate) => candidate.seq > event.seq)) return "already_projected";
 		events.push(event);
+		events.sort((left, right) => left.seq - right.seq);
+		return "projected";
 	}
 
 	async read(request: AgentV2RunEventReadRequest): Promise<AgentV2LiveRunEvent[]> {
@@ -100,6 +141,7 @@ export interface RedisAgentV2RunEventBusClient {
 	scanIterator(options: { MATCH: string; COUNT: number }): AsyncIterable<unknown>;
 	xAdd(key: string, id: string, message: Record<string, string>, options?: unknown): Promise<unknown>;
 	xRead(streams: unknown, options?: unknown): Promise<unknown>;
+	eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 }
 
 export class RedisAgentV2RunEventBus implements AgentV2RunEventBus {
@@ -125,23 +167,19 @@ export class RedisAgentV2RunEventBus implements AgentV2RunEventBus {
 			((clientOptions) => createClient({ url: clientOptions.url }) as RedisAgentV2RunEventBusClient);
 	}
 
-	async publish(event: AgentV2LiveRunEvent): Promise<void> {
+	async project(event: AgentV2LiveRunEvent): Promise<"projected" | "already_projected"> {
 		this.assertOpen();
 		const client = await this.connectedClient();
 		const key = agentV2RunEventStreamKey(event);
-		await client.xAdd(
-			key,
-			`${event.seq}-0`,
-			{ event: JSON.stringify(event) },
-			{
-				TRIM: {
-					strategy: "MAXLEN",
-					strategyModifier: "~",
-					threshold: this.maxLen,
-				},
-			},
+		const projected = Number(
+			await client.eval(PROJECT_EVENT_SCRIPT, {
+				keys: [key],
+				arguments: [`${event.seq}-0`, JSON.stringify(event), String(this.maxLen), String(event.seq)],
+			}),
 		);
+		if (projected < 0) throw new AgentV2RunEventProjectionConflictError();
 		await this.refreshTtlIfDue(client, key);
+		return projected === 0 ? "already_projected" : "projected";
 	}
 
 	async read(request: AgentV2RunEventReadRequest): Promise<AgentV2LiveRunEvent[]> {

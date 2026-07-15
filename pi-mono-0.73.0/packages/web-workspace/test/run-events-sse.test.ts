@@ -286,6 +286,9 @@ class FakeResponse {
 type BusReadStep = { events: AgentV2RunEventRecord[] } | { error: Error } | { waitForAbort: true };
 
 class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
+	async project(): Promise<"projected"> {
+		return "projected";
+	}
 	readonly readCalls: AgentV2RunEventReadRequest[] = [];
 	completedReads = 0;
 
@@ -316,6 +319,9 @@ class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
 }
 
 class EmptyAgentV2RunEventBus implements AgentV2RunEventBus {
+	async project(): Promise<"projected"> {
+		return "projected";
+	}
 	readonly readCalls: AgentV2RunEventReadRequest[] = [];
 
 	constructor(private readonly failAfterReads: number) {}

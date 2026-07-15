@@ -454,6 +454,9 @@ class RecordingAgentV2RunEventLog {
 type BusReadStep = { events: AgentV2RunEventRecord[] } | { waitForAbort: true };
 
 class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
+	async project(): Promise<"projected"> {
+		return "projected";
+	}
 	readonly readCalls: AgentV2RunEventReadRequest[] = [];
 
 	constructor(private readonly steps: BusReadStep[]) {}

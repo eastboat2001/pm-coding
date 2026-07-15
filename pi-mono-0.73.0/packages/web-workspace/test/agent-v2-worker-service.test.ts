@@ -383,7 +383,7 @@ describe("AgentV2WorkerService", () => {
 		});
 
 		setTimeout(() => {
-			void queue.requestCancel({ clientId: "client-a", runId: "run-cancel-during-execution" });
+			void queue.requestCancel({ clientId: "client-a", runId: "run-cancel-during-execution" }, "cancel-a");
 		}, 10);
 
 		await expect(worker.processOne()).resolves.toBe(true);
@@ -509,7 +509,7 @@ describe("AgentV2WorkerService", () => {
 
 		const processing = worker.processOne();
 		await waitFor(() => store.getRunSnapshot("client-a", "run-stop-cancel-race")?.status === "running");
-		await queue.requestCancel({ clientId: "client-a", runId: "run-stop-cancel-race" });
+		await queue.requestCancel({ clientId: "client-a", runId: "run-stop-cancel-race" }, "cancel-stop");
 		await expect(worker.stop()).resolves.toBeUndefined();
 		await expect(processing).resolves.toBe(true);
 		expect(execution.abortCount).toBe(1);
@@ -580,7 +580,7 @@ describe("AgentV2WorkerService", () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-poll-cas-miss");
 		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-poll-cas-miss" }]);
-		await queue.requestCancel({ clientId: "client-a", runId: "run-poll-cas-miss" });
+		await queue.requestCancel({ clientId: "client-a", runId: "run-poll-cas-miss" }, "cancel-poll");
 		const raceCancelling = (input: Parameters<MemoryWorkerStore["update"]>[0]) => {
 			if (input.status === "cancelling") {
 				store.forceUpdate({
@@ -1142,8 +1142,10 @@ class RecordingQueue implements AgentV2RunQueue {
 		return expired;
 	}
 
-	async requestCancel(run: { clientId: string; runId: string }): Promise<void> {
+	async requestCancel(run: { clientId: string; runId: string }, cancelToken: string): Promise<"requested"> {
 		this.cancelRequested.add(runKey(run.clientId, run.runId));
+		void cancelToken;
+		return "requested";
 	}
 
 	async isCancelRequested(run: { clientId: string; runId: string }): Promise<boolean> {
@@ -1296,7 +1298,7 @@ class ExternalInterruptedExecution {
 	) {}
 
 	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
-		await this.queue.requestCancel({ clientId: this.clientId, runId: this.runId });
+		await this.queue.requestCancel({ clientId: this.clientId, runId: this.runId }, "cancel-race");
 		await this.store.updateAgentV2Run({
 			clientId: this.clientId,
 			runId: this.runId,
@@ -1316,7 +1318,7 @@ class QueuedCancelDuringExecution {
 	) {}
 
 	async executeNextTask(): Promise<AgentV2ExecutionStepResult> {
-		await this.queue.requestCancel({ clientId: this.clientId, runId: this.runId });
+		await this.queue.requestCancel({ clientId: this.clientId, runId: this.runId }, "cancel-cas");
 		return { status: "complete", diagnosticIds: [] };
 	}
 }

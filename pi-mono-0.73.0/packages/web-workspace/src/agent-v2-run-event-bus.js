@@ -3,21 +3,61 @@ const DEFAULT_EVENT_STREAM_MAX_LEN = 1_000;
 const DEFAULT_EVENT_STREAM_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_READ_BLOCK_MS = 250;
 const DEFAULT_READ_COUNT = 100;
+const PROJECT_EVENT_SCRIPT = `
+-- agent-v2-project-live-event
+local existing = redis.call("XRANGE", KEYS[1], ARGV[1], ARGV[1], "COUNT", 1)
+if #existing > 0 then
+	local fields = existing[1][2]
+	for index = 1, #fields, 2 do
+		if fields[index] == "event" then
+			if fields[index + 1] == ARGV[2] then return 0 end
+			return -1
+		end
+	end
+	return -1
+end
+local latest = redis.call("XREVRANGE", KEYS[1], "+", "-", "COUNT", 1)
+if #latest > 0 then
+	local separator = string.find(latest[1][1], "-")
+	local latestSeq = separator and tonumber(string.sub(latest[1][1], 1, separator - 1)) or nil
+	local requestedSeq = tonumber(ARGV[4])
+	if latestSeq and requestedSeq and requestedSeq < latestSeq then return 0 end
+end
+redis.call("XADD", KEYS[1], "MAXLEN", "~", ARGV[3], ARGV[1], "event", ARGV[2])
+return 1
+`;
+export class AgentV2RunEventProjectionConflictError extends Error {
+    code = "agent_v2.live_projection_conflict";
+    constructor() {
+        super("Agent v2 live event projection conflicts with the canonical sequence");
+        this.name = "AgentV2RunEventProjectionConflictError";
+    }
+}
 export function agentV2RunEventStreamKey(identity) {
     return `pi:agent-v2:runs:${identity.clientId}:${identity.runId}:events`;
 }
 export class InMemoryAgentV2RunEventBus {
     closed = false;
     eventsByStream = new Map();
-    async publish(event) {
+    async project(event) {
         this.assertOpen();
         const key = agentV2RunEventStreamKey(event);
         const events = this.eventsByStream.get(key);
         if (events === undefined) {
             this.eventsByStream.set(key, [event]);
-            return;
+            return "projected";
         }
+        const existing = events.find((candidate) => candidate.seq === event.seq);
+        if (existing) {
+            if (JSON.stringify(existing) === JSON.stringify(event))
+                return "already_projected";
+            throw new AgentV2RunEventProjectionConflictError();
+        }
+        if (events.some((candidate) => candidate.seq > event.seq))
+            return "already_projected";
         events.push(event);
+        events.sort((left, right) => left.seq - right.seq);
+        return "projected";
     }
     async read(request) {
         this.assertOpen();
@@ -73,18 +113,18 @@ export class RedisAgentV2RunEventBus {
             options.createClient ??
                 ((clientOptions) => createClient({ url: clientOptions.url }));
     }
-    async publish(event) {
+    async project(event) {
         this.assertOpen();
         const client = await this.connectedClient();
         const key = agentV2RunEventStreamKey(event);
-        await client.xAdd(key, `${event.seq}-0`, { event: JSON.stringify(event) }, {
-            TRIM: {
-                strategy: "MAXLEN",
-                strategyModifier: "~",
-                threshold: this.maxLen,
-            },
-        });
+        const projected = Number(await client.eval(PROJECT_EVENT_SCRIPT, {
+            keys: [key],
+            arguments: [`${event.seq}-0`, JSON.stringify(event), String(this.maxLen), String(event.seq)],
+        }));
+        if (projected < 0)
+            throw new AgentV2RunEventProjectionConflictError();
         await this.refreshTtlIfDue(client, key);
+        return projected === 0 ? "already_projected" : "projected";
     }
     async read(request) {
         this.assertOpen();

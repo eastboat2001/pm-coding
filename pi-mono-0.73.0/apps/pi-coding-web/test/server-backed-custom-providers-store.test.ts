@@ -63,6 +63,52 @@ describe("ServerBackedCustomProvidersStore", () => {
 
 		expect(writes).toEqual([{ customProviders: [localProvider, newProvider] }]);
 	});
+
+	it("repairs stale manual model provider identities before returning server providers", async () => {
+		const staleProvider = {
+			id: "manual-mimo",
+			name: "mimo",
+			type: "openai-completions",
+			baseUrl: "https://example.test/v1",
+			models: [
+				{
+					id: "mimo-v2.5",
+					name: "mimo-v2.5",
+					api: "openai-completions",
+					provider: "mimo",
+					baseUrl: "https://example.test/v1",
+					reasoning: true,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 8192,
+				},
+			],
+		} as const;
+		const writes: unknown[] = [];
+		const store = new ServerBackedCustomProvidersStore({
+			readSettings: async () => ({ customProviders: [staleProvider] }),
+			writeSettings: async (settings: unknown) => {
+				writes.push(settings);
+				return true;
+			},
+		} as any);
+		store.setBackend(createMemoryBackend([]));
+
+		const providers = await store.getAll();
+
+		expect(providers[0]?.models?.[0]?.provider).toBe("custom-provider:manual-mimo");
+		expect(writes).toEqual([
+			{
+				customProviders: [
+					expect.objectContaining({
+						id: "manual-mimo",
+						models: [expect.objectContaining({ provider: "custom-provider:manual-mimo" })],
+					}),
+				],
+			},
+		]);
+	});
 });
 
 function createMemoryBackend(providers: Array<typeof localProvider>): StorageBackend {

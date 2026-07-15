@@ -84,14 +84,21 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 	private async readServerCustomProviders(): Promise<ServerCustomProvidersState> {
 		const settings = await this.configuredStorage.readSettings();
 		const rawProviders = settings?.customProviders;
+		const providers = Array.isArray(rawProviders) ? rawProviders.filter(isCustomProvider) : [];
+		const normalizedProviders = providers.map(normalizeCustomProviderModelIdentities);
+		if (normalizedProviders.some((provider, index) => provider !== providers[index])) {
+			await this.writeServerProviders(normalizedProviders);
+		}
 		return {
 			hasCustomProviders: Array.isArray(rawProviders),
-			providers: Array.isArray(rawProviders) ? rawProviders.filter(isCustomProvider) : [],
+			providers: normalizedProviders,
 		};
 	}
 
 	private async writeServerProviders(providers: CustomProvider[]): Promise<boolean> {
-		return await this.configuredStorage.writeSettings({ customProviders: providers });
+		return await this.configuredStorage.writeSettings({
+			customProviders: providers.map(normalizeCustomProviderModelIdentities),
+		});
 	}
 
 	private async readProvidersForWrite(serverState: ServerCustomProvidersState): Promise<CustomProvider[]> {
@@ -165,6 +172,19 @@ function isCustomProvider(value: unknown): value is CustomProvider {
 		typeof item.type === "string" &&
 		typeof item.baseUrl === "string"
 	);
+}
+
+function normalizeCustomProviderModelIdentities(provider: CustomProvider): CustomProvider {
+	if (!Array.isArray(provider.models)) return provider;
+	const identity = `custom-provider:${provider.id}`;
+	let changed = false;
+	const models = provider.models.map((model) => {
+		if (model.provider === identity) return model;
+		if (model.provider !== provider.id && model.provider !== provider.name) return model;
+		changed = true;
+		return { ...model, provider: identity };
+	});
+	return changed ? { ...provider, models } : provider;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {

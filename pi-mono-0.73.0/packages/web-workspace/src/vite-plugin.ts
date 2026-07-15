@@ -50,6 +50,7 @@ import { createWorkspaceTaskService } from "./workspace-task-factory.js";
 import type { WorkspaceTaskService } from "./workspace-task-service.js";
 
 const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
+const DURABLE_RUN_EVENT_CHECK_INTERVAL_MS = 1000;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 
@@ -758,7 +759,7 @@ async function handleAgentV2RuntimeRunsApi(
 		const eventsMatch = route.match(/^\/([^/]+)\/events$/);
 		if (method === "GET" && eventsMatch) {
 			const runId = decodeURIComponent(eventsMatch[1]);
-			const afterSeq = queryNumber(url, "afterSeq") ?? 0;
+			const afterSeq = agentV2ReplayCursor(url, req);
 			if (wantsEventStream(req, url)) {
 				await streamAgentV2RunEvents(
 					res,
@@ -831,8 +832,9 @@ async function streamAgentV2RunEvents(
 	runId: string,
 	afterSeq: number,
 ): Promise<void> {
-	let readSeq = afterSeq;
+	let liveReadSeq = afterSeq;
 	let sentSeq = afterSeq;
+	const pendingEvents = new Map<number, AgentV2RunEventRecord>();
 	let closed = false;
 	let heartbeatAt = Date.now();
 	let streamStarted = false;
@@ -854,7 +856,27 @@ async function streamAgentV2RunEvents(
 	try {
 		const run = await agentV2RunApi.getRun(clientId, runId);
 		if (!run) throw new AgentV2RunApiError("Agent v2 run not found.", 404);
-		const durableEvents = await runEventLog.list(clientId, runId, afterSeq);
+		const stageEvents = (events: readonly AgentV2RunEventRecord[]): void => {
+			for (const event of events) {
+				if (event.seq <= sentSeq || pendingEvents.has(event.seq)) continue;
+				pendingEvents.set(event.seq, event);
+			}
+		};
+		const flushContiguousEvents = (): void => {
+			while (true) {
+				const event = pendingEvents.get(sentSeq + 1);
+				if (!event) return;
+				writeServerSentRunEvent(res, event);
+				pendingEvents.delete(event.seq);
+				sentSeq = event.seq;
+			}
+		};
+		const healFromDurableLog = async (): Promise<void> => {
+			stageEvents(await runEventLog.list(clientId, runId, sentSeq));
+			flushContiguousEvents();
+			liveReadSeq = Math.max(liveReadSeq, sentSeq);
+		};
+		const durableEvents = await runEventLog.list(clientId, runId, sentSeq);
 		if (closed || res.destroyed) return;
 
 		res.statusCode = 200;
@@ -866,30 +888,29 @@ async function streamAgentV2RunEvents(
 		streamStarted = true;
 		res.write(": connected\n\n");
 
-		for (const event of durableEvents) {
-			readSeq = Math.max(readSeq, event.seq);
-			if (!writeRunEventIfFresh(res, event, sentSeq)) continue;
-			sentSeq = event.seq;
-		}
+		stageEvents(durableEvents);
+		flushContiguousEvents();
+		liveReadSeq = Math.max(liveReadSeq, sentSeq);
 
 		while (!closed && !res.destroyed) {
 			const events = await agentV2RunEventBus.read({
 				clientId,
 				runId,
-				afterSeq: readSeq,
-				blockMs: 15000,
+				afterSeq: liveReadSeq,
+				blockMs: DURABLE_RUN_EVENT_CHECK_INTERVAL_MS,
 				signal: abortController.signal,
 			});
-			for (const event of events) readSeq = Math.max(readSeq, event.seq);
+			for (const event of events) liveReadSeq = Math.max(liveReadSeq, event.seq);
 			if (closed || res.destroyed) break;
+			stageEvents(events);
+			flushContiguousEvents();
+			if (events.length === 0 || pendingEvents.size > 0) {
+				await healFromDurableLog();
+			}
 			if (events.length === 0) {
 				heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
 				await waitForRunEventReadBackoff(abortController.signal, EMPTY_RUN_EVENT_READ_BACKOFF_MS);
 				continue;
-			}
-			for (const event of events) {
-				if (!writeRunEventIfFresh(res, event, sentSeq)) continue;
-				sentSeq = event.seq;
 			}
 			heartbeatAt = writeHeartbeatIfDue(res, heartbeatAt);
 		}
@@ -904,16 +925,6 @@ async function streamAgentV2RunEvents(
 		req.off?.("close", closeStream);
 		if (typeof responseWithOn.off === "function") responseWithOn.off("close", closeStream);
 	}
-}
-
-function writeRunEventIfFresh(
-	res: ServerResponse,
-	event: RuntimeRunEventRecord | AgentV2RunEventRecord,
-	lastSeq: number,
-): boolean {
-	if (event.seq <= lastSeq) return false;
-	writeServerSentRunEvent(res, event);
-	return true;
 }
 
 function writeHeartbeatIfDue(res: ServerResponse, heartbeatAt: number): number {
@@ -940,7 +951,7 @@ function waitForRunEventReadBackoff(signal: AbortSignal, delayMs: number): Promi
 }
 
 function writeServerSentRunEvent(res: ServerResponse, event: RuntimeRunEventRecord | AgentV2RunEventRecord): void {
-	res.write(`data: ${JSON.stringify(event)}\n\n`);
+	res.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
 function writeServerSentError(res: ServerResponse, message: string): void {
@@ -968,6 +979,35 @@ function queryNumber(url: URL, key: string): number | undefined {
 	if (!value) return undefined;
 	const number = Number(value);
 	return Number.isFinite(number) ? number : undefined;
+}
+
+function agentV2ReplayCursor(url: URL, req: Connect.IncomingMessage): number {
+	const queryValues = url.searchParams.getAll("afterSeq");
+	if (queryValues.length > 1) {
+		throw new AgentV2RunApiError("afterSeq must be specified at most once.", 400);
+	}
+	const queryCursor = queryValues.length === 0 ? undefined : parseCanonicalReplayCursor(queryValues[0], "afterSeq");
+	const headerValue = req.headers["last-event-id"];
+	if (Array.isArray(headerValue)) {
+		throw new AgentV2RunApiError("Last-Event-ID must be specified at most once.", 400);
+	}
+	const headerCursor =
+		headerValue === undefined ? undefined : parseCanonicalReplayCursor(headerValue, "Last-Event-ID");
+	if (queryCursor !== undefined && headerCursor !== undefined && queryCursor !== headerCursor) {
+		throw new AgentV2RunApiError("afterSeq and Last-Event-ID must match.", 400);
+	}
+	return queryCursor ?? headerCursor ?? 0;
+}
+
+function parseCanonicalReplayCursor(value: string, label: string): number {
+	if (!/^(?:0|[1-9]\d*)$/.test(value)) {
+		throw new AgentV2RunApiError(`${label} must be a canonical non-negative integer.`, 400);
+	}
+	const cursor = Number(value);
+	if (!Number.isSafeInteger(cursor)) {
+		throw new AgentV2RunApiError(`${label} must be a safe integer.`, 400);
+	}
+	return cursor;
 }
 
 function queryBoolean(url: URL, key: string): boolean {

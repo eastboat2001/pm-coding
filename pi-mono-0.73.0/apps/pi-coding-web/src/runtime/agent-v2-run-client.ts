@@ -131,7 +131,10 @@ export function connectAgentV2RunEvents(
 			).toString();
 			const response = await fetch(endpoint, {
 				method: "GET",
-				headers: buildAgentV2RunRequestHeaders({ Accept: "text/event-stream" }),
+				headers: buildAgentV2RunRequestHeaders({
+					Accept: "text/event-stream",
+					"Last-Event-ID": String(connection.lastSeq),
+				}),
 				signal: abortController.signal,
 			});
 			if (!response.ok) {
@@ -179,8 +182,12 @@ export function connectAgentV2RunEvents(
 
 	const deliverRunEvent = async (event: AgentV2RunEventRecord): Promise<void> => {
 		if (connection.closed) return;
+		if (event.seq <= connection.lastSeq) return;
+		if (event.seq !== connection.lastSeq + 1) {
+			throw new Error(`Agent v2 event sequence gap: expected ${connection.lastSeq + 1}, received ${event.seq}.`);
+		}
 		await onEvent(event);
-		connection.lastSeq = Math.max(connection.lastSeq, event.seq);
+		connection.lastSeq = event.seq;
 	};
 
 	const deliverRunEvents = async (events: AgentV2RunEventRecord[]): Promise<void> => {
@@ -262,6 +269,9 @@ async function readEventStream(
 		}
 		buffer += decoder.decode();
 		if (buffer.trim()) await deliverServerSentEvent(buffer, onEvent);
+	} catch (error) {
+		await reader.cancel().catch(() => undefined);
+		throw error;
 	} finally {
 		reader.releaseLock();
 	}
@@ -284,11 +294,16 @@ async function deliverServerSentEvent(
 	onEvent: (event: AgentV2RunEventRecord) => void | Promise<void>,
 ): Promise<void> {
 	let eventType = "message";
+	let eventId: string | undefined;
 	const dataLines: string[] = [];
 	for (const line of rawEvent.split(/\r?\n/)) {
 		if (!line || line.startsWith(":")) continue;
 		if (line.startsWith("event:")) {
 			eventType = line.slice("event:".length).trimStart() || "message";
+			continue;
+		}
+		if (line.startsWith("id:")) {
+			eventId = line.slice("id:".length).trimStart();
 			continue;
 		}
 		if (line.startsWith("data:")) {
@@ -300,7 +315,23 @@ async function deliverServerSentEvent(
 	if (eventType === "error") {
 		throw new Error(serverSentErrorMessage(data));
 	}
-	await onEvent(JSON.parse(data) as AgentV2RunEventRecord);
+	const event = JSON.parse(data) as AgentV2RunEventRecord;
+	const parsedEventId = parseServerSentEventId(eventId);
+	if (parsedEventId !== event.seq) {
+		throw new Error(`Agent v2 SSE id ${parsedEventId} does not match payload seq ${event.seq}.`);
+	}
+	await onEvent(event);
+}
+
+function parseServerSentEventId(value: string | undefined): number {
+	if (value === undefined || !/^(?:0|[1-9]\d*)$/.test(value)) {
+		throw new Error("Agent v2 SSE id must be a canonical non-negative integer.");
+	}
+	const id = Number(value);
+	if (!Number.isSafeInteger(id)) {
+		throw new Error("Agent v2 SSE id must be a safe integer.");
+	}
+	return id;
 }
 
 function serverSentErrorMessage(data: string): string {

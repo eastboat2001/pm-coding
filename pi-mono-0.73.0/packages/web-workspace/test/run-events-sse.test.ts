@@ -43,16 +43,98 @@ describe("agent v2 runtime run SSE events", () => {
 		await waitUntil(() => sseDataEvents(request.response.body).length === 3);
 
 		expect(sseDataEvents(request.response.body).map((event) => event.seq)).toEqual([1, 2, 3]);
+		expect(sseEventIds(request.response.body)).toEqual([1, 2, 3]);
 		expect(bus.readCalls[0]).toMatchObject({
 			clientId: CLIENT_ID,
 			runId: "run-a",
 			afterSeq: 2,
-			blockMs: 15000,
+			blockMs: 1000,
 		});
 		expect(request.response.headers.get("Content-Type")).toBe("text/event-stream; charset=utf-8");
 		expect(request.response.headers.get("X-Accel-Buffering")).toBe("no");
 		expect(request.response.headers.get("Cache-Control")).toContain("no-transform");
 
+		request.close();
+		await request.done;
+	});
+
+	it("rejects duplicate, non-canonical, unsafe, and conflicting replay cursors", async () => {
+		const run = runSnapshot();
+		const invalidRequests: Array<{ url: string; lastEventId?: string | string[] }> = [
+			{ url: `${RUNS_API_PREFIX}/${run.runId}/events?afterSeq=1&afterSeq=1` },
+			{ url: `${RUNS_API_PREFIX}/${run.runId}/events?afterSeq=01` },
+			{ url: `${RUNS_API_PREFIX}/${run.runId}/events?afterSeq=-1` },
+			{ url: `${RUNS_API_PREFIX}/${run.runId}/events?afterSeq=1.5` },
+			{ url: `${RUNS_API_PREFIX}/${run.runId}/events?afterSeq=9007199254740992` },
+			{ url: `${RUNS_API_PREFIX}/${run.runId}/events`, lastEventId: "01" },
+			{ url: `${RUNS_API_PREFIX}/${run.runId}/events`, lastEventId: ["1", "1"] },
+			{ url: `${RUNS_API_PREFIX}/${run.runId}/events?afterSeq=1`, lastEventId: "2" },
+		];
+
+		for (const input of invalidRequests) {
+			const harness = createSseHarness({
+				agentV2RunApi: { getRun: vi.fn().mockResolvedValue(run) },
+				runEventLog: { list: vi.fn().mockResolvedValue([]) },
+				agentV2RunEventBus: new ScriptedAgentV2RunEventBus([]),
+			});
+			const request = dispatch(harness.middleware, input.url, input.lastEventId);
+			await request.done;
+			expect(request.response.statusCode, JSON.stringify(input)).toBe(400);
+			expect(request.response.headers.get("Content-Type")).toBe("application/json; charset=utf-8");
+		}
+	});
+
+	it("accepts a matching canonical query and Last-Event-ID cursor", async () => {
+		const run = runSnapshot();
+		const bus = new ScriptedAgentV2RunEventBus([{ waitForAbort: true }]);
+		const harness = createSseHarness({
+			agentV2RunApi: { getRun: vi.fn().mockResolvedValue(run) },
+			runEventLog: { list: vi.fn().mockResolvedValue([runEvent(3)]) },
+			agentV2RunEventBus: bus,
+		});
+		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=2`, "2");
+		await waitUntil(() => sseDataEvents(request.response.body).length === 1);
+		expect(sseEventIds(request.response.body)).toEqual([3]);
+		request.close();
+		await request.done;
+	});
+
+	it("buffers a live jump until the durable log fills the sequence hole", async () => {
+		const run = runSnapshot();
+		const bus = new ScriptedAgentV2RunEventBus([{ events: [runEvent(3)] }, { waitForAbort: true }]);
+		const list = vi
+			.fn()
+			.mockResolvedValueOnce([runEvent(1)])
+			.mockResolvedValueOnce([runEvent(2), runEvent(3)]);
+		const harness = createSseHarness({
+			agentV2RunApi: { getRun: vi.fn().mockResolvedValue(run) },
+			runEventLog: { list },
+			agentV2RunEventBus: bus,
+		});
+		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=0`);
+		await waitUntil(() => sseDataEvents(request.response.body).length === 3);
+		expect(sseDataEvents(request.response.body).map((event) => event.seq)).toEqual([1, 2, 3]);
+		expect(list).toHaveBeenNthCalledWith(2, CLIENT_ID, run.runId, 1);
+		request.close();
+		await request.done;
+	});
+
+	it("periodically discovers durable-only events for an already-connected client", async () => {
+		const run = runSnapshot();
+		const bus = new EmptyAgentV2RunEventBus(20);
+		const list = vi
+			.fn()
+			.mockResolvedValueOnce([])
+			.mockResolvedValue([runEvent(1)]);
+		const harness = createSseHarness({
+			agentV2RunApi: { getRun: vi.fn().mockResolvedValue(run) },
+			runEventLog: { list },
+			agentV2RunEventBus: bus,
+		});
+		const request = dispatch(harness.middleware, `${RUNS_API_PREFIX}/${run.runId}/events?stream=1&afterSeq=0`);
+		await waitUntil(() => sseDataEvents(request.response.body).length === 1, 3_000);
+		expect(sseDataEvents(request.response.body).map((event) => event.seq)).toEqual([1]);
+		expect(list.mock.calls.length).toBeGreaterThan(1);
 		request.close();
 		await request.done;
 	});
@@ -226,8 +308,8 @@ function createSseHarness(options: {
 	return { middleware };
 }
 
-function dispatch(middleware: Middleware, url: string) {
-	const request = new FakeRequest(url);
+function dispatch(middleware: Middleware, url: string, lastEventId?: string | string[]) {
+	const request = new FakeRequest(url, lastEventId);
 	const response = new FakeResponse();
 	let nextCalled = false;
 	const done = Promise.resolve(
@@ -247,11 +329,19 @@ function dispatch(middleware: Middleware, url: string) {
 }
 
 class FakeRequest extends EventEmitter {
-	readonly headers = { accept: "text/event-stream", "x-pi-client-id": CLIENT_ID };
+	readonly headers: Record<string, string | string[]>;
 	readonly method = "GET";
 
-	constructor(readonly url: string) {
+	constructor(
+		readonly url: string,
+		lastEventId?: string | string[],
+	) {
 		super();
+		this.headers = {
+			accept: "text/event-stream",
+			"x-pi-client-id": CLIENT_ID,
+			...(lastEventId === undefined ? {} : { "last-event-id": lastEventId }),
+		};
 	}
 }
 
@@ -447,8 +537,15 @@ function runEvent(seq: number, overrides: Partial<AgentV2RunEventRecord> = {}): 
 function sseDataEvents(body: string): AgentV2RunEventRecord[] {
 	return body
 		.split("\n\n")
-		.filter((chunk) => chunk.startsWith("data: "))
-		.map((chunk) => JSON.parse(chunk.slice("data: ".length)) as AgentV2RunEventRecord);
+		.flatMap((chunk) => chunk.split("\n").filter((line) => line.startsWith("data: ")))
+		.map((line) => JSON.parse(line.slice("data: ".length)) as AgentV2RunEventRecord);
+}
+
+function sseEventIds(body: string): number[] {
+	return body
+		.split("\n\n")
+		.flatMap((chunk) => chunk.split("\n").filter((line) => line.startsWith("id: ")))
+		.map((line) => Number(line.slice("id: ".length)));
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {

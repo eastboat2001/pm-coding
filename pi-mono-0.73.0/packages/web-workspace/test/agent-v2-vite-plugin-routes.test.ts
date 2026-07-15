@@ -156,9 +156,10 @@ describe("agent v2 Vite runtime routes", () => {
 		await waitUntil(() => sseDataEvents(request.response.body).length === 2);
 
 		expect(sseDataEvents(request.response.body)).toEqual([runEvent(2), runEvent(3)]);
+		expect(sseEventIds(request.response.body)).toEqual([2, 3]);
 		expect(request.response.headers.get("Content-Type")).toBe("text/event-stream; charset=utf-8");
 		expect(eventLog.listCalls).toEqual([{ clientId: CLIENT_ID, runId: "run-a", afterSeq: 1 }]);
-		expect(eventBus.readCalls[0]).toMatchObject({ clientId: CLIENT_ID, runId: "run-a", afterSeq: 2, blockMs: 15000 });
+		expect(eventBus.readCalls[0]).toMatchObject({ clientId: CLIENT_ID, runId: "run-a", afterSeq: 2, blockMs: 1000 });
 
 		request.close();
 		await request.done;
@@ -532,8 +533,15 @@ function createRealAgentV2RunApiForRouteTest(): AgentV2RunApiService {
 function sseDataEvents(body: string): AgentV2RunEventRecord[] {
 	return body
 		.split("\n\n")
-		.filter((chunk) => chunk.startsWith("data: "))
-		.map((chunk) => JSON.parse(chunk.slice("data: ".length)) as AgentV2RunEventRecord);
+		.flatMap((chunk) => chunk.split("\n").filter((line) => line.startsWith("data: ")))
+		.map((line) => JSON.parse(line.slice("data: ".length)) as AgentV2RunEventRecord);
+}
+
+function sseEventIds(body: string): number[] {
+	return body
+		.split("\n")
+		.filter((line) => line.startsWith("id: "))
+		.map((line) => Number(line.slice("id: ".length)));
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {

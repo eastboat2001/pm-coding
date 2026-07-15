@@ -171,10 +171,11 @@ describe("agent v2 run client", () => {
 	it("streams agent v2 run events with X-PI-Client-ID over fetch SSE", async () => {
 		vi.useFakeTimers();
 		const events = [createRunEventRecord(1), createRunEventRecord(2)];
+		const stream = createStreamTracker();
 		const requests: Array<{ url: string; init?: RequestInit }> = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 			requests.push({ url: String(input), init });
-			return sseResponse(events);
+			return trackedSseResponse(events, stream, undefined, true);
 		});
 		vi.stubGlobal("fetch", fetchMock);
 
@@ -191,10 +192,99 @@ describe("agent v2 run client", () => {
 		expect(requests[0]?.url).toBe(`http://localhost:5173${AGENT_V2_RUNS_API_PREFIX}/run-1/events?afterSeq=0&stream=1`);
 		expect(requests[0]?.init?.headers).toMatchObject({
 			accept: "text/event-stream",
+			"last-event-id": "0",
 			"X-PI-Client-ID": clientId,
 		});
 		expect(requests[0]?.init?.method).toBe("GET");
 		expect(connection.lastSeq).toBe(2);
+		expect(stream).toMatchObject({ active: 0, cancelled: 0, maxActive: 1 });
+	});
+
+	it("deduplicates SSE records and reconnects from the last contiguous cursor after a gap", async () => {
+		vi.useFakeTimers();
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		const stream = createStreamTracker();
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			requests.push({ url: String(input), init });
+			return requests.length === 1
+				? trackedSseResponse([createRunEventRecord(1), createRunEventRecord(1), createRunEventRecord(3)], stream)
+				: sseResponse([createRunEventRecord(2), createRunEventRecord(3)]);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const received: number[] = [];
+		const connection = connectAgentV2RunEvents("run-1", 0, (event) => received.push(event.seq));
+
+		await vi.waitFor(() => {
+			expect(received).toEqual([1]);
+			expect(connection.lastSeq).toBe(1);
+			expect(connection.lastError?.message).toContain("gap");
+			expect(stream).toMatchObject({ active: 0, cancelled: 1, maxActive: 1 });
+		});
+		await vi.advanceTimersByTimeAsync(1_000);
+		await vi.waitFor(() => expect(received).toEqual([1, 2, 3]));
+
+		connection.close();
+		expect(requests[1]?.url).toContain("afterSeq=1&stream=1");
+		expect(requests[1]?.init?.headers).toMatchObject({ "last-event-id": "1" });
+	});
+
+	it("rejects an SSE id that differs from payload seq and reconnects without advancing", async () => {
+		vi.useFakeTimers();
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		const stream = createStreamTracker();
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			requests.push({ url: String(input), init });
+			return requests.length === 1
+				? trackedSseResponse([createRunEventRecord(1)], stream, [2])
+				: sseResponse([createRunEventRecord(1)]);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const received: number[] = [];
+		const connection = connectAgentV2RunEvents("run-1", 0, (event) => received.push(event.seq));
+
+		await vi.waitFor(() => {
+			expect(connection.lastSeq).toBe(0);
+			expect(connection.lastError?.message).toContain("does not match");
+			expect(stream).toMatchObject({ active: 0, cancelled: 1, maxActive: 1 });
+		});
+		await vi.advanceTimersByTimeAsync(1_000);
+		await vi.waitFor(() => expect(received).toEqual([1]));
+
+		connection.close();
+		expect(requests[1]?.url).toContain("afterSeq=0&stream=1");
+		expect(requests[1]?.init?.headers).toMatchObject({ "last-event-id": "0" });
+	});
+
+	it("does not advance the replay cursor when the event callback fails", async () => {
+		vi.useFakeTimers();
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		const stream = createStreamTracker();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				requests.push({ url: String(input), init });
+				return requests.length === 1
+					? trackedSseResponse([createRunEventRecord(1)], stream)
+					: sseResponse([createRunEventRecord(1)]);
+			}),
+		);
+		let attempts = 0;
+		const connection = connectAgentV2RunEvents("run-1", 0, () => {
+			attempts += 1;
+			if (attempts === 1) throw new Error("callback failed");
+		});
+
+		await vi.waitFor(() => {
+			expect(connection.lastSeq).toBe(0);
+			expect(connection.lastError?.message).toBe("callback failed");
+			expect(stream).toMatchObject({ active: 0, cancelled: 1, maxActive: 1 });
+		});
+		await vi.advanceTimersByTimeAsync(1_000);
+		await vi.waitFor(() => expect(connection.lastSeq).toBe(1));
+
+		connection.close();
+		expect(attempts).toBe(2);
+		expect(requests[1]?.url).toContain("afterSeq=0&stream=1");
 	});
 
 	it("does not regress to legacy generation runtime symbols", () => {
@@ -254,14 +344,54 @@ function jsonResponse(body: unknown): Response {
 	});
 }
 
-function sseResponse(events: AgentV2RunEventRecord[]): Response {
+function sseResponse(events: AgentV2RunEventRecord[], ids = events.map((event) => event.seq)): Response {
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
 			const encoder = new TextEncoder();
-			for (const event of events) {
-				controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+			for (const [index, event] of events.entries()) {
+				controller.enqueue(encoder.encode(`id: ${ids[index]}\ndata: ${JSON.stringify(event)}\n\n`));
 			}
 			controller.close();
+		},
+	});
+	return new Response(stream, {
+		status: 200,
+		headers: { "Content-Type": "text/event-stream" },
+	});
+}
+
+interface StreamTracker {
+	active: number;
+	cancelled: number;
+	maxActive: number;
+}
+
+function createStreamTracker(): StreamTracker {
+	return { active: 0, cancelled: 0, maxActive: 0 };
+}
+
+function trackedSseResponse(
+	events: AgentV2RunEventRecord[],
+	tracker: StreamTracker,
+	ids = events.map((event) => event.seq),
+	closeAfterEvents = false,
+): Response {
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			tracker.active += 1;
+			tracker.maxActive = Math.max(tracker.maxActive, tracker.active);
+			const encoder = new TextEncoder();
+			for (const [index, event] of events.entries()) {
+				controller.enqueue(encoder.encode(`id: ${ids[index]}\ndata: ${JSON.stringify(event)}\n\n`));
+			}
+			if (closeAfterEvents) {
+				tracker.active -= 1;
+				controller.close();
+			}
+		},
+		cancel() {
+			tracker.active -= 1;
+			tracker.cancelled += 1;
 		},
 	});
 	return new Response(stream, {

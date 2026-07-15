@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import { AGENT_V2_RESET_CONFIRMATION, resetAgentV2Runtime } from "../src/agent-v2-maintenance.js";
 import { createAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
+import { loadStorageConfig } from "../src/config.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -463,6 +464,11 @@ describe("agent v2 quality regression", () => {
 			join(repoRoot, "apps", "pi-coding-web", ".env.example"),
 			join(repoRoot, "docker", "pi-coding-web", ".env.example"),
 		];
+		const startupSurfaces = [
+			...envFiles,
+			join(repoRoot, "apps", "pi-coding-web", "README.md"),
+			join(repoRoot, "scripts", "pi-local-source-dev.ps1"),
+		];
 		const docs = [
 			join(
 				repoRoot,
@@ -477,9 +483,24 @@ describe("agent v2 quality regression", () => {
 			join(repoRoot, "packages", "web-workspace", "src", "vite-plugin.ts"),
 		];
 
-		for (const file of envFiles) {
-			expect(readFileSync(file, "utf8"), file).not.toContain("PI_APP_AGENT_VERSION");
+		for (const file of startupSurfaces) {
+			const source = readFileSync(file, "utf8");
+			for (const retiredVariable of [
+				"PI_APP_AGENT_VERSION",
+				"PI_RUNS_ENABLED",
+				"PI_RUN_QUEUE_NAME",
+				"PI_PROJECT_INSTALL_COMMAND",
+				"PI_PROJECT_BUILD_COMMAND",
+				"PI_PROJECT_INSTALL_TIMEOUT_MS",
+				"PI_PROJECT_BUILD_TIMEOUT_MS",
+			]) {
+				expect(source, `${file} must not contain ${retiredVariable}`).not.toMatch(
+					new RegExp(`\\b${retiredVariable}\\b`),
+				);
+			}
 		}
+		const localSourceDev = readFileSync(join(repoRoot, "scripts", "pi-local-source-dev.ps1"), "utf8");
+		expect(localSourceDev).not.toContain('Write-Host "PI_POSTGRES_URL=');
 		const forbiddenDocPatterns = [
 			/short-term.+(switch|flag)/i,
 			/runtime.+(switch|flag)/i,
@@ -508,6 +529,15 @@ describe("agent v2 quality regression", () => {
 			"Rollback: redeploy the previous code version and restore from backup if required.",
 		]) {
 			expect(combinedDocs).toContain(line);
+		}
+	});
+
+	it("keeps shipped environment templates parseable by the strict runtime config", () => {
+		for (const file of [
+			join(repoRoot, "apps", "pi-coding-web", ".env.example"),
+			join(repoRoot, "docker", "pi-coding-web", ".env.example"),
+		]) {
+			expect(() => loadStorageConfig(repoRoot, file), file).not.toThrow();
 		}
 	});
 });

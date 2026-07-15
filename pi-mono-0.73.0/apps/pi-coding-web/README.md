@@ -213,10 +213,13 @@ PI_PREVIEW_BASE_URL=
 PI_DEFAULT_MODEL_PROVIDER=
 PI_DEFAULT_MODEL_ID=
 PI_HANDOFF_DEFAULT_THINKING_LEVEL=high
-PI_PROJECT_INSTALL_COMMAND=npm install
-PI_PROJECT_BUILD_COMMAND=npm run build
-PI_PROJECT_INSTALL_TIMEOUT_MS=120000
-PI_PROJECT_BUILD_TIMEOUT_MS=120000
+PI_RUNTIME_STORE=postgres
+PI_POSTGRES_URL=postgresql://<user>:<password>@127.0.0.1:5432/<database>
+PI_REDIS_URL=redis://127.0.0.1:6379
+PI_AGENT_V2_RUN_QUEUE_NAME=pi:agent-v2:runs:local
+PI_WORKER_ID=pi-local-worker
+PI_BUILD_CONTAINER_ENGINE=docker
+PI_BUILD_TIMEOUT_MS=120000
 ```
 
 Relative paths are resolved from `apps/pi-coding-web/`. Absolute paths are also supported.
@@ -267,7 +270,7 @@ Expected conversation flow:
 4. For app/site/project work, it calls `project_file` repeatedly to create or update server-side files.
 5. For dependency-free static projects, it calls `project_task validate` and then `project_task preview`.
 6. For build-based static frontend projects, it calls `project_task build_static`, then `project_task validate`, and finally `project_task preview`.
-7. `build_static` runs only the server-configured `PI_PROJECT_INSTALL_COMMAND` and `PI_PROJECT_BUILD_COMMAND`; `preview` never runs package scripts.
+7. `build_static` uses the server-controlled ephemeral container runner and restricted registry allowlist; `preview` never runs package scripts.
 8. The server serves `dist/`, `build/`, `public/`, or a root static `index.html` when present.
 9. The browser displays skill, file, and task tool cards plus the final assistant message with the preview URL.
 

@@ -19,13 +19,17 @@ $postgresPassword = if ($env:PI_POSTGRES_PASSWORD) { $env:PI_POSTGRES_PASSWORD }
 $env:PI_RUNTIME_STORE = "postgres"
 $env:PI_POSTGRES_URL = "postgres://${postgresUser}:${postgresPassword}@127.0.0.1:${PostgresPort}/${postgresDb}"
 $env:PI_REDIS_URL = "redis://127.0.0.1:${RedisPort}"
-$env:PI_RUN_QUEUE_NAME = if ($env:PI_RUN_QUEUE_NAME) { $env:PI_RUN_QUEUE_NAME } else { "pi:runs:local" }
+$env:PI_AGENT_V2_RUN_QUEUE_NAME = if ($env:PI_AGENT_V2_RUN_QUEUE_NAME) {
+	$env:PI_AGENT_V2_RUN_QUEUE_NAME
+} else {
+	"pi:agent-v2:runs:local"
+}
 $env:PI_WORKER_ID = if ($env:PI_WORKER_ID) { $env:PI_WORKER_ID } else { "pi-local-worker" }
 
 Write-Host "PI_RUNTIME_STORE=$env:PI_RUNTIME_STORE"
-Write-Host "PI_POSTGRES_URL=$env:PI_POSTGRES_URL"
+Write-Host "PI_POSTGRES_URL configured for local PostgreSQL (value hidden)"
 Write-Host "PI_REDIS_URL=$env:PI_REDIS_URL"
-Write-Host "PI_RUN_QUEUE_NAME=$env:PI_RUN_QUEUE_NAME"
+Write-Host "PI_AGENT_V2_RUN_QUEUE_NAME=$env:PI_AGENT_V2_RUN_QUEUE_NAME"
 
 if (-not $SkipDocker) {
 	Write-Host "Starting Docker dependencies: postgres redis"

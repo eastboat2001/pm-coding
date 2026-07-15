@@ -1207,7 +1207,7 @@ describe("AgentV2WorkerService", () => {
 		);
 	});
 
-	it("fails closed after uncertain ownership reaches the claim safety deadline", async () => {
+	it("fails closed after bounded Redis ownership confirmation remains uncertain", async () => {
 		vi.useFakeTimers();
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-uncertain-deadline");
@@ -1228,7 +1228,7 @@ describe("AgentV2WorkerService", () => {
 		});
 
 		const processing = worker.processOne();
-		await vi.advanceTimersByTimeAsync(50);
+		await vi.advanceTimersByTimeAsync(100);
 		await expect(processing).resolves.toBe(true);
 
 		expect(queue.confirmOwnershipCalls).toBeGreaterThan(0);

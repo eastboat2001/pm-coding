@@ -29,11 +29,12 @@ for index = 1, maxScans do
 	local ok, identity = pcall(cjson.decode, runKey)
 	if ok and type(identity) == "table" and type(identity[1]) == "string" and type(identity[2]) == "string" then
 		if redis.call("HEXISTS", KEYS[3], runKey) == 0 then
-			local now = tonumber(ARGV[3])
+			local serverTime = redis.call("TIME")
+			local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
 			local claim = {
 				clientId = identity[1], runId = identity[2], workerId = ARGV[2],
-				claimToken = ARGV[5], claimedAtMs = now, heartbeatAtMs = now,
-				leaseExpiresAtMs = now + tonumber(ARGV[4])
+				claimToken = ARGV[4], claimedAtMs = now, heartbeatAtMs = now,
+				leaseExpiresAtMs = now + tonumber(ARGV[3])
 			}
 			redis.call("HSET", KEYS[3], runKey, cjson.encode(claim))
 			return cjson.encode(claim)
@@ -121,7 +122,8 @@ return reclaimed
 `;
 const REQUEUE_EXPIRED_CLAIMS_SCRIPT = `
 -- agent-v2-requeue-expired
-local now = tonumber(ARGV[1])
+local serverTime = redis.call("TIME")
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
 local entries = redis.call("HGETALL", KEYS[1])
 local reclaimed = {}
 for index = 1, #entries, 2 do
@@ -146,45 +148,52 @@ return reclaimed
 `;
 const REQUEST_CANCEL_SCRIPT = `
 -- agent-v2-request-cancel
-local expired = redis.call("ZRANGEBYSCORE", KEYS[3], "-inf", ARGV[4])
+local serverTime = redis.call("TIME")
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+local expiresAtMs = now + tonumber(ARGV[2]) * 1000
+local expired = redis.call("ZRANGEBYSCORE", KEYS[3], "-inf", now)
 for _, runKey in ipairs(expired) do redis.call("HDEL", KEYS[4], runKey) end
-redis.call("ZREMRANGEBYSCORE", KEYS[3], "-inf", ARGV[4])
+redis.call("ZREMRANGEBYSCORE", KEYS[3], "-inf", now)
 local existingRaw = redis.call("HGET", KEYS[4], ARGV[1])
 if existingRaw then
 	local ok, existing = pcall(cjson.decode, existingRaw)
 	if ok and type(existing) == "table" and type(existing["token"]) == "string" and
-		type(existing["expiresAtMs"]) == "number" and existing["expiresAtMs"] > tonumber(ARGV[4]) then
-		if existing["token"] == ARGV[5] then return "already_requested" end
+		type(existing["expiresAtMs"]) == "number" and existing["expiresAtMs"] > now then
+		if existing["token"] == ARGV[3] then return "already_requested" end
 		return "stale"
 	end
 	redis.call("HDEL", KEYS[4], ARGV[1])
 end
-redis.call("HSET", KEYS[4], ARGV[1], cjson.encode({ token = ARGV[5], expiresAtMs = tonumber(ARGV[2]), active = true }))
-redis.call("ZADD", KEYS[3], ARGV[2], ARGV[1])
-redis.call("EXPIRE", KEYS[3], ARGV[3])
-redis.call("EXPIRE", KEYS[4], ARGV[3])
+redis.call("HSET", KEYS[4], ARGV[1], cjson.encode({ token = ARGV[3], expiresAtMs = expiresAtMs, active = true }))
+redis.call("ZADD", KEYS[3], expiresAtMs, ARGV[1])
+redis.call("EXPIRE", KEYS[3], ARGV[2])
+redis.call("EXPIRE", KEYS[4], ARGV[2])
 redis.call("SREM", KEYS[2], ARGV[1])
 redis.call("LREM", KEYS[1], 0, ARGV[1])
 return "requested"
 `;
 const CHECK_CANCEL_SCRIPT = `
 -- agent-v2-check-cancel
-local expired = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[2])
+local serverTime = redis.call("TIME")
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+local expired = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", now)
 for _, runKey in ipairs(expired) do redis.call("HDEL", KEYS[2], runKey) end
-redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[2])
+redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", now)
 local expiresAtMs = redis.call("ZSCORE", KEYS[1], ARGV[1])
 if not expiresAtMs then return 0 end
 local cancelRaw = redis.call("HGET", KEYS[2], ARGV[1])
 if not cancelRaw then return 0 end
 local ok, cancel = pcall(cjson.decode, cancelRaw)
 if not ok or type(cancel) ~= "table" or cancel["active"] ~= true then return 0 end
-return tonumber(expiresAtMs) > tonumber(ARGV[2]) and 1 or 0
+return tonumber(expiresAtMs) > now and 1 or 0
 `;
 const CLEAR_SCRIPT = `
 -- agent-v2-clear
 local queueItemsDeleted = redis.call("SCARD", KEYS[2])
 local activeClaimsDeleted = redis.call("HLEN", KEYS[3])
-redis.call("ZREMRANGEBYSCORE", KEYS[4], "-inf", ARGV[1])
+local serverTime = redis.call("TIME")
+local now = tonumber(serverTime[1]) * 1000 + math.floor(tonumber(serverTime[2]) / 1000)
+redis.call("ZREMRANGEBYSCORE", KEYS[4], "-inf", now)
 local cancelKeysDeleted = redis.call("ZCARD", KEYS[4])
 redis.call("DEL", KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5], KEYS[6])
 return { queueItemsDeleted, activeClaimsDeleted, cancelKeysDeleted }
@@ -416,7 +425,7 @@ export class RedisAgentV2RunQueue {
             for (;;) {
                 const result = await runBounded(client.eval(CLAIM_SCRIPT, {
                     keys: [this.queueName, this.readyKey, this.activeKey],
-                    arguments: ["100", workerId, String(Date.now()), String(this.claimLeaseTtlMs), claimToken],
+                    arguments: ["100", workerId, String(this.claimLeaseTtlMs), claimToken],
                 }), this.claimCommandTimeoutMs);
                 if (result.kind === "value") {
                     const claim = parseClaim(result.value);
@@ -495,26 +504,19 @@ export class RedisAgentV2RunQueue {
             return { status: "uncertain", errorCode: "agent_v2.redis_lease_uncertain" };
         }
     }
-    async requeueExpiredClaims(nowMs = Date.now()) {
+    async requeueExpiredClaims(_nowMs) {
         this.assertOpen();
         const result = await (await this.connectedClient()).eval(REQUEUE_EXPIRED_CLAIMS_SCRIPT, {
             keys: [this.activeKey, this.queueName, this.readyKey, this.invalidActiveKey],
-            arguments: [String(nowMs)],
+            arguments: [],
         });
         return Array.isArray(result) ? result.map(parseClaim).filter(isClaim) : [];
     }
     async requestCancel(run, cancelToken) {
         this.assertOpen();
-        const now = Date.now();
         const result = await (await this.connectedClient()).eval(REQUEST_CANCEL_SCRIPT, {
             keys: [this.queueName, this.readyKey, this.cancelIndexKey, this.cancelTokenKey],
-            arguments: [
-                runKey(run),
-                String(now + this.cancelTtlSeconds * 1_000),
-                String(this.cancelTtlSeconds),
-                String(now),
-                requireCancelToken(cancelToken),
-            ],
+            arguments: [runKey(run), String(this.cancelTtlSeconds), requireCancelToken(cancelToken)],
         });
         return parseCancelRequestResult(result);
     }
@@ -522,7 +524,7 @@ export class RedisAgentV2RunQueue {
         this.assertOpen();
         const result = await (await this.connectedClient()).eval(CHECK_CANCEL_SCRIPT, {
             keys: [this.cancelIndexKey, this.cancelTokenKey],
-            arguments: [runKey(run), String(Date.now())],
+            arguments: [runKey(run)],
         });
         return toCount(result) === 1;
     }
@@ -537,7 +539,7 @@ export class RedisAgentV2RunQueue {
                 this.invalidActiveKey,
                 this.cancelTokenKey,
             ],
-            arguments: [String(Date.now())],
+            arguments: [],
         });
         return parseClearResult(result);
     }

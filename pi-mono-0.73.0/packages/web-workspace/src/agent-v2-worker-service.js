@@ -9,6 +9,7 @@ const DEFAULT_IDLE_SLEEP_MS = 25;
 const DEFAULT_MAX_IDLE_SLEEP_MS = 1_000;
 const DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_STEPS_PER_RUN = 256;
+const MAX_OWNERSHIP_CONFIRMATION_ATTEMPTS = 3;
 const OWNERSHIP_CONTROL_ABORT_REASON = Symbol("agent-v2-ownership-control");
 export class AgentV2WorkerService {
     activeAbortControllers = new Map();
@@ -478,13 +479,8 @@ export class AgentV2WorkerService {
         return false;
     }
     async resolveUncertainOwnership(control, signal) {
-        while (!signal?.aborted) {
-            const remainingMs = control.claim.leaseExpiresAtMs - Date.now();
-            if (remainingMs <= 0) {
-                this.markControlUnsafe(control, "agent_v2.worker_lease_confirmation_timeout", "Agent v2 lease ownership could not be confirmed before its safety deadline.");
-                return false;
-            }
-            const ownership = await runBoundedControl(this.queue.confirmOwnership(control.claim, Math.min(this.controlOperationTimeoutMs, remainingMs)), Math.min(this.controlOperationTimeoutMs, remainingMs));
+        for (let attempt = 1; attempt <= MAX_OWNERSHIP_CONFIRMATION_ATTEMPTS && !signal?.aborted; attempt += 1) {
+            const ownership = await runBoundedControl(this.queue.confirmOwnership(control.claim, this.controlOperationTimeoutMs), this.controlOperationTimeoutMs);
             if (ownership.kind === "timeout") {
                 this.markControlUnsafe(control, "agent_v2.worker_lease_confirmation_timeout", "Agent v2 lease ownership could not be confirmed before its safety deadline.");
                 return false;
@@ -494,7 +490,7 @@ export class AgentV2WorkerService {
                 return false;
             }
             if (ownership.kind === "value" && ownership.value === "owned") {
-                const renewal = await runBoundedControl(this.queue.renewLease(control.claim), Math.min(this.controlOperationTimeoutMs, remainingMs));
+                const renewal = await runBoundedControl(this.queue.renewLease(control.claim), this.controlOperationTimeoutMs);
                 if (renewal.kind === "timeout") {
                     this.markControlUnsafe(control, "agent_v2.worker_lease_renew_timeout", "Agent v2 lease renewal timed out; the run was stopped safely.");
                     return false;
@@ -509,8 +505,12 @@ export class AgentV2WorkerService {
                     return true;
                 }
             }
-            const retryMs = Math.min(25, Math.max(1, control.claim.leaseExpiresAtMs - Date.now()));
-            await interruptibleSleep(retryMs, signal ?? new AbortController().signal);
+            if (attempt < MAX_OWNERSHIP_CONFIRMATION_ATTEMPTS) {
+                await interruptibleSleep(25, signal ?? new AbortController().signal);
+            }
+        }
+        if (!signal?.aborted) {
+            this.markControlUnsafe(control, "agent_v2.worker_lease_confirmation_timeout", "Agent v2 lease ownership could not be confirmed before its safety deadline.");
         }
         return false;
     }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "redis";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2DiagnosticCommitInput, AgentV2RunTransitionCommitInput } from "../src/agent-v2-durable-store.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
@@ -79,13 +79,76 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 		await usingQueue(queue, async () => {
 			await queue.enqueue({ clientId: "client-a", runId: "expired" });
 			const claim = await queue.claim("w1", 1);
-			const reclaimed = await queue.requeueExpiredClaims(claim!.leaseExpiresAtMs);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			const reclaimed = await queue.requeueExpiredClaims();
 			expect(reclaimed).toEqual([expect.objectContaining({ runId: "expired", claimToken: claim!.claimToken })]);
-			await expect(queue.requeueExpiredClaims(claim!.leaseExpiresAtMs)).resolves.toEqual([]);
+			await expect(queue.requeueExpiredClaims()).resolves.toEqual([]);
 			const next = await queue.claim("w2", 1);
 			expect(next).toMatchObject({ runId: "expired", workerId: "w2" });
 			expect(next?.claimToken).not.toBe(claim?.claimToken);
 		});
+	});
+
+	it.each([
+		["far behind", -10 * 365 * 24 * 60 * 60 * 1_000],
+		["far ahead", 10 * 365 * 24 * 60 * 60 * 1_000],
+	])("uses Redis time for claim, renew, reclaim, and cancel when the worker clock is %s", async (_label, skewMs) => {
+		const queueName = uniqueQueueName();
+		const queue = createRedisAgentV2RunQueue({
+			redisUrl: redisUrl!,
+			queueName,
+			claimLeaseTtlMs: 40,
+			cancelTtlSeconds: 1,
+		});
+		const inspection = createClient({ url: redisUrl! });
+		await inspection.connect();
+		const realDateNow = Date.now.bind(Date);
+		const workerClock = vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + skewMs);
+		try {
+			const run = { clientId: "client-a", runId: `clock-skew:${skewMs}` };
+			const beforeClaimMs = await redisNowMs(inspection);
+			await queue.enqueue(run);
+			const claim = (await queue.claim("worker-skewed", 1))!;
+			const afterClaimMs = await redisNowMs(inspection);
+			expect(claim.leaseExpiresAtMs).toBeGreaterThanOrEqual(beforeClaimMs + 40);
+			expect(claim.leaseExpiresAtMs).toBeLessThanOrEqual(afterClaimMs + 40);
+			await expect(queue.confirmOwnership(claim, 100)).resolves.toBe("owned");
+
+			const beforeRenewMs = await redisNowMs(inspection);
+			const renewal = await queue.renewLease(claim);
+			const afterRenewMs = await redisNowMs(inspection);
+			expect(renewal).toMatchObject({ status: "renewed" });
+			if (renewal.status !== "renewed") throw new Error("Expected a renewed Redis lease");
+			expect(renewal.leaseExpiresAtMs).toBeGreaterThanOrEqual(beforeRenewMs + 40);
+			expect(renewal.leaseExpiresAtMs).toBeLessThanOrEqual(afterRenewMs + 40);
+
+			const beforeCancelMs = await redisNowMs(inspection);
+			await expect(queue.requestCancel(run, `cancel:${skewMs}`)).resolves.toBe("requested");
+			const cancelExpiry = await inspection.zScore(`${queueName}:cancel`, JSON.stringify([run.clientId, run.runId]));
+			const afterCancelMs = await redisNowMs(inspection);
+			expect(cancelExpiry).not.toBeNull();
+			expect(cancelExpiry!).toBeGreaterThanOrEqual(beforeCancelMs + 1_000);
+			expect(cancelExpiry!).toBeLessThanOrEqual(afterCancelMs + 1_000);
+			await expect(queue.isCancelRequested(run)).resolves.toBe(true);
+
+			await new Promise((resolve) => setTimeout(resolve, 60));
+			await expect(queue.requeueExpiredClaims()).resolves.toEqual([
+				expect.objectContaining({
+					clientId: claim.clientId,
+					runId: claim.runId,
+					workerId: claim.workerId,
+					claimToken: claim.claimToken,
+				}),
+			]);
+			await expect(queue.requeueExpiredClaims()).resolves.toEqual([]);
+		} finally {
+			workerClock.mockRestore();
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await inspection.quit();
+		}
 	});
 
 	it("does not confirm or renew an expired unreclaimed claim", async () => {
@@ -179,10 +242,11 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 			]);
 			await inspection.hSet(`${queueName}:active`, Object.fromEntries(poisonEntries));
 
-			await expect(queue.requeueExpiredClaims(valid!.leaseExpiresAtMs)).resolves.toEqual([
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			await expect(queue.requeueExpiredClaims()).resolves.toEqual([
 				expect.objectContaining({ runId: "valid-expired", claimToken: valid!.claimToken }),
 			]);
-			await expect(queue.requeueExpiredClaims(valid!.leaseExpiresAtMs)).resolves.toEqual([]);
+			await expect(queue.requeueExpiredClaims()).resolves.toEqual([]);
 			await expect(queue.claim("w2", 1)).resolves.toMatchObject({ runId: "valid-expired", workerId: "w2" });
 			await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
 			expect(await inspection.hLen(`${queueName}:active`)).toBe(1);
@@ -382,17 +446,23 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 		});
 	});
 
-	it("lets the worker confirm and renew after a real Redis renew response is dropped", async () => {
+	it.each([
+		["far behind", -10 * 365 * 24 * 60 * 60 * 1_000],
+		["far ahead", 10 * 365 * 24 * 60 * 60 * 1_000],
+	])("lets a %s worker confirm and renew after a real Redis renew response is dropped", async (_label, skewMs) => {
 		const proxy = await createRedisFaultProxy(redisUrl!);
+		const runId = `run-worker-renew-drop:${skewMs}`;
 		const queue = createRedisAgentV2RunQueue({
 			redisUrl: proxy.url,
 			queueName: uniqueQueueName(),
 			claimLeaseTtlMs: 1_000,
 		});
 		const store = new MemoryWorkerStore();
-		store.createQueuedRun("client-a", "run-worker-renew-drop");
+		store.createQueuedRun("client-a", runId);
+		const realDateNow = Date.now.bind(Date);
+		const workerClock = vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + skewMs);
 		try {
-			await queue.enqueue({ clientId: "client-a", runId: "run-worker-renew-drop" });
+			await queue.enqueue({ clientId: "client-a", runId });
 			let dropRenewResponse = true;
 			const workerQueue = withRenewHook(queue, () => {
 				if (!dropRenewResponse) return;
@@ -417,9 +487,10 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 			});
 
 			await expect(worker.processOne()).resolves.toBe(true);
-			expect(store.getRunSnapshot("client-a", "run-worker-renew-drop")).toMatchObject({ status: "succeeded" });
+			expect(store.getRunSnapshot("client-a", runId)).toMatchObject({ status: "succeeded" });
 			expect(store.diagnostics).toContainEqual(expect.objectContaining({ code: "agent_v2.worker_lease_uncertain" }));
 		} finally {
+			workerClock.mockRestore();
 			try {
 				await queue.clear();
 			} catch {}
@@ -701,4 +772,10 @@ function timestampSequence(...timestamps: string[]): () => string {
 		index += 1;
 		return value;
 	};
+}
+
+async function redisNowMs(client: ReturnType<typeof createClient>): Promise<number> {
+	const reply = await client.sendCommand(["TIME"]);
+	if (!Array.isArray(reply) || reply.length !== 2) throw new Error("Redis TIME returned an invalid response");
+	return Number(reply[0]) * 1_000 + Math.floor(Number(reply[1]) / 1_000);
 }

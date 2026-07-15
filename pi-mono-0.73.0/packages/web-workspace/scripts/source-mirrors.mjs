@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -22,12 +22,13 @@ export function syncSourceMirrors(options) {
 }
 
 /**
- * @param {{ rootDir: string; files: string[] }} options
+ * @param {{ rootDir: string; files: string[]; rejectOrphans?: boolean }} options
  * @returns {string[]}
  */
 export function auditSourceMirrors(options) {
 	const drift = [];
-	for (const source of resolveSources(options)) {
+	const sources = resolveSources(options);
+	for (const source of sources) {
 		const generated = transpileSource(source);
 		if (!existsSync(source.jsPath)) {
 			drift.push(`${source.name}: missing JavaScript mirror`);
@@ -53,7 +54,38 @@ export function auditSourceMirrors(options) {
 		}
 		if (actualMapText !== generated.sourceMapText) drift.push(`${source.name}: source map drift`);
 	}
+	if (options.rejectOrphans) drift.push(...auditOrphanOutputs(resolve(options.rootDir, "src"), sources));
 	return drift;
+}
+
+function auditOrphanOutputs(srcDir, sources) {
+	const expectedJavaScript = new Set(sources.map((source) => source.name.slice(0, -3) + ".js"));
+	const expectedMaps = new Set([...expectedJavaScript].map((name) => `${name}.map`));
+	const orphaned = [];
+	for (const name of collectMirrorOutputs(srcDir)) {
+		if (name.endsWith(".js.map") && !expectedMaps.has(name)) {
+			orphaned.push(`${name}: orphan source map`);
+			continue;
+		}
+		if (name.endsWith(".js") && !expectedJavaScript.has(name)) {
+			orphaned.push(`${name}: orphan JavaScript mirror`);
+		}
+	}
+	return orphaned.sort();
+}
+
+function collectMirrorOutputs(srcDir, relativeDir = "") {
+	const outputs = [];
+	const currentDir = join(srcDir, relativeDir);
+	for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+		const name = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+		if (entry.isDirectory()) {
+			outputs.push(...collectMirrorOutputs(srcDir, name));
+			continue;
+		}
+		if (entry.isFile() && (entry.name.endsWith(".js") || entry.name.endsWith(".js.map"))) outputs.push(name);
+	}
+	return outputs;
 }
 
 /**

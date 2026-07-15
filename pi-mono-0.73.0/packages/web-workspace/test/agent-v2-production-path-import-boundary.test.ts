@@ -388,6 +388,39 @@ describe("agent v2 production import boundary", () => {
 		expect(violations).toEqual([]);
 	});
 
+	it("keeps the complete application generation product boundary v2-only", () => {
+		const forbidden = [
+			{
+				label: "retired v1 module import",
+				pattern:
+					/from\s+["'](?:(?:[.][/]?)?(?:legacy-v1-agent-v2-run-event-bridge|run-event-sink|run-retry-controller|retry-policy|app-preview-goal-service|app-preview-goal-supervisor|run-api-service|run-worker-service)|[^"']*agent-v2\/runtime-entry)[.]js["']/,
+			},
+			{
+				label: "retired prompt or continuation surface",
+				pattern:
+					/(?:coding-system-prompt|remote-resume|capability-planner|context-orchestrator|spec-artifact)|\b(?:buildCodingHandoffPrompt|buildCodingSystemPrompt|buildSpecArtifact|SPEC_ARTIFACT_PROJECT_FILES|startRemoteContinuationRun|resumeInterruptedToolResultSession|StartRunContinuationRequest|app_preview_continuation)\b/,
+			},
+			{ label: "provider AgentEvent cast", pattern: /\bas\s+(?:unknown\s+as\s+)?AgentEvent\b/ },
+			{
+				label: "host build command execution",
+				pattern: /\b(?:WorkspaceCommandService|runCommand)\b|from\s+["']node:child_process["']/,
+			},
+			{ label: "v1 SSE event union", pattern: /\b(?:LiveRunEvent|RuntimeRunEventRecord)\b/ },
+			{ label: "retired runtime configuration", pattern: /\bPI_APP_AGENT_VERSION\b|\bPI_RUN_[A-Z0-9_]+\b/ },
+		] as const;
+		const violations = applicationGenerationBoundaryFiles().flatMap((file) => {
+			const source = readFileSync(file, "utf8");
+			return forbidden
+				.filter(({ pattern }) => pattern.test(source))
+				.map(({ label }) => `${toRepoPath(file)}: ${label}`);
+		});
+
+		expect(violations).toEqual([]);
+		const canonicalTypes = join(repoRoot, "packages/web-workspace/src/agent-v2-types.ts");
+		expect(applicationGenerationBoundaryFiles()).toContain(canonicalTypes);
+		expect(readFileSync(canonicalTypes, "utf8")).toContain("AgentV2RunSnapshot");
+	});
+
 	it("deletes legacy event compatibility modules and dedicated tests", () => {
 		for (const file of deletedLegacyEventCompatibilityFiles) {
 			expect(existsSync(join(repoRoot, file)), `${file} must be deleted`).toBe(false);
@@ -638,6 +671,22 @@ function productionV2Files(): string[] {
 	const workerSrc = join(repoRoot, "apps", "pi-coding-web", "src", "worker");
 	const workerFiles = collectTsFiles(workerSrc);
 	return [...agentV2Files, ...v2OnlySubpathExports, ...workerFiles];
+}
+
+function applicationGenerationBoundaryFiles(): string[] {
+	const explicitFiles = [
+		...explicitV2BoundaryFiles,
+		"packages/web-workspace/src/agent-v2-types.ts",
+		"packages/web-workspace/src/workspace-task-factory.ts",
+		"packages/web-workspace/src/workspace-task-service.ts",
+		"apps/pi-coding-web/src/app/bootstrap.ts",
+		"apps/pi-coding-web/src/app/generated-apps-state.ts",
+		"apps/pi-coding-web/src/runtime/agent-v2-run-client.ts",
+		"apps/pi-coding-web/src/runtime/agent-v2-browser-controller.ts",
+		"apps/pi-coding-web/src/runtime/run-health.ts",
+		"apps/pi-coding-web/src/runtime/run-retry-status.ts",
+	].map((file) => join(repoRoot, file));
+	return [...new Set([...productionV2Files(), ...explicitFiles])].filter(existsSync);
 }
 
 function toRepoPath(file: string): string {

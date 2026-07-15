@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	linkSync,
@@ -10,11 +11,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 // @ts-expect-error The source mirror CLI is an ESM JavaScript module.
 import { auditSourceMirrors, syncSourceMirrors } from "../scripts/source-mirrors.mjs";
 
 const fixtureRoots: string[] = [];
+const packageRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const repoRoot = join(packageRoot, "..", "..");
 
 afterEach(() => {
 	for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -51,6 +55,28 @@ it("syncs only explicit TypeScript files and detects sourcesContent drift", asyn
 	writeFileSync(join(rootDir, "src/alpha.ts"), "export const alpha = 2;\n");
 	expect(auditSourceMirrors({ rootDir, files: ["alpha.ts"] })).toContain("alpha.ts: sourcesContent drift");
 	expect(existsSync(join(rootDir, "src/beta.js"))).toBe(false);
+});
+
+it("audits every tracked TypeScript source mirror and rejects orphan JavaScript outputs", async () => {
+	const rootDir = fixtureProject();
+	await syncSourceMirrors({ rootDir, files: ["alpha.ts", "beta.ts"] });
+	expect(auditSourceMirrors({ rootDir, files: ["alpha.ts"], rejectOrphans: true })).toEqual([
+		"beta.js.map: orphan source map",
+		"beta.js: orphan JavaScript mirror",
+	]);
+
+	const trackedSources = execFileSync("git", ["ls-files", "--", "packages/web-workspace/src/*.ts"], {
+		cwd: repoRoot,
+		encoding: "utf8",
+	})
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.filter((file) => !file.endsWith(".d.ts") && !file.endsWith("/node-service-runtime.ts"))
+		.map((file) => file.slice("packages/web-workspace/src/".length));
+
+	expect(trackedSources).toContain("agent-v2-types.ts");
+	expect(trackedSources).not.toContain("node-service-runtime.ts");
+	expect(auditSourceMirrors({ rootDir: packageRoot, files: trackedSources, rejectOrphans: true })).toEqual([]);
 });
 
 it("rejects invalid explicit file lists before writing mirrors", () => {

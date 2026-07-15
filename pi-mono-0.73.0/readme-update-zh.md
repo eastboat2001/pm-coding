@@ -162,4 +162,4 @@ Set-Location packages\web-workspace
 - 不恢复旧模块、旧 DTO、旧配置或兼容 wrapper。发现遗留 caller 时迁移 caller 到 v2 后删除旧实现。
 - `.env`、本地数据库、构建产物、离线镜像和 `.superpowers/sdd` 临时报告不得提交。
 
-当前架构依据以 Phase 9 cutover design、Phase 10 preflight design/review/implementation plans 和最终验收报告为准。
+当前架构依据以 Phase 9 cutover design、Phase 10 preflight design/review 和最终验收报告为准。

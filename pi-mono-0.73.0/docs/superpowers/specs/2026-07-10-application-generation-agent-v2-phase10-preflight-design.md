@@ -6,6 +6,15 @@
 
 **关联审查：** `docs/superpowers/reviews/2026-07-10-application-generation-agent-v2-phase10-preflight-review.md`
 
+## Reset and rollback invariant
+
+1. Stop v2 workers.
+2. Run the Agent v2 reset maintenance operation with confirmation token application-generation-agent-v2.
+3. Start v2 workers.
+4. Verify /api/agent-v2/runs/start and event replay.
+
+Rollback: redeploy the previous code version and restore from backup if required.
+
 ## 1. 目标
 
 在运行 Phase 10 真实端到端验收前，把 Application Generation Agent v2 从“可测试的确定性骨架”推进为安全、真实、可恢复、可诊断的唯一生产生成链，并清除仍在影响边界清晰度的旧浏览器语义、死代码和浅抽象。

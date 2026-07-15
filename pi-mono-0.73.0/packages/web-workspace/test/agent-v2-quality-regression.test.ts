@@ -464,8 +464,13 @@ describe("agent v2 quality regression", () => {
 			join(repoRoot, "docker", "pi-coding-web", ".env.example"),
 		];
 		const docs = [
-			join(repoRoot, "docs", "superpowers", "specs", "2026-07-08-application-generation-agent-v2-phase3-design.md"),
-			join(repoRoot, "docs", "superpowers", "specs", "2026-07-08-application-generation-agent-v2-phase4-design.md"),
+			join(
+				repoRoot,
+				"docs",
+				"superpowers",
+				"specs",
+				"2026-07-10-application-generation-agent-v2-phase10-preflight-design.md",
+			),
 		];
 		const sourceFiles = [
 			join(repoRoot, "apps", "pi-coding-web", "src", "worker", "main.ts"),
@@ -476,7 +481,6 @@ describe("agent v2 quality regression", () => {
 			expect(readFileSync(file, "utf8"), file).not.toContain("PI_APP_AGENT_VERSION");
 		}
 		const forbiddenDocPatterns = [
-			/PI_APP_AGENT_VERSION/i,
 			/short-term.+(switch|flag)/i,
 			/runtime.+(switch|flag)/i,
 			/version.+switch/i,

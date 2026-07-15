@@ -29,6 +29,13 @@ describe("agentV2RunEventStreamKey", () => {
 });
 
 describe("InMemoryAgentV2RunEventBus", () => {
+	it("honors an aborted readiness ping", async () => {
+		const bus = new InMemoryAgentV2RunEventBus();
+		const controller = new AbortController();
+		controller.abort();
+		await expect(bus.ping!(controller.signal)).rejects.toThrow("agent_v2.readiness_aborted");
+	});
+
 	it("only reads events with a sequence greater than afterSeq", async () => {
 		const bus = new InMemoryAgentV2RunEventBus();
 		await bus.project(event(1));
@@ -68,6 +75,14 @@ describe("InMemoryAgentV2RunEventBus", () => {
 		} finally {
 			deadline.dispose();
 		}
+	});
+
+	it("pings Redis through the shared command connection", async () => {
+		const client = new FakeRedisClient();
+		const bus = new RedisAgentV2RunEventBus({ redisUrl: "redis://example", createClient: () => client });
+		await expect(bus.ping!(new AbortController().signal)).resolves.toBeUndefined();
+		expect(client.pingCalls).toBe(1);
+		await bus.close();
 	});
 
 	it("purges streams by client id", async () => {
@@ -193,6 +208,7 @@ interface FakeRedisState {
 
 class FakeRedisClient {
 	isOpen = false;
+	pingCalls = 0;
 	readonly duplicates: FakeRedisClient[] = [];
 	holdXRead = false;
 	private readonly disconnectWaiters: Array<() => void> = [];
@@ -254,6 +270,11 @@ class FakeRedisClient {
 
 	async connect(): Promise<void> {
 		this.isOpen = true;
+	}
+
+	async ping(): Promise<string> {
+		this.pingCalls += 1;
+		return "PONG";
 	}
 
 	duplicate(): FakeRedisClient {

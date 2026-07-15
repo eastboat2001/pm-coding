@@ -441,6 +441,12 @@ export class RuntimeDbStore implements RuntimeStore {
 		this.writeTransaction(db, () => createSqliteAgentV2Schema(db, now()));
 	}
 
+	ping(signal: AbortSignal): void {
+		if (signal.aborted) throw new Error("agent_v2.readiness_aborted");
+		this.open().prepare("SELECT 1").get();
+		if (signal.aborted) throw new Error("agent_v2.readiness_aborted");
+	}
+
 	close(): void {
 		this.database?.close();
 		this.database = undefined;

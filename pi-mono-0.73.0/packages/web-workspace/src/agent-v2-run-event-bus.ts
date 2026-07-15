@@ -45,6 +45,7 @@ export class AgentV2RunEventProjectionConflictError extends Error {
 }
 
 export interface AgentV2RunEventBus {
+	ping?(signal: AbortSignal): Promise<void>;
 	project(event: AgentV2LiveRunEvent): Promise<"projected" | "already_projected">;
 	read(request: AgentV2RunEventReadRequest): Promise<AgentV2LiveRunEvent[]>;
 	purge(options?: AgentV2RunEventBusPurgeOptions): Promise<AgentV2RunEventBusPurgeResult>;
@@ -67,6 +68,11 @@ export function agentV2RunEventStreamKey(identity: AgentV2RunEventIdentity): str
 export class InMemoryAgentV2RunEventBus implements AgentV2RunEventBus {
 	private closed = false;
 	private readonly eventsByStream = new Map<string, AgentV2LiveRunEvent[]>();
+
+	async ping(signal: AbortSignal): Promise<void> {
+		this.assertOpen();
+		if (signal.aborted) throw new Error("agent_v2.readiness_aborted");
+	}
 
 	async project(event: AgentV2LiveRunEvent): Promise<"projected" | "already_projected"> {
 		this.assertOpen();
@@ -139,6 +145,7 @@ export interface RedisAgentV2RunEventBusClient {
 	del(keys: string | string[]): Promise<number>;
 	expire(key: string, seconds: number): Promise<unknown>;
 	quit(): Promise<unknown> | unknown;
+	ping(): Promise<unknown>;
 	scanIterator(options: { MATCH: string; COUNT: number }): AsyncIterable<unknown>;
 	xAdd(key: string, id: string, message: Record<string, string>, options?: unknown): Promise<unknown>;
 	xRead(streams: unknown, options?: unknown): Promise<unknown>;
@@ -166,6 +173,12 @@ export class RedisAgentV2RunEventBus implements AgentV2RunEventBus {
 		this.createRedisClient =
 			options.createClient ??
 			((clientOptions) => createClient({ url: clientOptions.url }) as RedisAgentV2RunEventBusClient);
+	}
+
+	async ping(signal: AbortSignal): Promise<void> {
+		this.assertOpen();
+		const client = await raceAbort(this.connectedClient(), signal);
+		await raceAbort(client.ping(), signal);
 	}
 
 	async project(event: AgentV2LiveRunEvent): Promise<"projected" | "already_projected"> {
@@ -396,4 +409,13 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 		chunks.push(items.slice(index, index + size));
 	}
 	return chunks;
+}
+
+function raceAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(new Error("agent_v2.readiness_aborted"));
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(new Error("agent_v2.readiness_aborted"));
+		signal.addEventListener("abort", onAbort, { once: true });
+		operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+	});
 }

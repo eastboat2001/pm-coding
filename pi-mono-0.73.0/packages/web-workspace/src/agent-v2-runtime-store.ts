@@ -27,6 +27,7 @@ export type MaybeAsyncIterable<T> = AsyncIterable<T> | Iterable<T>;
 
 export interface AgentV2SchemaStore {
 	ensureAgentV2Schema(): AgentV2StoreResult<void>;
+	ping(signal: AbortSignal): AgentV2StoreResult<void>;
 }
 
 export interface AgentV2RunApiStore {

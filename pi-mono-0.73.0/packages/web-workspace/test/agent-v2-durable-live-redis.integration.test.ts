@@ -33,7 +33,7 @@ describeRedis("agent v2 durable SSE healing with real Redis", () => {
 		const bus = new RedisAgentV2RunEventBus({ redisUrl: redisUrl!, ttlSeconds: 60 });
 		const eventLog = new AgentV2RunEventLog({ store });
 		const api = new AgentV2RunApiService({ store, events: eventLog, queueName: `pi:test:sse:${randomUUID()}` });
-		const middleware = createMiddleware({ root, store, bus, eventLog, api });
+		const middleware = await createMiddleware({ root, store, bus, eventLog, api });
 		const request = dispatch(middleware, `/api/agent-v2/runs/${runId}/events?stream=1&afterSeq=0`);
 
 		try {
@@ -68,13 +68,13 @@ type Middleware = (
 	next: Connect.NextFunction,
 ) => void | Promise<void>;
 
-function createMiddleware(options: {
+async function createMiddleware(options: {
 	root: string;
 	store: RuntimeDbStore;
 	bus: RedisAgentV2RunEventBus;
 	eventLog: AgentV2RunEventLog;
 	api: AgentV2RunApiService;
-}): Middleware {
+}): Promise<Middleware> {
 	let middleware: Middleware | undefined;
 	const plugin = createConfiguredStoragePluginForTest({
 		config: {
@@ -105,7 +105,7 @@ function createMiddleware(options: {
 		agentV2RunEventBus: options.bus,
 		agentV2RunEventLog: options.eventLog,
 	});
-	(plugin.configureServer as (server: { middlewares: { use(handler: Middleware): void } }) => void)({
+	await (plugin.configureServer as (server: { middlewares: { use(handler: Middleware): void } }) => Promise<void>)({
 		middlewares: {
 			use(handler) {
 				middleware = handler;

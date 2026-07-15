@@ -203,6 +203,11 @@ export class InMemoryAgentV2RunQueue {
         this.cancelTtlSeconds = options.cancelTtlSeconds ?? DEFAULT_CANCEL_TTL_SECONDS;
         this.now = options.now ?? (() => Date.now());
     }
+    async ping(signal) {
+        this.assertOpen();
+        if (signal.aborted)
+            throw new Error("agent_v2.readiness_aborted");
+    }
     async enqueue(run) {
         this.assertOpen();
         const identity = copyIdentity(run);
@@ -380,6 +385,11 @@ export class RedisAgentV2RunQueue {
         this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
         this.claimCommandTimeoutMs = options.claimCommandTimeoutMs ?? DEFAULT_CLAIM_COMMAND_TIMEOUT_MS;
         this.gracefulCloseTimeoutMs = Math.max(1, options.gracefulCloseTimeoutMs ?? DEFAULT_GRACEFUL_CLOSE_TIMEOUT_MS);
+    }
+    async ping(signal) {
+        this.assertOpen();
+        const client = await raceAbort(this.connectedClient(), signal);
+        await raceAbort(client.ping(), signal);
     }
     async enqueue(run) {
         this.assertOpen();
@@ -631,6 +641,15 @@ function copyIdentity(run) {
     if (typeof run.runId !== "string" || run.runId.length === 0)
         throw new Error("Agent v2 queue identity is missing runId");
     return { clientId: run.clientId, runId: run.runId };
+}
+function raceAbort(operation, signal) {
+    if (signal.aborted)
+        return Promise.reject(new Error("agent_v2.readiness_aborted"));
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(new Error("agent_v2.readiness_aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+        operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
 }
 function createActiveRunClaim(run, workerId, claimToken, now, claimLeaseTtlMs) {
     return {

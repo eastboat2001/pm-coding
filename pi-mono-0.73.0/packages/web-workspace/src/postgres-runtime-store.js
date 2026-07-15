@@ -253,6 +253,9 @@ export class PostgresRuntimeStore {
             await this.createAgentV2Schema(tx, now());
         });
     }
+    async ping(signal) {
+        await raceAbort(this.query(this.queryable, "SELECT 1"), signal);
+    }
     async createAgentV2Schema(queryable, appliedAt) {
         await this.query(queryable, POSTGRES_AGENT_V2_SCHEMA);
         await this.query(queryable, "INSERT INTO agent_v2_schema_metadata (singleton_id, schema_version, applied_at) VALUES (1, $1, $2)", [AGENT_V2_SCHEMA_VERSION, appliedAt]);
@@ -1882,6 +1885,15 @@ export class PostgresRuntimeStore {
         const rows = await this.queryRows(queryable, sql, values);
         return rows[0];
     }
+}
+function raceAbort(operation, signal) {
+    if (signal.aborted)
+        return Promise.reject(new Error("agent_v2.readiness_aborted"));
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(new Error("agent_v2.readiness_aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+        operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
 }
 function toSessionRecord(row) {
     return {

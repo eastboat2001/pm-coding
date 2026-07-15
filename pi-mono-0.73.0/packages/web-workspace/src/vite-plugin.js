@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { createAgentV2DiagnosticProjectionAdapters } from "./agent-v2-diagnostic-projections.js";
 import { createAgentV2ShutdownDeadline, runAgentV2ShutdownSteps } from "./agent-v2-lifecycle.js";
 import { AgentV2OutboxDispatcher } from "./agent-v2-outbox-dispatcher.js";
+import { AgentV2Readiness, AgentV2ReadinessGate } from "./agent-v2-readiness.js";
 import { AgentV2RunApiError, AgentV2RunApiService } from "./agent-v2-run-api-service.js";
 import { RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
@@ -26,6 +27,7 @@ const DURABLE_RUN_EVENT_CHECK_INTERVAL_MS = 1000;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 const VITE_SHUTDOWN_TIMEOUT_MS = 10_000;
+const READINESS_REFRESH_INTERVAL_MS = 1_000;
 export function configuredStoragePlugin(envFile) {
     const rootDir = process.cwd();
     const config = loadStorageConfig(rootDir, envFile);
@@ -85,12 +87,25 @@ export function configuredStoragePlugin(envFile) {
 export function createConfiguredStoragePluginForTest(services) {
     return createConfiguredStoragePlugin(services);
 }
-function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, previews, tasks, skills, runtimeDb, diagnosticExports, agentV2RunApi, agentV2RunEventBus, agentV2RunEventLog, agentV2RunQueue, agentV2OutboxDispatcher, }) {
+function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, previews, tasks, skills, runtimeDb, diagnosticExports, agentV2RunApi, agentV2RunEventBus, agentV2RunEventLog, agentV2RunQueue, agentV2OutboxDispatcher, agentV2ReadinessGate, }) {
     let startupDiagnosticsWritten = false;
     let storageDirsReady = false;
     let storageDirsPromise;
     const dispatcherAbort = new AbortController();
     let dispatcherPromise;
+    const readinessAbort = new AbortController();
+    const readinessGate = agentV2ReadinessGate ??
+        new AgentV2ReadinessGate(new AgentV2Readiness([
+            { name: "store", check: async (signal) => await runtimeDb.ping(signal) },
+            ...(agentV2RunQueue?.ping
+                ? [{ name: "queue", check: async (signal) => await agentV2RunQueue.ping(signal) }]
+                : []),
+            ...(agentV2RunEventBus?.ping
+                ? [{ name: "event_bus", check: async (signal) => await agentV2RunEventBus.ping(signal) }]
+                : []),
+        ]));
+    let readinessRefreshTimer;
+    let readinessRefreshPromise;
     const ensureStorageDirs = async () => {
         if (storageDirsReady)
             return;
@@ -101,6 +116,9 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             mkdirSync(config.defaultSkillsDir, { recursive: true });
             diagnostics.ensureDirs();
             await runtimeDb.ensureAgentV2Schema();
+            const startupReadiness = await readinessGate.check(readinessAbort.signal, { force: true });
+            if (!startupReadiness.ready)
+                throw new AgentV2ReadinessStartupError(startupReadiness);
             if (agentV2OutboxDispatcher && !dispatcherPromise) {
                 dispatcherPromise = agentV2OutboxDispatcher
                     .start({ ownerId: `web:${process.pid}`, intervalMs: 250, signal: dispatcherAbort.signal })
@@ -118,6 +136,7 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
                     void error;
                 });
             }
+            scheduleReadinessRefresh();
             writeStartupDiagnosticsOnce();
             storageDirsReady = true;
         })().catch((error) => {
@@ -125,6 +144,36 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             throw error;
         });
         await storageDirsPromise;
+    };
+    const scheduleReadinessRefresh = () => {
+        if (readinessAbort.signal.aborted || readinessRefreshTimer !== undefined)
+            return;
+        readinessRefreshTimer = setTimeout(() => {
+            readinessRefreshTimer = undefined;
+            const refresh = readinessGate
+                .check(readinessAbort.signal, { force: true })
+                .then(() => undefined, () => {
+                if (readinessAbort.signal.aborted)
+                    return;
+                diagnostics.writeEvents({
+                    events: [
+                        {
+                            level: "error",
+                            category: "system",
+                            eventType: "agent_v2.readiness_refresh_failed",
+                            data: { message: "Agent v2 readiness monitoring stopped unexpectedly" },
+                        },
+                    ],
+                });
+            })
+                .finally(() => {
+                if (readinessRefreshPromise === refresh)
+                    readinessRefreshPromise = undefined;
+                scheduleReadinessRefresh();
+            });
+            readinessRefreshPromise = refresh;
+        }, READINESS_REFRESH_INTERVAL_MS);
+        readinessRefreshTimer.unref?.();
     };
     const writeStartupDiagnosticsOnce = () => {
         if (startupDiagnosticsWritten)
@@ -200,10 +249,17 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
                 return;
             }
             if (isAgentV2RunsApi) {
+                if (method !== "GET") {
+                    const report = await readinessGate.check(readinessAbort.signal);
+                    if (!report.ready) {
+                        sendJson(res, { error: "Agent v2 runtime dependencies are unavailable.", readiness: report }, 503);
+                        return;
+                    }
+                }
                 await handleAgentV2RuntimeRunsApi(method, route, url, req, res, requireAgentV2RunApi(agentV2RunApi), requireAgentV2RunEventBus(agentV2RunEventBus), requireAgentV2RunEventLog(agentV2RunEventLog));
                 return;
             }
-            await handleStorageApi(method, route, req, res, config, sessions);
+            await handleStorageApi(method, route, req, res, config, sessions, readinessGate, readinessAbort.signal);
         }
         catch (error) {
             sendRuntimeApiError(res, error);
@@ -212,13 +268,19 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
     let runEventBusClosePromise;
     const closeRunEventBusOnce = () => {
         dispatcherAbort.abort();
+        readinessAbort.abort();
+        if (readinessRefreshTimer !== undefined)
+            clearTimeout(readinessRefreshTimer);
+        readinessRefreshTimer = undefined;
         runEventBusClosePromise ??= (async () => {
             const deadline = createAgentV2ShutdownDeadline(VITE_SHUTDOWN_TIMEOUT_MS);
             try {
                 const result = await runAgentV2ShutdownSteps([
+                    { step: "vite.readiness_monitor.stop", run: async () => await readinessRefreshPromise },
                     { step: "vite.outbox_dispatcher.stop", run: async () => await dispatcherPromise },
                     { step: "vite.event_bus.close", run: async (options) => await agentV2RunEventBus?.close(options) },
                     { step: "vite.queue.close", run: async (options) => await agentV2RunQueue?.close(options) },
+                    { step: "vite.runtime_store.close", run: async () => await runtimeDb.close?.() },
                     {
                         step: "vite.langfuse.flush",
                         run: async (options) => await diagnostics.flushLangfuse(options.signal),
@@ -249,12 +311,14 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
                 },
             };
         },
-        configureServer(server) {
+        async configureServer(server) {
             registerRunEventBusCleanup(server);
+            await ensureStorageDirs();
             server.middlewares.use(handler);
         },
-        configurePreviewServer(server) {
+        async configurePreviewServer(server) {
             registerRunEventBusCleanup(server);
+            await ensureStorageDirs();
             server.middlewares.use(handler);
         },
         async closeBundle() {
@@ -411,8 +475,9 @@ function normalizeBatchSummarySessions(body) {
     }
     return sessions;
 }
-async function handleStorageApi(method, route, req, res, config, sessions) {
+async function handleStorageApi(method, route, req, res, config, sessions, readinessGate, readinessSignal) {
     if (method === "GET" && route === "/status") {
+        const readiness = await readinessGate.check(readinessSignal);
         sendJson(res, {
             configured: true,
             settingsFile: config.settingsFile,
@@ -448,8 +513,8 @@ async function handleStorageApi(method, route, req, res, config, sessions) {
             logCleanupIntervalMs: config.logCleanupIntervalMs,
             logVacuumIntervalMs: config.logVacuumIntervalMs,
             langfuseEnabled: config.langfuseEnabled,
-            langfuseHost: config.langfuseHost,
-            langfuseOtelEndpoint: config.langfuseOtelEndpoint || computedLangfuseOtelEndpoint(config.langfuseHost),
+            langfuseHost: publicEndpointOrigin(config.langfuseHost),
+            langfuseOtelEndpoint: publicEndpointOrigin(config.langfuseOtelEndpoint || computedLangfuseOtelEndpoint(config.langfuseHost)),
             langfuseConfigured: Boolean((config.langfuseHost || config.langfuseOtelEndpoint) &&
                 config.langfusePublicKey &&
                 config.langfuseSecretKey),
@@ -460,7 +525,8 @@ async function handleStorageApi(method, route, req, res, config, sessions) {
             langfuseExportModelOutputSnapshots: config.langfuseExportModelOutputSnapshots,
             otelServiceName: config.otelServiceName,
             otelDeploymentEnvironment: config.otelDeploymentEnvironment,
-        });
+            readiness,
+        }, readiness.ready ? 200 : 503);
         return;
     }
     const clientId = readConfiguredApiClientId(req, config);
@@ -477,6 +543,14 @@ async function handleStorageApi(method, route, req, res, config, sessions) {
         }
     }
     sendJson(res, { error: "Not found." }, 404);
+}
+export class AgentV2ReadinessStartupError extends Error {
+    report;
+    constructor(report) {
+        super("Agent v2 runtime dependencies are unavailable during startup.");
+        this.report = report;
+        this.name = "AgentV2ReadinessStartupError";
+    }
 }
 async function handleLogsApi(method, route, url, req, res, config, diagnostics, diagnosticExports) {
     if (method === "GET" && route === "/status") {
@@ -854,6 +928,16 @@ function sanitizeFilenamePart(value) {
 }
 function computedLangfuseOtelEndpoint(host) {
     return host ? `${host}/api/public/otel/v1/traces` : "";
+}
+function publicEndpointOrigin(value) {
+    if (!value)
+        return "";
+    try {
+        return new URL(value).origin;
+    }
+    catch {
+        return "";
+    }
 }
 function redactConnectionUrl(value) {
     try {

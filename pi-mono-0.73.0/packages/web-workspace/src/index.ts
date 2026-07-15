@@ -64,6 +64,7 @@ export {
 	buildAgentV2PlanningBootstrap,
 	persistAgentV2PlanningBootstrap,
 } from "./agent-v2-planning-bootstrap.js";
+export * from "./agent-v2-readiness.js";
 export {
 	type AgentV2RepairAction,
 	type AgentV2RepairActionType,
@@ -230,7 +231,11 @@ export {
 	type AgentV2WorkerStore,
 } from "./agent-v2-worker-service.js";
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
-export { loadStorageConfig, RetiredApplicationGenerationConfigError } from "./config.js";
+export {
+	InvalidRuntimeConfigError,
+	loadStorageConfig,
+	RetiredApplicationGenerationConfigError,
+} from "./config.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export type { LangfuseDiagnosticEvent, LangfuseExporterStatus } from "./langfuse-exporter.js";

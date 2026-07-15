@@ -3,6 +3,7 @@ export type * from "./agent-v2-durable-store.js";
 export * from "./agent-v2-lifecycle.js";
 export type * from "./agent-v2-outbox.js";
 export * from "./agent-v2-outbox-dispatcher.js";
+export * from "./agent-v2-readiness.js";
 export {
 	type AgentV2CancelRequestResult,
 	type AgentV2RunQueue,
@@ -22,7 +23,7 @@ export type {
 	AgentV2SchemaStore,
 	AgentV2WorkerStore,
 } from "./agent-v2-runtime-store.js";
-export { loadStorageConfig } from "./config.js";
+export { InvalidRuntimeConfigError, loadStorageConfig } from "./config.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export { type AgentV2ProductionStore, createAgentV2RuntimeStore } from "./runtime-store-factory.js";
 export type { AgentV2RuntimeConfig, DiagnosticLogEventInput, JsonObject, StorageConfig } from "./types.js";

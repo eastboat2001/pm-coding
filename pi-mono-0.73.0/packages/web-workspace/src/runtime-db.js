@@ -235,6 +235,13 @@ export class RuntimeDbStore {
         }
         this.writeTransaction(db, () => createSqliteAgentV2Schema(db, now()));
     }
+    ping(signal) {
+        if (signal.aborted)
+            throw new Error("agent_v2.readiness_aborted");
+        this.open().prepare("SELECT 1").get();
+        if (signal.aborted)
+            throw new Error("agent_v2.readiness_aborted");
+    }
     close() {
         this.database?.close();
         this.database = undefined;

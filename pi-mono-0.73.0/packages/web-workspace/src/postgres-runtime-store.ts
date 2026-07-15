@@ -524,6 +524,10 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		});
 	}
 
+	async ping(signal: AbortSignal): Promise<void> {
+		await raceAbort(this.query(this.queryable, "SELECT 1"), signal);
+	}
+
 	private async createAgentV2Schema(queryable: Queryable, appliedAt: string): Promise<void> {
 		await this.query(queryable, POSTGRES_AGENT_V2_SCHEMA);
 		await this.query(
@@ -2875,6 +2879,15 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		const rows = await this.queryRows<T>(queryable, sql, values);
 		return rows[0];
 	}
+}
+
+function raceAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(new Error("agent_v2.readiness_aborted"));
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(new Error("agent_v2.readiness_aborted"));
+		signal.addEventListener("abort", onAbort, { once: true });
+		operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+	});
 }
 
 function toSessionRecord(row: SessionRow): RuntimeSessionRecord {

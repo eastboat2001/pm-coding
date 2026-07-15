@@ -19,7 +19,7 @@ describe("configured storage plugin schema init", () => {
 	it("initializes only the agent v2 schema before handling API routes", async () => {
 		root = mkdtempSync(join(tmpdir(), "pi-vite-plugin-schema-init-"));
 		const calls: string[] = [];
-		const middleware = createMiddleware(testConfig(root), calls);
+		const middleware = await createMiddleware(testConfig(root), calls);
 
 		const response = await dispatch(middleware, "/api/pi-skills/unknown");
 
@@ -27,23 +27,32 @@ describe("configured storage plugin schema init", () => {
 		expect(calls).toEqual(["ensureAgentV2Schema"]);
 	});
 
-	it("defers schema initialization until a non-retired API request", async () => {
+	it("does not register routes when startup schema initialization fails", async () => {
 		root = mkdtempSync(join(tmpdir(), "pi-vite-plugin-schema-init-"));
 		const calls: string[] = [];
-		const middleware = createMiddleware(testConfig(root), calls);
+		let registered = false;
+		const plugin = createConfiguredStoragePluginForTest(
+			createSchemaInitServices(testConfig(root), {
+				async ensureAgentV2Schema() {
+					calls.push("ensureAgentV2Schema");
+					throw new Error("schema unavailable");
+				},
+				async ping() {},
+			}),
+		);
+		const configureServer = plugin.configureServer as (server: {
+			middlewares: { use(handler: Middleware): void };
+		}) => Promise<void>;
 
-		expect(calls).toEqual([]);
-
-		const retiredResponse = await dispatch(middleware, "/api/runtime/runs/retired-run/events");
-		expect(retiredResponse.statusCode).toBe(410);
-		expect(JSON.parse(retiredResponse.body)).toEqual({
-			error: "Application Generation Agent v1 runtime routes have been removed.",
-		});
-		expect(calls).toEqual([]);
-
-		const activeResponse = await dispatch(middleware, "/api/pi-skills/unknown");
-		expect(activeResponse.statusCode).toBe(404);
+		await expect(
+			configureServer(
+				createFakeServer(() => {
+					registered = true;
+				}),
+			),
+		).rejects.toThrow("schema unavailable");
 		expect(calls).toEqual(["ensureAgentV2Schema"]);
+		expect(registered).toBe(false);
 	});
 });
 
@@ -54,19 +63,20 @@ type Middleware = (
 	next: Connect.NextFunction,
 ) => void | Promise<void>;
 
-function createMiddleware(config: StorageConfig, calls: string[]): Middleware {
+async function createMiddleware(config: StorageConfig, calls: string[]): Promise<Middleware> {
 	let middleware: Middleware | undefined;
 	const plugin = createConfiguredStoragePluginForTest(
 		createSchemaInitServices(config, {
 			async ensureAgentV2Schema() {
 				calls.push("ensureAgentV2Schema");
 			},
+			async ping() {},
 		}),
 	);
 	const configureServer = plugin.configureServer as (server: {
 		middlewares: { use(handler: Middleware): void };
-	}) => void;
-	configureServer(
+	}) => Promise<void>;
+	await configureServer(
 		createFakeServer((handler) => {
 			middleware = handler;
 		}),
@@ -77,7 +87,7 @@ function createMiddleware(config: StorageConfig, calls: string[]): Middleware {
 
 function createSchemaInitServices(
 	config: StorageConfig,
-	runtimeDb: Pick<TestServices["runtimeDb"], "ensureAgentV2Schema">,
+	runtimeDb: Pick<TestServices["runtimeDb"], "ensureAgentV2Schema" | "ping">,
 ): TestServices {
 	return {
 		config,

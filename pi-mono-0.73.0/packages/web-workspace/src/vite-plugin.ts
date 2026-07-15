@@ -6,6 +6,7 @@ import type { Connect, Plugin } from "vite";
 import { createAgentV2DiagnosticProjectionAdapters } from "./agent-v2-diagnostic-projections.js";
 import { createAgentV2ShutdownDeadline, runAgentV2ShutdownSteps } from "./agent-v2-lifecycle.js";
 import { AgentV2OutboxDispatcher } from "./agent-v2-outbox-dispatcher.js";
+import { AgentV2Readiness, AgentV2ReadinessGate, type AgentV2ReadinessReport } from "./agent-v2-readiness.js";
 import { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
 import { type AgentV2RunEventBus, RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
@@ -56,6 +57,7 @@ const DURABLE_RUN_EVENT_CHECK_INTERVAL_MS = 1000;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 const VITE_SHUTDOWN_TIMEOUT_MS = 10_000;
+const READINESS_REFRESH_INTERVAL_MS = 1_000;
 
 type RetiredApplicationGenerationRoute = { status: 404 | 410; error: string };
 
@@ -67,13 +69,14 @@ export interface ConfiguredStoragePluginTestServices {
 	previews: WorkspacePreviewService;
 	tasks: WorkspaceTaskService;
 	skills: WorkspaceSkillService;
-	runtimeDb: AgentV2SchemaStore;
+	runtimeDb: AgentV2SchemaStore & { close?(): void | Promise<void> };
 	diagnosticExports: WorkspaceDiagnosticExportService;
 	agentV2RunApi?: AgentV2RunApiService;
 	agentV2RunEventBus?: AgentV2RunEventBus;
 	agentV2RunEventLog?: Pick<AgentV2RunEventLog, "list">;
 	agentV2RunQueue?: AgentV2RunQueue;
 	agentV2OutboxDispatcher?: AgentV2OutboxDispatcher;
+	agentV2ReadinessGate?: AgentV2ReadinessGate;
 }
 
 export function configuredStoragePlugin(envFile?: string): Plugin {
@@ -152,12 +155,29 @@ function createConfiguredStoragePlugin({
 	agentV2RunEventLog,
 	agentV2RunQueue,
 	agentV2OutboxDispatcher,
+	agentV2ReadinessGate,
 }: ConfiguredStoragePluginTestServices): Plugin {
 	let startupDiagnosticsWritten = false;
 	let storageDirsReady = false;
 	let storageDirsPromise: Promise<void> | undefined;
 	const dispatcherAbort = new AbortController();
 	let dispatcherPromise: Promise<void> | undefined;
+	const readinessAbort = new AbortController();
+	const readinessGate =
+		agentV2ReadinessGate ??
+		new AgentV2ReadinessGate(
+			new AgentV2Readiness([
+				{ name: "store", check: async (signal) => await runtimeDb.ping(signal) },
+				...(agentV2RunQueue?.ping
+					? [{ name: "queue", check: async (signal: AbortSignal) => await agentV2RunQueue.ping!(signal) }]
+					: []),
+				...(agentV2RunEventBus?.ping
+					? [{ name: "event_bus", check: async (signal: AbortSignal) => await agentV2RunEventBus.ping!(signal) }]
+					: []),
+			]),
+		);
+	let readinessRefreshTimer: NodeJS.Timeout | undefined;
+	let readinessRefreshPromise: Promise<void> | undefined;
 
 	const ensureStorageDirs = async () => {
 		if (storageDirsReady) return;
@@ -168,6 +188,8 @@ function createConfiguredStoragePlugin({
 			mkdirSync(config.defaultSkillsDir, { recursive: true });
 			diagnostics.ensureDirs();
 			await runtimeDb.ensureAgentV2Schema();
+			const startupReadiness = await readinessGate.check(readinessAbort.signal, { force: true });
+			if (!startupReadiness.ready) throw new AgentV2ReadinessStartupError(startupReadiness);
 			if (agentV2OutboxDispatcher && !dispatcherPromise) {
 				dispatcherPromise = agentV2OutboxDispatcher
 					.start({ ownerId: `web:${process.pid}`, intervalMs: 250, signal: dispatcherAbort.signal })
@@ -185,6 +207,7 @@ function createConfiguredStoragePlugin({
 						void error;
 					});
 			}
+			scheduleReadinessRefresh();
 			writeStartupDiagnosticsOnce();
 			storageDirsReady = true;
 		})().catch((error) => {
@@ -192,6 +215,37 @@ function createConfiguredStoragePlugin({
 			throw error;
 		});
 		await storageDirsPromise;
+	};
+
+	const scheduleReadinessRefresh = (): void => {
+		if (readinessAbort.signal.aborted || readinessRefreshTimer !== undefined) return;
+		readinessRefreshTimer = setTimeout(() => {
+			readinessRefreshTimer = undefined;
+			const refresh = readinessGate
+				.check(readinessAbort.signal, { force: true })
+				.then(
+					() => undefined,
+					() => {
+						if (readinessAbort.signal.aborted) return;
+						diagnostics.writeEvents({
+							events: [
+								{
+									level: "error",
+									category: "system",
+									eventType: "agent_v2.readiness_refresh_failed",
+									data: { message: "Agent v2 readiness monitoring stopped unexpectedly" },
+								},
+							],
+						});
+					},
+				)
+				.finally(() => {
+					if (readinessRefreshPromise === refresh) readinessRefreshPromise = undefined;
+					scheduleReadinessRefresh();
+				});
+			readinessRefreshPromise = refresh;
+		}, READINESS_REFRESH_INTERVAL_MS);
+		readinessRefreshTimer.unref?.();
 	};
 
 	const writeStartupDiagnosticsOnce = () => {
@@ -272,6 +326,13 @@ function createConfiguredStoragePlugin({
 				return;
 			}
 			if (isAgentV2RunsApi) {
+				if (method !== "GET") {
+					const report = await readinessGate.check(readinessAbort.signal);
+					if (!report.ready) {
+						sendJson(res, { error: "Agent v2 runtime dependencies are unavailable.", readiness: report }, 503);
+						return;
+					}
+				}
 				await handleAgentV2RuntimeRunsApi(
 					method,
 					route,
@@ -284,7 +345,7 @@ function createConfiguredStoragePlugin({
 				);
 				return;
 			}
-			await handleStorageApi(method, route, req, res, config, sessions);
+			await handleStorageApi(method, route, req, res, config, sessions, readinessGate, readinessAbort.signal);
 		} catch (error) {
 			sendRuntimeApiError(res, error);
 		}
@@ -292,14 +353,19 @@ function createConfiguredStoragePlugin({
 	let runEventBusClosePromise: Promise<void> | undefined;
 	const closeRunEventBusOnce = (): Promise<void> => {
 		dispatcherAbort.abort();
+		readinessAbort.abort();
+		if (readinessRefreshTimer !== undefined) clearTimeout(readinessRefreshTimer);
+		readinessRefreshTimer = undefined;
 		runEventBusClosePromise ??= (async () => {
 			const deadline = createAgentV2ShutdownDeadline(VITE_SHUTDOWN_TIMEOUT_MS);
 			try {
 				const result = await runAgentV2ShutdownSteps(
 					[
+						{ step: "vite.readiness_monitor.stop", run: async () => await readinessRefreshPromise },
 						{ step: "vite.outbox_dispatcher.stop", run: async () => await dispatcherPromise },
 						{ step: "vite.event_bus.close", run: async (options) => await agentV2RunEventBus?.close(options) },
 						{ step: "vite.queue.close", run: async (options) => await agentV2RunQueue?.close(options) },
+						{ step: "vite.runtime_store.close", run: async () => await runtimeDb.close?.() },
 						{
 							step: "vite.langfuse.flush",
 							run: async (options) => await diagnostics.flushLangfuse(options.signal),
@@ -334,12 +400,14 @@ function createConfiguredStoragePlugin({
 				},
 			};
 		},
-		configureServer(server) {
+		async configureServer(server) {
 			registerRunEventBusCleanup(server);
+			await ensureStorageDirs();
 			server.middlewares.use(handler);
 		},
-		configurePreviewServer(server) {
+		async configurePreviewServer(server) {
 			registerRunEventBusCleanup(server);
+			await ensureStorageDirs();
 			server.middlewares.use(handler);
 		},
 		async closeBundle() {
@@ -541,58 +609,68 @@ async function handleStorageApi(
 	res: ServerResponse,
 	config: StorageConfig,
 	sessions: WorkspaceSessionService,
+	readinessGate: AgentV2ReadinessGate,
+	readinessSignal: AbortSignal,
 ): Promise<void> {
 	if (method === "GET" && route === "/status") {
-		sendJson(res, {
-			configured: true,
-			settingsFile: config.settingsFile,
-			clientsRootDir: config.clientsRootDir,
-			skillsDir: config.skillsDir,
-			defaultSkillsDir: config.defaultSkillsDir,
-			previewBaseUrl: config.previewBaseUrl,
-			defaultModelProvider: config.defaultModelProvider,
-			defaultModelId: config.defaultModelId,
-			handoffDefaultThinkingLevel: config.handoffDefaultThinkingLevel,
-			envFile: config.envFile,
-			envFileExists: config.envFileExists,
-			runtimeDbFile: config.runtimeDbFile,
-			redisUrl: redactConnectionUrl(config.redisUrl),
-			workerId: config.workerId,
-			workerConcurrency: config.workerConcurrency,
-			agentV2: config.agentV2,
-			clientIdRequired: config.clientIdRequired,
-			logsDbFile: config.logsDbFile,
-			loggingEnabled: config.loggingEnabled,
-			logStdoutEnabled: config.logStdoutEnabled,
-			rawProviderLoggingEnabled: config.rawProviderLoggingEnabled,
-			rawProviderLogMaxChars: config.rawProviderLogMaxChars,
-			promptSnapshotLoggingEnabled: config.promptSnapshotLoggingEnabled,
-			promptSnapshotMaxChars: config.promptSnapshotMaxChars,
-			modelOutputSnapshotLoggingEnabled: config.modelOutputSnapshotLoggingEnabled,
-			modelOutputSnapshotMaxChars: config.modelOutputSnapshotMaxChars,
-			modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
-			modelMaxOutputTokens: config.modelMaxOutputTokens,
-			contextProviderPayloadBudgetChars: config.contextProviderPayloadBudgetChars,
-			logRetentionDays: config.logRetentionDays,
-			logMaxEvents: config.logMaxEvents,
-			logCleanupIntervalMs: config.logCleanupIntervalMs,
-			logVacuumIntervalMs: config.logVacuumIntervalMs,
-			langfuseEnabled: config.langfuseEnabled,
-			langfuseHost: config.langfuseHost,
-			langfuseOtelEndpoint: config.langfuseOtelEndpoint || computedLangfuseOtelEndpoint(config.langfuseHost),
-			langfuseConfigured: Boolean(
-				(config.langfuseHost || config.langfuseOtelEndpoint) &&
-					config.langfusePublicKey &&
-					config.langfuseSecretKey,
-			),
-			langfuseFlushIntervalMs: config.langfuseFlushIntervalMs,
-			langfuseBatchSize: config.langfuseBatchSize,
-			langfuseExportPromptSnapshots: config.langfuseExportPromptSnapshots,
-			langfuseExportRawChunks: config.langfuseExportRawChunks,
-			langfuseExportModelOutputSnapshots: config.langfuseExportModelOutputSnapshots,
-			otelServiceName: config.otelServiceName,
-			otelDeploymentEnvironment: config.otelDeploymentEnvironment,
-		});
+		const readiness = await readinessGate.check(readinessSignal);
+		sendJson(
+			res,
+			{
+				configured: true,
+				settingsFile: config.settingsFile,
+				clientsRootDir: config.clientsRootDir,
+				skillsDir: config.skillsDir,
+				defaultSkillsDir: config.defaultSkillsDir,
+				previewBaseUrl: config.previewBaseUrl,
+				defaultModelProvider: config.defaultModelProvider,
+				defaultModelId: config.defaultModelId,
+				handoffDefaultThinkingLevel: config.handoffDefaultThinkingLevel,
+				envFile: config.envFile,
+				envFileExists: config.envFileExists,
+				runtimeDbFile: config.runtimeDbFile,
+				redisUrl: redactConnectionUrl(config.redisUrl),
+				workerId: config.workerId,
+				workerConcurrency: config.workerConcurrency,
+				agentV2: config.agentV2,
+				clientIdRequired: config.clientIdRequired,
+				logsDbFile: config.logsDbFile,
+				loggingEnabled: config.loggingEnabled,
+				logStdoutEnabled: config.logStdoutEnabled,
+				rawProviderLoggingEnabled: config.rawProviderLoggingEnabled,
+				rawProviderLogMaxChars: config.rawProviderLogMaxChars,
+				promptSnapshotLoggingEnabled: config.promptSnapshotLoggingEnabled,
+				promptSnapshotMaxChars: config.promptSnapshotMaxChars,
+				modelOutputSnapshotLoggingEnabled: config.modelOutputSnapshotLoggingEnabled,
+				modelOutputSnapshotMaxChars: config.modelOutputSnapshotMaxChars,
+				modelStreamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
+				modelMaxOutputTokens: config.modelMaxOutputTokens,
+				contextProviderPayloadBudgetChars: config.contextProviderPayloadBudgetChars,
+				logRetentionDays: config.logRetentionDays,
+				logMaxEvents: config.logMaxEvents,
+				logCleanupIntervalMs: config.logCleanupIntervalMs,
+				logVacuumIntervalMs: config.logVacuumIntervalMs,
+				langfuseEnabled: config.langfuseEnabled,
+				langfuseHost: publicEndpointOrigin(config.langfuseHost),
+				langfuseOtelEndpoint: publicEndpointOrigin(
+					config.langfuseOtelEndpoint || computedLangfuseOtelEndpoint(config.langfuseHost),
+				),
+				langfuseConfigured: Boolean(
+					(config.langfuseHost || config.langfuseOtelEndpoint) &&
+						config.langfusePublicKey &&
+						config.langfuseSecretKey,
+				),
+				langfuseFlushIntervalMs: config.langfuseFlushIntervalMs,
+				langfuseBatchSize: config.langfuseBatchSize,
+				langfuseExportPromptSnapshots: config.langfuseExportPromptSnapshots,
+				langfuseExportRawChunks: config.langfuseExportRawChunks,
+				langfuseExportModelOutputSnapshots: config.langfuseExportModelOutputSnapshots,
+				otelServiceName: config.otelServiceName,
+				otelDeploymentEnvironment: config.otelDeploymentEnvironment,
+				readiness,
+			},
+			readiness.ready ? 200 : 503,
+		);
 		return;
 	}
 	const clientId = readConfiguredApiClientId(req, config);
@@ -610,6 +688,13 @@ async function handleStorageApi(
 	}
 
 	sendJson(res, { error: "Not found." }, 404);
+}
+
+export class AgentV2ReadinessStartupError extends Error {
+	constructor(readonly report: AgentV2ReadinessReport) {
+		super("Agent v2 runtime dependencies are unavailable during startup.");
+		this.name = "AgentV2ReadinessStartupError";
+	}
 }
 
 async function handleLogsApi(
@@ -1052,6 +1137,15 @@ function sanitizeFilenamePart(value: string): string {
 
 function computedLangfuseOtelEndpoint(host: string): string {
 	return host ? `${host}/api/public/otel/v1/traces` : "";
+}
+
+function publicEndpointOrigin(value: string): string {
+	if (!value) return "";
+	try {
+		return new URL(value).origin;
+	} catch {
+		return "";
+	}
 }
 
 function redactConnectionUrl(value: string): string {

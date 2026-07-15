@@ -221,7 +221,7 @@ describe("workspace client isolation and path safety", () => {
 			filename: "secret.js",
 			content: "export const secret = true;",
 		});
-		const harness = createProjectsApiHarness(config, files);
+		const harness = await createProjectsApiHarness(config, files);
 
 		const response = await dispatchJson(harness.middleware, "/api/pi-projects/batch-summary", {
 			headers: { "x-pi-client-id": clientA },
@@ -348,7 +348,10 @@ type Middleware = (
 	next: Connect.NextFunction,
 ) => void | Promise<void>;
 
-function createProjectsApiHarness(config: StorageConfig, files: WorkspaceFileService): { middleware: Middleware } {
+async function createProjectsApiHarness(
+	config: StorageConfig,
+	files: WorkspaceFileService,
+): Promise<{ middleware: Middleware }> {
 	let middleware: Middleware | undefined;
 	const services = {
 		config,
@@ -361,14 +364,17 @@ function createProjectsApiHarness(config: StorageConfig, files: WorkspaceFileSer
 		previews: new WorkspacePreviewService(config),
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
-		runtimeDb: { ensureAgentV2Schema: async () => undefined } as unknown as TestServices["runtimeDb"],
+		runtimeDb: {
+			ensureAgentV2Schema: async () => undefined,
+			ping: async () => undefined,
+		} as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
 	} satisfies TestServices;
 	const plugin = createConfiguredStoragePluginForTest(services);
 	const configureServer = plugin.configureServer as (server: {
 		middlewares: { use(handler: Middleware): void };
-	}) => void;
-	configureServer({
+	}) => Promise<void>;
+	await configureServer({
 		middlewares: {
 			use(handler) {
 				middleware = handler;

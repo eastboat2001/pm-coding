@@ -6,6 +6,13 @@ const redisMock = vi.hoisted(() => ({ createClient: vi.fn() }));
 vi.mock("redis", () => ({ createClient: redisMock.createClient }));
 
 describe("InMemoryAgentV2RunQueue", () => {
+	it("honors an aborted readiness ping", async () => {
+		const queue = createAgentV2RunQueue();
+		const controller = new AbortController();
+		controller.abort();
+		await expect(queue.ping!(controller.signal)).rejects.toThrow("agent_v2.readiness_aborted");
+	});
+
 	it("returns deterministic enqueue states and exact claimed ownership", async () => {
 		const queue = createAgentV2RunQueue({ claimLeaseTtlMs: 100, now: () => 1_000 });
 		const run = { clientId: "client-a", runId: "run-a" };
@@ -122,6 +129,15 @@ describe("InMemoryAgentV2RunQueue", () => {
 });
 
 describe("RedisAgentV2RunQueue", () => {
+	it("pings Redis through the shared command connection", async () => {
+		const fake = new FakeRedisClient();
+		redisMock.createClient.mockReturnValueOnce(fake);
+		const queue = createRedisAgentV2RunQueue({ redisUrl: "redis://example", queueName: "queue" });
+		await expect(queue.ping!(new AbortController().signal)).resolves.toBeUndefined();
+		expect(fake.pingCalls).toBe(1);
+		await queue.close();
+	});
+
 	it("starts the work deadline only after the dedicated socket connects", async () => {
 		const fake = new FakeRedisClient();
 		fake.connectDelayMs = 25;
@@ -225,6 +241,7 @@ class FakeRedisClient {
 	holdClaim = false;
 	holdQuit = false;
 	disconnectCalls = 0;
+	pingCalls = 0;
 	readonly evalCalls: Array<{ script: string; keys: string[]; arguments: string[] }> = [];
 	private readonly resolvers: Array<() => void> = [];
 	private evalStarted = false;
@@ -236,6 +253,11 @@ class FakeRedisClient {
 	async connect(): Promise<void> {
 		this.isOpen = true;
 		if (this.connectDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.connectDelayMs));
+	}
+
+	async ping(): Promise<string> {
+		this.pingCalls += 1;
+		return "PONG";
 	}
 
 	async eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown> {

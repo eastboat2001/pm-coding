@@ -39,6 +39,11 @@ export function agentV2RunEventStreamKey(identity) {
 export class InMemoryAgentV2RunEventBus {
     closed = false;
     eventsByStream = new Map();
+    async ping(signal) {
+        this.assertOpen();
+        if (signal.aborted)
+            throw new Error("agent_v2.readiness_aborted");
+    }
     async project(event) {
         this.assertOpen();
         const key = agentV2RunEventStreamKey(event);
@@ -112,6 +117,11 @@ export class RedisAgentV2RunEventBus {
         this.createRedisClient =
             options.createClient ??
                 ((clientOptions) => createClient({ url: clientOptions.url }));
+    }
+    async ping(signal) {
+        this.assertOpen();
+        const client = await raceAbort(this.connectedClient(), signal);
+        await raceAbort(client.ping(), signal);
     }
     async project(event) {
         this.assertOpen();
@@ -311,5 +321,14 @@ function chunk(items, size) {
         chunks.push(items.slice(index, index + size));
     }
     return chunks;
+}
+function raceAbort(operation, signal) {
+    if (signal.aborted)
+        return Promise.reject(new Error("agent_v2.readiness_aborted"));
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(new Error("agent_v2.readiness_aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+        operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
 }
 //# sourceMappingURL=agent-v2-run-event-bus.js.map

@@ -3,11 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RedisAgentV2RunEventBusOptions } from "../../../packages/web-workspace/src/agent-v2-run-event-bus.js";
+import { AgentV2Readiness, AgentV2ReadinessGate } from "../../../packages/web-workspace/src/agent-v2-readiness.js";
+import { InMemoryAgentV2RunQueue } from "../../../packages/web-workspace/src/agent-v2-run-queue.js";
 import { loadStorageConfig } from "../../../packages/web-workspace/src/config.js";
 import { RuntimeDbStore } from "../../../packages/web-workspace/src/runtime-db.js";
 import {
 	createAgentV2WorkerExecution,
 	createAgentV2WorkerRunEventOptions,
+	createReadinessGatedAgentV2RunQueue,
 	createWorkerStartupDiagnosticEvents,
 	installWorkerFatalDiagnostics,
 	stopWorkerRuntime,
@@ -20,6 +23,37 @@ describe("worker runtime diagnostics", () => {
 		vi.restoreAllMocks();
 		if (dir) rmSync(dir, { force: true, recursive: true });
 		dir = undefined;
+	});
+
+	it("pauses only new claims while readiness is lost and resumes after recovery", async () => {
+		let now = 1_000;
+		let ready = true;
+		const gate = new AgentV2ReadinessGate(
+			new AgentV2Readiness([
+				{
+					name: "store",
+					async check() {
+						if (!ready) throw new Error("unavailable");
+					},
+				},
+			]),
+			{ now: () => now, successTtlMs: 1_000 },
+		);
+		const queue = new InMemoryAgentV2RunQueue();
+		const claim = vi.spyOn(queue, "claim");
+		const gated = createReadinessGatedAgentV2RunQueue(queue, gate);
+		await queue.enqueue({ clientId: "client-a", runId: "run-a" });
+		expect((await gate.check(new AbortController().signal, { force: true })).ready).toBe(true);
+
+		now = 2_001;
+		ready = false;
+		expect(await gated.claim("worker-a", 0)).toBeUndefined();
+		expect(claim).not.toHaveBeenCalled();
+
+		ready = true;
+		const recovered = await gated.claim("worker-a", 0);
+		expect(recovered).toMatchObject({ clientId: "client-a", runId: "run-a", workerId: "worker-a" });
+		expect(claim).toHaveBeenCalledTimes(1);
 	});
 
 	it("records agent v2 defaults in worker startup diagnostics without a legacy version field", () => {

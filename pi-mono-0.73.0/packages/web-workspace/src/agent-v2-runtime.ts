@@ -12,6 +12,7 @@ export * from "./agent-v2-model-execution.js";
 export * from "./agent-v2-model-prompt.js";
 export type * from "./agent-v2-outbox.js";
 export * from "./agent-v2-outbox-dispatcher.js";
+export * from "./agent-v2-readiness.js";
 export {
 	type AgentV2RunEventBus,
 	AgentV2RunEventProjectionConflictError,

@@ -250,6 +250,7 @@ export interface RedisAgentV2RunQueueOptions {
 }
 
 export interface AgentV2RunQueue {
+	ping?(signal: AbortSignal): Promise<void>;
 	enqueue(run: AgentV2RunQueueIdentity): Promise<AgentV2QueueEnqueueResult>;
 	claim(workerId: string, timeoutMs: number): Promise<AgentV2ClaimedRun | undefined>;
 	complete(claim: AgentV2ClaimedRun): Promise<boolean>;
@@ -277,6 +278,11 @@ export class InMemoryAgentV2RunQueue implements AgentV2RunQueue {
 		this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
 		this.cancelTtlSeconds = options.cancelTtlSeconds ?? DEFAULT_CANCEL_TTL_SECONDS;
 		this.now = options.now ?? (() => Date.now());
+	}
+
+	async ping(signal: AbortSignal): Promise<void> {
+		this.assertOpen();
+		if (signal.aborted) throw new Error("agent_v2.readiness_aborted");
 	}
 
 	async enqueue(run: AgentV2RunQueueIdentity): Promise<AgentV2QueueEnqueueResult> {
@@ -454,6 +460,12 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 		this.claimLeaseTtlMs = options.claimLeaseTtlMs ?? DEFAULT_CLAIM_LEASE_TTL_MS;
 		this.claimCommandTimeoutMs = options.claimCommandTimeoutMs ?? DEFAULT_CLAIM_COMMAND_TIMEOUT_MS;
 		this.gracefulCloseTimeoutMs = Math.max(1, options.gracefulCloseTimeoutMs ?? DEFAULT_GRACEFUL_CLOSE_TIMEOUT_MS);
+	}
+
+	async ping(signal: AbortSignal): Promise<void> {
+		this.assertOpen();
+		const client = await raceAbort(this.connectedClient(), signal);
+		await raceAbort(client.ping(), signal);
 	}
 
 	async enqueue(run: AgentV2RunQueueIdentity): Promise<AgentV2QueueEnqueueResult> {
@@ -720,6 +732,15 @@ function copyIdentity(run: AgentV2RunQueueIdentity): AgentV2RunQueueIdentity {
 	if (typeof run.runId !== "string" || run.runId.length === 0)
 		throw new Error("Agent v2 queue identity is missing runId");
 	return { clientId: run.clientId, runId: run.runId };
+}
+
+function raceAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(new Error("agent_v2.readiness_aborted"));
+	return new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(new Error("agent_v2.readiness_aborted"));
+		signal.addEventListener("abort", onAbort, { once: true });
+		operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+	});
 }
 
 function createActiveRunClaim(

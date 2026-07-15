@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Connect } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentV2Readiness, AgentV2ReadinessGate } from "../src/agent-v2-readiness.js";
 import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import type { AgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import type { AgentV2RunEventReadRequest, AgentV2RunTransportEvent } from "../src/agent-v2-run-events.js";
@@ -27,13 +28,66 @@ afterEach(() => {
 });
 
 describe("agent v2 Vite runtime routes", () => {
+	it("does not expose Langfuse endpoint paths through storage status", async () => {
+		const config = createTestConfig();
+		config.langfuseHost = "https://langfuse.internal/super-secret-host-path";
+		config.langfuseOtelEndpoint = "https://otel.internal/super-secret-otel-path";
+		const harness = await createHarness({ config });
+
+		const response = await dispatch(harness.middleware, { method: "GET", url: "/api/pi-storage/status" });
+		expect(response.statusCode).toBe(200);
+		expect(response.body).not.toContain("super-secret");
+		expect(JSON.parse(response.body)).toMatchObject({
+			langfuseHost: "https://langfuse.internal",
+			langfuseOtelEndpoint: "https://otel.internal",
+		});
+	});
+
+	it("returns 503 for status and run mutations after dependency loss, then recovers", async () => {
+		let now = 1_000;
+		let dependencyReady = true;
+		const api = new RecordingAgentV2RunApi();
+		const gate = new AgentV2ReadinessGate(
+			new AgentV2Readiness([
+				{
+					name: "store",
+					async check() {
+						if (!dependencyReady) throw new Error("postgres://user:secret@internal/db");
+					},
+				},
+			]),
+			{ now: () => now, successTtlMs: 1_000 },
+		);
+		const harness = await createHarness({ agentV2RunApi: api, agentV2ReadinessGate: gate });
+
+		now = 2_001;
+		dependencyReady = false;
+		await gate.check(new AbortController().signal, { force: true });
+		const statusUnavailable = await dispatch(harness.middleware, { method: "GET", url: "/api/pi-storage/status" });
+		const startUnavailable = await dispatch(harness.middleware, {
+			method: "POST",
+			url: `${PREFIX}/start`,
+			body: { input: { objective: "Build", sessionId: "session-a", title: "App" }, model: { id: "test" } },
+		});
+		expect(statusUnavailable.statusCode).toBe(503);
+		expect(JSON.parse(statusUnavailable.body).readiness.ready).toBe(false);
+		expect(startUnavailable.statusCode).toBe(503);
+		expect(api.calls).toEqual([]);
+		expect(startUnavailable.body).not.toContain("secret");
+
+		dependencyReady = true;
+		const statusRecovered = await dispatch(harness.middleware, { method: "GET", url: "/api/pi-storage/status" });
+		expect(statusRecovered.statusCode).toBe(200);
+		expect(JSON.parse(statusRecovered.body).readiness.ready).toBe(true);
+	});
+
 	it("starts a v2 run and returns the v2 snapshot", async () => {
 		const api = new RecordingAgentV2RunApi();
 		api.startRunResult = runSnapshot({
 			runId: "run-started",
 			input: { objective: "Build a dashboard", sessionId: "session-a", title: "Dashboard" },
 		});
-		const harness = createHarness({ agentV2RunApi: api });
+		const harness = await createHarness({ agentV2RunApi: api });
 
 		const response = await dispatch(harness.middleware, {
 			method: "POST",
@@ -57,7 +111,7 @@ describe("agent v2 Vite runtime routes", () => {
 	});
 
 	it("returns 400 when v2 start input lacks executable session context", async () => {
-		const harness = createHarness({ agentV2RunApi: createRealAgentV2RunApiForRouteTest() });
+		const harness = await createHarness({ agentV2RunApi: createRealAgentV2RunApiForRouteTest() });
 
 		const response = await dispatch(harness.middleware, {
 			method: "POST",
@@ -97,7 +151,7 @@ describe("agent v2 Vite runtime routes", () => {
 		api.listRunsResult = [runSnapshot({ runId: "run-a" })];
 		api.getRunResult = runSnapshot({ runId: "run-a", status: "running", phase: "implementation" });
 		api.cancelRunResult = runSnapshot({ runId: "run-a", status: "cancelled", phase: "cancelled" });
-		const harness = createHarness({ agentV2RunApi: api });
+		const harness = await createHarness({ agentV2RunApi: api });
 
 		const listResponse = await dispatch(harness.middleware, { method: "GET", url: PREFIX });
 		const getResponse = await dispatch(harness.middleware, { method: "GET", url: `${PREFIX}/run-a` });
@@ -112,7 +166,7 @@ describe("agent v2 Vite runtime routes", () => {
 	it("replays durable v2 events as JSON", async () => {
 		const api = new RecordingAgentV2RunApi();
 		api.listRunEventsResult = [runEvent(2), runEvent(3)];
-		const harness = createHarness({ agentV2RunApi: api });
+		const harness = await createHarness({ agentV2RunApi: api });
 
 		const response = await dispatch(harness.middleware, {
 			method: "GET",
@@ -128,7 +182,7 @@ describe("agent v2 Vite runtime routes", () => {
 		const api = new RecordingAgentV2RunApi();
 		api.getRunResult = undefined;
 		api.listRunEventsResult = [runEvent(2)];
-		const harness = createHarness({ agentV2RunApi: api });
+		const harness = await createHarness({ agentV2RunApi: api });
 
 		const response = await dispatch(harness.middleware, {
 			method: "GET",
@@ -145,7 +199,11 @@ describe("agent v2 Vite runtime routes", () => {
 		api.getRunResult = runSnapshot({ runId: "run-a" });
 		const eventLog = new RecordingAgentV2RunEventLog([runEvent(2)]);
 		const eventBus = new ScriptedAgentV2RunEventBus([{ events: [runEvent(3)] }, { waitForAbort: true }]);
-		const harness = createHarness({ agentV2RunApi: api, agentV2RunEventLog: eventLog, agentV2RunEventBus: eventBus });
+		const harness = await createHarness({
+			agentV2RunApi: api,
+			agentV2RunEventLog: eventLog,
+			agentV2RunEventBus: eventBus,
+		});
 
 		const request = dispatchStreaming(harness.middleware, {
 			method: "GET",
@@ -166,7 +224,7 @@ describe("agent v2 Vite runtime routes", () => {
 	});
 
 	it("keeps retired generation routes as data-free tombstones", async () => {
-		const harness = createHarness();
+		const harness = await createHarness();
 		const response = await dispatch(harness.middleware, { method: "GET", url: "/api/runtime/runs/old-run/events" });
 
 		expect(response.statusCode).toBe(410);
@@ -176,7 +234,7 @@ describe("agent v2 Vite runtime routes", () => {
 	});
 
 	it("returns fixed 410 responses for legacy run routes", async () => {
-		const harness = createHarness();
+		const harness = await createHarness();
 		const cases = LEGACY_RUN_API_PREFIXES.flatMap((prefix) => [
 			{ label: `${prefix} list`, method: "GET", url: prefix },
 			{ label: `${prefix} get`, method: "GET", url: `${prefix}/legacy-run` },
@@ -202,7 +260,7 @@ describe("agent v2 Vite runtime routes", () => {
 	});
 
 	it("returns fixed legacy removal responses", async () => {
-		const harness = createHarness();
+		const harness = await createHarness();
 
 		const runResponse = await dispatch(harness.middleware, {
 			method: "POST",
@@ -224,7 +282,7 @@ describe("agent v2 Vite runtime routes", () => {
 	});
 
 	it("returns fixed 410 responses for legacy session routes", async () => {
-		const harness = createHarness();
+		const harness = await createHarness();
 		const sessionCases = LEGACY_SESSION_API_PREFIXES.flatMap((prefix) => [
 			{ label: `${prefix} get`, method: "GET", url: `${prefix}/session-a` },
 			{ label: `${prefix} list`, method: "GET", url: `${prefix}` },
@@ -247,7 +305,7 @@ describe("agent v2 Vite runtime routes", () => {
 	});
 
 	it("does not expose legacy app-preview-goal routes", async () => {
-		const harness = createHarness();
+		const harness = await createHarness();
 
 		const getResponse = await dispatch(harness.middleware, {
 			method: "GET",
@@ -271,6 +329,7 @@ type TestServices = Omit<ConfiguredTestServices, "agentV2RunApi" | "agentV2RunEv
 	agentV2RunApi?: ConfiguredTestServices["agentV2RunApi"] | RecordingAgentV2RunApi;
 	agentV2RunEventBus?: AgentV2RunEventBus;
 	agentV2RunEventLog?: RecordingAgentV2RunEventLog;
+	agentV2ReadinessGate?: AgentV2ReadinessGate;
 };
 type Middleware = (
 	req: Connect.IncomingMessage,
@@ -278,17 +337,19 @@ type Middleware = (
 	next: Connect.NextFunction,
 ) => void | Promise<void>;
 
-function createHarness(
+async function createHarness(
 	overrides: {
+		config?: StorageConfig;
 		agentV2RunApi?: ConfiguredTestServices["agentV2RunApi"] | RecordingAgentV2RunApi;
 		agentV2RunEventBus?: AgentV2RunEventBus;
 		agentV2RunEventLog?: RecordingAgentV2RunEventLog;
+		agentV2ReadinessGate?: AgentV2ReadinessGate;
 	} = {},
 ) {
 	let middleware: Middleware | undefined;
 	const closeListeners: Array<() => void> = [];
 	const services: TestServices = {
-		config: createTestConfig(),
+		config: overrides.config ?? createTestConfig(),
 		diagnostics: {
 			ensureDirs: vi.fn(),
 			status: vi.fn(() => ({})),
@@ -300,18 +361,22 @@ function createHarness(
 		previews: { servePreviewRequest: vi.fn(() => false) } as unknown as TestServices["previews"],
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
-		runtimeDb: { ensureAgentV2Schema: vi.fn() } as unknown as TestServices["runtimeDb"],
+		runtimeDb: {
+			ensureAgentV2Schema: vi.fn(),
+			ping: vi.fn(async () => undefined),
+		} as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
 		agentV2RunApi: overrides.agentV2RunApi ?? new RecordingAgentV2RunApi(),
 		agentV2RunEventBus: overrides.agentV2RunEventBus ?? new ScriptedAgentV2RunEventBus([{ waitForAbort: true }]),
 		agentV2RunEventLog: overrides.agentV2RunEventLog ?? new RecordingAgentV2RunEventLog([]),
+		agentV2ReadinessGate: overrides.agentV2ReadinessGate,
 	};
 	const plugin = createConfiguredStoragePluginForTest(services as unknown as ConfiguredTestServices);
 	const configureServer = plugin.configureServer as (server: {
 		httpServer: { once(event: "close", listener: () => void): void };
 		middlewares: { use(handler: Middleware): void };
-	}) => void;
-	configureServer({
+	}) => Promise<void>;
+	await configureServer({
 		httpServer: {
 			once(event, listener) {
 				if (event === "close") closeListeners.push(listener);
@@ -456,6 +521,8 @@ class RecordingAgentV2RunEventLog {
 type BusReadStep = { events: AgentV2RunEventRecord[] } | { waitForAbort: true };
 
 class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
+	async ping(_signal: AbortSignal): Promise<void> {}
+
 	async project(): Promise<"projected"> {
 		return "projected";
 	}

@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadStorageConfig, RetiredApplicationGenerationConfigError } from "../src/config.js";
+import {
+	InvalidRuntimeConfigError,
+	loadStorageConfig,
+	RetiredApplicationGenerationConfigError,
+} from "../src/config.js";
 import { createStartupDiagnosticEvents } from "../src/vite-plugin.js";
 
 const RETIRED_APPLICATION_GENERATION_ENV = [
@@ -34,7 +38,8 @@ const INVALID_REGISTRY_ORIGINS = [
 	"https://_",
 	"https://example.com:0",
 ] as const;
-const INVALID_REGISTRY_MESSAGE = "Error: Invalid production container build configuration: PI_BUILD_REGISTRY_ORIGINS";
+const INVALID_REGISTRY_MESSAGE =
+	"InvalidRuntimeConfigError: Invalid runtime configuration: PI_BUILD_REGISTRY_ORIGINS must be a valid production container value.";
 
 const CONFIG_ENV_KEYS = [
 	"PI_STORAGE_ENV_FILE",
@@ -46,13 +51,17 @@ const CONFIG_ENV_KEYS = [
 	"PI_DB_FILE",
 	"PI_RUNTIME_STORE",
 	"PI_POSTGRES_URL",
+	"PI_CLIENT_ID_REQUIRED",
+	"PI_LOG_ENABLED",
 	"PI_WORKER_ID",
+	"PI_WORKER_CONCURRENCY",
 	"PI_AGENT_V2_RUN_QUEUE_NAME",
 	"PI_AGENT_V2_RUN_EVENT_STREAM_MAXLEN",
 	"PI_AGENT_V2_RUN_EVENT_STREAM_TTL_SECONDS",
 	"PI_MODEL_MAX_OUTPUT_TOKENS",
 	"PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS",
 	"PI_PREVIEW_INTERNAL_ORIGIN",
+	"PI_PREVIEW_BASE_URL",
 	"PI_BUILD_CONTAINER_ENGINE",
 	"PI_BUILD_CONTAINER_IMAGE",
 	"PI_BUILD_PROXY_IMAGE",
@@ -62,6 +71,12 @@ const CONFIG_ENV_KEYS = [
 	"PI_BUILD_PIDS_LIMIT",
 	"PI_BUILD_MAX_LOG_CHARS",
 	"PI_BUILD_REGISTRY_ORIGINS",
+	"PI_LANGFUSE_HOST",
+	"LANGFUSE_HOST",
+	"LANGFUSE_BASE_URL",
+	"PI_LANGFUSE_OTEL_ENDPOINT",
+	"LANGFUSE_OTEL_ENDPOINT",
+	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
 ] as const;
 
 function withIsolatedConfigEnv<T>(run: () => T): T {
@@ -79,6 +94,68 @@ function withIsolatedConfigEnv<T>(run: () => T): T {
 }
 
 describe("storage config diagnostics", () => {
+	it.each([
+		["PI_RUNTIME_STORE", "postgress"],
+		["PI_RUNTIME_STORE", ""],
+		["PI_WORKER_CONCURRENCY", "0"],
+		["PI_WORKER_CONCURRENCY", "1.5"],
+		["PI_AGENT_V2_RUN_EVENT_STREAM_MAXLEN", "NaN"],
+		["PI_CLIENT_ID_REQUIRED", "truthy"],
+		["PI_LOG_ENABLED", ""],
+		["PI_REDIS_URL", "http://redis.internal"],
+		["PI_POSTGRES_URL", "https://postgres.internal/db"],
+		["PI_PREVIEW_BASE_URL", "https://user:secret@preview.internal"],
+	] as const)("fails fast for invalid runtime config %s without echoing its value", (variable, value) => {
+		withIsolatedConfigEnv(() => {
+			const root = mkdtempSync(join(tmpdir(), "pi-config-invalid-runtime-"));
+			process.env[variable] = value;
+			try {
+				loadStorageConfig(root);
+				throw new Error("expected invalid runtime configuration");
+			} catch (error) {
+				expect(error).toBeInstanceOf(InvalidRuntimeConfigError);
+				expect(String(error)).toContain(variable);
+				if (value) expect(String(error)).not.toContain(value);
+			}
+		});
+	});
+
+	it.each([
+		["PI_LANGFUSE_HOST", "   "],
+		["LANGFUSE_HOST", "ftp://langfuse.internal"],
+		["LANGFUSE_BASE_URL", "https://user:super-secret@langfuse.internal"],
+		["PI_LANGFUSE_OTEL_ENDPOINT", "not-a-url"],
+		["LANGFUSE_OTEL_ENDPOINT", "https://user:super-secret@otel.internal/v1/traces"],
+		["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "file:///super-secret"],
+	] as const)("rejects invalid Langfuse endpoint alias %s without leaking its value", (variable, value) => {
+		withIsolatedConfigEnv(() => {
+			const root = mkdtempSync(join(tmpdir(), "pi-config-invalid-langfuse-url-"));
+			process.env[variable] = value;
+
+			try {
+				loadStorageConfig(root);
+				throw new Error("expected invalid Langfuse endpoint configuration");
+			} catch (error) {
+				expect(error).toBeInstanceOf(InvalidRuntimeConfigError);
+				expect(String(error)).toContain(variable);
+				if (value.trim()) expect(String(error)).not.toContain(value.trim());
+				expect(String(error)).not.toContain("super-secret");
+			}
+		});
+	});
+
+	it("uses and normalizes the first configured valid Langfuse endpoint alias", () => {
+		withIsolatedConfigEnv(() => {
+			const root = mkdtempSync(join(tmpdir(), "pi-config-langfuse-url-alias-"));
+			process.env.LANGFUSE_BASE_URL = "https://langfuse.internal/base/";
+			process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = "https://otel.internal/v1/traces/";
+
+			const config = loadStorageConfig(root);
+			expect(config.langfuseHost).toBe("https://langfuse.internal/base");
+			expect(config.langfuseOtelEndpoint).toBe("https://otel.internal/v1/traces");
+		});
+	});
+
 	it("records nested agent v2 defaults when the default .env file is missing", () => {
 		withIsolatedConfigEnv(() => {
 			const root = mkdtempSync(join(tmpdir(), "pi-config-diagnostics-"));

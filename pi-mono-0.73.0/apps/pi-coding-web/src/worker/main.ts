@@ -4,6 +4,9 @@ import {
 	type AgentV2InputMaterializer,
 	type AgentV2ModelExecution,
 	AgentV2OutboxDispatcher,
+	AgentV2Readiness,
+	AgentV2ReadinessGate,
+	type AgentV2ReadinessReport,
 	AgentV2RunEventLog,
 	type AgentV2RunQueue,
 	type AgentV2RunSnapshot,
@@ -39,9 +42,51 @@ import {
 import { runWorkerShutdownDeadline } from "./shutdown-deadline.js";
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
+const WORKER_READINESS_REFRESH_INTERVAL_MS = 1_000;
 
 export async function ensureRuntimeSchemas(runtimeDb: AgentV2SchemaStore): Promise<void> {
 	await runtimeDb.ensureAgentV2Schema();
+}
+
+export function createReadinessGatedAgentV2RunQueue(
+	queue: AgentV2RunQueue,
+	gate: AgentV2ReadinessGate,
+	signal: AbortSignal = new AbortController().signal,
+): AgentV2RunQueue {
+	return {
+		ping: async (signal) => {
+			if (!queue.ping) throw new Error("Agent v2 queue readiness is not configured.");
+			await queue.ping(signal);
+		},
+		enqueue: async (run) => await queue.enqueue(run),
+		async claim(workerId, timeoutMs) {
+			const report = await gate.check(signal);
+			return report.ready ? await queue.claim(workerId, timeoutMs) : undefined;
+		},
+		complete: async (claim) => await queue.complete(claim),
+		confirmOwnership: async (claim, timeoutMs) => await queue.confirmOwnership(claim, timeoutMs),
+		requeueActive: async (workerId) => await queue.requeueActive(workerId),
+		renewLease: async (claim) => await queue.renewLease(claim),
+		requeueExpiredClaims: async (nowMs) => await queue.requeueExpiredClaims(nowMs),
+		requestCancel: async (run, cancelToken) => await queue.requestCancel(run, cancelToken),
+		isCancelRequested: async (run) => await queue.isCancelRequested(run),
+		clear: async () => await queue.clear(),
+		close: async (options) => await queue.close(options),
+	};
+}
+
+export async function runAgentV2WorkerReadinessRefresh(input: {
+	gate: AgentV2ReadinessGate;
+	signal: AbortSignal;
+	intervalMs?: number;
+	onReport?: (report: AgentV2ReadinessReport) => void;
+}): Promise<void> {
+	const intervalMs = Math.max(1, input.intervalMs ?? WORKER_READINESS_REFRESH_INTERVAL_MS);
+	while (!input.signal.aborted) {
+		const report = await input.gate.check(input.signal, { force: true });
+		input.onReport?.(report);
+		await waitForAbortOrDelay(input.signal, intervalMs);
+	}
 }
 
 export function createAgentV2WorkerRunEventOptions(config: StorageConfig): {
@@ -136,6 +181,8 @@ async function main(): Promise<void> {
 	let worker: AgentV2WorkerService | undefined;
 	let outboxDispatcherAbort: AbortController | undefined;
 	let outboxDispatcherPromise: Promise<void> | undefined;
+	let readinessAbort: AbortController | undefined;
+	let readinessPromise: Promise<void> | undefined;
 	try {
 		runtimeDb = createAgentV2RuntimeStore(config);
 		await ensureRuntimeSchemas(runtimeDb);
@@ -146,10 +193,33 @@ async function main(): Promise<void> {
 			queueName: config.agentV2.queueName,
 		});
 		agentV2RunEventBus = new RedisAgentV2RunEventBus(options.bus);
+		const readinessGate = new AgentV2ReadinessGate(
+			new AgentV2Readiness([
+				{ name: "store", check: async (signal) => await runtimeDb!.ping(signal) },
+				{
+					name: "queue",
+					check: async (signal) => {
+						if (!queue.ping) throw new Error("Agent v2 queue readiness is not configured.");
+						await queue.ping(signal);
+					},
+				},
+				{
+					name: "event_bus",
+					check: async (signal) => {
+						if (!agentV2RunEventBus?.ping) throw new Error("Agent v2 event bus readiness is not configured.");
+						await agentV2RunEventBus.ping(signal);
+					},
+				},
+			]),
+		);
+		readinessAbort = new AbortController();
+		const initialReadiness = await readinessGate.check(readinessAbort.signal, { force: true });
+		if (!initialReadiness.ready) throw new Error("Agent v2 worker dependencies are unavailable during startup.");
+		const readinessGatedQueue = createReadinessGatedAgentV2RunQueue(queue, readinessGate, readinessAbort.signal);
 		const events = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
 		const outboxDispatcher = AgentV2OutboxDispatcher.forQueueAndLive({
 			store: runtimeDb,
-			queue,
+			queue: readinessGatedQueue,
 			queueName: config.agentV2.queueName,
 			bus: agentV2RunEventBus,
 			additionalAdapters: createAgentV2DiagnosticProjectionAdapters({ store: runtimeDb, diagnostics }),
@@ -171,11 +241,28 @@ async function main(): Promise<void> {
 			});
 		worker = new AgentV2WorkerService({
 			store: runtimeDb,
-			queue,
+			queue: readinessGatedQueue,
 			events,
 			execution: createAgentV2WorkerExecution(config, runtimeDb),
 			workerId: config.workerId,
 			concurrency: config.workerConcurrency,
+		});
+		readinessPromise = runAgentV2WorkerReadinessRefresh({
+			gate: readinessGate,
+			signal: readinessAbort.signal,
+			onReport: (report) => {
+				if (!report.ready) {
+					writeWorkerProcessDiagnostic(config, diagnostics, "agent_v2.worker_dependencies_unavailable", "error", {
+						message: "Agent v2 worker dependency readiness check failed; new claims are paused.",
+					});
+				}
+			},
+		}).catch(() => {
+			if (!readinessAbort?.signal.aborted) {
+				writeWorkerProcessDiagnostic(config, diagnostics, "agent_v2.worker_readiness_failed", "error", {
+					message: "Agent v2 worker readiness monitoring stopped unexpectedly.",
+				});
+			}
 		});
 
 		let shuttingDown = false;
@@ -194,6 +281,8 @@ async function main(): Promise<void> {
 				diagnostics,
 				outboxDispatcherAbort,
 				outboxDispatcherPromise,
+				readinessAbort,
+				readinessPromise,
 			});
 			const exitCode = stopResult.completed ? 0 : 1;
 			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopped", exitCode === 0 ? "info" : "error", {
@@ -229,6 +318,8 @@ async function main(): Promise<void> {
 			diagnostics,
 			outboxDispatcherAbort,
 			outboxDispatcherPromise,
+			readinessAbort,
+			readinessPromise,
 		});
 		removeProcessLifecycleDiagnostics();
 		removeFatalDiagnostics();
@@ -243,14 +334,20 @@ export async function stopWorkerRuntime(input: {
 	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse">;
 	outboxDispatcherAbort?: AbortController;
 	outboxDispatcherPromise?: Promise<void>;
+	readinessAbort?: AbortController;
+	readinessPromise?: Promise<void>;
 	shutdownTimeoutMs?: number;
 }): Promise<AgentV2WorkerStopResult> {
 	input.outboxDispatcherAbort?.abort();
+	input.readinessAbort?.abort();
 	return await runWorkerShutdownDeadline({
 		timeoutMs: input.shutdownTimeoutMs,
 		run: async (options) => {
 			const dispatcher = await runAgentV2ShutdownSteps(
-				[{ step: "outbox_dispatcher.stop", run: async () => await input.outboxDispatcherPromise }],
+				[
+					{ step: "readiness_monitor.stop", run: async () => await input.readinessPromise },
+					{ step: "outbox_dispatcher.stop", run: async () => await input.outboxDispatcherPromise },
+				],
 				options,
 			);
 			let worker: AgentV2WorkerStopResult = { completed: true, timedOutSteps: [], errors: [] };
@@ -452,6 +549,20 @@ function exitAfterShutdownFailure(error: unknown): never {
 
 function logCleanupError(step: string, error: unknown): void {
 	console.error(`PI worker ${step} failed:`, error instanceof Error ? error.stack || error.message : error);
+}
+
+function waitForAbortOrDelay(signal: AbortSignal, delayMs: number): Promise<void> {
+	if (signal.aborted) return Promise.resolve();
+	return new Promise((resolve) => {
+		const onDone = () => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", onDone);
+			resolve();
+		};
+		const timer = setTimeout(onDone, delayMs);
+		timer.unref?.();
+		signal.addEventListener("abort", onDone, { once: true });
+	});
 }
 
 if (isDirectWorkerEntry()) {

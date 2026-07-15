@@ -28,7 +28,7 @@ describe("agent v2 runtime run SSE events", () => {
 	it("sends durable catch-up events before live bus events", async () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ events: [runEvent(3)] }, { waitForAbort: true }]);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
@@ -72,7 +72,7 @@ describe("agent v2 runtime run SSE events", () => {
 		];
 
 		for (const input of invalidRequests) {
-			const harness = createSseHarness({
+			const harness = await createSseHarness({
 				agentV2RunApi: { getRun: vi.fn().mockResolvedValue(run) },
 				runEventLog: { list: vi.fn().mockResolvedValue([]) },
 				agentV2RunEventBus: new ScriptedAgentV2RunEventBus([]),
@@ -87,7 +87,7 @@ describe("agent v2 runtime run SSE events", () => {
 	it("accepts a matching canonical query and Last-Event-ID cursor", async () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ waitForAbort: true }]);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: { getRun: vi.fn().mockResolvedValue(run) },
 			runEventLog: { list: vi.fn().mockResolvedValue([runEvent(3)]) },
 			agentV2RunEventBus: bus,
@@ -106,7 +106,7 @@ describe("agent v2 runtime run SSE events", () => {
 			.fn()
 			.mockResolvedValueOnce([runEvent(1)])
 			.mockResolvedValueOnce([runEvent(2), runEvent(3)]);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: { getRun: vi.fn().mockResolvedValue(run) },
 			runEventLog: { list },
 			agentV2RunEventBus: bus,
@@ -126,7 +126,7 @@ describe("agent v2 runtime run SSE events", () => {
 			.fn()
 			.mockResolvedValueOnce([])
 			.mockResolvedValue([runEvent(1)]);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: { getRun: vi.fn().mockResolvedValue(run) },
 			runEventLog: { list },
 			agentV2RunEventBus: bus,
@@ -142,7 +142,7 @@ describe("agent v2 runtime run SSE events", () => {
 	it("deduplicates live events at or before the last sent durable sequence", async () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ events: [runEvent(3), runEvent(4)] }, { waitForAbort: true }]);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
@@ -165,7 +165,7 @@ describe("agent v2 runtime run SSE events", () => {
 
 	it("returns 404 JSON without SSE headers when the v2 run does not exist", async () => {
 		const bus = new ScriptedAgentV2RunEventBus([]);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(undefined),
 			},
@@ -187,7 +187,7 @@ describe("agent v2 runtime run SSE events", () => {
 	it("emits an SSE error event when live bus reads fail after headers are written", async () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ error: new Error("redis unavailable") }]);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
@@ -211,7 +211,7 @@ describe("agent v2 runtime run SSE events", () => {
 	it("aborts the live bus read and releases the stream loop when the request closes", async () => {
 		const run = runSnapshot();
 		const bus = new ScriptedAgentV2RunEventBus([{ waitForAbort: true }]);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
@@ -234,7 +234,7 @@ describe("agent v2 runtime run SSE events", () => {
 	it("backs off after empty live bus reads and still exits promptly when the request closes", async () => {
 		const run = runSnapshot();
 		const bus = new EmptyAgentV2RunEventBus(3);
-		const harness = createSseHarness({
+		const harness = await createSseHarness({
 			agentV2RunApi: {
 				getRun: vi.fn().mockResolvedValue(run),
 			},
@@ -263,7 +263,7 @@ type Middleware = (
 	next: Connect.NextFunction,
 ) => void | Promise<void>;
 
-function createSseHarness(options: {
+async function createSseHarness(options: {
 	agentV2RunApi: Partial<AgentV2RunApiService>;
 	runEventLog: Pick<AgentV2RunEventLog, "list">;
 	agentV2RunEventBus: AgentV2RunEventBus;
@@ -285,7 +285,10 @@ function createSseHarness(options: {
 		previews: { servePreviewRequest: vi.fn(() => false) } as unknown as TestServices["previews"],
 		tasks: {} as TestServices["tasks"],
 		skills: {} as TestServices["skills"],
-		runtimeDb: { ensureAgentV2Schema: vi.fn() } as unknown as TestServices["runtimeDb"],
+		runtimeDb: {
+			ensureAgentV2Schema: vi.fn(),
+			ping: vi.fn(async () => undefined),
+		} as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
 		agentV2RunApi: options.agentV2RunApi as TestServices["agentV2RunApi"],
 		agentV2RunEventBus: options.agentV2RunEventBus,
@@ -294,9 +297,9 @@ function createSseHarness(options: {
 	const plugin = createConfiguredStoragePluginForTest(services);
 	const configureServer = plugin.configureServer as (server: {
 		middlewares: { use(handler: Middleware): void };
-	}) => void;
+	}) => Promise<void>;
 
-	configureServer({
+	await configureServer({
 		middlewares: {
 			use(handler) {
 				middleware = handler;
@@ -376,6 +379,8 @@ class FakeResponse {
 type BusReadStep = { events: AgentV2RunEventRecord[] } | { error: Error } | { waitForAbort: true };
 
 class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
+	async ping(_signal: AbortSignal): Promise<void> {}
+
 	async project(): Promise<"projected"> {
 		return "projected";
 	}
@@ -409,6 +414,8 @@ class ScriptedAgentV2RunEventBus implements AgentV2RunEventBus {
 }
 
 class EmptyAgentV2RunEventBus implements AgentV2RunEventBus {
+	async ping(_signal: AbortSignal): Promise<void> {}
+
 	async project(): Promise<"projected"> {
 		return "projected";
 	}

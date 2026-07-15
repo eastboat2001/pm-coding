@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createAgentV2ShutdownDeadline, runAgentV2ShutdownSteps } from "../src/agent-v2-lifecycle.js";
 import {
 	agentV2RunEventStreamKey,
 	InMemoryAgentV2RunEventBus,
@@ -47,6 +48,26 @@ describe("InMemoryAgentV2RunEventBus", () => {
 		await expect(bus.project(event(2))).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.read({ ...identity, afterSeq: 0 })).rejects.toThrow("Agent v2 run event bus is closed");
 		await expect(bus.purge({ clientId: "client-a" })).rejects.toThrow("Agent v2 run event bus is closed");
+	});
+
+	it("disconnects a stalled XREAD within the shared shutdown deadline", async () => {
+		const client = new FakeRedisClient();
+		client.holdXRead = true;
+		const bus = new RedisAgentV2RunEventBus({ redisUrl: "redis://example", createClient: () => client });
+		const reading = bus.read({ ...identity, afterSeq: 0, blockMs: 60_000 });
+		await waitFor(() => client.xReadCalls.length === 1);
+		const deadline = createAgentV2ShutdownDeadline(25);
+		try {
+			await expect(
+				runAgentV2ShutdownSteps(
+					[{ step: "event_bus.xread", run: async (options) => await bus.close(options) }],
+					deadline,
+				),
+			).resolves.toEqual({ completed: true, timedOutSteps: [], errors: [] });
+			await expect(reading).resolves.toEqual([]);
+		} finally {
+			deadline.dispose();
+		}
 	});
 
 	it("purges streams by client id", async () => {
@@ -173,6 +194,7 @@ interface FakeRedisState {
 class FakeRedisClient {
 	isOpen = false;
 	readonly duplicates: FakeRedisClient[] = [];
+	holdXRead = false;
 	private readonly disconnectWaiters: Array<() => void> = [];
 
 	constructor(
@@ -236,6 +258,7 @@ class FakeRedisClient {
 
 	duplicate(): FakeRedisClient {
 		const duplicate = new FakeRedisClient(this.state);
+		duplicate.holdXRead = this.holdXRead;
 		this.duplicates.push(duplicate);
 		return duplicate;
 	}
@@ -266,6 +289,7 @@ class FakeRedisClient {
 
 	async xRead(streams: unknown, options: unknown): Promise<unknown> {
 		this.xReadCalls.push({ streams, options });
+		if (this.holdXRead) return await this.disconnectPromise();
 		const result = this.xReadResults.shift() ?? null;
 		return Promise.race([Promise.resolve(result), this.disconnectPromise()]);
 	}
@@ -294,4 +318,12 @@ class FakeRedisClient {
 			this.disconnectWaiters.push(() => reject(new Error("Redis client disconnected")));
 		});
 	}
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+	for (let attempts = 0; attempts < 100; attempts += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	throw new Error("Timed out waiting for Agent v2 event bus state");
 }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "redis";
+import { type AgentV2CloseOptions, remainingAgentV2ShutdownMs } from "./agent-v2-lifecycle.js";
 
 type AgentV2RedisClient = ReturnType<typeof createClient>;
 
@@ -259,7 +260,7 @@ export interface AgentV2RunQueue {
 	requestCancel(run: AgentV2RunQueueIdentity, cancelToken: string): Promise<AgentV2CancelRequestResult>;
 	isCancelRequested(run: AgentV2RunQueueIdentity): Promise<boolean>;
 	clear(): Promise<AgentV2RunQueueClearResult>;
-	close(): Promise<void>;
+	close(options?: AgentV2CloseOptions): Promise<void>;
 }
 
 export class InMemoryAgentV2RunQueue implements AgentV2RunQueue {
@@ -401,7 +402,7 @@ export class InMemoryAgentV2RunQueue implements AgentV2RunQueue {
 		return result;
 	}
 
-	async close(): Promise<void> {
+	async close(_options?: AgentV2CloseOptions): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
 		this.queued.length = 0;
@@ -612,12 +613,12 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 		return parseClearResult(result);
 	}
 
-	close(): Promise<void> {
-		if (!this.closePromise) this.closePromise = this.closeInternal();
+	close(options?: AgentV2CloseOptions): Promise<void> {
+		if (!this.closePromise) this.closePromise = this.closeInternal(options);
 		return this.closePromise;
 	}
 
-	private async closeInternal(): Promise<void> {
+	private async closeInternal(options?: AgentV2CloseOptions): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
 		this.wakeAllIdleWaiters();
@@ -626,7 +627,14 @@ export class RedisAgentV2RunQueue implements AgentV2RunQueue {
 		this.client = undefined;
 		this.clientConnectPromise = undefined;
 		if (!client?.isOpen) return;
-		const graceful = await runBounded(client.quit(), this.gracefulCloseTimeoutMs);
+		if (options?.signal.aborted || (options && remainingAgentV2ShutdownMs(options) === 0)) {
+			await client.disconnect().catch(() => undefined);
+			return;
+		}
+		const gracefulTimeoutMs = options
+			? Math.max(1, Math.min(this.gracefulCloseTimeoutMs, remainingAgentV2ShutdownMs(options)))
+			: this.gracefulCloseTimeoutMs;
+		const graceful = await runBounded(client.quit(), gracefulTimeoutMs);
 		if (graceful.kind !== "value" && client.isOpen) await client.disconnect().catch(() => undefined);
 	}
 

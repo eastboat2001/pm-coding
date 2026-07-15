@@ -6,6 +6,7 @@ export { buildAgentV2PlanDocument, buildAgentV2SpecDocument, buildAgentV2TaskGra
 export { executeAgentV2NextTask, } from "./agent-v2-execution-core.js";
 export { createAgentV2FileAdapter, } from "./agent-v2-file-adapter.js";
 export * from "./agent-v2-input-materializer.js";
+export * from "./agent-v2-lifecycle.js";
 export { clearAgentV2GeneratedProjectWorkspaces, resetAgentV2Runtime, } from "./agent-v2-maintenance.js";
 export * from "./agent-v2-model-execution.js";
 export * from "./agent-v2-model-prompt.js";

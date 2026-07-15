@@ -136,7 +136,7 @@ describe("worker runtime diagnostics", () => {
 		});
 		vi.spyOn(console, "error").mockImplementation(() => {});
 
-		const exitCode = await stopWorkerRuntime({
+		const stopResult = await stopWorkerRuntime({
 			worker: { stop: workerStop } as unknown as Parameters<typeof stopWorkerRuntime>[0]["worker"],
 			agentV2RunEventBus: { close: eventBusClose } as unknown as Parameters<
 				typeof stopWorkerRuntime
@@ -145,7 +145,17 @@ describe("worker runtime diagnostics", () => {
 			diagnostics: { flushLangfuse },
 		});
 
-		expect(exitCode).toBe(1);
+		expect(stopResult).toEqual({
+			completed: false,
+			timedOutSteps: [],
+			errors: [
+				{
+					step: "langfuse.flush",
+					code: "agent_v2.shutdown_step_failed",
+					message: "Agent v2 shutdown step failed",
+				},
+			],
+		});
 		expect(flushLangfuse).toHaveBeenCalledTimes(1);
 		expect(runtimeDbClose).toHaveBeenCalledTimes(1);
 		expect(cleanupOrder).toEqual([
@@ -154,6 +164,58 @@ describe("worker runtime diagnostics", () => {
 			"diagnostics.flushLangfuse",
 			"runtimeDb.close",
 		]);
+	});
+
+	it.each([
+		"outbox_dispatcher.stop",
+		"event_bus.close",
+		"langfuse.flush",
+	] as const)("bounds a stalled %s by the one total deadline and still closes the store", async (stalledStep) => {
+		const never = new Promise<void>(() => undefined);
+		const runtimeDbClose = vi.fn(async () => undefined);
+		const result = await stopWorkerRuntime({
+			outboxDispatcherAbort: new AbortController(),
+			outboxDispatcherPromise: stalledStep === "outbox_dispatcher.stop" ? never : Promise.resolve(),
+			worker: {
+				stop: () => Promise.resolve({ completed: true, timedOutSteps: [], errors: [] }),
+			} as unknown as Parameters<typeof stopWorkerRuntime>[0]["worker"],
+			agentV2RunEventBus: {
+				close: () => (stalledStep === "event_bus.close" ? never : Promise.resolve()),
+			} as unknown as Parameters<typeof stopWorkerRuntime>[0]["agentV2RunEventBus"],
+			diagnostics: {
+				flushLangfuse: () => (stalledStep === "langfuse.flush" ? never : Promise.resolve()),
+			},
+			runtimeDb: { close: runtimeDbClose } as unknown as Parameters<typeof stopWorkerRuntime>[0]["runtimeDb"],
+			shutdownTimeoutMs: 15,
+		});
+
+		expect(result).toEqual({ completed: false, timedOutSteps: [stalledStep], errors: [] });
+		expect(runtimeDbClose).toHaveBeenCalledTimes(1);
+	});
+
+	it("preserves the worker's precise inner timeout instead of replacing it with worker.stop", async () => {
+		const runtimeDbClose = vi.fn(async () => undefined);
+		const result = await stopWorkerRuntime({
+			worker: {
+				async stop(options: { signal: AbortSignal }) {
+					if (!options.signal.aborted) {
+						await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+					}
+					return { completed: false, timedOutSteps: ["worker.claim_or_execution"], errors: [] };
+				},
+			} as unknown as Parameters<typeof stopWorkerRuntime>[0]["worker"],
+			diagnostics: { flushLangfuse: vi.fn(async () => undefined) },
+			runtimeDb: { close: runtimeDbClose } as unknown as Parameters<typeof stopWorkerRuntime>[0]["runtimeDb"],
+			shutdownTimeoutMs: 15,
+		});
+
+		expect(result).toEqual({
+			completed: false,
+			timedOutSteps: ["worker.claim_or_execution"],
+			errors: [],
+		});
+		expect(result.timedOutSteps).not.toContain("worker.stop");
+		expect(runtimeDbClose).toHaveBeenCalledTimes(1);
 	});
 
 	it("writes fatal diagnostics, flushes Langfuse, and attempts to exit after a fatal worker error", async () => {

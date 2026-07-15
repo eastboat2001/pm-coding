@@ -293,6 +293,7 @@ function createHarness(
 			ensureDirs: vi.fn(),
 			status: vi.fn(() => ({})),
 			writeEvents: vi.fn(),
+			flushLangfuse: vi.fn(async () => undefined),
 		} as unknown as TestServices["diagnostics"],
 		sessions: { ensureDirs: vi.fn() } as unknown as TestServices["sessions"],
 		files: {} as TestServices["files"],

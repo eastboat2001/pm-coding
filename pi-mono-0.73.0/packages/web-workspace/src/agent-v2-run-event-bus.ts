@@ -1,4 +1,5 @@
 import { createClient } from "redis";
+import type { AgentV2CloseOptions } from "./agent-v2-lifecycle.js";
 import type {
 	AgentV2LiveRunEvent,
 	AgentV2RunEventIdentity,
@@ -47,7 +48,7 @@ export interface AgentV2RunEventBus {
 	project(event: AgentV2LiveRunEvent): Promise<"projected" | "already_projected">;
 	read(request: AgentV2RunEventReadRequest): Promise<AgentV2LiveRunEvent[]>;
 	purge(options?: AgentV2RunEventBusPurgeOptions): Promise<AgentV2RunEventBusPurgeResult>;
-	close(): Promise<void>;
+	close(options?: AgentV2CloseOptions): Promise<void>;
 }
 
 export interface AgentV2RunEventBusPurgeOptions {
@@ -113,7 +114,7 @@ export class InMemoryAgentV2RunEventBus implements AgentV2RunEventBus {
 		return { streamsDeleted: keys.length };
 	}
 
-	async close(): Promise<void> {
+	async close(_options?: AgentV2CloseOptions): Promise<void> {
 		this.closed = true;
 		this.eventsByStream.clear();
 	}
@@ -253,7 +254,7 @@ export class RedisAgentV2RunEventBus implements AgentV2RunEventBus {
 		return this.deleteStreams(keys);
 	}
 
-	async close(): Promise<void> {
+	async close(_options?: AgentV2CloseOptions): Promise<void> {
 		this.closed = true;
 		await Promise.all(
 			[...this.activeBlockingClients].map(async (client) => {

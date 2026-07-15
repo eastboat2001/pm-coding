@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createAgentV2DiagnosticProjectionAdapters } from "./agent-v2-diagnostic-projections.js";
+import { createAgentV2ShutdownDeadline, runAgentV2ShutdownSteps } from "./agent-v2-lifecycle.js";
 import { AgentV2OutboxDispatcher } from "./agent-v2-outbox-dispatcher.js";
 import { AgentV2RunApiError, AgentV2RunApiService } from "./agent-v2-run-api-service.js";
 import { RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
@@ -24,6 +25,7 @@ const EMPTY_RUN_EVENT_READ_BACKOFF_MS = 100;
 const DURABLE_RUN_EVENT_CHECK_INTERVAL_MS = 1000;
 const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
+const VITE_SHUTDOWN_TIMEOUT_MS = 10_000;
 export function configuredStoragePlugin(envFile) {
     const rootDir = process.cwd();
     const config = loadStorageConfig(rootDir, envFile);
@@ -210,16 +212,30 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
     let runEventBusClosePromise;
     const closeRunEventBusOnce = () => {
         dispatcherAbort.abort();
-        runEventBusClosePromise ??= Promise.all([
-            dispatcherPromise,
-            Promise.resolve(agentV2RunEventBus?.close()).catch(() => undefined),
-            Promise.resolve(agentV2RunQueue?.close()).catch(() => undefined),
-        ]).then(() => undefined);
+        runEventBusClosePromise ??= (async () => {
+            const deadline = createAgentV2ShutdownDeadline(VITE_SHUTDOWN_TIMEOUT_MS);
+            try {
+                const result = await runAgentV2ShutdownSteps([
+                    { step: "vite.outbox_dispatcher.stop", run: async () => await dispatcherPromise },
+                    { step: "vite.event_bus.close", run: async (options) => await agentV2RunEventBus?.close(options) },
+                    { step: "vite.queue.close", run: async (options) => await agentV2RunQueue?.close(options) },
+                    {
+                        step: "vite.langfuse.flush",
+                        run: async (options) => await diagnostics.flushLangfuse(options.signal),
+                    },
+                ], deadline);
+                if (!result.completed)
+                    throw new Error("agent_v2.vite_shutdown_failed");
+            }
+            finally {
+                deadline.dispose();
+            }
+        })();
         return runEventBusClosePromise;
     };
     const registerRunEventBusCleanup = (server) => {
         server.httpServer?.once?.("close", () => {
-            void closeRunEventBusOnce();
+            void closeRunEventBusOnce().catch(() => console.error("[agent_v2.vite_shutdown_failed] Agent v2 Vite cleanup failed"));
         });
     };
     return {
@@ -240,6 +256,9 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
         configurePreviewServer(server) {
             registerRunEventBusCleanup(server);
             server.middlewares.use(handler);
+        },
+        async closeBundle() {
+            await closeRunEventBusOnce();
         },
     };
 }

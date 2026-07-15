@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import { runAgentV2ShutdownSteps, } from "./agent-v2-lifecycle.js";
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 50;
 const DEFAULT_CONTROL_OPERATION_TIMEOUT_MS = 1_000;
@@ -11,6 +12,7 @@ const DEFAULT_MAX_STEPS_PER_RUN = 256;
 const OWNERSHIP_CONTROL_ABORT_REASON = Symbol("agent-v2-ownership-control");
 export class AgentV2WorkerService {
     activeAbortControllers = new Map();
+    activeClaims = new Map();
     activeProcessOneCalls = new Set();
     cancelPollIntervalMs;
     claimTimeoutMs;
@@ -58,20 +60,54 @@ export class AgentV2WorkerService {
         this.maintenanceAbortController = new AbortController();
         this.maintenanceLoop = this.runExpiredClaimMaintenance(this.maintenanceAbortController.signal);
     }
-    async stop() {
+    async stop(options) {
         this.stopping = true;
         this.running = false;
         this.maintenanceAbortController?.abort();
         for (const controller of this.activeAbortControllers.values()) {
             controller.abort();
         }
-        await Promise.all([...this.loops, ...(this.maintenanceLoop ? [this.maintenanceLoop] : [])]);
-        await this.waitForActiveProcessOneCalls();
-        await this.markOwnedRunsInterrupted();
-        await this.queue.close();
-        this.loops = [];
-        this.maintenanceAbortController = undefined;
-        this.maintenanceLoop = undefined;
+        const finish = () => {
+            this.loops = [];
+            this.maintenanceAbortController = undefined;
+            this.maintenanceLoop = undefined;
+        };
+        if (!options) {
+            await Promise.all([...this.loops, ...(this.maintenanceLoop ? [this.maintenanceLoop] : [])]);
+            await this.waitForActiveProcessOneCalls();
+            await this.markOwnedRunsInterrupted();
+            await this.queue.close();
+            finish();
+            return;
+        }
+        const markActiveClaimsUnsafe = () => {
+            for (const claimToken of this.activeClaims.keys())
+                this.unsafeClaimTokens.add(claimToken);
+        };
+        if (options.signal.aborted)
+            markActiveClaimsUnsafe();
+        else
+            options.signal.addEventListener("abort", markActiveClaimsUnsafe, { once: true });
+        try {
+            const result = await runAgentV2ShutdownSteps([
+                {
+                    step: "worker.claim_or_execution",
+                    run: async () => await Promise.all([
+                        ...this.loops,
+                        ...this.activeProcessOneCalls,
+                        ...(this.maintenanceLoop ? [this.maintenanceLoop] : []),
+                    ]),
+                    onTimeout: markActiveClaimsUnsafe,
+                },
+                { step: "worker.durable_interrupt", run: async () => await this.markOwnedRunsInterrupted() },
+                { step: "queue.close", run: async (closeOptions) => await this.queue.close(closeOptions) },
+            ], options);
+            finish();
+            return result;
+        }
+        finally {
+            options.signal.removeEventListener("abort", markActiveClaimsUnsafe);
+        }
     }
     async processOne() {
         if (this.stopping)
@@ -90,6 +126,7 @@ export class AgentV2WorkerService {
         const claimed = await this.queue.claim(this.workerId, this.claimTimeoutMs);
         if (!claimed)
             return false;
+        this.activeClaims.set(claimed.claimToken, claimed);
         let safelyCompleteClaim = false;
         try {
             const run = await this.store.getAgentV2Run(claimed.clientId, claimed.runId);
@@ -120,8 +157,13 @@ export class AgentV2WorkerService {
         }
         finally {
             const ownershipSafeToComplete = !this.unsafeClaimTokens.delete(claimed.claimToken);
-            if (safelyCompleteClaim && ownershipSafeToComplete)
-                await this.queue.complete(claimed);
+            try {
+                if (safelyCompleteClaim && ownershipSafeToComplete)
+                    await this.queue.complete(claimed);
+            }
+            finally {
+                this.activeClaims.delete(claimed.claimToken);
+            }
         }
     }
     async recoverOwnedRuns() {
@@ -354,6 +396,7 @@ export class AgentV2WorkerService {
             pendingDiagnostics: [],
             unsafe: false,
         };
+        abortController.signal.addEventListener("abort", () => control.controlAbortController.abort(), { once: true });
         control.controlPromise = this.runClaimControlLoop(control);
         return control;
     }

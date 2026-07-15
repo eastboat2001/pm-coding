@@ -46,6 +46,7 @@ export {
 	createAgentV2FileAdapter,
 } from "./agent-v2-file-adapter.js";
 export * from "./agent-v2-input-materializer.js";
+export * from "./agent-v2-lifecycle.js";
 export {
 	type AgentV2GeneratedProjectCleanupResult,
 	type AgentV2RuntimeResetOptions,

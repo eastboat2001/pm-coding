@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type { AgentV2RunTransitionCommitResult } from "./agent-v2-durable-store.js";
 import type { AgentV2ExecutionStepResult } from "./agent-v2-execution-core.js";
+import {
+	type AgentV2CloseOptions,
+	type AgentV2WorkerStopResult,
+	runAgentV2ShutdownSteps,
+} from "./agent-v2-lifecycle.js";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import type { AgentV2ClaimedRun, AgentV2RunQueue, AgentV2RunQueueIdentity } from "./agent-v2-run-queue.js";
 import type { AgentV2WorkerStore } from "./agent-v2-runtime-store.js";
@@ -71,6 +76,7 @@ interface AgentV2ClaimControlSession {
 
 export class AgentV2WorkerService {
 	private readonly activeAbortControllers = new Map<string, AbortController>();
+	private readonly activeClaims = new Map<string, AgentV2ClaimedRun>();
 	private readonly activeProcessOneCalls = new Set<Promise<void>>();
 	private readonly cancelPollIntervalMs: number;
 	private readonly claimTimeoutMs: number;
@@ -129,20 +135,56 @@ export class AgentV2WorkerService {
 		this.maintenanceLoop = this.runExpiredClaimMaintenance(this.maintenanceAbortController.signal);
 	}
 
-	async stop(): Promise<void> {
+	async stop(): Promise<undefined>;
+	async stop(options: AgentV2CloseOptions): Promise<AgentV2WorkerStopResult>;
+	async stop(options?: AgentV2CloseOptions): Promise<undefined | AgentV2WorkerStopResult> {
 		this.stopping = true;
 		this.running = false;
 		this.maintenanceAbortController?.abort();
 		for (const controller of this.activeAbortControllers.values()) {
 			controller.abort();
 		}
-		await Promise.all([...this.loops, ...(this.maintenanceLoop ? [this.maintenanceLoop] : [])]);
-		await this.waitForActiveProcessOneCalls();
-		await this.markOwnedRunsInterrupted();
-		await this.queue.close();
-		this.loops = [];
-		this.maintenanceAbortController = undefined;
-		this.maintenanceLoop = undefined;
+		const finish = () => {
+			this.loops = [];
+			this.maintenanceAbortController = undefined;
+			this.maintenanceLoop = undefined;
+		};
+		if (!options) {
+			await Promise.all([...this.loops, ...(this.maintenanceLoop ? [this.maintenanceLoop] : [])]);
+			await this.waitForActiveProcessOneCalls();
+			await this.markOwnedRunsInterrupted();
+			await this.queue.close();
+			finish();
+			return;
+		}
+		const markActiveClaimsUnsafe = () => {
+			for (const claimToken of this.activeClaims.keys()) this.unsafeClaimTokens.add(claimToken);
+		};
+		if (options.signal.aborted) markActiveClaimsUnsafe();
+		else options.signal.addEventListener("abort", markActiveClaimsUnsafe, { once: true });
+		try {
+			const result = await runAgentV2ShutdownSteps(
+				[
+					{
+						step: "worker.claim_or_execution",
+						run: async () =>
+							await Promise.all([
+								...this.loops,
+								...this.activeProcessOneCalls,
+								...(this.maintenanceLoop ? [this.maintenanceLoop] : []),
+							]),
+						onTimeout: markActiveClaimsUnsafe,
+					},
+					{ step: "worker.durable_interrupt", run: async () => await this.markOwnedRunsInterrupted() },
+					{ step: "queue.close", run: async (closeOptions) => await this.queue.close(closeOptions) },
+				],
+				options,
+			);
+			finish();
+			return result;
+		} finally {
+			options.signal.removeEventListener("abort", markActiveClaimsUnsafe);
+		}
 	}
 
 	async processOne(): Promise<boolean> {
@@ -163,6 +205,7 @@ export class AgentV2WorkerService {
 	private async processOneInternal(): Promise<boolean> {
 		const claimed = await this.queue.claim(this.workerId, this.claimTimeoutMs);
 		if (!claimed) return false;
+		this.activeClaims.set(claimed.claimToken, claimed);
 
 		let safelyCompleteClaim = false;
 		try {
@@ -193,7 +236,11 @@ export class AgentV2WorkerService {
 			return true;
 		} finally {
 			const ownershipSafeToComplete = !this.unsafeClaimTokens.delete(claimed.claimToken);
-			if (safelyCompleteClaim && ownershipSafeToComplete) await this.queue.complete(claimed);
+			try {
+				if (safelyCompleteClaim && ownershipSafeToComplete) await this.queue.complete(claimed);
+			} finally {
+				this.activeClaims.delete(claimed.claimToken);
+			}
 		}
 	}
 
@@ -433,6 +480,7 @@ export class AgentV2WorkerService {
 			pendingDiagnostics: [],
 			unsafe: false,
 		};
+		abortController.signal.addEventListener("abort", () => control.controlAbortController.abort(), { once: true });
 		control.controlPromise = this.runClaimControlLoop(control);
 		return control;
 	}

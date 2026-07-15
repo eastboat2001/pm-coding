@@ -1,6 +1,7 @@
 export * from "./agent-v2-diagnostic-projections.js";
 export { executeAgentV2NextTask, } from "./agent-v2-execution-core.js";
 export * from "./agent-v2-input-materializer.js";
+export * from "./agent-v2-lifecycle.js";
 export * from "./agent-v2-model-execution.js";
 export * from "./agent-v2-model-prompt.js";
 export * from "./agent-v2-outbox-dispatcher.js";

@@ -7,6 +7,7 @@ import type {
 	AgentV2RunTransitionCommitResult,
 } from "../src/agent-v2-durable-store.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
+import { createAgentV2ShutdownDeadline } from "../src/agent-v2-lifecycle.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import type { AgentV2ActiveRunClaim, AgentV2ClaimedRun, AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import {
@@ -304,6 +305,169 @@ describe("AgentV2WorkerService", () => {
 
 		expect(outcome).toBe("stopped");
 		expect(queue.closeCount).toBe(1);
+	});
+
+	it("bounds a claim connection that ignores shutdown by the shared deadline", async () => {
+		class StalledClaimQueue extends RecordingQueue {
+			override async claim(): Promise<AgentV2ClaimedRun | undefined> {
+				return await new Promise<AgentV2ClaimedRun | undefined>(() => undefined);
+			}
+		}
+		const queue = new StalledClaimQueue();
+		const worker = new AgentV2WorkerService({
+			store: new MemoryWorkerStore(),
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([]),
+			workerId: "worker-a",
+		});
+		await worker.start();
+		await Promise.resolve();
+		const deadline = createAgentV2ShutdownDeadline(15);
+		try {
+			await expect(worker.stop(deadline)).resolves.toEqual({
+				completed: false,
+				timedOutSteps: ["worker.claim_or_execution"],
+				errors: [],
+			});
+			expect(queue.closeCount).toBe(1);
+		} finally {
+			deadline.dispose();
+		}
+	});
+
+	it("bounds execution that ignores abort without completing its claim", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-stalled-shutdown");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-stalled-shutdown" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: { executeNextTask: async () => await new Promise<AgentV2ExecutionStepResult>(() => undefined) },
+			workerId: "worker-a",
+		});
+		await worker.start();
+		await waitFor(() => store.getRunSnapshot("client-a", "run-stalled-shutdown")?.status === "running");
+		const deadline = createAgentV2ShutdownDeadline(15);
+		try {
+			await expect(worker.stop(deadline)).resolves.toEqual({
+				completed: false,
+				timedOutSteps: ["worker.claim_or_execution"],
+				errors: [],
+			});
+			expect(queue.completeCalls).toEqual([]);
+			expect(queue.closeCount).toBe(1);
+			await waitFor(() => store.getRunSnapshot("client-a", "run-stalled-shutdown")?.status === "interrupted");
+		} finally {
+			deadline.dispose();
+		}
+	});
+
+	it("marks a timed-out active claim unsafe before an abort-ignoring execution resolves late", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-late-shutdown");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-late-shutdown" }]);
+		const lateExecution = deferred<AgentV2ExecutionStepResult>();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: { executeNextTask: async () => await lateExecution.promise },
+			workerId: "worker-a",
+		});
+		const processing = worker.processOne();
+		await waitFor(() => store.getRunSnapshot("client-a", "run-late-shutdown")?.status === "running");
+		const deadline = createAgentV2ShutdownDeadline(15);
+		try {
+			await expect(worker.stop(deadline)).resolves.toMatchObject({
+				completed: false,
+				timedOutSteps: ["worker.claim_or_execution"],
+			});
+			lateExecution.resolve({ status: "complete", diagnosticIds: [] });
+			await expect(processing).resolves.toBe(true);
+			expect(queue.completeCalls).toEqual([]);
+			expect(store.getRunSnapshot("client-a", "run-late-shutdown")?.status).toBe("interrupted");
+		} finally {
+			deadline.dispose();
+		}
+	});
+
+	it("marks a claim unsafe while its pre-execution durable read resolves after deadline", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-late-pre-read");
+		const originalGet = store.getAgentV2Run.bind(store);
+		const readStarted = deferred<void>();
+		const releaseRead = deferred<void>();
+		let firstRead = true;
+		store.getAgentV2Run = async (clientId, runId) => {
+			if (firstRead) {
+				firstRead = false;
+				readStarted.resolve();
+				await releaseRead.promise;
+			}
+			return await originalGet(clientId, runId);
+		};
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-late-pre-read" }]);
+		const execution = new CountingExecution();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution,
+			workerId: "worker-a",
+		});
+		const processing = worker.processOne();
+		await readStarted.promise;
+		const deadline = createAgentV2ShutdownDeadline(15);
+		try {
+			await worker.stop(deadline);
+			releaseRead.resolve();
+			await processing;
+			expect(queue.completeCalls).toEqual([]);
+			expect(execution.callCount).toBe(0);
+			expect(store.getRunSnapshot("client-a", "run-late-pre-read")?.status).toBe("interrupted");
+		} finally {
+			deadline.dispose();
+		}
+	});
+
+	it("marks a claim unsafe while its final durable reread resolves after deadline", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-late-final-read");
+		const originalGet = store.getAgentV2Run.bind(store);
+		const finalReadStarted = deferred<void>();
+		const releaseFinalRead = deferred<void>();
+		let heldFinalRead = false;
+		store.getAgentV2Run = async (clientId, runId) => {
+			const snapshot = await originalGet(clientId, runId);
+			if (!heldFinalRead && snapshot?.status === "succeeded") {
+				heldFinalRead = true;
+				finalReadStarted.resolve();
+				await releaseFinalRead.promise;
+			}
+			return snapshot;
+		};
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-late-final-read" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+		});
+		const processing = worker.processOne();
+		await finalReadStarted.promise;
+		const deadline = createAgentV2ShutdownDeadline(15);
+		try {
+			await worker.stop(deadline);
+			releaseFinalRead.resolve();
+			await processing;
+			expect(queue.completeCalls).toEqual([]);
+			expect(store.getRunSnapshot("client-a", "run-late-final-read")?.status).toBe("succeeded");
+		} finally {
+			deadline.dispose();
+		}
 	});
 
 	it("records a sanitized retryable diagnostic and recovers after reclaim maintenance rejects", async () => {

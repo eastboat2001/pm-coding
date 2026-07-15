@@ -10,12 +10,14 @@ import {
 	type AgentV2WorkerExecution,
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
+	type AgentV2WorkerStopResult,
 	createAgentV2DiagnosticProjectionAdapters,
 	DurableAgentV2InputMaterializer,
 	executeAgentV2NextTask,
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
 	type RedisAgentV2RunEventBusOptions,
+	runAgentV2ShutdownSteps,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
 import {
 	type AgentV2ProductionStore,
@@ -34,6 +36,7 @@ import {
 	type GlobalProviderApiKeySources,
 	loadAgentV2ServerSettingsSnapshot,
 } from "./global-provider-keys.js";
+import { runWorkerShutdownDeadline } from "./shutdown-deadline.js";
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 
@@ -184,7 +187,7 @@ async function main(): Promise<void> {
 			shuttingDown = true;
 			console.log(`PI worker received ${signal}; stopping.`);
 			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopping", "info", { signal });
-			const exitCode = await stopWorkerRuntime({
+			const stopResult = await stopWorkerRuntime({
 				worker,
 				agentV2RunEventBus,
 				runtimeDb,
@@ -192,9 +195,11 @@ async function main(): Promise<void> {
 				outboxDispatcherAbort,
 				outboxDispatcherPromise,
 			});
+			const exitCode = stopResult.completed ? 0 : 1;
 			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopped", exitCode === 0 ? "info" : "error", {
 				signal,
 				exitCode,
+				stopResult,
 			});
 			removeProcessLifecycleDiagnostics();
 			removeFatalDiagnostics();
@@ -238,40 +243,51 @@ export async function stopWorkerRuntime(input: {
 	diagnostics: Pick<WorkspaceDiagnosticLogService, "flushLangfuse">;
 	outboxDispatcherAbort?: AbortController;
 	outboxDispatcherPromise?: Promise<void>;
-}): Promise<number> {
-	let exitCode = 0;
+	shutdownTimeoutMs?: number;
+}): Promise<AgentV2WorkerStopResult> {
 	input.outboxDispatcherAbort?.abort();
-	try {
-		await input.outboxDispatcherPromise;
-	} catch (error) {
-		exitCode = 1;
-		logCleanupError("outboxDispatcher.stop", error);
-	}
-	try {
-		await input.worker?.stop();
-	} catch (error) {
-		exitCode = 1;
-		logCleanupError("worker.stop", error);
-	}
-	try {
-		await input.agentV2RunEventBus?.close();
-	} catch (error) {
-		exitCode = 1;
-		logCleanupError("agentV2RunEventBus.close", error);
-	}
-	try {
-		await input.diagnostics.flushLangfuse();
-	} catch (error) {
-		exitCode = 1;
-		logCleanupError("diagnostics.flushLangfuse", error);
-	}
-	try {
-		await input.runtimeDb?.close();
-	} catch (error) {
-		exitCode = 1;
-		logCleanupError("runtimeDb.close", error);
-	}
-	return exitCode;
+	return await runWorkerShutdownDeadline({
+		timeoutMs: input.shutdownTimeoutMs,
+		run: async (options) => {
+			const dispatcher = await runAgentV2ShutdownSteps(
+				[{ step: "outbox_dispatcher.stop", run: async () => await input.outboxDispatcherPromise }],
+				options,
+			);
+			let worker: AgentV2WorkerStopResult = { completed: true, timedOutSteps: [], errors: [] };
+			try {
+				worker = (await input.worker?.stop(options)) ?? worker;
+			} catch {
+				worker = {
+					completed: false,
+					timedOutSteps: [],
+					errors: [
+						{
+							step: "worker.stop",
+							code: "agent_v2.shutdown_step_failed",
+							message: "Agent v2 shutdown step failed",
+						},
+					],
+				};
+			}
+			const remaining = await runAgentV2ShutdownSteps(
+				[
+					{
+						step: "event_bus.close",
+						run: async (closeOptions) => await input.agentV2RunEventBus?.close(closeOptions),
+					},
+					{
+						step: "langfuse.flush",
+						run: async (closeOptions) => await input.diagnostics.flushLangfuse(closeOptions.signal),
+					},
+					{ step: "runtime_store.close", run: async () => await input.runtimeDb?.close() },
+				],
+				options,
+			);
+			const timedOutSteps = [...dispatcher.timedOutSteps, ...worker.timedOutSteps, ...remaining.timedOutSteps];
+			const errors = [...dispatcher.errors, ...worker.errors, ...remaining.errors];
+			return { completed: timedOutSteps.length === 0 && errors.length === 0, timedOutSteps, errors };
+		},
+	});
 }
 
 export function createWorkerStartupDiagnosticEvents(config: StorageConfig): DiagnosticLogEventInput[] {

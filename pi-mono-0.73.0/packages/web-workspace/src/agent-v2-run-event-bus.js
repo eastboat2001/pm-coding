@@ -83,7 +83,7 @@ export class InMemoryAgentV2RunEventBus {
         }
         return { streamsDeleted: keys.length };
     }
-    async close() {
+    async close(_options) {
         this.closed = true;
         this.eventsByStream.clear();
     }
@@ -189,7 +189,7 @@ export class RedisAgentV2RunEventBus {
         }
         return this.deleteStreams(keys);
     }
-    async close() {
+    async close(_options) {
         this.closed = true;
         await Promise.all([...this.activeBlockingClients].map(async (client) => {
             if (client.isOpen)

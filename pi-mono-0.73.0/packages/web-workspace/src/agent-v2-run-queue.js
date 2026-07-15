@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "redis";
+import { remainingAgentV2ShutdownMs } from "./agent-v2-lifecycle.js";
 const DEFAULT_CANCEL_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_CLAIM_LEASE_TTL_MS = 30_000;
 const DEFAULT_CLAIM_COMMAND_TIMEOUT_MS = 5_000;
@@ -328,7 +329,7 @@ export class InMemoryAgentV2RunQueue {
         this.cancelRequests.clear();
         return result;
     }
-    async close() {
+    async close(_options) {
         if (this.closed)
             return;
         this.closed = true;
@@ -530,12 +531,12 @@ export class RedisAgentV2RunQueue {
         });
         return parseClearResult(result);
     }
-    close() {
+    close(options) {
         if (!this.closePromise)
-            this.closePromise = this.closeInternal();
+            this.closePromise = this.closeInternal(options);
         return this.closePromise;
     }
-    async closeInternal() {
+    async closeInternal(options) {
         if (this.closed)
             return;
         this.closed = true;
@@ -546,7 +547,14 @@ export class RedisAgentV2RunQueue {
         this.clientConnectPromise = undefined;
         if (!client?.isOpen)
             return;
-        const graceful = await runBounded(client.quit(), this.gracefulCloseTimeoutMs);
+        if (options?.signal.aborted || (options && remainingAgentV2ShutdownMs(options) === 0)) {
+            await client.disconnect().catch(() => undefined);
+            return;
+        }
+        const gracefulTimeoutMs = options
+            ? Math.max(1, Math.min(this.gracefulCloseTimeoutMs, remainingAgentV2ShutdownMs(options)))
+            : this.gracefulCloseTimeoutMs;
+        const graceful = await runBounded(client.quit(), gracefulTimeoutMs);
         if (graceful.kind !== "value" && client.isOpen)
             await client.disconnect().catch(() => undefined);
     }

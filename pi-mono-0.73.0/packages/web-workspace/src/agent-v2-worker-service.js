@@ -102,11 +102,11 @@ export class AgentV2WorkerService {
             if (!running.applied)
                 return true;
             await this.appendPhaseEvent(running.run, "running");
-            await this.executeClaimedRun(running.run);
+            await this.executeClaimedRun(running.run, claimed);
             return true;
         }
         finally {
-            await this.queue.complete(claimed, this.workerId);
+            await this.queue.complete(claimed);
         }
     }
     async recoverOwnedRuns() {
@@ -114,7 +114,7 @@ export class AgentV2WorkerService {
         await this.markOwnedRunsInterrupted();
         await this.recoverExpiredClaims();
     }
-    async appendDiagnostic(run, code, message) {
+    async appendDiagnostic(run, code, message, retryable) {
         const diagnostic = createAgentV2DiagnosticEvent({
             diagnosticId: `${code}:${run.runId}:${randomUUID()}`,
             clientId: run.clientId,
@@ -127,6 +127,7 @@ export class AgentV2WorkerService {
             data: {
                 status: run.status,
                 workerId: this.workerId,
+                ...(retryable === undefined ? {} : { retryable }),
             },
             createdAt: this.now(),
         });
@@ -189,7 +190,7 @@ export class AgentV2WorkerService {
         }
         await this.cancelRun(current);
     }
-    async executeClaimedRun(initialRun) {
+    async executeClaimedRun(initialRun, claim) {
         const key = runKey(initialRun);
         const abortController = new AbortController();
         this.activeAbortControllers.set(key, abortController);
@@ -202,10 +203,8 @@ export class AgentV2WorkerService {
             });
         }, this.cancelPollIntervalMs);
         const leaseHeartbeat = setInterval(() => {
-            void this.queue
-                .renewLease({ clientId: initialRun.clientId, runId: initialRun.runId }, this.workerId)
-                .then((refreshed) => {
-                if (refreshed || leaseLost)
+            void this.queue.renewLease(claim).then((renewal) => {
+                if (renewal.status === "renewed" || leaseLost)
                     return;
                 leaseLost = true;
                 abortController.abort();
@@ -357,7 +356,7 @@ export class AgentV2WorkerService {
         }
     }
     async recoverExpiredClaims(signal) {
-        for (const claim of await this.queue.releaseExpiredClaims()) {
+        for (const claim of await this.queue.requeueExpiredClaims()) {
             if (signal?.aborted)
                 return;
             const run = await this.store.getAgentV2Run(claim.clientId, claim.runId);
@@ -366,10 +365,8 @@ export class AgentV2WorkerService {
             if (!run) {
                 continue;
             }
-            if (run.status === "queued") {
-                await this.queue.enqueue({ clientId: claim.clientId, runId: claim.runId });
+            if (run.status === "queued")
                 continue;
-            }
             if (run.status === "running" || run.status === "cancelling") {
                 await this.interruptRun(run);
             }
@@ -394,9 +391,30 @@ export class AgentV2WorkerService {
             await interruptibleSleep(this.expiredClaimRecoveryIntervalMs, signal);
             if (!this.running || signal.aborted)
                 return;
-            const recovery = this.recoverExpiredClaims(signal).catch(() => undefined);
+            let failed = false;
+            const recovery = this.recoverExpiredClaims(signal).catch(() => {
+                failed = true;
+            });
             if (!(await settleOrAbort(recovery, signal)))
                 return;
+            if (failed)
+                await this.recordReclaimMaintenanceFailure();
+        }
+    }
+    async recordReclaimMaintenanceFailure() {
+        const code = "agent_v2.worker_reclaim_failed";
+        const message = "Agent v2 expired-claim maintenance failed and will be retried.";
+        try {
+            const runs = await this.store.listAgentV2RunsByWorker(this.workerId);
+            if (runs.length === 0) {
+                console.error(`[${code}] ${message}`);
+                return;
+            }
+            for (const run of runs)
+                await this.appendDiagnostic(run, code, message, true);
+        }
+        catch {
+            console.error(`[${code}] ${message}`);
         }
     }
     async runLoop() {

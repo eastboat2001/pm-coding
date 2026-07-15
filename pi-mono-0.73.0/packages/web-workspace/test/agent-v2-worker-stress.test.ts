@@ -3,6 +3,10 @@ import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import {
+	type AgentV2ClaimedRun,
+	type AgentV2ClaimOwnership,
+	type AgentV2LeaseRenewalResult,
+	type AgentV2QueueEnqueueResult,
 	type AgentV2RunQueue,
 	type AgentV2RunQueueClearResult,
 	type AgentV2RunQueueIdentity,
@@ -202,32 +206,39 @@ class TrackingQueue implements AgentV2RunQueue {
 
 	constructor(private readonly inner: AgentV2RunQueue) {}
 
-	async enqueue(run: AgentV2RunQueueIdentity): Promise<void> {
-		await this.inner.enqueue(run);
+	async enqueue(run: AgentV2RunQueueIdentity): Promise<AgentV2QueueEnqueueResult> {
+		return await this.inner.enqueue(run);
 	}
 
-	async claim(workerId: string, timeoutMs: number): Promise<AgentV2RunQueueIdentity | undefined> {
+	async claim(workerId: string, timeoutMs: number): Promise<AgentV2ClaimedRun | undefined> {
 		const claimed = await this.inner.claim(workerId, timeoutMs);
 		if (claimed) this.activeClaims.add(runKey(claimed.clientId, claimed.runId));
 		return claimed;
 	}
 
-	async complete(run: AgentV2RunQueueIdentity, workerId: string): Promise<void> {
-		await this.inner.complete(run, workerId);
-		this.activeClaims.delete(runKey(run.clientId, run.runId));
-		this.completed.add(runKey(run.clientId, run.runId));
+	async complete(claim: AgentV2ClaimedRun): Promise<boolean> {
+		const completed = await this.inner.complete(claim);
+		if (completed) {
+			this.activeClaims.delete(runKey(claim.clientId, claim.runId));
+			this.completed.add(runKey(claim.clientId, claim.runId));
+		}
+		return completed;
+	}
+
+	async confirmOwnership(claim: AgentV2ClaimedRun, timeoutMs: number): Promise<AgentV2ClaimOwnership> {
+		return await this.inner.confirmOwnership(claim, timeoutMs);
 	}
 
 	async requeueActive(workerId: string): Promise<number> {
 		return await this.inner.requeueActive(workerId);
 	}
 
-	async renewLease(run: AgentV2RunQueueIdentity, workerId: string): Promise<boolean> {
-		return await this.inner.renewLease(run, workerId);
+	async renewLease(claim: AgentV2ClaimedRun): Promise<AgentV2LeaseRenewalResult> {
+		return await this.inner.renewLease(claim);
 	}
 
-	async releaseExpiredClaims() {
-		return await this.inner.releaseExpiredClaims();
+	async requeueExpiredClaims(nowMs?: number) {
+		return await this.inner.requeueExpiredClaims(nowMs);
 	}
 
 	async requestCancel(run: AgentV2RunQueueIdentity): Promise<void> {

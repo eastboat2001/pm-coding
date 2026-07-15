@@ -101,6 +101,9 @@ export type {
 } from "./agent-v2-run-events.js";
 export {
 	type AgentV2ClaimedRun,
+	type AgentV2ClaimOwnership,
+	type AgentV2LeaseRenewalResult,
+	type AgentV2QueueEnqueueResult,
 	type AgentV2RunQueue,
 	type AgentV2RunQueueClearResult,
 	type AgentV2RunQueueIdentity,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "./agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
-import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "./agent-v2-run-queue.js";
+import type { AgentV2ClaimedRun, AgentV2RunQueue, AgentV2RunQueueIdentity } from "./agent-v2-run-queue.js";
 import type { AgentV2WorkerStore } from "./agent-v2-runtime-store.js";
 import type { AgentV2RunUpdateResult } from "./agent-v2-store.js";
 import type { AgentV2Phase, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
@@ -148,10 +148,10 @@ export class AgentV2WorkerService {
 			});
 			if (!running.applied) return true;
 			await this.appendPhaseEvent(running.run, "running");
-			await this.executeClaimedRun(running.run);
+			await this.executeClaimedRun(running.run, claimed);
 			return true;
 		} finally {
-			await this.queue.complete(claimed, this.workerId);
+			await this.queue.complete(claimed);
 		}
 	}
 
@@ -161,7 +161,12 @@ export class AgentV2WorkerService {
 		await this.recoverExpiredClaims();
 	}
 
-	private async appendDiagnostic(run: AgentV2RunSnapshot, code: string, message: string): Promise<void> {
+	private async appendDiagnostic(
+		run: AgentV2RunSnapshot,
+		code: string,
+		message: string,
+		retryable?: boolean,
+	): Promise<void> {
 		const diagnostic = createAgentV2DiagnosticEvent({
 			diagnosticId: `${code}:${run.runId}:${randomUUID()}`,
 			clientId: run.clientId,
@@ -174,6 +179,7 @@ export class AgentV2WorkerService {
 			data: {
 				status: run.status,
 				workerId: this.workerId,
+				...(retryable === undefined ? {} : { retryable }),
 			},
 			createdAt: this.now(),
 		});
@@ -238,7 +244,7 @@ export class AgentV2WorkerService {
 		await this.cancelRun(current);
 	}
 
-	private async executeClaimedRun(initialRun: AgentV2RunSnapshot): Promise<void> {
+	private async executeClaimedRun(initialRun: AgentV2RunSnapshot, claim: AgentV2ClaimedRun): Promise<void> {
 		const key = runKey(initialRun);
 		const abortController = new AbortController();
 		this.activeAbortControllers.set(key, abortController);
@@ -252,13 +258,11 @@ export class AgentV2WorkerService {
 			});
 		}, this.cancelPollIntervalMs);
 		const leaseHeartbeat = setInterval(() => {
-			void this.queue
-				.renewLease({ clientId: initialRun.clientId, runId: initialRun.runId }, this.workerId)
-				.then((refreshed) => {
-					if (refreshed || leaseLost) return;
-					leaseLost = true;
-					abortController.abort();
-				});
+			void this.queue.renewLease(claim).then((renewal) => {
+				if (renewal.status === "renewed" || leaseLost) return;
+				leaseLost = true;
+				abortController.abort();
+			});
 		}, this.leaseHeartbeatIntervalMs);
 
 		try {
@@ -414,17 +418,14 @@ export class AgentV2WorkerService {
 	}
 
 	private async recoverExpiredClaims(signal?: AbortSignal): Promise<void> {
-		for (const claim of await this.queue.releaseExpiredClaims()) {
+		for (const claim of await this.queue.requeueExpiredClaims()) {
 			if (signal?.aborted) return;
 			const run = await this.store.getAgentV2Run(claim.clientId, claim.runId);
 			if (signal?.aborted) return;
 			if (!run) {
 				continue;
 			}
-			if (run.status === "queued") {
-				await this.queue.enqueue({ clientId: claim.clientId, runId: claim.runId });
-				continue;
-			}
+			if (run.status === "queued") continue;
 			if (run.status === "running" || run.status === "cancelling") {
 				await this.interruptRun(run);
 			}
@@ -450,8 +451,27 @@ export class AgentV2WorkerService {
 		while (this.running && !signal.aborted) {
 			await interruptibleSleep(this.expiredClaimRecoveryIntervalMs, signal);
 			if (!this.running || signal.aborted) return;
-			const recovery = this.recoverExpiredClaims(signal).catch(() => undefined);
+			let failed = false;
+			const recovery = this.recoverExpiredClaims(signal).catch(() => {
+				failed = true;
+			});
 			if (!(await settleOrAbort(recovery, signal))) return;
+			if (failed) await this.recordReclaimMaintenanceFailure();
+		}
+	}
+
+	private async recordReclaimMaintenanceFailure(): Promise<void> {
+		const code = "agent_v2.worker_reclaim_failed";
+		const message = "Agent v2 expired-claim maintenance failed and will be retried.";
+		try {
+			const runs = await this.store.listAgentV2RunsByWorker(this.workerId);
+			if (runs.length === 0) {
+				console.error(`[${code}] ${message}`);
+				return;
+			}
+			for (const run of runs) await this.appendDiagnostic(run, code, message, true);
+		} catch {
+			console.error(`[${code}] ${message}`);
 		}
 	}
 

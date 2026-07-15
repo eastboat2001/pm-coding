@@ -20,7 +20,7 @@ import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import { InMemoryAgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import { parseAgentV2RunContext } from "../src/agent-v2-run-input-contract.js";
-import type { AgentV2RunQueue, AgentV2RunQueueIdentity } from "../src/agent-v2-run-queue.js";
+import type { AgentV2ClaimedRun, AgentV2RunQueue, AgentV2RunQueueIdentity } from "../src/agent-v2-run-queue.js";
 import type { AgentV2WorkerExecutionInput } from "../src/agent-v2-worker-service.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
 import { loadStorageConfig } from "../src/config.js";
@@ -342,23 +342,33 @@ async function deliverPendingRunEnqueue(
 class LocalAgentV2RunQueue implements AgentV2RunQueue {
 	private readonly queued: AgentV2RunQueueIdentity[] = [];
 	private readonly cancelKeys = new Set<string>();
+	private claimSequence = 0;
 
-	async enqueue(run: AgentV2RunQueueIdentity): Promise<void> {
+	async enqueue(run: AgentV2RunQueueIdentity): Promise<"enqueued"> {
 		this.queued.push(run);
+		return "enqueued";
 	}
 
-	async claim(): Promise<AgentV2RunQueueIdentity | undefined> {
-		return this.queued.shift();
+	async claim(workerId: string): Promise<AgentV2ClaimedRun | undefined> {
+		const run = this.queued.shift();
+		if (!run) return undefined;
+		this.claimSequence += 1;
+		return { ...run, workerId, claimToken: `local-${this.claimSequence}`, leaseExpiresAtMs: Date.now() + 30_000 };
 	}
 
-	async complete(): Promise<void> {}
+	async complete(): Promise<boolean> {
+		return true;
+	}
+	async confirmOwnership(): Promise<"owned"> {
+		return "owned";
+	}
 	async requeueActive(): Promise<number> {
 		return 0;
 	}
-	async renewLease(): Promise<boolean> {
-		return true;
+	async renewLease(claim: AgentV2ClaimedRun) {
+		return { status: "renewed" as const, leaseExpiresAtMs: claim.leaseExpiresAtMs + 30_000 };
 	}
-	async releaseExpiredClaims(): Promise<[]> {
+	async requeueExpiredClaims(): Promise<[]> {
 		return [];
 	}
 	async requestCancel(run: AgentV2RunQueueIdentity): Promise<void> {

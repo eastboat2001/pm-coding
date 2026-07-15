@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
-import type { AgentV2ActiveRunClaim, AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
+import type { AgentV2ActiveRunClaim, AgentV2ClaimedRun, AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import {
 	type AgentV2RunEventRecord,
 	type AgentV2RunUpdateResult,
@@ -212,6 +212,49 @@ describe("AgentV2WorkerService", () => {
 
 		expect(outcome).toBe("stopped");
 		expect(queue.closeCount).toBe(1);
+	});
+
+	it("records a sanitized retryable diagnostic and recovers after reclaim maintenance rejects", async () => {
+		vi.useFakeTimers();
+		const store = new MemoryWorkerStore();
+		const queue = new RecordingQueue();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+			claimTimeoutMs: 0,
+			idleSleepMs: 10,
+			maxIdleSleepMs: 10,
+			expiredClaimRecoveryIntervalMs: 20,
+			now: () => "2026-07-15T00:00:00.000Z",
+		});
+
+		await worker.start();
+		store.createOwnedActiveRun("client-a", "run-maintenance", "running", "worker-a");
+		queue.failNextRequeueExpiredClaims = new Error(
+			'WRONGTYPE redis://user:secret@127.0.0.1 queue:active {"authorization":"Bearer secret"}',
+		);
+		await vi.advanceTimersByTimeAsync(45);
+		const stopping = worker.stop();
+		await vi.runAllTimersAsync();
+		await stopping;
+
+		expect(queue.releaseExpiredClaimsCalls).toBeGreaterThanOrEqual(3);
+		expect(queue.completeCalls).toEqual([]);
+		expect(store.diagnostics).toEqual([
+			expect.objectContaining({
+				clientId: "client-a",
+				runId: "run-maintenance",
+				category: "worker",
+				code: "agent_v2.worker_reclaim_failed",
+				message: "Agent v2 expired-claim maintenance failed and will be retried.",
+				data: expect.objectContaining({ retryable: true, workerId: "worker-a" }),
+			}),
+		]);
+		expect(JSON.stringify(store.diagnostics)).not.toContain("secret");
+		expect(JSON.stringify(store.diagnostics)).not.toContain("queue:active");
 	});
 
 	it("stores terminal failures as v2 errors and emits diagnostic events", async () => {
@@ -733,7 +776,11 @@ describe("AgentV2WorkerService", () => {
 		await worker.recoverOwnedRuns();
 
 		expect(queue.releaseExpiredClaimsCalls).toBe(1);
-		expect(queue.enqueuedClaims).toEqual([{ clientId: "client-a", runId: "run-stale-queued" }]);
+		expect(queue.enqueuedClaims).toEqual([
+			{ clientId: "client-a", runId: "run-stale-running" },
+			{ clientId: "client-a", runId: "run-stale-queued" },
+			{ clientId: "client-a", runId: "run-terminal" },
+		]);
 		expect(store.getRunSnapshot("client-a", "run-stale-running")).toMatchObject({ status: "interrupted" });
 		expect(store.getRunSnapshot("client-a", "run-stale-queued")).toMatchObject({ status: "queued" });
 		expect(store.getRunSnapshot("client-a", "run-terminal")).toMatchObject({ status: "succeeded" });
@@ -1015,8 +1062,9 @@ class RecordingQueue implements AgentV2RunQueue {
 	readonly operations: string[] = [];
 	readonly requeueActiveCalls: string[] = [];
 	readonly renewLeaseCalls: Array<{ clientId: string; runId: string; workerId: string }> = [];
-	expiredClaims: AgentV2ActiveRunClaim[] = [];
+	expiredClaims: Array<Omit<AgentV2ActiveRunClaim, "claimToken"> & { claimToken?: string }> = [];
 	failNextRenewLease = false;
+	failNextRequeueExpiredClaims: Error | undefined;
 	holdReleaseExpiredClaims = false;
 	releaseExpiredClaimsCalls = 0;
 	private readonly cancelRequested = new Set<string>();
@@ -1029,22 +1077,31 @@ class RecordingQueue implements AgentV2RunQueue {
 		private readonly options: { throwOnCompleteAfterClose?: boolean } = {},
 	) {}
 
-	async enqueue(run: { clientId: string; runId: string }): Promise<void> {
+	async enqueue(run: { clientId: string; runId: string }): Promise<"enqueued"> {
 		this.enqueuedClaims.push(run);
 		this.claims.push(run);
+		return "enqueued";
 	}
 
-	async claim(): Promise<{ clientId: string; runId: string } | undefined> {
+	async claim(workerId: string): Promise<AgentV2ClaimedRun | undefined> {
 		this.claimCount += 1;
-		return this.claims.shift();
+		const run = this.claims.shift();
+		return run
+			? { ...run, workerId, claimToken: `recording-${this.claimCount}`, leaseExpiresAtMs: Date.now() + 30_000 }
+			: undefined;
 	}
 
-	async complete(run: { clientId: string; runId: string }, workerId: string): Promise<void> {
+	async complete(claim: AgentV2ClaimedRun): Promise<boolean> {
 		if (this.closed && this.options.throwOnCompleteAfterClose) {
 			throw new Error("Run queue is closed");
 		}
-		this.operations.push(`complete:${run.clientId}:${run.runId}`);
-		this.completeCalls.push({ ...run, workerId });
+		this.operations.push(`complete:${claim.clientId}:${claim.runId}`);
+		this.completeCalls.push({ clientId: claim.clientId, runId: claim.runId, workerId: claim.workerId });
+		return true;
+	}
+
+	async confirmOwnership(): Promise<"owned"> {
+		return "owned";
 	}
 
 	async requeueActive(workerId: string): Promise<number> {
@@ -1052,19 +1109,35 @@ class RecordingQueue implements AgentV2RunQueue {
 		return 2;
 	}
 
-	async renewLease(run: { clientId: string; runId: string }, workerId: string): Promise<boolean> {
-		this.renewLeaseCalls.push({ ...run, workerId });
+	async renewLease(claim: AgentV2ClaimedRun) {
+		this.renewLeaseCalls.push({ clientId: claim.clientId, runId: claim.runId, workerId: claim.workerId });
 		if (this.failNextRenewLease) {
 			this.failNextRenewLease = false;
-			return false;
+			return { status: "lost" as const };
 		}
-		return true;
+		return { status: "renewed" as const, leaseExpiresAtMs: claim.leaseExpiresAtMs + 30_000 };
 	}
 
-	async releaseExpiredClaims(): Promise<AgentV2ActiveRunClaim[]> {
+	async requeueExpiredClaims(): Promise<AgentV2ClaimedRun[]> {
 		this.releaseExpiredClaimsCalls += 1;
-		if (this.holdReleaseExpiredClaims) return await new Promise<AgentV2ActiveRunClaim[]>(() => undefined);
-		const expired = [...this.expiredClaims];
+		if (this.failNextRequeueExpiredClaims) {
+			const error = this.failNextRequeueExpiredClaims;
+			this.failNextRequeueExpiredClaims = undefined;
+			throw error;
+		}
+		if (this.holdReleaseExpiredClaims) return await new Promise<AgentV2ClaimedRun[]>(() => undefined);
+		const expired = this.expiredClaims.map((claim, index) => ({
+			clientId: claim.clientId,
+			runId: claim.runId,
+			workerId: claim.workerId,
+			claimToken: claim.claimToken ?? `expired-${index}`,
+			leaseExpiresAtMs: claim.leaseExpiresAtMs,
+		}));
+		for (const claim of expired) {
+			const identity = { clientId: claim.clientId, runId: claim.runId };
+			this.enqueuedClaims.push(identity);
+			this.claims.push(identity);
+		}
 		this.expiredClaims = [];
 		return expired;
 	}

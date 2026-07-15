@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createClient } from "redis";
 import { describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
@@ -13,21 +14,163 @@ import {
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
+import { createRedisFaultProxy } from "./support/redis-fault-proxy.js";
 
 const redisUrl = process.env.PI_TEST_REDIS_URL;
 const describeRedis = redisUrl ? describe : describe.skip;
 
 describeRedis("createRedisAgentV2RunQueue integration", () => {
+	it("keeps enqueue idempotent and protects exact worker/token ownership", async () => {
+		const queue = createQueue();
+		await usingQueue(queue, async () => {
+			const run = { clientId: "client-a", runId: "ownership" };
+			await expect(queue.enqueue(run)).resolves.toBe("enqueued");
+			await expect(queue.enqueue(run)).resolves.toBe("already_ready");
+			const claim = await queue.claim("w1", 1);
+			expect(claim).toMatchObject({ ...run, workerId: "w1" });
+			expect(claim?.claimToken).toEqual(expect.any(String));
+			await expect(queue.enqueue(run)).resolves.toBe("already_active");
+			await expect(queue.renewLease({ ...claim!, workerId: "w2" })).resolves.toEqual({ status: "lost" });
+			await expect(queue.renewLease({ ...claim!, claimToken: "stale" })).resolves.toEqual({ status: "lost" });
+			await expect(queue.complete({ ...claim!, claimToken: "stale" })).resolves.toBe(false);
+			await expect(queue.confirmOwnership(claim!, 100)).resolves.toBe("owned");
+			await expect(queue.complete(claim!)).resolves.toBe(true);
+			await expect(queue.confirmOwnership(claim!, 100)).resolves.toBe("lost");
+		});
+	});
+
+	it("claims concurrently through independent sockets", async () => {
+		const queue = createQueue();
+		await usingQueue(queue, async () => {
+			await queue.enqueue({ clientId: "client-a", runId: "parallel-a" });
+			await queue.enqueue({ clientId: "client-a", runId: "parallel-b" });
+			const [first, second] = await Promise.all([queue.claim("w1", 1), queue.claim("w2", 1)]);
+			expect(new Set([first?.runId, second?.runId])).toEqual(new Set(["parallel-a", "parallel-b"]));
+			expect(first?.claimToken).not.toBe(second?.claimToken);
+		});
+	});
+
+	it("recovers an exact claim after its Redis response is dropped", async () => {
+		const proxy = await createRedisFaultProxy(redisUrl!);
+		const queueName = uniqueQueueName();
+		const queue = createRedisAgentV2RunQueue({ redisUrl: proxy.url, queueName, claimCommandTimeoutMs: 100 });
+		try {
+			await queue.enqueue({ clientId: "client-a", runId: "response-drop" });
+			proxy.dropNextEvalResponse();
+			const claim = await queue.claim("w1", 250);
+			expect(claim).toMatchObject({ clientId: "client-a", runId: "response-drop", workerId: "w1" });
+			await expect(queue.confirmOwnership(claim!, 100)).resolves.toBe("owned");
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await proxy.close();
+		}
+	});
+
+	it("atomically requeues expired claims exactly once", async () => {
+		const queue = createRedisAgentV2RunQueue({
+			redisUrl: redisUrl!,
+			queueName: uniqueQueueName(),
+			claimLeaseTtlMs: 20,
+		});
+		await usingQueue(queue, async () => {
+			await queue.enqueue({ clientId: "client-a", runId: "expired" });
+			const claim = await queue.claim("w1", 1);
+			const reclaimed = await queue.requeueExpiredClaims(claim!.leaseExpiresAtMs);
+			expect(reclaimed).toEqual([expect.objectContaining({ runId: "expired", claimToken: claim!.claimToken })]);
+			await expect(queue.requeueExpiredClaims(claim!.leaseExpiresAtMs)).resolves.toEqual([]);
+			const next = await queue.claim("w2", 1);
+			expect(next).toMatchObject({ runId: "expired", workerId: "w2" });
+			expect(next?.claimToken).not.toBe(claim?.claimToken);
+		});
+	});
+
+	it("quarantines poisoned active records without blocking valid expired reclaim", async () => {
+		const queueName = uniqueQueueName();
+		const queue = createRedisAgentV2RunQueue({ redisUrl: redisUrl!, queueName, claimLeaseTtlMs: 20 });
+		const inspection = createClient({ url: redisUrl! });
+		await inspection.connect();
+		try {
+			await queue.enqueue({ clientId: "client-a", runId: "valid-expired" });
+			const valid = await queue.claim("w1", 1);
+			const poisonEntries = new Map([
+				[
+					'["client-a","missing-expiry"]',
+					JSON.stringify({ workerId: "hostile", claimToken: "missing", payload: "redis://user:secret@host" }),
+				],
+				[
+					'["client-a","string-expiry"]',
+					JSON.stringify({ workerId: "hostile", claimToken: "string", leaseExpiresAtMs: "0" }),
+				],
+				['["client-a","huge-expiry"]', '{"workerId":"hostile","claimToken":"huge","leaseExpiresAtMs":1e999}'],
+			]);
+			await inspection.hSet(`${queueName}:active`, Object.fromEntries(poisonEntries));
+
+			await expect(queue.requeueExpiredClaims(valid!.leaseExpiresAtMs)).resolves.toEqual([
+				expect.objectContaining({ runId: "valid-expired", claimToken: valid!.claimToken }),
+			]);
+			await expect(queue.requeueExpiredClaims(valid!.leaseExpiresAtMs)).resolves.toEqual([]);
+			await expect(queue.claim("w2", 1)).resolves.toMatchObject({ runId: "valid-expired", workerId: "w2" });
+			await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
+			expect(await inspection.hLen(`${queueName}:active`)).toBe(1);
+			expect(await inspection.hGetAll(`${queueName}:invalid-active`)).toEqual({
+				'["client-a","missing-expiry"]': "invalid_lease_expiry",
+				'["client-a","string-expiry"]': "invalid_lease_expiry",
+				'["client-a","huge-expiry"]': "invalid_lease_expiry",
+			});
+			await queue.clear();
+			expect(await inspection.exists(`${queueName}:invalid-active`)).toBe(0);
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await inspection.quit();
+		}
+	});
+
+	it("expires and prunes cancellation state", async () => {
+		const queueName = uniqueQueueName();
+		const queue = createRedisAgentV2RunQueue({ redisUrl: redisUrl!, queueName, cancelTtlSeconds: 1 });
+		const inspection = createClient({ url: redisUrl! });
+		await inspection.connect();
+		try {
+			await queue.requestCancel({ clientId: "client-a", runId: "cancelled" });
+			expect(await inspection.ttl(`${queueName}:cancel`)).toBeGreaterThan(0);
+			await inspection.zAdd(`${queueName}:cancel`, { score: 1, value: '["client-a","expired"]' });
+			await expect(queue.isCancelRequested({ clientId: "client-a", runId: "expired" })).resolves.toBe(false);
+			expect(await inspection.zScore(`${queueName}:cancel`, '["client-a","expired"]')).toBeNull();
+		} finally {
+			try {
+				await queue.clear();
+			} catch {}
+			await queue.close();
+			await inspection.quit();
+		}
+	});
+
+	it("closes promptly with active claim sockets", async () => {
+		const queue = createQueue();
+		const claim = queue.claim("w1", 10_000);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		await expect(queue.close()).resolves.toBeUndefined();
+		await expect(claim).resolves.toBeUndefined();
+	});
+
 	it("requeues active claims owned by a worker in Redis", async () => {
 		const queue = createQueue();
 		await usingQueue(queue, async () => {
 			await queue.enqueue({ clientId: "client-a", runId: "run-redis-1" });
 
-			await expect(queue.claim("w1", 1)).resolves.toEqual({ clientId: "client-a", runId: "run-redis-1" });
+			const first = await queue.claim("w1", 1);
+			expect(first).toMatchObject({ clientId: "client-a", runId: "run-redis-1", workerId: "w1" });
 			await expect(queue.requeueActive("w1")).resolves.toBe(1);
 
-			await expect(queue.claim("w2", 1)).resolves.toEqual({ clientId: "client-a", runId: "run-redis-1" });
-			await queue.complete({ clientId: "client-a", runId: "run-redis-1" }, "w2");
+			const second = await queue.claim("w2", 1);
+			expect(second).toMatchObject({ clientId: "client-a", runId: "run-redis-1", workerId: "w2" });
+			await queue.complete(second!);
 			await expect(queue.claim("w2", 1)).resolves.toBeUndefined();
 		});
 	});
@@ -39,7 +182,7 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 			store.createQueuedRun("client-a", "run-redis-queued");
 
 			await queue.enqueue({ clientId: "client-a", runId: "run-redis-queued" });
-			await expect(queue.claim("w1", 1)).resolves.toEqual({ clientId: "client-a", runId: "run-redis-queued" });
+			await expect(queue.claim("w1", 1)).resolves.toMatchObject({ clientId: "client-a", runId: "run-redis-queued" });
 
 			const worker = new AgentV2WorkerService({
 				store,
@@ -65,7 +208,10 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 			store.createOwnedActiveRun("client-a", "run-redis-running", "running", "w1");
 
 			await queue.enqueue({ clientId: "client-a", runId: "run-redis-running" });
-			await expect(queue.claim("w1", 1)).resolves.toEqual({ clientId: "client-a", runId: "run-redis-running" });
+			await expect(queue.claim("w1", 1)).resolves.toMatchObject({
+				clientId: "client-a",
+				runId: "run-redis-running",
+			});
 
 			const worker = new AgentV2WorkerService({
 				store,
@@ -92,8 +238,12 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 function createQueue(): AgentV2RunQueue {
 	return createRedisAgentV2RunQueue({
 		redisUrl: redisUrl!,
-		queueName: `pi:test:agent-v2:runs:${Date.now()}:${randomUUID()}`,
+		queueName: uniqueQueueName(),
 	});
+}
+
+function uniqueQueueName(): string {
+	return `pi:test:agent-v2:runs:${Date.now()}:${randomUUID()}`;
 }
 
 async function usingQueue(queue: AgentV2RunQueue, fn: () => Promise<void>): Promise<void> {

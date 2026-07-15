@@ -193,7 +193,13 @@ describe("agent v2 durable commit and outbox store", () => {
 		const input = richStartReplayInput(createdAt);
 		const fingerprint = agentV2StartReplayFingerprint(input);
 		const created = store.commitAgentV2RunStart(input);
-		expect(created.runCreatedEvent.payload).toEqual({ status: "queued" });
+		expect(created.runCreatedEvent.payload).toEqual({
+			type: "agent_v2.run_created",
+			status: "queued",
+			phase: "intake",
+			attempt: 1,
+			at: createdAt,
+		});
 		const publicEvents = JSON.stringify(store.listAgentV2RunEvents("client-a", "run-a", 0));
 		for (const privateValue of ["# Spec", "assets/a.txt", input.bootstrapChecksum, fingerprint]) {
 			expect(publicEvents).not.toContain(privateValue);

@@ -1,7 +1,7 @@
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
-import type { ImageContent, Model } from "@mariozechner/pi-ai";
+import type { AssistantMessage, ImageContent, Model } from "@mariozechner/pi-ai";
 import {
 	type AgentState,
 	ApiKeyPromptDialog,
@@ -61,6 +61,15 @@ import {
 import { createServerProjectTools } from "../project-tools/tools.js";
 import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import {
+	AgentV2BrowserController,
+	type AgentV2BrowserRunEventDrainResult,
+	type AgentV2BrowserRunSink,
+	type AgentV2DiagnosticRecordedPayload,
+	type AgentV2OutputRecordedPayload,
+	agentV2OutputToAssistantMessage,
+	settleAgentV2BrowserTerminalSnapshot,
+} from "../runtime/agent-v2-browser-controller.js";
+import {
 	cancelAgentV2Run,
 	connectAgentV2RunEvents,
 	getAgentV2Run,
@@ -77,7 +86,6 @@ import {
 } from "../runtime/context-orchestrator.js";
 import { STATIC_PREVIEW_CONTRACT } from "../runtime/platform-contract.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
-import { RemoteAgentController, type RemoteRunEventDrainResult } from "../runtime/remote-agent-controller.js";
 import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
@@ -92,8 +100,6 @@ import {
 	type RunTransientStatusSource,
 	type RunTransientStatusTexts,
 	selectRunTransientStatusText,
-	shouldClearProviderStallStatusForRunEvent,
-	shouldScheduleProviderStallStatusAfterRunEvent,
 } from "../runtime/run-transient-status.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
@@ -139,7 +145,6 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set([
 	"failed",
 	"interrupted",
 ]);
-const AGENT_V2_LIFECYCLE_EVENT_PREFIX = "agent_v2.";
 const EMPTY_USAGE: SessionMetadata["usage"] = {
 	input: 0,
 	output: 0,
@@ -198,17 +203,6 @@ function toTrackedRemoteRun(run: AgentV2RunSnapshot, sessionId: string): Tracked
 		updatedAt: run.updatedAt,
 		...(run.error ? { error: run.error } : {}),
 	};
-}
-
-function runEventPayloadType(event: AgentV2RunEventRecord): string | undefined {
-	return isRecord(event.payload) && typeof event.payload.type === "string" ? event.payload.type : undefined;
-}
-
-function isAgentV2LifecycleRunEvent(event: AgentV2RunEventRecord): boolean {
-	return (
-		event.type.startsWith(AGENT_V2_LIFECYCLE_EVENT_PREFIX) ||
-		runEventPayloadType(event)?.startsWith(AGENT_V2_LIFECYCLE_EVENT_PREFIX) === true
-	);
 }
 
 function runStatusFromAgentV2LifecycleEvent(event: AgentV2RunEventRecord): AgentV2RunStatus | undefined {
@@ -381,7 +375,7 @@ let isEditingTitle = false;
 let agent: Agent;
 let chatPanel: ChatPanel;
 let agentUnsubscribe: (() => void) | undefined;
-let remoteAgentController: RemoteAgentController | undefined;
+let agentV2BrowserController: AgentV2BrowserController | undefined;
 let remoteRunConnection: RunEventConnection | undefined;
 let remoteRunStatusPollId: ReturnType<typeof setTimeout> | undefined;
 let remoteRunProviderStallStatusTimerId: ReturnType<typeof setTimeout> | undefined;
@@ -469,7 +463,7 @@ const scheduleProviderStallStatus = (runId: string): void => {
 	setRemoteRunTransientStatusText("providerStalled");
 	remoteRunProviderStallStatusTimerId = setTimeout(() => {
 		remoteRunProviderStallStatusTimerId = undefined;
-		if (runId !== currentActiveRunId || remoteAgentController?.activeRunId !== runId) return;
+		if (runId !== currentActiveRunId || agentV2BrowserController?.activeRunId !== runId) return;
 		if (currentRunStatus && currentRunStatus !== "running") return;
 		setRemoteRunTransientStatusText("providerStalled", providerStallStatusText(i18nText));
 		requestChatPanelUpdate();
@@ -491,7 +485,7 @@ const syncActiveRunStatusOnce = (): void => {
 const resetRemoteRunState = (): void => {
 	closeRemoteRunConnection();
 	clearProviderStallStatusTimer();
-	remoteAgentController = undefined;
+	agentV2BrowserController = undefined;
 	reportedQueuedRunTimeouts.clear();
 	clearRemoteRunTransientStatusTexts();
 	trackRemoteRun(undefined);
@@ -508,7 +502,7 @@ const i18nText = (key: string): string => i18n(key as Parameters<typeof i18n>[0]
 const markRemoteRunSettled = (runId: string, status: AgentV2RunStatus, updatedAt?: string): void => {
 	closeRemoteRunConnection();
 	clearProviderStallStatusTimer();
-	remoteAgentController = undefined;
+	agentV2BrowserController = undefined;
 	currentActiveRunId = undefined;
 	currentLastRunId = runId;
 	currentRunStatus = status;
@@ -788,7 +782,7 @@ const handleAgentEvent = async (event: AgentEvent) => {
 			if (currentSessionId) {
 				await saveSession();
 			}
-			if (remoteAgentController?.activeRunId) {
+			if (agentV2BrowserController?.activeRunId) {
 				scheduleRemoteRunRender();
 			} else {
 				renderApp();
@@ -1162,20 +1156,172 @@ function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
 	} as unknown as AgentMessage;
 }
 
-const drainCurrentRemoteRunEvents = async (runId: string): Promise<RemoteRunEventDrainResult | undefined> => {
-	const controller = remoteAgentController;
+type AgentV2BrowserMutableState = {
+	isStreaming: boolean;
+	streamingMessage?: AgentMessage;
+	pendingToolCalls: ReadonlySet<string>;
+	errorMessage?: string;
+};
+
+function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink {
+	let activeRunId: string | undefined;
+	const mutableState = (): AgentV2BrowserMutableState => browserAgent.state as unknown as AgentV2BrowserMutableState;
+	return {
+		beginRun(runId) {
+			activeRunId = runId;
+			const state = mutableState();
+			state.isStreaming = true;
+			state.streamingMessage = undefined;
+			state.pendingToolCalls = new Set<string>();
+			state.errorMessage = undefined;
+		},
+		setPhase(phase, status) {
+			currentRunStatus = status;
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: "agent_v2.browser_phase_projected",
+				data: { runId: activeRunId, phase, status },
+			});
+		},
+		setTask(event) {
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: {
+					runId: activeRunId,
+					taskId: event.taskId,
+					kind: event.kind,
+					status: event.status,
+					phase: event.phase,
+				},
+			});
+		},
+		setArtifact(event) {
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: {
+					runId: activeRunId,
+					artifactId: event.artifactId,
+					path: event.path,
+					validationStatus: event.validationStatus,
+					revision: event.revision,
+				},
+			});
+			refreshGeneratedAppsPanel();
+			if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+		},
+		setValidation(event) {
+			writeDiagnosticEvent({
+				level: event.status === "failed" || event.status === "blocked" ? "warn" : "info",
+				category: "agent",
+				eventType: event.type,
+				data: {
+					runId: activeRunId,
+					validationId: event.validationId,
+					taskId: event.taskId,
+					attempt: event.attempt,
+					status: event.status,
+					summary: event.summary,
+				},
+			});
+		},
+		appendOutput(event) {
+			appendAgentV2BrowserOutput(browserAgent, event);
+		},
+		appendDiagnostic(event) {
+			writeAgentV2BrowserDiagnostic(activeRunId, event);
+		},
+		settle(status, error) {
+			const state = mutableState();
+			state.isStreaming = false;
+			state.streamingMessage = undefined;
+			state.pendingToolCalls = new Set<string>();
+			state.errorMessage = error?.message;
+			if ((status === "failed" || status === "interrupted") && error?.message) {
+				appendAgentV2BrowserTerminalError(browserAgent, error.message);
+			}
+			activeRunId = undefined;
+		},
+	};
+}
+
+function appendAgentV2BrowserOutput(browserAgent: Agent, event: AgentV2OutputRecordedPayload): void {
+	const timestamp = Date.parse(event.at);
+	const alreadyProjected = browserAgent.state.messages.some((message) => {
+		if (message.role !== "assistant") return false;
+		return (
+			message.provider === event.provider &&
+			message.model === event.model &&
+			message.timestamp === timestamp &&
+			message.content.length === 1 &&
+			message.content[0]?.type === "text" &&
+			message.content[0].text === event.summary
+		);
+	});
+	if (alreadyProjected) return;
+	const message = agentV2OutputToAssistantMessage(event);
+	browserAgent.state.messages = [...browserAgent.state.messages, message];
+}
+
+function appendAgentV2BrowserTerminalError(browserAgent: Agent, errorMessage: string): void {
+	const text = `Run failed: ${errorMessage}`;
+	if (
+		browserAgent.state.messages.some(
+			(message) =>
+				message.role === "assistant" &&
+				message.content.length === 1 &&
+				message.content[0]?.type === "text" &&
+				message.content[0].text === text,
+		)
+	) {
+		return;
+	}
+	const message: AssistantMessage = {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "agent-v2",
+		provider: "agent-v2",
+		model: "runtime",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "error",
+		errorMessage,
+		timestamp: Date.now(),
+	};
+	browserAgent.state.messages = [...browserAgent.state.messages, message];
+}
+
+function writeAgentV2BrowserDiagnostic(runId: string | undefined, event: AgentV2DiagnosticRecordedPayload): void {
+	writeDiagnosticEvent({
+		level: event.severity === "debug" ? "info" : event.severity,
+		category: "agent",
+		eventType: event.code,
+		data: {
+			runId,
+			diagnosticId: event.diagnosticId,
+			message: event.message,
+			at: event.at,
+		},
+	});
+}
+
+const drainCurrentRemoteRunEvents = async (runId: string): Promise<AgentV2BrowserRunEventDrainResult | undefined> => {
+	const controller = agentV2BrowserController;
 	if (!controller || controller.activeRunId !== runId) return;
 	const afterSeq = controller.lastSeq;
 	try {
 		const events = await runClient.listRunEvents(runId, controller.lastSeq);
-		for (const event of [...events].sort((left, right) => left.seq - right.seq)) {
-			if (controller.activeRunId !== runId) return { ok: true, afterSeq: controller.lastSeq };
-			if (isAgentV2LifecycleRunEvent(event)) {
-				controller.markRunEventSeen(event);
-				continue;
-			}
-			await controller.applyRunEvent(event);
-		}
+		controller.hydrate(events, controller.lastSeq);
 		return { ok: true, afterSeq: controller.lastSeq };
 	} catch (error) {
 		return { ok: false, afterSeq, error };
@@ -1198,21 +1344,34 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 			continue;
 		}
 
-		const drainResult = await drainCurrentRemoteRunEvents(run.runId);
-		if (drainResult && !drainResult.ok) {
-			writeDiagnosticEvent({
-				level: "warn",
-				category: "agent",
-				eventType: "agent.remote_run.event_drain_failed",
-				data: errorDiagnosticData(drainResult.error, { runId: run.runId, afterSeq: drainResult.afterSeq }),
-			});
+		const settlement = await settleAgentV2BrowserTerminalSnapshot({
+			controller: agentV2BrowserController,
+			runId: run.runId,
+			status: run.status,
+			...(run.error ? { error: run.error } : {}),
+			drain: () => drainCurrentRemoteRunEvents(run.runId),
+			onSettled: () => {
+				closeRemoteRunConnection();
+				markRemoteRunSettled(run.runId, run.status, run.updatedAt);
+			},
+		});
+		if (settlement.status === "retry") {
+			const drainResult = settlement.drainResult;
+			if (drainResult && !drainResult.ok) {
+				writeDiagnosticEvent({
+					level: "warn",
+					category: "agent",
+					eventType: "agent.remote_run.event_drain_failed",
+					data: errorDiagnosticData(drainResult.error, { runId: run.runId, afterSeq: drainResult.afterSeq }),
+				});
+			}
+			if (attempt < attempts - 1) {
+				await new Promise((resolve) => setTimeout(resolve, intervalMs));
+				continue;
+			}
+			return false;
 		}
-		closeRemoteRunConnection();
-		const controller = remoteAgentController;
-		if (controller?.activeRunId === run.runId) {
-			await controller.settleRemoteRun(run.status, run.error?.message);
-		}
-		markRemoteRunSettled(run.runId, run.status, run.updatedAt);
+		if (settlement.status === "inactive") return true;
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
@@ -1236,13 +1395,13 @@ const scheduleRemoteRunStatusPoll = (runId: string): void => {
 	if (remoteRunStatusPollId !== undefined) clearTimeout(remoteRunStatusPollId);
 	remoteRunStatusPollId = setTimeout(() => {
 		remoteRunStatusPollId = undefined;
-		if (runId !== currentActiveRunId || remoteAgentController?.activeRunId !== runId) return;
+		if (runId !== currentActiveRunId || agentV2BrowserController?.activeRunId !== runId) return;
 		void syncCurrentRunStatusFromServer(runId, 1, 0)
 			.catch((error) => {
 				console.error("Failed to poll remote run status:", error);
 			})
 			.finally(() => {
-				if (runId === currentActiveRunId && remoteAgentController?.activeRunId === runId) {
+				if (runId === currentActiveRunId && agentV2BrowserController?.activeRunId === runId) {
 					scheduleRemoteRunStatusPoll(runId);
 				}
 			});
@@ -1304,7 +1463,7 @@ const cancelCurrentRemoteRun = async (runId: string): Promise<void> => {
 };
 
 const applyConnectedRunEvent = async (event: AgentV2RunEventRecord): Promise<void> => {
-	if (!remoteAgentController || event.runId !== remoteAgentController.activeRunId) return;
+	if (!agentV2BrowserController || event.runId !== agentV2BrowserController.activeRunId) return;
 
 	const retryStatus = retryStatusFromRunEvent(event);
 	setRemoteRunTransientStatusText("connection");
@@ -1314,55 +1473,28 @@ const applyConnectedRunEvent = async (event: AgentV2RunEventRecord): Promise<voi
 		setRemoteRunTransientStatusText("retry");
 	}
 
-	const payloadType = runEventPayloadType(event);
-	if (isAgentV2LifecycleRunEvent(event)) {
-		const runStatus = runStatusFromAgentV2LifecycleEvent(event);
-		trackRemoteRun({
-			runId: event.runId,
-			status: runStatus ?? currentRunStatus ?? "running",
-			updatedAt: event.createdAt,
-		});
-		clearProviderStallStatusTimer();
-		setRemoteRunTransientStatusText("providerStalled");
-		if (!runStatus || !isTerminalRunStatus(runStatus)) {
-			scheduleProviderStallStatus(event.runId);
-		}
-		scheduleRemoteRunRender();
-		requestChatPanelUpdate();
-		refreshGeneratedAppsPanel();
-		if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
-		if (runStatus && isTerminalRunStatus(runStatus)) {
-			const syncedTerminalStatus = await syncCurrentRunStatusFromServer(event.runId);
-			if (!syncedTerminalStatus) {
-				if (remoteAgentController?.activeRunId === event.runId) {
-					await remoteAgentController.settleRemoteRun(runStatus);
-				}
-				markRemoteRunSettled(event.runId, runStatus, event.createdAt);
-				await saveSession();
-				scheduleRemoteRunRender();
-				requestChatPanelUpdate();
-				refreshGeneratedAppsPanel({ force: true });
-				if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
-			}
-		}
-		return;
-	}
-
-	await remoteAgentController.applyRunEvent(event);
-	if (shouldClearProviderStallStatusForRunEvent(payloadType)) {
-		clearProviderStallStatusTimer();
-		setRemoteRunTransientStatusText("providerStalled");
-	}
-	if (shouldScheduleProviderStallStatusAfterRunEvent(payloadType)) scheduleProviderStallStatus(event.runId);
-	if (payloadType !== "agent_end") scheduleRemoteRunRender();
+	agentV2BrowserController.apply(event);
+	const runStatus = runStatusFromAgentV2LifecycleEvent(event);
+	trackRemoteRun({
+		runId: event.runId,
+		status: runStatus ?? currentRunStatus ?? "running",
+		updatedAt: event.createdAt,
+	});
+	clearProviderStallStatusTimer();
+	setRemoteRunTransientStatusText("providerStalled");
+	if (!runStatus || !isTerminalRunStatus(runStatus)) scheduleProviderStallStatus(event.runId);
+	scheduleRemoteRunRender();
+	requestChatPanelUpdate();
+	refreshGeneratedAppsPanel();
+	if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 	currentRunUpdatedAt = event.createdAt;
 
-	if (payloadType === "agent_end") {
+	if (runStatus && isTerminalRunStatus(runStatus)) {
 		await syncCurrentRunStatusFromServer(event.runId);
 	}
 };
 
-const connectToRemoteRun = (run: TrackedRemoteRun, controller: RemoteAgentController): void => {
+const connectToRemoteRun = (run: TrackedRemoteRun, controller: AgentV2BrowserController): void => {
 	closeRemoteRunConnection();
 	trackRemoteRun(run);
 	scheduleRemoteRunStatusPoll(run.runId);
@@ -1394,7 +1526,7 @@ const connectToRemoteRun = (run: TrackedRemoteRun, controller: RemoteAgentContro
 				if (
 					connection.closed ||
 					run.runId !== currentActiveRunId ||
-					remoteAgentController?.activeRunId !== run.runId
+					agentV2BrowserController?.activeRunId !== run.runId
 				) {
 					return;
 				}
@@ -1472,10 +1604,10 @@ const startRemotePrompt = async (
 
 	pendingHandoffModelContext = undefined;
 
-	const controller = new RemoteAgentController(agent);
-	controller.startRemoteRun(runResult.runId);
+	const controller = new AgentV2BrowserController(createAgentV2BrowserRunSink(agent));
+	controller.start(runResult);
 	clearRemoteRunTransientStatusTexts();
-	remoteAgentController = controller;
+	agentV2BrowserController = controller;
 	connectToRemoteRun(toTrackedRemoteRun(runResult, currentSessionId!), controller);
 	renderApp();
 	requestChatPanelUpdate();
@@ -1505,10 +1637,10 @@ const startRemoteContinuationRun = async (_parentRunId: string): Promise<void> =
 		throw error;
 	}
 
-	const controller = new RemoteAgentController(agent);
-	controller.startRemoteRun(runResult.runId);
+	const controller = new AgentV2BrowserController(createAgentV2BrowserRunSink(agent));
+	controller.start(runResult);
 	clearRemoteRunTransientStatusTexts();
-	remoteAgentController = controller;
+	agentV2BrowserController = controller;
 	connectToRemoteRun(toTrackedRemoteRun(runResult, currentSessionId!), controller);
 	renderApp();
 	requestChatPanelUpdate();
@@ -1567,7 +1699,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	(agent as Agent & { repairToolCalls: boolean }).repairToolCalls = true;
 	const abortAgentLocally = agent.abort.bind(agent);
 	agent.abort = () => {
-		if (currentActiveRunId && remoteAgentController?.activeRunId === currentActiveRunId) {
+		if (currentActiveRunId && agentV2BrowserController?.activeRunId === currentActiveRunId) {
 			void cancelCurrentRemoteRun(currentActiveRunId).catch(() => {});
 		}
 		abortAgentLocally();
@@ -1693,12 +1825,25 @@ const restoreActiveRemoteRunFromMetadata = async (
 		return false;
 	}
 
-	const controller = new RemoteAgentController(agent);
-	controller.startRemoteRun(activeRunId);
+	const runSnapshot: AgentV2RunSnapshot =
+		run ??
+		({
+			clientId: piClientHeaders()["X-PI-Client-ID"] || "",
+			runId: activeRunId,
+			status: restoredStatus,
+			phase: "intake",
+			attempt: 0,
+			input: {},
+			model: {},
+			createdAt: sessionData.lastModified,
+			updatedAt: sessionMetadata?.runUpdatedAt ?? sessionData.lastModified,
+		} satisfies AgentV2RunSnapshot);
+	const controller = new AgentV2BrowserController(createAgentV2BrowserRunSink(agent));
+	controller.start(runSnapshot);
 	if (replayedEvents.length > 0) {
-		controller.hydrateRunEvents(replayedEvents);
+		controller.hydrate(replayedEvents, replayedEvents.at(-1)?.seq ?? 0);
 	}
-	remoteAgentController = controller;
+	agentV2BrowserController = controller;
 	clearRemoteRunTransientStatusTexts();
 	const trackedRun: TrackedRemoteRun = run
 		? toTrackedRemoteRun(run, sessionId)

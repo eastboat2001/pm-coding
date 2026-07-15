@@ -46,8 +46,8 @@ describe("AgentV2RunApiService", () => {
 		});
 		expect(JSON.stringify(run.input)).not.toContain("secret source");
 		expect(store.listAgentV2RunEvents("client-a", "run-start", 0).map((event) => [event.seq, event.type])).toEqual([
-			[1, "run_created"],
-			[2, "planning_ready"],
+			[1, "agent_v2.run_created"],
+			[2, "agent_v2.planning_ready"],
 		]);
 		expect(store.listAgentV2Documents("client-a", "run-start")).toHaveLength(4);
 		expect(store.listAgentV2Tasks("client-a", "run-start")).toHaveLength(6);
@@ -479,7 +479,15 @@ describe("AgentV2RunApiService", () => {
 			endedAt: "2026-07-14T01:10:00.000Z",
 		});
 		const cancelEvent = store.listAgentV2RunEvents("client-a", `run-${status}`, 0).at(-1);
-		expect(cancelEvent).toMatchObject({ type: "run_cancelled", createdAt: "2026-07-14T01:10:00.000Z" });
+		expect(cancelEvent).toMatchObject({
+			type: "agent_v2.phase_changed",
+			payload: {
+				type: "agent_v2.phase_changed",
+				phase: "cancelled",
+				status: "cancelled",
+			},
+			createdAt: "2026-07-14T01:10:00.000Z",
+		});
 		const intents = store.leaseAgentV2Outbox({
 			ownerId: `cancel-${status}`,
 			kinds: ["run_cancel"],
@@ -511,7 +519,12 @@ describe("AgentV2RunApiService", () => {
 		expect(
 			store
 				.listAgentV2RunEvents("client-a", "run-cancel-replay", 0)
-				.filter((event) => event.type === "run_cancelled"),
+				.filter(
+					(event) =>
+						event.type === "agent_v2.phase_changed" &&
+						event.payload.phase === "cancelled" &&
+						event.payload.status === "cancelled",
+				),
 		).toHaveLength(1);
 		expect(wakeDispatcher).toHaveBeenCalledTimes(2);
 	});

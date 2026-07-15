@@ -36,7 +36,10 @@ export type AgentV2RunCreatedTransportEvent = AgentV2TransportEventBase & {
 export type AgentV2PhaseChangedTransportEvent = AgentV2TransportEventBase & {
 	type: "agent_v2.phase_changed";
 	phase: AgentV2Phase;
+	status: AgentV2RunStatus;
 	attempt?: number;
+	reason?: string;
+	cancelFingerprint?: string;
 };
 
 export type AgentV2TaskUpdatedTransportEvent = AgentV2TransportEventBase & {

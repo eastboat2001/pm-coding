@@ -431,7 +431,7 @@ describe("agent v2 production import boundary", () => {
 			join(repoRoot, "apps", "pi-coding-web", "src", "app", "bootstrap.ts"),
 			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "agent-v2-run-client.ts"),
 			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "run-client.ts"),
-			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "remote-agent-controller.ts"),
+			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "agent-v2-browser-controller.ts"),
 		];
 		const forbidden = [
 			"PI_APP_AGENT_VERSION",
@@ -458,6 +458,41 @@ describe("agent v2 production import boundary", () => {
 		}
 	});
 
+	it("projects v2 browser events without replaying or synthesizing provider AgentEvents", () => {
+		const browserController = join(
+			repoRoot,
+			"apps",
+			"pi-coding-web",
+			"src",
+			"runtime",
+			"agent-v2-browser-controller.ts",
+		);
+		const bootstrap = join(repoRoot, "apps", "pi-coding-web", "src", "app", "bootstrap.ts");
+		const retiredController = join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "remote-agent-controller.ts");
+		const retiredControllerTest = join(repoRoot, "apps", "pi-coding-web", "test", "remote-agent-controller.test.ts");
+
+		expect(existsSync(browserController)).toBe(true);
+		expect(existsSync(retiredController)).toBe(false);
+		expect(existsSync(retiredControllerTest)).toBe(false);
+		for (const file of [browserController, bootstrap]) {
+			const source = readFileSync(file, "utf8");
+			expect(source, `${toRepoPath(file)} must not cast v2 payloads to AgentEvent`).not.toMatch(
+				/payload\s+as\s+AgentEvent/,
+			);
+			expect(source, `${toRepoPath(file)} must not replay provider events`).not.toContain("applyRemoteEvent");
+			expect(source, `${toRepoPath(file)} must not synthesize provider events`).not.toMatch(
+				/payload\s*:\s*\{\s*type\s*:\s*"(?:agent_start|message_end|agent_end)"/,
+			);
+		}
+		const controllerSource = readFileSync(browserController, "utf8");
+		for (const providerEvent of ["agent_start", "message_end", "agent_end"]) {
+			expect(controllerSource, `${toRepoPath(browserController)} must not know ${providerEvent}`).not.toContain(
+				providerEvent,
+			);
+		}
+		expect(readFileSync(bootstrap, "utf8")).not.toContain("remote-agent-controller");
+	});
+
 	it("keeps browser application generation state on agent v2 contracts", () => {
 		const browserFiles = [
 			"apps/pi-coding-web/src/app/bootstrap.ts",
@@ -466,7 +501,7 @@ describe("agent v2 production import boundary", () => {
 			"apps/pi-coding-web/src/diagnostics/diagnostic-export-client.ts",
 			"apps/pi-coding-web/src/runtime/agent-v2-run-client.ts",
 			"apps/pi-coding-web/src/runtime/browser-records.ts",
-			"apps/pi-coding-web/src/runtime/remote-agent-controller.ts",
+			"apps/pi-coding-web/src/runtime/agent-v2-browser-controller.ts",
 			"apps/pi-coding-web/src/runtime/remote-resume.ts",
 			"apps/pi-coding-web/src/runtime/run-health.ts",
 			"apps/pi-coding-web/src/runtime/run-retry-status.ts",

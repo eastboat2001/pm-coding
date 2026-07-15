@@ -77,12 +77,13 @@ describe("run client", () => {
 		const syncSource = bootstrapSource.slice(syncStart, syncEnd);
 
 		expect(bootstrapSource).toContain("getRun: async (runId: string) =>");
-		expect(bootstrapSource).toContain("if (isAgentV2LifecycleRunEvent(event)) {");
+		expect(bootstrapSource).toContain("agentV2BrowserController.apply(event);");
+		expect(bootstrapSource).not.toContain("isAgentV2LifecycleRunEvent");
 		expect(syncSource).toContain("const run = await runClient.getRun(runId);");
 		expect(syncSource).not.toContain("const detail = await runClient.getSession(currentSessionId);");
 		expect(syncSource).not.toContain("const run = detail.runs.find((candidate) => candidate.runId === runId);");
 		expect(bootstrapSource).not.toContain("tryDrainRemoteRunEvents");
-		expect(bootstrapSource).toContain("controller.markRunEventSeen(event);");
+		expect(bootstrapSource).toContain("controller.hydrate(events, controller.lastSeq);");
 	});
 
 	it("restores sessions from local storage and v2 run APIs instead of the legacy session detail API", () => {

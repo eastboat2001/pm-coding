@@ -1186,13 +1186,23 @@ export class PostgresRuntimeStore {
                 if (!runCreatedEvent ||
                     !planningReadyEvent ||
                     runCreatedEvent.seq !== 1 ||
-                    runCreatedEvent.type !== "run_created" ||
+                    runCreatedEvent.type !== "agent_v2.run_created" ||
                     runCreatedEvent.createdAt !== input.createdAt ||
-                    !equalAgentV2ProtocolValues(runCreatedEvent.payload, { status: "queued" }) ||
+                    !equalAgentV2ProtocolValues(runCreatedEvent.payload, {
+                        type: "agent_v2.run_created",
+                        status: "queued",
+                        phase: "intake",
+                        attempt: 1,
+                        at: input.createdAt,
+                    }) ||
                     planningReadyEvent.seq !== 2 ||
-                    planningReadyEvent.type !== "planning_ready" ||
+                    planningReadyEvent.type !== "agent_v2.planning_ready" ||
                     planningReadyEvent.createdAt !== input.createdAt ||
-                    !equalAgentV2ProtocolValues(planningReadyEvent.payload, { phase: input.readyPhase }))
+                    !equalAgentV2ProtocolValues(planningReadyEvent.payload, {
+                        type: "agent_v2.planning_ready",
+                        phase: input.readyPhase,
+                        at: input.createdAt,
+                    }))
                     throw new Error("Agent v2 run start replay conflict");
                 const outboxIntentIds = [];
                 for (const reference of postgresStartOutboxReferences(input)) {
@@ -1248,16 +1258,22 @@ export class PostgresRuntimeStore {
                 clientId: run.clientId,
                 runId: run.runId,
                 seq: 1,
-                type: "run_created",
-                payload: { status: run.status },
+                type: "agent_v2.run_created",
+                payload: {
+                    type: "agent_v2.run_created",
+                    status: run.status,
+                    phase: run.phase,
+                    attempt: run.attempt,
+                    at: input.createdAt,
+                },
                 createdAt: input.createdAt,
             });
             const planningReadyEvent = await this.appendAgentV2RunEventWithQueryable(tx, {
                 clientId: run.clientId,
                 runId: run.runId,
                 seq: 2,
-                type: "planning_ready",
-                payload: { phase: input.readyPhase },
+                type: "agent_v2.planning_ready",
+                payload: { type: "agent_v2.planning_ready", phase: input.readyPhase, at: input.createdAt },
                 createdAt: input.createdAt,
             });
             const outboxIntentIds = [
@@ -1314,9 +1330,14 @@ export class PostgresRuntimeStore {
             const existing = await this.queryOne(tx, "SELECT intent_id FROM agent_v2_outbox WHERE dedupe_key = $1", [dedupeKey]);
             if (existing) {
                 const cancelFingerprint = agentV2CancelReplayFingerprint(input);
-                const event = (await this.listAgentV2RunEventsWithQueryable(tx, input.clientId, input.runId, 0)).find((item) => item.type === "run_cancelled" &&
+                const event = (await this.listAgentV2RunEventsWithQueryable(tx, input.clientId, input.runId, 0)).find((item) => item.type === "agent_v2.phase_changed" &&
                     item.createdAt === input.cancelledAt &&
                     equalAgentV2ProtocolValues(item.payload, {
+                        type: "agent_v2.phase_changed",
+                        phase: "cancelled",
+                        status: "cancelled",
+                        attempt: input.expectedRun.attempt,
+                        at: input.cancelledAt,
                         ...(input.reason !== undefined ? { reason: input.reason } : {}),
                         cancelFingerprint,
                     }));
@@ -1372,8 +1393,13 @@ export class PostgresRuntimeStore {
             const cancelEvent = await this.appendAgentV2RunEventWithQueryable(tx, {
                 clientId: input.clientId,
                 runId: input.runId,
-                type: "run_cancelled",
+                type: "agent_v2.phase_changed",
                 payload: {
+                    type: "agent_v2.phase_changed",
+                    phase: "cancelled",
+                    status: "cancelled",
+                    attempt: current.attempt,
+                    at: input.cancelledAt,
                     ...(input.reason !== undefined ? { reason: input.reason } : {}),
                     cancelFingerprint: agentV2CancelReplayFingerprint(input),
                 },

@@ -46,7 +46,6 @@ import { createDiagnosticClient, type DiagnosticData, type DiagnosticEvent } fro
 import { createLoggedStreamFn, type DiagnosticStreamLoggingConfig } from "../diagnostics/model-stream-logger.js";
 import { normalizeHandoffLanguage } from "../integrations/handoff-language.js";
 import {
-	buildCodingHandoffPromptFromSource,
 	buildPmApiUrl,
 	buildVisibleCodingHandoffPrompt,
 	fetchPmHandoffPayload,
@@ -54,12 +53,7 @@ import {
 	type PmHandoffPayload,
 	prepareHandoffDocumentFiles,
 } from "../integrations/pm-handoff.js";
-import {
-	type ProjectContextCompactionSummary,
-	resolveProjectContextProviderPayloadBudget,
-} from "../project-tools/context-manifest.js";
 import { createServerProjectTools } from "../project-tools/tools.js";
-import { buildCodingSystemPrompt } from "../prompts/coding-system-prompt.js";
 import {
 	AgentV2BrowserController,
 	type AgentV2BrowserRunEventDrainResult,
@@ -77,16 +71,8 @@ import {
 	type AgentV2RunEventConnection as RunEventConnection,
 	startAgentV2Run,
 } from "../runtime/agent-v2-run-client.js";
-import { type CapabilityPlan, capabilityPlanDiagnosticData, planCapabilities } from "../runtime/capability-planner.js";
 import { piClientHeaders } from "../runtime/client-id.js";
-import {
-	type ContextOrchestratorDecision,
-	contextDecisionDiagnosticData,
-	prepareContextPacket,
-} from "../runtime/context-orchestrator.js";
-import { STATIC_PREVIEW_CONTRACT } from "../runtime/platform-contract.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
-import { resumeInterruptedToolResultSession } from "../runtime/remote-resume.js";
 import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
 import {
@@ -163,11 +149,9 @@ const EMPTY_USAGE: SessionMetadata["usage"] = {
 const piRuntimeConfig = {
 	handoffDefaultThinkingLevel: "high" as ThinkingLevel,
 	selectableSkills: [] as SkillSummary[],
-	globalSkills: [] as SkillSummary[],
 	defaultSkills: [] as SkillSummary[],
 	skillDiagnostics: [] as SkillDiagnostic[],
 	skillSlashSuggestions: [] as SkillSlashSuggestion[],
-	contextProviderPayloadBudgetChars: 90_000,
 	diagnosticLogging: {
 		rawProviderLoggingEnabled: false,
 		rawProviderLogMaxChars: 12000,
@@ -179,8 +163,6 @@ const piRuntimeConfig = {
 		maxOutputTokens: 12_000,
 	} as DiagnosticStreamLoggingConfig,
 };
-
-let pendingHandoffModelContext: { documentFiles: HandoffDocumentFile[] } | undefined;
 
 type TrackedRemoteRun = Pick<AgentV2RunSnapshot, "runId" | "clientId" | "status" | "updatedAt"> & {
 	sessionId: string;
@@ -303,12 +285,10 @@ const getProxyUrl = async (): Promise<string | undefined> => {
 const loadPiRuntimeConfig = async () => {
 	const [status, skillList] = await Promise.all([configuredStorage.getStatus(), loadServerSkillList()]);
 	const selectableSkills = Array.isArray(skillList.skills) ? skillList.skills : [];
-	const promptSkills = Array.isArray(skillList.promptSkills) ? skillList.promptSkills : [];
 	const defaultSkills = Array.isArray(skillList.defaultSkills) ? skillList.defaultSkills : [];
 	const diagnostics = Array.isArray(skillList.diagnostics) ? skillList.diagnostics : [];
 	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
 	piRuntimeConfig.selectableSkills = selectableSkills;
-	piRuntimeConfig.globalSkills = promptSkills;
 	piRuntimeConfig.defaultSkills = defaultSkills;
 	piRuntimeConfig.skillDiagnostics = diagnostics;
 	piRuntimeConfig.diagnosticLogging = {
@@ -321,10 +301,6 @@ const loadPiRuntimeConfig = async () => {
 		streamIdleTimeoutMs: normalizePositiveInteger(status?.modelStreamIdleTimeoutMs, 60000),
 		maxOutputTokens: normalizeNonNegativeInteger(status?.modelMaxOutputTokens, 12_000),
 	};
-	piRuntimeConfig.contextProviderPayloadBudgetChars = normalizePositiveInteger(
-		status?.contextProviderPayloadBudgetChars,
-		90_000,
-	);
 	piRuntimeConfig.skillSlashSuggestions = [
 		createSkillSlashCommand(skillApiErrorDetail(diagnostics)),
 		...selectableSkills.map(skillToSlashSuggestion),
@@ -333,9 +309,6 @@ const loadPiRuntimeConfig = async () => {
 
 const syncRuntimeConfigAfterRender = async () => {
 	await loadPiRuntimeConfig();
-	if (agent) {
-		agent.state.systemPrompt = buildCurrentSystemPrompt();
-	}
 	applySkillSlashSuggestions();
 };
 
@@ -383,10 +356,8 @@ let currentActiveRunId: string | undefined;
 let currentLastRunId: string | undefined;
 let currentRunStatus: AgentV2RunStatus | undefined;
 let currentRunUpdatedAt: string | undefined;
-let currentCapabilityPlan: CapabilityPlan | undefined;
 const remoteRunTransientStatusTexts: RunTransientStatusTexts = {};
 const reportedQueuedRunTimeouts = new Set<string>();
-const resumedInterruptedSessions = new Set<string>();
 let activeSidebarPanel: "files" | "apps" | null = null;
 let currentProjectFilesPanelWidth = safeReadCurrentProjectFilesPanelWidth();
 let generatedAppsPanelWidth = safeReadGeneratedAppsPanelWidth();
@@ -609,17 +580,6 @@ const ensureSessionIdentity = async () => {
 	await setCurrentSessionId(crypto.randomUUID());
 };
 
-const buildCurrentSystemPrompt = (capabilityPlan = currentCapabilityPlan) =>
-	buildCodingSystemPrompt(
-		piRuntimeConfig.globalSkills,
-		capabilityPlan
-			? {
-					platformContract: STATIC_PREVIEW_CONTRACT,
-					capabilityPlan,
-				}
-			: {},
-	);
-
 const DEFAULT_SKILL_EMPTY_DETAIL = "请在服务端 skillsDir 下添加 data/skills/<skill-name>/SKILL.md。";
 
 const createSkillSlashCommand = (emptyDetail = DEFAULT_SKILL_EMPTY_DETAIL): SkillSlashSuggestion => ({
@@ -652,7 +612,7 @@ const applySkillSlashSuggestions = () => {
 };
 
 const createInitialAgentState = (model?: Model<any>): Partial<AgentState> => ({
-	systemPrompt: buildCurrentSystemPrompt(),
+	systemPrompt: "",
 	...(model ? { model } : {}),
 	thinkingLevel: "off",
 	messages: [],
@@ -1049,29 +1009,6 @@ window.addEventListener(CUSTOM_PROVIDER_SAVED_EVENT, (event) => {
 	});
 });
 
-const resumeInterruptedSessionIfNeeded = () => {
-	if (!agent) return;
-	resumeInterruptedToolResultSession({
-		activeRunId: currentActiveRunId,
-		isStreaming: agent.state.isStreaming,
-		messages: agent.state.messages,
-		parentRunId: currentLastRunId,
-		resumedSessions: resumedInterruptedSessions,
-		runStatus: currentRunStatus,
-		sessionId: currentSessionId,
-		startRemoteContinuation: startRemoteContinuationRun,
-		reportError: (error, sessionId) => {
-			console.error("Failed to resume interrupted session:", error);
-			writeDiagnosticEvent({
-				level: "error",
-				category: "agent",
-				eventType: "agent.resume.error",
-				data: errorDiagnosticData(error, { sessionId }),
-			});
-		},
-	});
-};
-
 const normalizeRemotePromptInput = (
 	input: string | AgentMessage | AgentMessage[],
 	images?: ImageContent[],
@@ -1091,19 +1028,6 @@ const normalizeRemotePromptInput = (
 	}
 	return [{ role: "user", content, timestamp: Date.now() }];
 };
-
-function applyPendingHandoffModelContent(messages: AgentMessage[]): AgentMessage[] {
-	if (!pendingHandoffModelContext || messages.length !== 1) return messages;
-	const message = messages[0];
-	if ((message as { role?: unknown }).role !== "user-with-attachments") return messages;
-	const visibleContent = (message as { content?: unknown }).content;
-	const visibleText = messageContentText(visibleContent);
-	const messageWithModelContent = {
-		...(message as unknown as Record<string, unknown>),
-		llmContent: buildCodingHandoffPromptFromSource(visibleText, pendingHandoffModelContext.documentFiles),
-	} as unknown as AgentMessage;
-	return [messageWithModelContent];
-}
 
 function messageContentText(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -1126,22 +1050,8 @@ function nonEmptyText(value: string | undefined): string | undefined {
 	return value?.trim() ? value.trim() : undefined;
 }
 
-function promptTextFromMessage(message: AgentMessage): string | undefined {
-	if ("llmContent" in message && typeof message.llmContent === "string") {
-		const llmContent = nonEmptyText(message.llmContent);
-		if (llmContent) return llmContent;
-	}
+function objectiveTextFromMessage(message: AgentMessage): string | undefined {
 	return nonEmptyText(messageContentText((message as { content?: unknown }).content));
-}
-
-function latestPromptTextFromMessages(messages: AgentMessage[]): string | undefined {
-	for (const message of [...messages].reverse()) {
-		const role = (message as { role?: unknown }).role;
-		if (role !== "user" && role !== "user-with-attachments") continue;
-		const prompt = promptTextFromMessage(message);
-		if (prompt) return prompt;
-	}
-	return undefined;
 }
 
 function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
@@ -1553,23 +1463,13 @@ const startRemotePrompt = async (
 	images?: ImageContent[],
 ): Promise<void> => {
 	await ensureSessionIdentity();
-	const messages = applyPendingHandoffModelContent(normalizeRemotePromptInput(input, images));
+	const messages = normalizeRemotePromptInput(input, images);
 	const message = messages[0];
 	if (!isRecord(message)) {
 		throw new Error("Remote runs require a JSON-object prompt message.");
 	}
 
 	const previousMessages = agent.state.messages.slice();
-	const previousCapabilityPlan = currentCapabilityPlan;
-	const previousSystemPrompt = agent.state.systemPrompt;
-	const capabilityPlan = planCapabilities({
-		messages: [...previousMessages, ...messages],
-		platform: STATIC_PREVIEW_CONTRACT,
-		source: "browser",
-	});
-	currentCapabilityPlan = capabilityPlan;
-	agent.state.systemPrompt = buildCurrentSystemPrompt(capabilityPlan);
-	writeCapabilityPlanDiagnostic(capabilityPlan);
 	agent.state.messages = [...previousMessages, message];
 	renderApp();
 	requestChatPanelUpdate();
@@ -1582,55 +1482,18 @@ const startRemotePrompt = async (
 			? ((message as { attachments?: unknown[] }).attachments ?? [])
 			: undefined;
 		const title = sessionTitle(currentTitle, agent.state.messages);
-		const prompt = promptTextFromMessage(message) ?? title;
+		const objective = objectiveTextFromMessage(message) ?? title;
+		const selectedModel = agent.state.model;
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId!,
 			title,
-			prompt,
-			message: message as Record<string, unknown>,
+			objective,
 			...(attachments ? { attachments } : {}),
-			model: agent.state.model as unknown as Record<string, unknown>,
+			model: selectedModel ? { provider: selectedModel.provider, id: selectedModel.id } : undefined,
 			...(projectFiles.length > 0 ? { projectFiles } : {}),
 		});
 	} catch (error) {
 		agent.state.messages = previousMessages;
-		currentCapabilityPlan = previousCapabilityPlan;
-		agent.state.systemPrompt = previousSystemPrompt;
-		await saveSession();
-		renderApp();
-		requestChatPanelUpdate();
-		throw error;
-	}
-
-	pendingHandoffModelContext = undefined;
-
-	const controller = new AgentV2BrowserController(createAgentV2BrowserRunSink(agent));
-	controller.start(runResult);
-	clearRemoteRunTransientStatusTexts();
-	agentV2BrowserController = controller;
-	connectToRemoteRun(toTrackedRemoteRun(runResult, currentSessionId!), controller);
-	renderApp();
-	requestChatPanelUpdate();
-	await saveSession();
-	refreshGeneratedAppsPanel();
-	await agent.waitForIdle();
-};
-
-const startRemoteContinuationRun = async (_parentRunId: string): Promise<void> => {
-	await ensureSessionIdentity();
-	const projectFiles = collectProjectFilesFromMessages(agent.state.messages);
-	const title = sessionTitle(currentTitle, agent.state.messages);
-	const prompt = latestPromptTextFromMessages(agent.state.messages) ?? title;
-	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
-	try {
-		runResult = await runClient.startRun({
-			sessionId: currentSessionId!,
-			title,
-			prompt,
-			model: agent.state.model as unknown as Record<string, unknown>,
-			...(projectFiles.length > 0 ? { projectFiles } : {}),
-		});
-	} catch (error) {
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
@@ -1660,31 +1523,13 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	agent = new Agent({
 		initialState: {
 			...resolvedInitialState,
-			systemPrompt: buildCurrentSystemPrompt(),
+			systemPrompt: "",
 		},
 		convertToLlm: defaultConvertToLlm,
-		transformContext: async (messages) => {
-			const providerBudget = resolveProjectContextProviderPayloadBudget({
-				model: agent.state.model,
-				thinkingLevel: agent.state.thinkingLevel,
-				systemPrompt: agent.state.systemPrompt,
-				tools: agent.state.tools,
-				providerPayloadBudgetChars: piRuntimeConfig.contextProviderPayloadBudgetChars,
-			});
-			const result = await prepareContextPacket(
-				await expandSkillCommandsInMessages(messages, {
-					defaultSkillNames: piRuntimeConfig.defaultSkills.map((skill) => skill.name),
-				}),
-				{
-					capabilityPlan: currentCapabilityPlan,
-					providerPayloadBudgetChars: providerBudget.providerPayloadBudgetChars,
-					providerPayloadFixedOverheadChars: providerBudget.providerPayloadFixedOverheadChars,
-					onCompaction: writeProjectContextCompactionDiagnostic,
-					onDecision: writeProjectContextPacketDiagnostic,
-				},
-			);
-			return result.messages;
-		},
+		transformContext: async (messages) =>
+			await expandSkillCommandsInMessages(messages, {
+				defaultSkillNames: piRuntimeConfig.defaultSkills.map((skill) => skill.name),
+			}),
 		streamFn: createLoggedStreamFn(
 			createStreamFn(getProxyUrl),
 			diagnosticClient,
@@ -1746,35 +1591,6 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 	});
 	applySkillSlashSuggestions();
 };
-
-function writeProjectContextCompactionDiagnostic(summary: ProjectContextCompactionSummary): void {
-	diagnosticClient.write({
-		level: "info",
-		category: "model",
-		eventType: "model.context_compaction",
-		sessionId: currentSessionId,
-		traceId: currentSessionId,
-		data: { ...summary },
-	});
-}
-
-function writeCapabilityPlanDiagnostic(capabilityPlan: CapabilityPlan): void {
-	writeDiagnosticEvent({
-		level: "info",
-		category: "model",
-		eventType: "model.capability_plan",
-		data: capabilityPlanDiagnosticData(capabilityPlan),
-	});
-}
-
-function writeProjectContextPacketDiagnostic(decision: ContextOrchestratorDecision): void {
-	writeDiagnosticEvent({
-		level: "info",
-		category: "model",
-		eventType: "model.context_packet",
-		data: contextDecisionDiagnosticData(decision),
-	});
-}
 
 function restoredRunStatusFromEvents(events: AgentV2RunEventRecord[]): AgentV2RunStatus | undefined {
 	for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -1860,8 +1676,6 @@ const restoreActiveRemoteRunFromMetadata = async (
 };
 
 const loadSession = async (sessionId: string): Promise<boolean> => {
-	pendingHandoffModelContext = undefined;
-	currentCapabilityPlan = undefined;
 	if (!storage.sessions) return false;
 
 	const sessionData = await storage.sessions.get(sessionId);
@@ -1896,19 +1710,14 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 	currentRunStatus = sessionMetadata?.runStatus;
 	currentRunUpdatedAt = sessionMetadata?.runUpdatedAt;
 
-	const restoredActiveRun = await restoreActiveRemoteRunFromMetadata(sessionId, sessionData, sessionMetadata);
+	await restoreActiveRemoteRunFromMetadata(sessionId, sessionData, sessionMetadata);
 
 	await saveSession();
 	renderApp();
-	if (!restoredActiveRun) {
-		resumeInterruptedSessionIfNeeded();
-	}
 	return true;
 };
 
 const startFreshSession = async (persistImmediately = false) => {
-	pendingHandoffModelContext = undefined;
-	currentCapabilityPlan = undefined;
 	currentTitle = "";
 	currentSessionCreatedAt = undefined;
 	resetRemoteRunState();
@@ -1975,7 +1784,6 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 	const inputAttachments =
 		documentFiles.length > 0 ? markHandoffAttachmentsUiOnly(attachments, documentFiles) : attachments;
 	await applyHandoffDefaultThinkingLevel();
-	pendingHandoffModelContext = { documentFiles };
 	chatPanel.agentInterface?.setInput(buildVisibleCodingHandoffPrompt(payload), inputAttachments);
 	if (currentSessionId) {
 		await saveSession();

@@ -41,10 +41,16 @@ describe("agent v2 run client", () => {
 			startAgentV2Run({
 				sessionId: "session-1",
 				title: "Build dashboard",
-				prompt: "Build dashboard",
 				objective: "Ship a working dashboard",
-				message: { role: "user", content: "build it" },
-				attachments: [{ id: "attachment-1" }],
+				attachments: [
+					{
+						type: "document",
+						fileName: "main.ts",
+						mimeType: "text/typescript",
+						projectFilePath: "src/main.ts",
+						extractedText: "console.log('hi');",
+					},
+				],
 				projectFiles,
 				model: { provider: "openai", id: "gpt-5" },
 			}),
@@ -58,10 +64,15 @@ describe("agent v2 run client", () => {
 				input: {
 					sessionId: "session-1",
 					title: "Build dashboard",
-					prompt: "Build dashboard",
 					objective: "Ship a working dashboard",
-					message: { role: "user", content: "build it" },
-					attachments: [{ id: "attachment-1" }],
+					attachments: [
+						{
+							type: "file",
+							fileName: "main.ts",
+							mimeType: "text/typescript",
+							projectFilePath: "src/main.ts",
+						},
+					],
 					projectFiles,
 				},
 				model: { provider: "openai", id: "gpt-5" },
@@ -71,6 +82,72 @@ describe("agent v2 run client", () => {
 			"Content-Type": "application/json",
 			"X-PI-Client-ID": clientId,
 		});
+	});
+
+	it.each([
+		["missing model", undefined],
+		["missing model id", { provider: "openai" }],
+		["extra base URL", { provider: "openai", id: "gpt-5", baseUrl: "https://client.invalid" }],
+		["extra API selector", { provider: "openai", id: "gpt-5", api: "responses" }],
+		["extra API key", { provider: "openai", id: "gpt-5", apiKey: "must-not-cross-boundary" }],
+		["extra transport headers", { provider: "openai", id: "gpt-5", headers: { Authorization: "secret" } }],
+		["extra credential", { provider: "openai", id: "gpt-5", credential: "client-owned" }],
+		["extra transport", { provider: "openai", id: "gpt-5", transport: "browser" }],
+		["extra URL", { provider: "openai", id: "gpt-5", url: "https://client.invalid" }],
+	])("fails closed before fetch for %s", async (_label, model) => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			startAgentV2Run({
+				sessionId: "session-1",
+				title: "Build dashboard",
+				objective: "Build dashboard",
+				model,
+			}),
+		).rejects.toThrow("model");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[
+			"missing canonical file",
+			[{ type: "document", fileName: "brief.md", mimeType: "text/markdown", projectFilePath: "docs/brief.md" }],
+			[],
+		],
+		[
+			"case-mismatched path",
+			[{ type: "document", fileName: "brief.md", mimeType: "text/markdown", projectFilePath: "Docs/brief.md" }],
+			[{ filename: "docs/brief.md", content: "requirements" }],
+		],
+		[
+			"conflicting document bytes",
+			[
+				{
+					type: "document",
+					fileName: "brief.md",
+					mimeType: "text/markdown",
+					projectFilePath: "docs/brief.md",
+					extractedText: "different",
+				},
+			],
+			[{ filename: "docs/brief.md", content: "requirements" }],
+		],
+	])("rejects attachment %s before fetch", async (_label, attachments, projectFiles) => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			startAgentV2Run({
+				sessionId: "session-1",
+				title: "Build dashboard",
+				objective: "Build dashboard",
+				attachments,
+				projectFiles,
+				model: { provider: "openai", id: "gpt-5" },
+			}),
+		).rejects.toThrow(/attachment|project file/i);
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("reads individual runs through the agent v2 run API", async () => {

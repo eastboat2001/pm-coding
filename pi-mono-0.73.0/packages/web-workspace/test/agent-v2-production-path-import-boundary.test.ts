@@ -493,6 +493,34 @@ describe("agent v2 production import boundary", () => {
 		expect(readFileSync(bootstrap, "utf8")).not.toContain("remote-agent-controller");
 	});
 
+	it("deletes legacy browser planning and continuation modules from the v2 production path", () => {
+		const retiredFiles = [
+			"apps/pi-coding-web/src/runtime/remote-resume.ts",
+			"apps/pi-coding-web/src/runtime/capability-planner.ts",
+			"apps/pi-coding-web/src/runtime/context-orchestrator.ts",
+			"apps/pi-coding-web/src/prompts/coding-system-prompt.ts",
+			"apps/pi-coding-web/test/remote-resume.test.ts",
+			"apps/pi-coding-web/test/capability-planner.test.ts",
+			"apps/pi-coding-web/test/context-orchestrator.test.ts",
+			"apps/pi-coding-web/test/coding-system-prompt.test.ts",
+		];
+		for (const file of retiredFiles) {
+			expect(existsSync(join(repoRoot, file)), `${file} must be deleted`).toBe(false);
+		}
+
+		const bootstrapSource = readFileSync(join(repoRoot, "apps/pi-coding-web/src/app/bootstrap.ts"), "utf8");
+		for (const retiredSymbol of [
+			"buildCodingHandoffPrompt",
+			"currentCapabilityPlan",
+			"buildCodingSystemPrompt",
+			"startRemoteContinuationRun",
+			"resumeInterruptedToolResultSession",
+			"resumedInterruptedSessions",
+		]) {
+			expect(bootstrapSource, `bootstrap must not retain ${retiredSymbol}`).not.toContain(retiredSymbol);
+		}
+	});
+
 	it("keeps browser application generation state on agent v2 contracts", () => {
 		const browserFiles = [
 			"apps/pi-coding-web/src/app/bootstrap.ts",
@@ -502,7 +530,6 @@ describe("agent v2 production import boundary", () => {
 			"apps/pi-coding-web/src/runtime/agent-v2-run-client.ts",
 			"apps/pi-coding-web/src/runtime/browser-records.ts",
 			"apps/pi-coding-web/src/runtime/agent-v2-browser-controller.ts",
-			"apps/pi-coding-web/src/runtime/remote-resume.ts",
 			"apps/pi-coding-web/src/runtime/run-health.ts",
 			"apps/pi-coding-web/src/runtime/run-retry-status.ts",
 			"apps/pi-coding-web/src/storage/merged-session-index.ts",

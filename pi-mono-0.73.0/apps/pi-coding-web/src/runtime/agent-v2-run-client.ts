@@ -1,4 +1,4 @@
-import type { AgentV2RunEventRecord, AgentV2RunSnapshot, JsonObject } from "@mariozechner/pi-web-workspace";
+import type { AgentV2RunEventRecord, AgentV2RunSnapshot } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "./client-id.js";
 
 export const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
@@ -11,18 +11,26 @@ const RUN_EVENT_STREAM_RECONNECT_MS = 1000;
 export interface AgentV2BrowserProjectFile {
 	filename: string;
 	content: string;
+	encoding?: "base64";
 }
 
 export interface AgentV2BrowserStartRunRequest {
 	sessionId: string;
 	title: string;
-	prompt: string;
-	objective?: string;
-	message?: JsonObject;
+	objective: string;
 	attachments?: unknown[];
 	projectFiles?: AgentV2BrowserProjectFile[];
-	model?: unknown;
+	model: unknown;
 }
+
+type AgentV2BrowserAttachmentDescriptor = {
+	type: string;
+	fileName: string;
+	mimeType: string;
+	projectFilePath: string;
+};
+
+type AgentV2BrowserModelReference = { provider: string; id: string };
 
 export interface AgentV2RunEventConnection {
 	readonly CLOSED: 2;
@@ -41,22 +49,106 @@ export interface AgentV2RunEventConnectionOptions {
 }
 
 export async function startAgentV2Run(request: AgentV2BrowserStartRunRequest): Promise<AgentV2RunSnapshot> {
-	const input: Record<string, unknown> = {
-		sessionId: request.sessionId,
-		title: request.title,
-		prompt: request.prompt,
-		...(request.objective ? { objective: request.objective } : {}),
-		...(request.message ? { message: request.message } : {}),
-		...(request.attachments ? { attachments: request.attachments } : {}),
-		...(request.projectFiles ? { projectFiles: request.projectFiles } : {}),
+	const model = requireStableModelReference(request.model);
+	const projectFiles = validateProjectFiles(request.projectFiles ?? []);
+	const attachments = validateAttachmentDescriptors(request.attachments ?? [], projectFiles);
+	const input = {
+		sessionId: requireNonEmptyString(request.sessionId, "sessionId"),
+		title: requireNonEmptyString(request.title, "title"),
+		objective: requireNonEmptyString(request.objective, "objective"),
+		...(attachments.length > 0 ? { attachments } : {}),
+		...(projectFiles.length > 0 ? { projectFiles } : {}),
 	};
 	return requestAgentV2RunApi<AgentV2RunSnapshot>(`${AGENT_V2_RUNS_API_PREFIX}/start`, {
 		method: "POST",
-		body: JSON.stringify({
-			input,
-			...(request.model !== undefined ? { model: request.model } : {}),
-		}),
+		body: JSON.stringify({ input, model }),
 	});
+}
+
+function requireStableModelReference(value: unknown): AgentV2BrowserModelReference {
+	if (!isRecord(value)) throw new Error("Agent v2 model must contain only provider and id.");
+	const keys = Object.keys(value).sort();
+	if (keys.length !== 2 || keys[0] !== "id" || keys[1] !== "provider") {
+		throw new Error("Agent v2 model must contain only provider and id.");
+	}
+	return {
+		provider: requireNonEmptyString(value.provider, "model.provider"),
+		id: requireNonEmptyString(value.id, "model.id"),
+	};
+}
+
+function validateProjectFiles(files: readonly AgentV2BrowserProjectFile[]): AgentV2BrowserProjectFile[] {
+	const validated: AgentV2BrowserProjectFile[] = [];
+	const seen = new Set<string>();
+	for (const file of files) {
+		if (!isRecord(file)) throw new Error("Agent v2 project file must be an object.");
+		const keys = Object.keys(file);
+		if (keys.some((key) => key !== "filename" && key !== "content" && key !== "encoding")) {
+			throw new Error("Agent v2 project file contains unsupported fields.");
+		}
+		const filename = requireNonEmptyString(file.filename, "project file filename");
+		if (seen.has(filename.toLowerCase())) throw new Error("Agent v2 project file paths must be unique.");
+		seen.add(filename.toLowerCase());
+		if (typeof file.content !== "string") throw new Error("Agent v2 project file content must be a string.");
+		if (file.encoding !== undefined && file.encoding !== "base64") {
+			throw new Error("Agent v2 project file encoding is invalid.");
+		}
+		validated.push({
+			filename,
+			content: file.content,
+			...(file.encoding === "base64" ? { encoding: "base64" } : {}),
+		});
+	}
+	return validated;
+}
+
+function validateAttachmentDescriptors(
+	attachments: readonly unknown[],
+	projectFiles: readonly AgentV2BrowserProjectFile[],
+): AgentV2BrowserAttachmentDescriptor[] {
+	const filesByPath = new Map(projectFiles.map((file) => [file.filename, file]));
+	const caseFoldedPaths = new Map(projectFiles.map((file) => [file.filename.toLowerCase(), file.filename]));
+	return attachments.map((attachment) => {
+		if (!isRecord(attachment)) throw new Error("Agent v2 attachment must be an object.");
+		const rawType = requireNonEmptyString(attachment.type, "attachment type");
+		const type = rawType === "document" || rawType === "file" ? "file" : rawType === "image" ? "image" : undefined;
+		if (!type) throw new Error("Agent v2 attachment type must be file or image.");
+		const descriptor = {
+			type,
+			fileName: requireNonEmptyString(attachment.fileName, "attachment fileName"),
+			mimeType: requireNonEmptyString(attachment.mimeType, "attachment mimeType"),
+			projectFilePath: requireNonEmptyString(attachment.projectFilePath, "attachment projectFilePath"),
+		};
+		const projectFile = filesByPath.get(descriptor.projectFilePath);
+		if (!projectFile) {
+			const caseMismatch = caseFoldedPaths.has(descriptor.projectFilePath.toLowerCase());
+			throw new Error(
+				caseMismatch
+					? "Agent v2 attachment path casing must exactly match its project file."
+					: "Agent v2 attachment must reference a canonical project file.",
+			);
+		}
+		if (typeof attachment.extractedText === "string" && attachment.extractedText !== projectFile.content) {
+			throw new Error("Agent v2 attachment content conflicts with its project file.");
+		}
+		if (
+			type === "image" &&
+			typeof attachment.content === "string" &&
+			(attachment.content !== projectFile.content || projectFile.encoding !== "base64")
+		) {
+			throw new Error("Agent v2 attachment content conflicts with its project file.");
+		}
+		return descriptor;
+	});
+}
+
+function requireNonEmptyString(value: unknown, field: string): string {
+	if (typeof value !== "string" || !value.trim()) throw new Error(`Agent v2 ${field} must be a non-empty string.`);
+	return value.trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function getAgentV2Run(runId: string): Promise<AgentV2RunSnapshot | undefined> {

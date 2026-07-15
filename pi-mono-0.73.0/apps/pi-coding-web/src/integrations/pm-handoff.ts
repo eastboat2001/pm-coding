@@ -1,4 +1,3 @@
-import { PI_CODING_HANDOFF_INSTRUCTIONS_EN } from "../prompts/coding-system-prompt.js";
 import { normalizeHandoffLanguage } from "./handoff-language.js";
 
 export type PmHandoffDocument = {
@@ -74,18 +73,6 @@ export function prepareHandoffDocumentFiles(
 	});
 }
 
-export function buildCodingHandoffPrompt(payload: PmHandoffPayload, documentFiles: HandoffDocumentFile[] = []): string {
-	return buildCodingHandoffPromptFromSource(payload.implementation_prompt || "", documentFiles);
-}
-
-export function buildCodingHandoffPromptFromSource(source: string, documentFiles: HandoffDocumentFile[] = []): string {
-	const sourcePrompt = source.trim();
-	const handoffDocumentInstructions = buildHandoffDocumentInstructions(documentFiles);
-	return [sourcePrompt, handoffDocumentInstructions, PI_CODING_HANDOFF_INSTRUCTIONS_EN]
-		.filter(Boolean)
-		.join("\n\n---\n\n");
-}
-
 export function buildVisibleCodingHandoffPrompt(payload: PmHandoffPayload): string {
 	const sourcePrompt = (payload.implementation_prompt || "").trim();
 	if (sourcePrompt) return sourcePrompt;
@@ -98,24 +85,6 @@ const HANDOFF_VISIBLE_FALLBACK = {
 	de: "Erstelle das statische Projekt anhand des PM-Handoffs.",
 	ms: "Jana projek statik berdasarkan handoff PM.",
 } as const;
-
-function buildHandoffDocumentInstructions(documentFiles: HandoffDocumentFile[]): string {
-	if (documentFiles.length === 0) return "";
-	const entries = documentFiles.map((file) => `- ${formatDocumentKind(file.kind)}: ${file.filename}`).join("\n");
-	return [
-		"PI has saved the PM handoff documents under the docs/ subdirectory of the current session project workspace.",
-		'Before coding, use project_file get to read each exact path below. If the original PM prompt mentions attachment filenames or labels such as "PRD document" or "design document", use these docs/ paths instead and do not read the original attachment names.',
-		entries,
-		"The UI still shows the same attachments for review only; the model context should rely on these docs/ files.",
-	].join("\n");
-}
-
-function formatDocumentKind(kind: string): string {
-	const normalized = kind.trim().toLowerCase();
-	if (normalized === "prd" || normalized === "requirements") return "PRD";
-	if (normalized === "design" || normalized === "system-design") return "Design";
-	return kind || "Document";
-}
 
 function sanitizeDocumentFilename(filename: string, fallback: string): string {
 	const normalized = String(filename || "")

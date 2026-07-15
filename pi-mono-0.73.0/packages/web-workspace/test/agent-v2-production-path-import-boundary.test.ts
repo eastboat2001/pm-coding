@@ -163,6 +163,52 @@ describe("agent v2 production import boundary", () => {
 		}
 	});
 
+	it("deletes proven dead runtime helpers without eroding the canonical v2 contracts", () => {
+		for (const file of [
+			"packages/web-workspace/src/node-service-runtime.ts",
+			"apps/pi-coding-web/src/runtime/run-client.ts",
+			"apps/pi-coding-web/test/run-client.test.ts",
+		]) {
+			expect(existsSync(join(repoRoot, file)), `${file} must be deleted`).toBe(false);
+		}
+
+		const json = readFileSync(join(repoRoot, "packages/web-workspace/src/json.ts"), "utf8");
+		const stateMachine = readFileSync(join(repoRoot, "packages/web-workspace/src/agent-v2-state-machine.ts"), "utf8");
+		const rootBarrel = readFileSync(join(repoRoot, "packages/web-workspace/src/index.ts"), "utf8");
+		const eventLog = readFileSync(join(repoRoot, "packages/web-workspace/src/agent-v2-run-event-log.ts"), "utf8");
+		const runApi = readFileSync(join(repoRoot, "packages/web-workspace/src/agent-v2-run-api-service.ts"), "utf8");
+		const legacyTypes = readFileSync(join(repoRoot, "packages/web-workspace/src/types.ts"), "utf8");
+
+		expect(json).not.toContain("cloneJsonObject");
+		expect(stateMachine).not.toContain("getReadyAgentV2TaskIds");
+		expect(rootBarrel).not.toContain("getReadyAgentV2TaskIds");
+		expect(eventLog).not.toContain("AgentV2RunEventBus");
+		expect(eventLog).not.toContain("readLive");
+		expect(runApi).not.toContain("type AgentV2RunStore =");
+		for (const symbol of [
+			"AppPreviewGoalStartRequest",
+			"StartRunContinuationSource",
+			"StartRunContinuationRequest",
+			"StartRunRequest",
+			"StartRunProjectFile",
+			"DeleteSessionResult",
+			"RuntimeSessionListResult",
+			"RuntimeRunListResult",
+			"RuntimeRunEventListResult",
+			"WorkerAgentInput",
+		]) {
+			expect(legacyTypes, `${symbol} must be deleted from types.ts`).not.toContain(symbol);
+		}
+
+		for (const file of ["agent-v2-types.ts", "agent-v2-types.js", "agent-v2-types.js.map"]) {
+			expect(existsSync(join(repoRoot, "packages/web-workspace/src", file)), `${file} must remain`).toBe(true);
+		}
+		const canonicalTypes = readFileSync(join(repoRoot, "packages/web-workspace/src/agent-v2-types.ts"), "utf8");
+		for (const symbol of ["AGENT_V2_SCHEMA_VERSION", "AgentV2RunSnapshot", "AgentV2TaskNode"]) {
+			expect(canonicalTypes, `${symbol} must remain`).toContain(symbol);
+		}
+	});
+
 	it("does not expose legacy v1 product services through the root package barrel", () => {
 		const rootExports = readRootBarrelExportNames();
 		for (const legacyExport of [...legacyRootServiceExports, ...legacyRootRuntimeExports]) {
@@ -430,7 +476,6 @@ describe("agent v2 production import boundary", () => {
 		const browserFiles = [
 			join(repoRoot, "apps", "pi-coding-web", "src", "app", "bootstrap.ts"),
 			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "agent-v2-run-client.ts"),
-			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "run-client.ts"),
 			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "agent-v2-browser-controller.ts"),
 		];
 		const forbidden = [
@@ -567,7 +612,6 @@ describe("agent v2 production import boundary", () => {
 	it("keeps product browser/runtime paths from calling the legacy pi-sessions API", () => {
 		const browserFiles = [
 			join(repoRoot, "apps", "pi-coding-web", "src", "app", "bootstrap.ts"),
-			join(repoRoot, "apps", "pi-coding-web", "src", "runtime", "run-client.ts"),
 			join(repoRoot, "apps", "pi-coding-web", "src", "diagnostics", "DiagnosticLogsTab.ts"),
 			join(repoRoot, "apps", "pi-coding-web", "src", "diagnostics", "diagnostic-export-client.ts"),
 		];

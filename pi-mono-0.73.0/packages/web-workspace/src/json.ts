@@ -56,7 +56,3 @@ export function sendPrettyJson(res: ServerResponse, payload: JsonObject, status 
 export function isObject(value: unknown): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-export function cloneJsonObject(value: JsonObject): JsonObject {
-	return JSON.parse(JSON.stringify(value)) as JsonObject;
-}

@@ -128,7 +128,6 @@ export {
 	advanceAgentV2Phase,
 	assertAgentV2RunTransition,
 	createAgentV2RunSnapshot,
-	getReadyAgentV2TaskIds,
 	transitionAgentV2RunSnapshot,
 } from "./agent-v2-state-machine.js";
 export {

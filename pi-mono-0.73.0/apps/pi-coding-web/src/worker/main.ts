@@ -216,7 +216,7 @@ async function main(): Promise<void> {
 		const initialReadiness = await readinessGate.check(readinessAbort.signal, { force: true });
 		if (!initialReadiness.ready) throw new Error("Agent v2 worker dependencies are unavailable during startup.");
 		const readinessGatedQueue = createReadinessGatedAgentV2RunQueue(queue, readinessGate, readinessAbort.signal);
-		const events = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
+		const events = new AgentV2RunEventLog({ store: runtimeDb });
 		const outboxDispatcher = AgentV2OutboxDispatcher.forQueueAndLive({
 			store: runtimeDb,
 			queue: readinessGatedQueue,

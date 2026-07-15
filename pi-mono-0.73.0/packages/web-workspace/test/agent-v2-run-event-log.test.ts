@@ -42,24 +42,12 @@ describe("AgentV2RunEventLog", () => {
 		expect(appended.seq).toBe(1);
 	});
 
-	it("replays durable store events before attempting a live bus read", async () => {
+	it("lists canonical durable events after the requested sequence", async () => {
 		const store = new RecordingStore([event(2), event(3)]);
-		const bus = new RecordingBus([event(4)]);
-		const log = new AgentV2RunEventLog({ store, bus });
+		const log = new AgentV2RunEventLog({ store });
 
-		await expect(log.readLive({ ...identity, afterSeq: 1 })).resolves.toEqual([event(2), event(3)]);
+		await expect(log.list(identity.clientId, identity.runId, 1)).resolves.toEqual([event(2), event(3)]);
 		expect(store.listCalls).toEqual([{ ...identity, afterSeq: 1 }]);
-		expect(bus.readCalls).toEqual([]);
-	});
-
-	it("reads live events without requiring a legacy sessionId", async () => {
-		const store = new RecordingStore();
-		const bus = new RecordingBus([event(1)]);
-		const log = new AgentV2RunEventLog({ store, bus });
-
-		await expect(log.readLive({ ...identity, afterSeq: 0, blockMs: 15_000 })).resolves.toEqual([event(1)]);
-		expect(bus.readCalls).toEqual([{ ...identity, afterSeq: 0, blockMs: 15_000 }]);
-		expect("sessionId" in bus.readCalls[0]!).toBe(false);
 	});
 });
 
@@ -86,30 +74,4 @@ class RecordingStore {
 		this.listCalls.push({ clientId, runId, afterSeq });
 		return this.listResult.filter((entry) => entry.seq > afterSeq);
 	}
-}
-
-class RecordingBus {
-	readonly readCalls: Array<{ clientId: string; runId: string; afterSeq: number; blockMs?: number }> = [];
-
-	constructor(private readonly readResult: AgentV2RunEventRecord[] = []) {}
-
-	async project(): Promise<"projected"> {
-		return "projected";
-	}
-
-	async read(request: {
-		clientId: string;
-		runId: string;
-		afterSeq: number;
-		blockMs?: number;
-	}): Promise<AgentV2RunEventRecord[]> {
-		this.readCalls.push(request);
-		return this.readResult.filter((entry) => entry.seq > request.afterSeq);
-	}
-
-	async purge(): Promise<{ streamsDeleted: number }> {
-		return { streamsDeleted: 0 };
-	}
-
-	async close(): Promise<void> {}
 }

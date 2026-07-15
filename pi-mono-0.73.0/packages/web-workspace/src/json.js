@@ -52,7 +52,4 @@ export function sendPrettyJson(res, payload, status = 200) {
 export function isObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-export function cloneJsonObject(value) {
-    return JSON.parse(JSON.stringify(value));
-}
 //# sourceMappingURL=json.js.map

@@ -17,7 +17,6 @@ import type {
 } from "../src/agent-v2-model-execution.js";
 import { AGENT_V2_RESET_CONFIRMATION, resetAgentV2RuntimeData } from "../src/agent-v2-reset.js";
 import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
-import { InMemoryAgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import { parseAgentV2RunContext } from "../src/agent-v2-run-input-contract.js";
 import type { AgentV2ClaimedRun, AgentV2RunQueue, AgentV2RunQueueIdentity } from "../src/agent-v2-run-queue.js";
@@ -55,8 +54,7 @@ describe("agent v2 production chain rehearsal", () => {
 	});
 
 	it("crosses the durable production v2 chain through repair, replay, export, and reset", async () => {
-		const bus = new InMemoryAgentV2RunEventBus();
-		const eventLog = new AgentV2RunEventLog({ store: runtimeDb, bus });
+		const eventLog = new AgentV2RunEventLog({ store: runtimeDb });
 		const queue = new LocalAgentV2RunQueue();
 		let failedAttemptBeforeRepair: ReturnType<RuntimeDbStore["listAgentV2Validations"]>[number] | undefined;
 		const model = new RecordingModelExecution(() => {
@@ -186,17 +184,12 @@ describe("agent v2 production chain rehearsal", () => {
 			]),
 		);
 
-		const replayed = await eventLog.readLive({
-			clientId: CLIENT_ID,
-			runId: "run-production-chain",
-			afterSeq: 0,
-			blockMs: 1,
-		});
+		const replayed = await eventLog.list(CLIENT_ID, "run-production-chain", 0);
 		const eventTypes = replayed.map((event) => event.type);
 		expect(eventTypes).toEqual(
 			expect.arrayContaining([
-				"run_created",
-				"planning_ready",
+				"agent_v2.run_created",
+				"agent_v2.planning_ready",
 				"agent_v2.task_updated",
 				"agent_v2.artifact_indexed",
 				"agent_v2.validation_recorded",
@@ -243,8 +236,7 @@ describe("agent v2 production chain rehearsal", () => {
 
 	it("records a sanitized non-retryable worker diagnostic and never calls the model when materialization fails", async () => {
 		const sentinel = "RAW_DURABLE_STORE_SECRET_SENTINEL";
-		const bus = new InMemoryAgentV2RunEventBus();
-		const eventLog = new AgentV2RunEventLog({ store: runtimeDb, bus });
+		const eventLog = new AgentV2RunEventLog({ store: runtimeDb });
 		const queue = new LocalAgentV2RunQueue();
 		const api = new AgentV2RunApiService({
 			store: runtimeDb,

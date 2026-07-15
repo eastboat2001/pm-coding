@@ -3,7 +3,6 @@ import {
 	advanceAgentV2Phase,
 	assertAgentV2RunTransition,
 	createAgentV2RunSnapshot,
-	getReadyAgentV2TaskIds,
 	phaseForAgentV2Task,
 	transitionAgentV2RunSnapshot,
 } from "../src/agent-v2-state-machine.js";
@@ -123,16 +122,6 @@ describe("Agent v2 state machine", () => {
 				updatedAt: "2026-07-07T01:00:00.000Z",
 			}),
 		).toThrow("succeeded -> running");
-	});
-
-	it("marks only dependency-satisfied tasks as ready", () => {
-		const ready = getReadyAgentV2TaskIds([
-			task("requirements", "succeeded", []),
-			task("implementation", "pending", ["requirements"]),
-			task("validation", "pending", ["implementation"]),
-		]);
-
-		expect(ready).toEqual(["implementation"]);
 	});
 
 	it("projects implementation outcomes through one authoritative task phase mapping", () => {

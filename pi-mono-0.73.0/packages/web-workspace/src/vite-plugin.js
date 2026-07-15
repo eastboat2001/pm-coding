@@ -48,7 +48,7 @@ export function configuredStoragePlugin(envFile) {
         maxLen: config.agentV2.eventStreamMaxLen,
         ttlSeconds: config.agentV2.eventStreamTtlSeconds,
     });
-    const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
+    const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb });
     const agentV2OutboxDispatcher = AgentV2OutboxDispatcher.forQueueAndLive({
         store: runtimeDb,
         queue: agentV2RunQueue,

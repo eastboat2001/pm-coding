@@ -75,18 +75,6 @@ export type AppPreviewGoalEventType =
 	| "blocked"
 	| "queue_unavailable";
 
-export interface AppPreviewGoalStartRequest extends JsonObject {
-	enabled: boolean;
-	source: AppPreviewGoalSource;
-}
-
-export type StartRunContinuationSource = "interrupted_recovery";
-
-export interface StartRunContinuationRequest extends JsonObject {
-	source: StartRunContinuationSource;
-	parentRunId: string;
-}
-
 export interface AppPreviewGoalRecord extends JsonObject {
 	goalId: string;
 	clientId: string;
@@ -116,22 +104,6 @@ export interface AppPreviewGoalEventRecord extends JsonObject {
 	createdAt: string;
 }
 
-export interface StartRunRequest extends JsonObject {
-	sessionId?: string;
-	title?: string;
-	message?: JsonObject;
-	model?: JsonObject;
-	thinkingLevel?: string;
-	projectFiles?: StartRunProjectFile[];
-	appPreviewGoal?: AppPreviewGoalStartRequest;
-	continuation?: StartRunContinuationRequest;
-}
-
-export interface StartRunProjectFile extends JsonObject {
-	filename: string;
-	content: string;
-}
-
 export interface StartRunResult extends JsonObject {
 	session: RuntimeSessionRecord;
 	message?: RuntimeMessageRecord;
@@ -149,34 +121,6 @@ export interface RuntimeSessionDetail extends JsonObject {
 	messages: RuntimeMessageRecord[];
 	runs: RuntimeRunRecord[];
 	activeRun?: RuntimeActiveRunRestore;
-}
-
-export interface DeleteSessionResult extends JsonObject {
-	deleted: boolean;
-	sessionId: string;
-	cancelledRuns?: number;
-}
-
-export interface RuntimeSessionListResult extends JsonObject {
-	sessions: RuntimeSessionRecord[];
-}
-
-export interface RuntimeRunListResult extends JsonObject {
-	runs: RuntimeRunRecord[];
-}
-
-export interface RuntimeRunEventListResult extends JsonObject {
-	events: RuntimeRunEventRecord[];
-}
-
-export interface WorkerAgentInput extends JsonObject {
-	run: RuntimeRunRecord;
-	session: RuntimeSessionRecord;
-	messages: RuntimeMessageRecord[];
-	model: JsonObject;
-	thinkingLevel: string;
-	projectContext?: ProjectWorkspaceContext;
-	signal?: AbortSignal;
 }
 
 export interface CreateSessionInput extends JsonObject {

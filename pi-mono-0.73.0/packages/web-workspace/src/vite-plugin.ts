@@ -39,7 +39,6 @@ import type {
 	ProjectPreviewRenameRequest,
 	ProjectRequestContext,
 	ProjectTaskRequest,
-	RuntimeRunEventRecord,
 	SkillLoadRequest,
 	SkillResourceRequest,
 	StorageConfig,
@@ -99,7 +98,7 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 		maxLen: config.agentV2.eventStreamMaxLen,
 		ttlSeconds: config.agentV2.eventStreamTtlSeconds,
 	});
-	const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb, bus: agentV2RunEventBus });
+	const agentV2RunEventLog = new AgentV2RunEventLog({ store: runtimeDb });
 	const agentV2OutboxDispatcher = AgentV2OutboxDispatcher.forQueueAndLive({
 		store: runtimeDb,
 		queue: agentV2RunQueue,
@@ -1059,7 +1058,7 @@ function waitForRunEventReadBackoff(signal: AbortSignal, delayMs: number): Promi
 	});
 }
 
-function writeServerSentRunEvent(res: ServerResponse, event: RuntimeRunEventRecord | AgentV2RunEventRecord): void {
+function writeServerSentRunEvent(res: ServerResponse, event: AgentV2RunEventRecord): void {
 	res.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`);
 }
 

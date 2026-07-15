@@ -17,8 +17,6 @@ import {
 } from "./agent-v2-start-input.js";
 import type { AgentV2Phase, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
 
-type AgentV2RunStore = AgentV2DurableCommitStore & Pick<AgentV2RunApiStore, "getAgentV2Run" | "listAgentV2Runs">;
-
 export interface AgentV2StartRunRequest {
 	input: unknown;
 	model: unknown;
@@ -26,7 +24,7 @@ export interface AgentV2StartRunRequest {
 }
 
 export interface AgentV2RunApiServiceOptions {
-	store: AgentV2RunStore;
+	store: AgentV2DurableCommitStore & Pick<AgentV2RunApiStore, "getAgentV2Run" | "listAgentV2Runs">;
 	events: Pick<AgentV2RunEventLog, "list">;
 	queueName: string;
 	wakeDispatcher?: () => void | Promise<void>;
@@ -49,7 +47,7 @@ export class AgentV2RunApiService {
 	private readonly events: Pick<AgentV2RunEventLog, "list">;
 	private readonly now: () => string;
 	private readonly queueName: string;
-	private readonly store: AgentV2RunStore;
+	private readonly store: AgentV2DurableCommitStore & Pick<AgentV2RunApiStore, "getAgentV2Run" | "listAgentV2Runs">;
 	private readonly wakeDispatcher?: () => void | Promise<void>;
 
 	constructor(options: AgentV2RunApiServiceOptions) {
@@ -270,4 +268,4 @@ function mapCancelConflict(error: unknown): unknown {
 	return error;
 }
 
-export type { AgentV2RunStore, AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus, AgentV2Phase };
+export type { AgentV2RunInput, AgentV2RunSnapshot, AgentV2RunStatus, AgentV2Phase };

@@ -120,12 +120,5 @@ export function transitionAgentV2RunSnapshot(snapshot, to, patch = {}) {
     }
     return next;
 }
-export function getReadyAgentV2TaskIds(tasks) {
-    const succeeded = new Set(tasks.filter((task) => task.status === "succeeded").map((task) => task.taskId));
-    return tasks
-        .filter((task) => task.status === "pending")
-        .filter((task) => task.dependsOn.every((taskId) => succeeded.has(taskId)))
-        .map((task) => task.taskId);
-}
 export { AGENT_V2_PHASES, AGENT_V2_RUN_STATUSES };
 //# sourceMappingURL=agent-v2-state-machine.js.map

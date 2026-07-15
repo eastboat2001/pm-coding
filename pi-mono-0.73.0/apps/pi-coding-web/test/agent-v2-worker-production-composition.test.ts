@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai/types";
-import { AgentV2RunApiService, InMemoryAgentV2RunEventBus, RuntimeDbStore } from "@mariozechner/pi-web-workspace";
+import { AgentV2RunApiService, RuntimeDbStore } from "@mariozechner/pi-web-workspace";
 import {
 	AgentV2RunEventLog,
 	AgentV2WorkerService,
@@ -40,10 +40,7 @@ describe("agent v2 worker production composition", () => {
 		store.ensureAgentV2Schema();
 		mkdirSync(join(config.clientsRootDir, CLIENT_ID, "sessions", SESSION_ID, "project"), { recursive: true });
 
-		const eventLog = new AgentV2RunEventLog({
-			store,
-			bus: new InMemoryAgentV2RunEventBus(),
-		});
+		const eventLog = new AgentV2RunEventLog({ store });
 		const api = new AgentV2RunApiService({
 			store,
 			events: eventLog,

@@ -322,6 +322,54 @@ describe("agent v2 Vite runtime routes", () => {
 		expect(JSON.parse(getResponse.body)).toEqual({ error: "Legacy app-preview-goal routes have been removed." });
 		expect(JSON.parse(postResponse.body)).toEqual({ error: "Legacy app-preview-goal routes have been removed." });
 	});
+
+	it("selects diagnostic export clients only from the normalized client header", async () => {
+		const exportJson = vi.fn(async (request: { clientId: string }) => ({
+			version: 1 as const,
+			exportedAt: "2026-07-15T00:00:00.000Z",
+			query: { clientId: request.clientId },
+			runtime: {},
+			diagnostics: {},
+		}));
+		const diagnosticExports = {
+			export: exportJson,
+			exportArchive: vi.fn(),
+		} as unknown as TestServices["diagnosticExports"];
+		const harness = await createHarness({ diagnosticExports });
+
+		await dispatch(harness.middleware, {
+			method: "GET",
+			url: "/api/pi-logs/export?sessionId=session-a&clientId=22222222-2222-4222-8222-222222222222&format=json",
+			includeClientHeader: false,
+		});
+		await dispatch(harness.middleware, {
+			method: "GET",
+			url: "/api/pi-logs/export?sessionId=session-a&clientId=22222222-2222-4222-8222-222222222222&format=json",
+			headers: { "x-pi-client-id": CLIENT_ID.toUpperCase() },
+		});
+
+		expect(exportJson).toHaveBeenNthCalledWith(1, expect.objectContaining({ clientId: "" }));
+		expect(exportJson).toHaveBeenNthCalledWith(2, expect.objectContaining({ clientId: CLIENT_ID }));
+
+		const strictConfig = createTestConfig();
+		strictConfig.clientIdRequired = true;
+		const strictExport = vi.fn();
+		const strictHarness = await createHarness({
+			config: strictConfig,
+			diagnosticExports: {
+				export: strictExport,
+				exportArchive: vi.fn(),
+			} as unknown as TestServices["diagnosticExports"],
+		});
+		const strictQueryOnly = await dispatch(strictHarness.middleware, {
+			method: "GET",
+			url: "/api/pi-logs/export?sessionId=session-a&clientId=22222222-2222-4222-8222-222222222222&format=json",
+			includeClientHeader: false,
+		});
+
+		expect(strictQueryOnly.statusCode).toBe(401);
+		expect(strictExport).not.toHaveBeenCalled();
+	});
 });
 
 type ConfiguredTestServices = Parameters<typeof createConfiguredStoragePluginForTest>[0];
@@ -340,6 +388,7 @@ type Middleware = (
 async function createHarness(
 	overrides: {
 		config?: StorageConfig;
+		diagnosticExports?: ConfiguredTestServices["diagnosticExports"];
 		agentV2RunApi?: ConfiguredTestServices["agentV2RunApi"] | RecordingAgentV2RunApi;
 		agentV2RunEventBus?: AgentV2RunEventBus;
 		agentV2RunEventLog?: RecordingAgentV2RunEventLog;
@@ -365,7 +414,7 @@ async function createHarness(
 			ensureAgentV2Schema: vi.fn(),
 			ping: vi.fn(async () => undefined),
 		} as unknown as TestServices["runtimeDb"],
-		diagnosticExports: {} as TestServices["diagnosticExports"],
+		diagnosticExports: overrides.diagnosticExports ?? ({} as TestServices["diagnosticExports"]),
 		agentV2RunApi: overrides.agentV2RunApi ?? new RecordingAgentV2RunApi(),
 		agentV2RunEventBus: overrides.agentV2RunEventBus ?? new ScriptedAgentV2RunEventBus([{ waitForAbort: true }]),
 		agentV2RunEventLog: overrides.agentV2RunEventLog ?? new RecordingAgentV2RunEventLog([]),
@@ -420,6 +469,7 @@ interface DispatchOptions {
 	url: string;
 	body?: JsonObject;
 	headers?: Record<string, string>;
+	includeClientHeader?: boolean;
 }
 
 class FakeRequest extends EventEmitter {
@@ -432,7 +482,10 @@ class FakeRequest extends EventEmitter {
 		super();
 		this.method = options.method;
 		this.url = options.url;
-		this.headers = { "x-pi-client-id": CLIENT_ID, ...(options.headers ?? {}) };
+		this.headers = {
+			...(options.includeClientHeader === false ? {} : { "x-pi-client-id": CLIENT_ID }),
+			...(options.headers ?? {}),
+		};
 		this.body = options.body;
 	}
 

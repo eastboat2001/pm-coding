@@ -34,11 +34,19 @@ describe("WorkspaceDiagnosticExportService", () => {
 		rmSync(dir, { force: true, recursive: true });
 	});
 
-	it("exports runtime and diagnostic data for a session without extra export-layer redaction", async () => {
+	it("excludes settings by default and only exports a credential-free settings summary when requested", async () => {
 		sessions.writeSettings(
 			{
-				providerKeys: { "custom-provider:test": "server-key" },
-				customProviders: [{ id: "test", name: "test", apiKey: "provider-key" }],
+				providerKeys: { "custom-provider:test": "json-provider-key-sentinel" },
+				customProviders: [
+					{
+						id: "test",
+						name: "test",
+						apiKey: "json-api-key-sentinel",
+						secret: "json-secret-sentinel",
+						token: "json-token-sentinel",
+					},
+				],
 			},
 			"client-a",
 		);
@@ -78,8 +86,19 @@ describe("WorkspaceDiagnosticExportService", () => {
 		});
 
 		const service = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
-		const exported = await service.export({ clientId: "client-a", sessionId: "session-1" });
+		const defaultExport = await service.export({ clientId: "client-a", sessionId: "session-1" });
+		const exported = await service.export({
+			clientId: "client-a",
+			sessionId: "session-1",
+			includeSettings: true,
+		});
+		const crossClientExport = await service.export({
+			clientId: "client-b",
+			sessionId: "client-b-session",
+			includeSettings: true,
+		});
 
+		expect(defaultExport.settings).toBeUndefined();
 		expect(exported.query).toMatchObject({ clientId: "client-a", sessionId: "session-1" });
 		expect(exported.runtime).toMatchObject({
 			session: null,
@@ -99,10 +118,23 @@ describe("WorkspaceDiagnosticExportService", () => {
 				{ eventType: "model.stream.summary", data: { stopReason: "length", textDeltaCount: 600 } },
 			],
 		});
-		expect(exported.settings).toMatchObject({
-			providerKeys: { "custom-provider:test": "server-key" },
-			customProviders: [{ id: "test", name: "test", apiKey: "provider-key" }],
+		expect(exported.settings).toEqual({
+			version: 1,
+			hasCurrentSession: false,
+			hasSelectedModel: false,
+			configuredProviderCount: 1,
+			customProviderCount: 1,
 		});
+		expect(crossClientExport.settings).toEqual(exported.settings);
+		const serialized = JSON.stringify({ defaultExport, exported, crossClientExport });
+		for (const secret of [
+			"json-provider-key-sentinel",
+			"json-api-key-sentinel",
+			"json-secret-sentinel",
+			"json-token-sentinel",
+		]) {
+			expect(serialized).not.toContain(secret);
+		}
 	});
 
 	it("exports a browser metadata session without reading legacy runtime tables", async () => {
@@ -132,6 +164,15 @@ describe("WorkspaceDiagnosticExportService", () => {
 		expect(JSON.parse(files["runtime/session.json"])).toBe(null);
 		expect(files["runtime/messages.ndjson"]).toBe("");
 		expect(JSON.parse(files["runtime/runs.json"])).toEqual([]);
+	});
+
+	it("rejects exports without a normalized client id", async () => {
+		const service = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
+
+		await expect(service.export({ clientId: "", sessionId: "session-a" })).rejects.toThrow("Client id is required.");
+		await expect(service.exportArchive({ clientId: "", sessionId: "session-a" })).rejects.toThrow(
+			"Client id is required.",
+		);
 	});
 
 	it("exports v2 runs, events, and diagnostics by run id without legacy session lookups", async () => {
@@ -207,11 +248,19 @@ describe("WorkspaceDiagnosticExportService", () => {
 		});
 	});
 
-	it("exports a multi-file archive manifest with runtime events and full settings", async () => {
+	it("exports a multi-file archive with only a credential-free settings summary", async () => {
 		sessions.writeSettings(
 			{
-				providerKeys: { "custom-provider:test": "server-key" },
-				customProviders: [{ id: "test", name: "test", apiKey: "provider-key" }],
+				providerKeys: { "custom-provider:test": "zip-provider-key-sentinel" },
+				customProviders: [
+					{
+						id: "test",
+						name: "test",
+						apiKey: "zip-api-key-sentinel",
+						secret: "zip-secret-sentinel",
+						token: "zip-token-sentinel",
+					},
+				],
 			},
 			"client-a",
 		);
@@ -251,7 +300,11 @@ describe("WorkspaceDiagnosticExportService", () => {
 		});
 
 		const service = new WorkspaceDiagnosticExportService(runtimeDb, diagnostics, sessions);
-		const archive = await service.exportArchive({ clientId: "client-a", sessionId: "session-1" });
+		const archive = await service.exportArchive({
+			clientId: "client-a",
+			sessionId: "session-1",
+			includeSettings: true,
+		});
 		const files = await collectArchiveFiles(archive.entries);
 		const zipBuffer = Buffer.concat(await collectArchiveChunks(archive.stream()));
 
@@ -305,10 +358,22 @@ describe("WorkspaceDiagnosticExportService", () => {
 			counts: { messages: 0, runs: 1 },
 			runs: [{ runId: "run-1", eventCount: 26 }],
 		});
-		expect(JSON.parse(files["settings/settings.json"])).toMatchObject({
-			providerKeys: { "custom-provider:test": "server-key" },
-			customProviders: [{ id: "test", name: "test", apiKey: "provider-key" }],
+		expect(JSON.parse(files["settings/settings.json"])).toEqual({
+			version: 1,
+			hasCurrentSession: false,
+			hasSelectedModel: false,
+			configuredProviderCount: 1,
+			customProviderCount: 1,
 		});
+		for (const secret of [
+			"zip-provider-key-sentinel",
+			"zip-api-key-sentinel",
+			"zip-secret-sentinel",
+			"zip-token-sentinel",
+		]) {
+			expect(files["settings/settings.json"]).not.toContain(secret);
+			expect(zipBuffer.includes(Buffer.from(secret))).toBe(false);
+		}
 	});
 
 	it("exports global diagnostics, timeline, and findings for a queued run with no worker progress", async () => {

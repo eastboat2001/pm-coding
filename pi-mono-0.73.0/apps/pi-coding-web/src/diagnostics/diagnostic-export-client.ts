@@ -1,5 +1,5 @@
 import type { BrowserSessionRecord } from "../runtime/browser-records.js";
-import { getOrCreatePiClientId, piClientHeaders } from "../runtime/client-id.js";
+import { piClientHeaders } from "../runtime/client-id.js";
 
 const LOGS_API_PREFIX = "/api/pi-logs";
 const DEFAULT_MAX_DIAGNOSTIC_EVENTS = 200000;
@@ -7,7 +7,6 @@ const DEFAULT_MAX_DIAGNOSTIC_EVENTS = 200000;
 export interface DiagnosticExportEndpointOptions {
 	sessionId?: string;
 	runId?: string;
-	clientId?: string;
 	maxDiagnosticEvents?: number;
 	includeSettings?: boolean;
 }
@@ -16,10 +15,9 @@ export function buildDiagnosticExportEndpoint(options: DiagnosticExportEndpointO
 	const params = new URLSearchParams();
 	if (options.sessionId) params.set("sessionId", options.sessionId);
 	if (options.runId) params.set("runId", options.runId);
-	if (options.clientId) params.set("clientId", options.clientId);
 	params.set("format", "archive");
 	params.set("maxDiagnosticEvents", String(options.maxDiagnosticEvents ?? DEFAULT_MAX_DIAGNOSTIC_EVENTS));
-	if (options.includeSettings === false) params.set("includeSettings", "false");
+	if (options.includeSettings !== undefined) params.set("includeSettings", String(options.includeSettings));
 	return `${LOGS_API_PREFIX}/export?${params.toString()}`;
 }
 
@@ -35,20 +33,23 @@ export function diagnosticExportDownloadName(session: BrowserSessionRecord): str
 }
 
 export async function downloadDiagnosticSessionExport(session: BrowserSessionRecord): Promise<void> {
-	const clientId = getOrCreatePiClientId();
 	const endpoint = buildDiagnosticExportEndpoint({
 		...(session.lastRunId ? { runId: session.lastRunId } : { sessionId: session.sessionId }),
-		clientId,
 	});
 	const url = new URL(endpoint, window.location.origin).toString();
 	const response = await fetch(url, {
-		method: "HEAD",
+		method: "GET",
 		headers: piClientHeaders(),
 	});
 	if (!response.ok) {
 		throw new Error(`Diagnostic export failed with HTTP ${response.status}`);
 	}
-	downloadUrl(url, diagnosticExportDownloadName(session));
+	const objectUrl = URL.createObjectURL(await response.blob());
+	try {
+		downloadUrl(objectUrl, diagnosticExportDownloadName(session));
+	} finally {
+		URL.revokeObjectURL(objectUrl);
+	}
 }
 
 function downloadUrl(url: string, filename: string): void {

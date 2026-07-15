@@ -558,7 +558,7 @@ async function handleLogsApi(method, route, url, req, res, config, diagnostics, 
         return;
     }
     if ((method === "GET" || method === "HEAD") && route === "/export") {
-        const clientId = readDiagnosticExportClientId(req, url, config);
+        const clientId = readDiagnosticExportClientId(req, config);
         const sessionId = queryString(url, "sessionId");
         const runId = queryString(url, "runId");
         if (!sessionId && !runId) {
@@ -570,7 +570,7 @@ async function handleLogsApi(method, route, url, req, res, config, diagnostics, 
                 clientId: clientId ?? "",
                 sessionId,
                 runId,
-                includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : true,
+                includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : false,
                 maxDiagnosticEvents: queryNumber(url, "maxDiagnosticEvents"),
             });
             if (method === "HEAD") {
@@ -584,7 +584,7 @@ async function handleLogsApi(method, route, url, req, res, config, diagnostics, 
             clientId: clientId ?? "",
             sessionId,
             runId,
-            includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : true,
+            includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : false,
             maxDiagnosticEvents: queryNumber(url, "maxDiagnosticEvents"),
         });
         res.setHeader("Content-Disposition", `attachment; filename="${diagnosticExportFilename(sessionId, runId)}"`);
@@ -625,16 +625,8 @@ async function sendDiagnosticArchive(res, archive) {
     }
     res.end();
 }
-function readDiagnosticExportClientId(req, url, config) {
-    const headerValue = req.headers["x-pi-client-id"];
-    if (headerValue !== undefined)
-        return normalizeClientId(Array.isArray(headerValue) ? headerValue[0] : headerValue);
-    const queryClientId = queryString(url, "clientId");
-    if (queryClientId)
-        return normalizeClientId(queryClientId);
-    if (config.clientIdRequired)
-        return readClientIdHeader(req);
-    return undefined;
+function readDiagnosticExportClientId(req, config) {
+    return readConfiguredApiClientId(req, config);
 }
 function readConfiguredApiClientId(req, config) {
     if (config.clientIdRequired)

@@ -11,18 +11,21 @@ const clientId = "550e8400-e29b-41d4-a716-446655440000";
 
 describe("diagnostic export client helpers", () => {
 	afterEach(() => {
+		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 	});
 
 	it("builds a session export endpoint from a selected runtime session", () => {
 		const endpoint = buildDiagnosticExportEndpoint({
 			sessionId: "session/with spaces",
-			clientId: "client-1",
 			maxDiagnosticEvents: 200000,
 		});
 
 		expect(endpoint).toBe(
-			"/api/pi-logs/export?sessionId=session%2Fwith+spaces&clientId=client-1&format=archive&maxDiagnosticEvents=200000",
+			"/api/pi-logs/export?sessionId=session%2Fwith+spaces&format=archive&maxDiagnosticEvents=200000",
+		);
+		expect(buildDiagnosticExportEndpoint({ sessionId: "session-a", includeSettings: true })).toContain(
+			"includeSettings=true",
 		);
 	});
 
@@ -44,6 +47,8 @@ describe("diagnostic export client helpers", () => {
 
 	it("downloads v2 diagnostics by run id when browser metadata has a last run id", async () => {
 		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:pi-diagnostic-export");
+		const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
 		vi.stubGlobal("window", {
 			localStorage: createStorage(clientId),
 			location: { origin: "http://localhost:5173" },
@@ -52,7 +57,7 @@ describe("diagnostic export client helpers", () => {
 			"fetch",
 			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 				requests.push({ url: String(input), init });
-				return new Response(null, { status: 200 });
+				return new Response(new Blob(["zip-content"]), { status: 200 });
 			}),
 		);
 		vi.stubGlobal("document", createDocumentStub());
@@ -61,16 +66,20 @@ describe("diagnostic export client helpers", () => {
 
 		expect(requests).toHaveLength(1);
 		expect(requests[0].url).toBe(
-			`http://localhost:5173/api/pi-logs/export?runId=run-a&clientId=${clientId}&format=archive&maxDiagnosticEvents=200000`,
+			"http://localhost:5173/api/pi-logs/export?runId=run-a&format=archive&maxDiagnosticEvents=200000",
 		);
 		expect(requests[0].init).toMatchObject({
-			method: "HEAD",
+			method: "GET",
 			headers: { "X-PI-Client-ID": clientId },
 		});
+		expect(createObjectUrl).toHaveBeenCalledWith(expect.any(Blob));
+		expect(revokeObjectUrl).toHaveBeenCalledWith("blob:pi-diagnostic-export");
 	});
 
 	it("falls back to session metadata when there is no v2 run id", async () => {
 		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:pi-diagnostic-export");
+		vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
 		vi.stubGlobal("window", {
 			localStorage: createStorage(clientId),
 			location: { origin: "http://localhost:5173" },
@@ -79,7 +88,7 @@ describe("diagnostic export client helpers", () => {
 			"fetch",
 			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 				requests.push({ url: String(input), init });
-				return new Response(null, { status: 200 });
+				return new Response(new Blob(["zip-content"]), { status: 200 });
 			}),
 		);
 		vi.stubGlobal("document", createDocumentStub());
@@ -87,8 +96,12 @@ describe("diagnostic export client helpers", () => {
 		await downloadDiagnosticSessionExport(createSession({ sessionId: "session-a" }));
 
 		expect(requests[0].url).toBe(
-			`http://localhost:5173/api/pi-logs/export?sessionId=session-a&clientId=${clientId}&format=archive&maxDiagnosticEvents=200000`,
+			"http://localhost:5173/api/pi-logs/export?sessionId=session-a&format=archive&maxDiagnosticEvents=200000",
 		);
+		expect(requests[0].init).toMatchObject({
+			method: "GET",
+			headers: { "X-PI-Client-ID": clientId },
+		});
 	});
 });
 

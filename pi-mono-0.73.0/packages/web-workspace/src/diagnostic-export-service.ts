@@ -97,8 +97,10 @@ export class WorkspaceDiagnosticExportService {
 			sessionId: context.sessionId,
 			maxEvents: request.maxDiagnosticEvents,
 		});
-		const includeSettings = request.includeSettings !== false;
-		const settings = includeSettings ? (this.sessions.readSettings(context.clientId) ?? {}) : undefined;
+		const includeSettings = request.includeSettings === true;
+		const settings = includeSettings
+			? diagnosticSettingsSummary(this.sessions.readSettings(context.clientId))
+			: undefined;
 
 		return {
 			version: 1,
@@ -129,7 +131,7 @@ export class WorkspaceDiagnosticExportService {
 	async exportArchive(request: DiagnosticExportRequest): Promise<DiagnosticArchiveExport> {
 		const context = await this.resolveContext(request);
 		const exportedAt = new Date().toISOString();
-		const includeSettings = request.includeSettings !== false;
+		const includeSettings = request.includeSettings === true;
 		const entries: DiagnosticArchiveEntry[] = [];
 		const add = (entry: DiagnosticArchiveEntry): DiagnosticArchiveEntry => {
 			entries.push(entry);
@@ -214,7 +216,11 @@ export class WorkspaceDiagnosticExportService {
 			),
 		);
 		if (includeSettings) {
-			add(jsonEntry("settings/settings.json", "settings", () => this.sessions.readSettings(context.clientId) ?? {}));
+			add(
+				jsonEntry("settings/settings.json", "settings", () =>
+					diagnosticSettingsSummary(this.sessions.readSettings(context.clientId)),
+				),
+			);
 		}
 
 		const manifest = jsonEntry("manifest.json", "manifest", () => ({
@@ -261,6 +267,21 @@ export class WorkspaceDiagnosticExportService {
 			runs,
 		};
 	}
+}
+
+function diagnosticSettingsSummary(settings: JsonObject | undefined): JsonObject {
+	const providerKeys = isJsonRecord(settings?.providerKeys) ? settings.providerKeys : undefined;
+	return {
+		version: settings?.version === 1 ? 1 : null,
+		hasCurrentSession: typeof settings?.currentSessionId === "string" && settings.currentSessionId.trim().length > 0,
+		hasSelectedModel: isJsonRecord(settings?.selectedModel),
+		configuredProviderCount: providerKeys ? Object.keys(providerKeys).length : 0,
+		customProviderCount: Array.isArray(settings?.customProviders) ? settings.customProviders.length : 0,
+	};
+}
+
+function isJsonRecord(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function collectAgentV2RunEvents(

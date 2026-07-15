@@ -711,7 +711,7 @@ async function handleLogsApi(
 		return;
 	}
 	if ((method === "GET" || method === "HEAD") && route === "/export") {
-		const clientId = readDiagnosticExportClientId(req, url, config);
+		const clientId = readDiagnosticExportClientId(req, config);
 		const sessionId = queryString(url, "sessionId");
 		const runId = queryString(url, "runId");
 		if (!sessionId && !runId) {
@@ -723,7 +723,7 @@ async function handleLogsApi(
 				clientId: clientId ?? "",
 				sessionId,
 				runId,
-				includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : true,
+				includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : false,
 				maxDiagnosticEvents: queryNumber(url, "maxDiagnosticEvents"),
 			});
 			if (method === "HEAD") {
@@ -737,7 +737,7 @@ async function handleLogsApi(
 			clientId: clientId ?? "",
 			sessionId,
 			runId,
-			includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : true,
+			includeSettings: url.searchParams.has("includeSettings") ? queryBoolean(url, "includeSettings") : false,
 			maxDiagnosticEvents: queryNumber(url, "maxDiagnosticEvents"),
 		});
 		res.setHeader("Content-Disposition", `attachment; filename="${diagnosticExportFilename(sessionId, runId)}"`);
@@ -781,17 +781,8 @@ async function sendDiagnosticArchive(res: ServerResponse, archive: DiagnosticArc
 	res.end();
 }
 
-function readDiagnosticExportClientId(
-	req: Connect.IncomingMessage,
-	url: URL,
-	config: StorageConfig,
-): string | undefined {
-	const headerValue = req.headers["x-pi-client-id"];
-	if (headerValue !== undefined) return normalizeClientId(Array.isArray(headerValue) ? headerValue[0] : headerValue);
-	const queryClientId = queryString(url, "clientId");
-	if (queryClientId) return normalizeClientId(queryClientId);
-	if (config.clientIdRequired) return readClientIdHeader(req);
-	return undefined;
+function readDiagnosticExportClientId(req: Connect.IncomingMessage, config: StorageConfig): string | undefined {
+	return readConfiguredApiClientId(req, config);
 }
 
 function readConfiguredApiClientId(req: Connect.IncomingMessage, config: StorageConfig): string | undefined {

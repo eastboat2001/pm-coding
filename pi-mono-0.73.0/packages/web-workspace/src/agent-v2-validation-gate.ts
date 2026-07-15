@@ -18,6 +18,22 @@ export interface AgentV2ValidationGateContext {
 
 type AgentV2ValidationTaskRunner = Pick<WorkspaceTaskService, "run">;
 
+const REPAIRABLE_BUILD_POLICY_MESSAGES = new Set([
+	"Build manifest could not be inspected.",
+	"Project npm configuration is not allowed.",
+	"Unsupported package-manager lockfile.",
+	"Package manifest is missing or invalid.",
+	"Package scripts must be an object.",
+	"Package manifest requires a string build script.",
+	"Package manifest contains a forbidden lifecycle script.",
+	"Dependencies require package-lock.json.",
+	"Only npm packageManager declarations are allowed.",
+	"Dependency declarations must be objects.",
+	"Package manifest contains an unsupported dependency specification.",
+	"Package lock is invalid.",
+	"Package lock contains a disallowed resolved URL.",
+]);
+
 export interface RunAgentV2StaticValidationGateInput {
 	config: StorageConfig;
 	context: AgentV2ValidationGateContext;
@@ -159,13 +175,7 @@ function classifyBuildRunnerFailure(result: ProjectTaskResult, taskId: string): 
 function isBuildFailureRepairable(code: string, message: string): boolean {
 	if (code === "build.config_missing" || code === "build.output_escape") return false;
 	if (code !== "build.policy_rejected") return true;
-	return ![
-		"Registry allowlist contains an invalid origin.",
-		"Registry allowlist requires pure HTTPS origins.",
-		"Build and proxy images must be pinned by sha256 digest.",
-		"No authorized build output is available.",
-		"Container build identifier is invalid.",
-	].includes(message);
+	return REPAIRABLE_BUILD_POLICY_MESSAGES.has(message);
 }
 
 function classifyStaticValidationFailure(message: string, taskId: string): AgentV2ValidationFailure {

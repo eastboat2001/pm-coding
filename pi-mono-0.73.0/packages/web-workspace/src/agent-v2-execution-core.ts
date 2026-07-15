@@ -112,7 +112,7 @@ export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput)
 		);
 	}
 	if (task.kind === "delivery") {
-		return executeDeliveryTask(input, task, now);
+		return executeDeliveryTask(input, snapshot.run, task, now);
 	}
 
 	await advanceAgentV2Task({
@@ -140,33 +140,156 @@ export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput)
 
 async function executeDeliveryTask(
 	input: ExecuteAgentV2NextTaskInput,
+	run: AgentV2RunSnapshot,
 	task: AgentV2TaskNode,
-	now: string,
+	proposedNow: string,
 ): Promise<AgentV2ExecutionStepResult> {
 	const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
 	assertAgentV2ToolAllowed(registry, "preview.publish", "delivery");
 	throwIfAborted(input.signal);
-	const preview = await new WorkspacePreviewService(input.config).preview(input.context, { headers: {} });
+	let preview: Awaited<ReturnType<WorkspacePreviewService["preview"]>>;
+	try {
+		preview = await new WorkspacePreviewService(input.config).preview(input.context, { headers: {} });
+	} catch (error) {
+		throwIfAborted(input.signal);
+		return commitDeliveryFailure(input, run, task, proposedNow, classifyPreviewFailure(error));
+	}
 	throwIfAborted(input.signal);
 	if (preview.status !== "running" || !preview.previewUrl) {
-		throw new Error("Agent v2 preview publish failed.");
+		return commitDeliveryFailure(input, run, task, proposedNow, classifyPreviewFailure(preview.logs));
 	}
-	await advanceAgentV2Task({
-		store: input.store,
-		clientId: input.context.clientId,
-		runId: input.runId,
-		taskId: task.taskId,
+	const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt);
+	const transitioned = transitionAgentV2Task({
+		task,
 		status: "succeeded",
 		now,
 		output: {
 			...task.output,
 			projectId: preview.projectId,
 			previewUrl: preview.previewUrl,
-			serveRoot: preview.serveRoot,
 			fileCount: preview.fileCount,
 		},
 	});
-	return { status: "task_succeeded", taskId: task.taskId, diagnosticIds: [] };
+	const phase = phaseForAgentV2Task(task, transitioned.status);
+	const mutation = await Promise.resolve(
+		input.store.commitAgentV2ExecutionMutation({
+			clientId: input.context.clientId,
+			runId: input.runId,
+			expectedRun: expectedRunState(run),
+			expectedTasks: [expectedTaskState(task)],
+			updatedAt: now,
+			nextRunPhase: phase,
+			tasks: [toUpsertTaskInput(input.context.clientId, input.runId, transitioned)],
+			events: [taskEvent(transitioned, phase, now)],
+		}),
+	);
+	return mutation.applied
+		? { status: "task_succeeded", taskId: task.taskId, diagnosticIds: [] }
+		: { status: "task_conflict", taskId: task.taskId, diagnosticIds: [] };
+}
+
+type AgentV2PreviewFailureTaxonomy = "workspace_empty" | "build_required" | "missing_entry" | "publish_failed";
+
+interface AgentV2PreviewFailure {
+	taxonomy: AgentV2PreviewFailureTaxonomy;
+	code: string;
+	message: string;
+	retryable: boolean;
+}
+
+function classifyPreviewFailure(value: unknown): AgentV2PreviewFailure {
+	const messages = Array.isArray(value)
+		? value.filter((candidate): candidate is string => typeof candidate === "string")
+		: [value instanceof Error ? value.message : typeof value === "string" ? value : ""];
+	if (messages.some((message) => message.includes("Cannot preview an empty project workspace."))) {
+		return {
+			taxonomy: "workspace_empty",
+			code: "agent_v2.preview_workspace_empty",
+			message: "Preview requires at least one project file.",
+			retryable: true,
+		};
+	}
+	if (messages.some((message) => message.includes("Static preview found a build source entry"))) {
+		return {
+			taxonomy: "build_required",
+			code: "agent_v2.preview_build_required",
+			message: "Preview requires browser-ready build output in dist, build, or public.",
+			retryable: true,
+		};
+	}
+	if (
+		messages.some(
+			(message) =>
+				message.includes("requires an index.html in the project root, dist, build, or public") ||
+				message.includes("no index.html was found in the project root, dist, build, or public"),
+		)
+	) {
+		return {
+			taxonomy: "missing_entry",
+			code: "agent_v2.preview_missing_entry",
+			message: "Preview requires a browser-ready index.html in the project root, dist, build, or public.",
+			retryable: true,
+		};
+	}
+	return {
+		taxonomy: "publish_failed",
+		code: "agent_v2.preview_publish_failed",
+		message: "Preview publication failed for an unclassified reason.",
+		retryable: false,
+	};
+}
+
+async function commitDeliveryFailure(
+	input: ExecuteAgentV2NextTaskInput,
+	run: AgentV2RunSnapshot,
+	task: AgentV2TaskNode,
+	proposedNow: string,
+	failure: AgentV2PreviewFailure,
+): Promise<AgentV2ExecutionStepResult> {
+	const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt);
+	const diagnosticId = `${failure.code}:${task.taskId}`;
+	const diagnostic = createAgentV2DiagnosticEvent({
+		diagnosticId,
+		clientId: input.context.clientId,
+		runId: input.runId,
+		severity: "error",
+		category: "preview",
+		code: failure.code,
+		phase: "preview",
+		taskId: task.taskId,
+		message: failure.message,
+		data: { retryable: failure.retryable, taxonomy: failure.taxonomy },
+		createdAt: now,
+	});
+	const transitioned = transitionAgentV2Task({
+		task,
+		status: "failed",
+		now,
+		output: task.output,
+		error: {
+			code: failure.code,
+			message: failure.message,
+			retryable: failure.retryable,
+			data: { diagnosticId, taxonomy: failure.taxonomy },
+		},
+	});
+	const phase = phaseForAgentV2Task(task, transitioned.status);
+	const mutation = await Promise.resolve(
+		input.store.commitAgentV2ExecutionMutation({
+			clientId: input.context.clientId,
+			runId: input.runId,
+			expectedRun: expectedRunState(run),
+			expectedTasks: [expectedTaskState(task)],
+			updatedAt: now,
+			nextRunPhase: phase,
+			tasks: [toUpsertTaskInput(input.context.clientId, input.runId, transitioned)],
+			diagnostics: [diagnostic],
+			events: [diagnosticEvent(diagnostic, now), taskEvent(transitioned, phase, now)],
+		}),
+	);
+	return mutation.applied
+		? { status: "task_failed", taskId: task.taskId, diagnosticIds: [diagnosticId] }
+		: { status: "task_conflict", taskId: task.taskId, diagnosticIds: [] };
 }
 
 async function executeImplementationTask(

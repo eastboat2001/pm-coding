@@ -9,13 +9,15 @@ import { buildAgentV2PlanningBootstrap, persistAgentV2PlanningBootstrap } from "
 import type { AgentV2ExecutionStore } from "../src/agent-v2-runtime-store.js";
 import { createAgentV2ToolRegistry } from "../src/agent-v2-tool-governance.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
-import type { StorageConfig } from "../src/types.js";
+import type { ProjectPreviewResult, StorageConfig } from "../src/types.js";
+import { WorkspacePreviewService } from "../src/workspace-preview-service.js";
 
 const cleanupRoots: string[] = [];
 const cleanupStores: RuntimeDbStore[] = [];
 
 describe("agent v2 execution core", () => {
 	afterEach(() => {
+		vi.restoreAllMocks();
 		for (const store of cleanupStores.splice(0)) store.close();
 		for (const root of cleanupRoots.splice(0)) rmSync(root, { force: true, recursive: true });
 	});
@@ -124,24 +126,24 @@ describe("agent v2 execution core", () => {
 			}),
 		]);
 		expect(store.listAgentV2Diagnostics("client-a", "run-validation")).toEqual([
-				expect.objectContaining({
-					diagnosticId: "agent_v2.validation_failed:validate:1",
-					code: "agent_v2.validation_failed",
-					message: "Static validation failed.",
-					data: expect.objectContaining({
-						attempt: 1,
-						maxAttempts: 3,
-						failureCodes: expect.any(Array),
-						failureDetails: expect.arrayContaining([
-							expect.objectContaining({
-								code: "static.workspace_empty",
-								message: "Workspace has no project files to validate.",
-								retryable: true,
-								source: "static_validate",
-							}),
-						]),
-					}),
+			expect.objectContaining({
+				diagnosticId: "agent_v2.validation_failed:validate:1",
+				code: "agent_v2.validation_failed",
+				message: "Static validation failed.",
+				data: expect.objectContaining({
+					attempt: 1,
+					maxAttempts: 3,
+					failureCodes: expect.any(Array),
+					failureDetails: expect.arrayContaining([
+						expect.objectContaining({
+							code: "static.workspace_empty",
+							message: "Workspace has no project files to validate.",
+							retryable: true,
+							source: "static_validate",
+						}),
+					]),
 				}),
+			}),
 		]);
 		expect(store.listAgentV2Tasks("client-a", "run-validation")).toEqual(
 			expect.arrayContaining([
@@ -718,6 +720,8 @@ describe("agent v2 execution core", () => {
 			updatedAt: "2026-07-08T00:00:00.000Z",
 		});
 		writeProjectFile(root, "index.html", "<!doctype html><main><h1>Ready</h1></main>");
+		const commit = vi.spyOn(store, "commitAgentV2ExecutionMutation");
+		const directTaskWrite = vi.spyOn(store, "upsertAgentV2Task");
 
 		const result = await executeAgentV2NextTask({
 			...unusedExecutionDependencies(),
@@ -743,6 +747,163 @@ describe("agent v2 execution core", () => {
 				projectId: "project-client-a-session-",
 			}),
 		});
+		expect(store.listAgentV2Tasks("client-a", "run-delivery-preview")[0]?.output).not.toHaveProperty("serveRoot");
+		expect(store.getAgentV2Run("client-a", "run-delivery-preview")).toMatchObject({ phase: "delivery" });
+		expect(commit).toHaveBeenCalledTimes(1);
+		expect(directTaskWrite).not.toHaveBeenCalled();
+		const events = store.listAgentV2RunEvents("client-a", "run-delivery-preview", 0);
+		expect(events.map((event) => event.type)).toEqual(["agent_v2.task_updated"]);
+		expect(events[0]?.payload).toMatchObject({
+			type: "agent_v2.task_updated",
+			taskId: "deliver",
+			kind: "delivery",
+			status: "succeeded",
+			phase: "delivery",
+		});
+		expect(
+			JSON.stringify({ events, tasks: store.listAgentV2Tasks("client-a", "run-delivery-preview") }),
+		).not.toContain(root);
+	});
+
+	it("does not commit delivery success when cancellation wins during preview publication", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createDeliveryTask(store, "run-delivery-cancelled", { running: true });
+		vi.spyOn(WorkspacePreviewService.prototype, "preview").mockImplementation(async () => {
+			store.updateAgentV2RunWithResult({
+				clientId: "client-a",
+				runId: "run-delivery-cancelled",
+				status: "cancelling",
+				expectedStatuses: ["running"],
+				updatedAt: "2026-07-08T00:01:30.000Z",
+			});
+			return previewSuccess();
+		});
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-delivery-cancelled",
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result).toEqual({ status: "task_conflict", taskId: "deliver", diagnosticIds: [] });
+		expect(store.getAgentV2Run("client-a", "run-delivery-cancelled")?.status).toBe("cancelling");
+		expect(store.listAgentV2Tasks("client-a", "run-delivery-cancelled")[0]?.status).toBe("ready");
+		expect(store.listAgentV2RunEvents("client-a", "run-delivery-cancelled", 0)).toEqual([]);
+	});
+
+	it("does not commit delivery success after lease ownership changes", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createDeliveryTask(store, "run-delivery-lease", { running: true });
+		vi.spyOn(WorkspacePreviewService.prototype, "preview").mockImplementation(async () => {
+			store.updateAgentV2RunWithResult({
+				clientId: "client-a",
+				runId: "run-delivery-lease",
+				expectedStatuses: ["running"],
+				workerId: "worker-b",
+				updatedAt: "2026-07-08T00:01:30.000Z",
+			});
+			return previewSuccess();
+		});
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-delivery-lease",
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result).toEqual({ status: "task_conflict", taskId: "deliver", diagnosticIds: [] });
+		expect(store.getAgentV2Run("client-a", "run-delivery-lease")?.workerId).toBe("worker-b");
+		expect(store.listAgentV2Tasks("client-a", "run-delivery-lease")[0]?.status).toBe("ready");
+		expect(store.listAgentV2RunEvents("client-a", "run-delivery-lease", 0)).toEqual([]);
+	});
+
+	it("atomically persists a classified preview failure without absolute paths", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createDeliveryTask(store, "run-delivery-failed");
+		writeProjectFile(root, "app.js", "console.log('not previewable');");
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-delivery-failed",
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result).toEqual({
+			status: "task_failed",
+			taskId: "deliver",
+			diagnosticIds: ["agent_v2.preview_missing_entry:deliver"],
+		});
+		expect(store.listAgentV2Tasks("client-a", "run-delivery-failed")[0]).toMatchObject({
+			status: "failed",
+			error: {
+				code: "agent_v2.preview_missing_entry",
+				message: "Preview requires a browser-ready index.html in the project root, dist, build, or public.",
+				retryable: true,
+			},
+		});
+		expect(store.listAgentV2Diagnostics("client-a", "run-delivery-failed")).toEqual([
+			expect.objectContaining({
+				diagnosticId: "agent_v2.preview_missing_entry:deliver",
+				category: "preview",
+				code: "agent_v2.preview_missing_entry",
+				message: "Preview requires a browser-ready index.html in the project root, dist, build, or public.",
+				data: { retryable: true, taxonomy: "missing_entry" },
+			}),
+		]);
+		const events = store.listAgentV2RunEvents("client-a", "run-delivery-failed", 0);
+		expect(events.map((event) => event.type)).toEqual(["agent_v2.diagnostic_recorded", "agent_v2.task_updated"]);
+		const durableBoundary = JSON.stringify({
+			diagnostics: store.listAgentV2Diagnostics("client-a", "run-delivery-failed"),
+			events,
+			tasks: store.listAgentV2Tasks("client-a", "run-delivery-failed"),
+		});
+		expect(durableBoundary).not.toContain(root);
+	});
+
+	it("persists an unknown preview exception as bounded non-retryable diagnostics", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createDeliveryTask(store, "run-delivery-exception");
+		vi.spyOn(WorkspacePreviewService.prototype, "preview").mockRejectedValue(
+			new Error(`redis://user:secret@internal.example/db ${root} ${"x".repeat(10_000)}`),
+		);
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-delivery-exception",
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result).toEqual({
+			status: "task_failed",
+			taskId: "deliver",
+			diagnosticIds: ["agent_v2.preview_publish_failed:deliver"],
+		});
+		const durableBoundary = JSON.stringify({
+			diagnostics: store.listAgentV2Diagnostics("client-a", "run-delivery-exception"),
+			events: store.listAgentV2RunEvents("client-a", "run-delivery-exception", 0),
+			tasks: store.listAgentV2Tasks("client-a", "run-delivery-exception"),
+		});
+		expect(durableBoundary).toContain("Preview publication failed for an unclassified reason.");
+		expect(durableBoundary.length).toBeLessThan(8_000);
+		expect(durableBoundary).not.toContain("secret");
+		expect(durableBoundary).not.toContain(root);
+		expect(durableBoundary).not.toContain("x".repeat(1_000));
 	});
 });
 
@@ -791,6 +952,59 @@ function createImplementationTask(store: RuntimeDbStore, runId: string): void {
 		createdAt: "2026-07-08T00:00:00.000Z",
 		updatedAt: "2026-07-08T00:00:00.000Z",
 	});
+}
+
+function createDeliveryTask(store: RuntimeDbStore, runId: string, options: { running?: boolean } = {}): void {
+	store.createAgentV2Run({
+		clientId: "client-a",
+		runId,
+		input: { objective: "Build a static app" },
+		model: { provider: "test", id: "v2-test-model" },
+		createdAt: "2026-07-08T00:00:00.000Z",
+	});
+	if (options.running) {
+		store.updateAgentV2RunWithResult({
+			clientId: "client-a",
+			runId,
+			status: "running",
+			expectedStatuses: ["queued"],
+			phase: "preview",
+			workerId: "worker-a",
+			updatedAt: "2026-07-08T00:01:00.000Z",
+		});
+	}
+	store.upsertAgentV2Task({
+		clientId: "client-a",
+		runId,
+		taskId: "deliver",
+		kind: "delivery",
+		title: "Publish static preview",
+		status: "ready",
+		dependsOn: [],
+		acceptanceCriteria: ["Publish a browser-ready preview URL."],
+		input: {},
+		output: {},
+		createdAt: "2026-07-08T00:00:00.000Z",
+		updatedAt: "2026-07-08T00:00:00.000Z",
+	});
+}
+
+function previewSuccess(): ProjectPreviewResult {
+	return {
+		version: 1 as const,
+		projectId: "project-client-a-session-",
+		clientId: "client-a",
+		sessionId: "session-a",
+		title: "Demo",
+		status: "running",
+		mode: "static",
+		previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
+		projectRoot: "C:/server/private/project",
+		serveRoot: "C:/server/private/project/dist",
+		fileCount: 1,
+		updatedAt: "2026-07-08T00:01:30.000Z",
+		logs: [],
+	};
 }
 
 function recordingModelExecution(

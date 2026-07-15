@@ -59,7 +59,13 @@ describe("agent v2 PostgreSQL durable store", () => {
 		expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
 		const publicEvents = await store.listAgentV2RunEvents("client-a", "run-concurrent", 0);
 		expect(publicEvents).toHaveLength(2);
-		expect(publicEvents[0]?.payload).toEqual({ status: "queued" });
+		expect(publicEvents[0]?.payload).toEqual({
+			type: "agent_v2.run_created",
+			status: "queued",
+			phase: "intake",
+			attempt: 1,
+			at: input.createdAt,
+		});
 		const serializedEvents = JSON.stringify(publicEvents);
 		for (const privateValue of [input.run.input.prompt, input.bootstrapChecksum, fingerprint]) {
 			expect(serializedEvents).not.toContain(privateValue);
@@ -251,7 +257,8 @@ describe("agent v2 PostgreSQL durable store", () => {
 			["bootstrap", (sql) => sql.startsWith("INSERT INTO agent_v2_bootstraps")],
 			[
 				"planning",
-				(sql, values) => sql.startsWith("INSERT INTO agent_v2_run_events") && values[3] === "planning_ready",
+				(sql, values) =>
+					sql.startsWith("INSERT INTO agent_v2_run_events") && values[3] === "agent_v2.planning_ready",
 			],
 			["outbox", (sql, values) => sql.startsWith("INSERT INTO agent_v2_outbox") && values[4] === "run_enqueue"],
 		];

@@ -94,10 +94,11 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 		["far ahead", 10 * 365 * 24 * 60 * 60 * 1_000],
 	])("uses Redis time for claim, renew, reclaim, and cancel when the worker clock is %s", async (_label, skewMs) => {
 		const queueName = uniqueQueueName();
+		const claimLeaseTtlMs = 500;
 		const queue = createRedisAgentV2RunQueue({
 			redisUrl: redisUrl!,
 			queueName,
-			claimLeaseTtlMs: 40,
+			claimLeaseTtlMs,
 			cancelTtlSeconds: 1,
 		});
 		const inspection = createClient({ url: redisUrl! });
@@ -110,8 +111,8 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 			await queue.enqueue(run);
 			const claim = (await queue.claim("worker-skewed", 1))!;
 			const afterClaimMs = await redisNowMs(inspection);
-			expect(claim.leaseExpiresAtMs).toBeGreaterThanOrEqual(beforeClaimMs + 40);
-			expect(claim.leaseExpiresAtMs).toBeLessThanOrEqual(afterClaimMs + 40);
+			expect(claim.leaseExpiresAtMs).toBeGreaterThanOrEqual(beforeClaimMs + claimLeaseTtlMs);
+			expect(claim.leaseExpiresAtMs).toBeLessThanOrEqual(afterClaimMs + claimLeaseTtlMs);
 			await expect(queue.confirmOwnership(claim, 100)).resolves.toBe("owned");
 
 			const beforeRenewMs = await redisNowMs(inspection);
@@ -119,8 +120,8 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 			const afterRenewMs = await redisNowMs(inspection);
 			expect(renewal).toMatchObject({ status: "renewed" });
 			if (renewal.status !== "renewed") throw new Error("Expected a renewed Redis lease");
-			expect(renewal.leaseExpiresAtMs).toBeGreaterThanOrEqual(beforeRenewMs + 40);
-			expect(renewal.leaseExpiresAtMs).toBeLessThanOrEqual(afterRenewMs + 40);
+			expect(renewal.leaseExpiresAtMs).toBeGreaterThanOrEqual(beforeRenewMs + claimLeaseTtlMs);
+			expect(renewal.leaseExpiresAtMs).toBeLessThanOrEqual(afterRenewMs + claimLeaseTtlMs);
 
 			const beforeCancelMs = await redisNowMs(inspection);
 			await expect(queue.requestCancel(run, `cancel:${skewMs}`)).resolves.toBe("requested");
@@ -131,7 +132,7 @@ describeRedis("createRedisAgentV2RunQueue integration", () => {
 			expect(cancelExpiry!).toBeLessThanOrEqual(afterCancelMs + 1_000);
 			await expect(queue.isCancelRequested(run)).resolves.toBe(true);
 
-			await new Promise((resolve) => setTimeout(resolve, 60));
+			await new Promise((resolve) => setTimeout(resolve, claimLeaseTtlMs + 50));
 			await expect(queue.requeueExpiredClaims()).resolves.toEqual([
 				expect.objectContaining({
 					clientId: claim.clientId,

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
+import type {
+	AgentV2DiagnosticCommitInput,
+	AgentV2DiagnosticCommitResult,
+	AgentV2RunTransitionCommitInput,
+	AgentV2RunTransitionCommitResult,
+} from "../src/agent-v2-durable-store.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import type { AgentV2ActiveRunClaim, AgentV2ClaimedRun, AgentV2RunQueue } from "../src/agent-v2-run-queue.js";
@@ -46,7 +52,7 @@ describe("AgentV2WorkerService", () => {
 			endedAt: "2026-07-08T09:00:01.000Z",
 		});
 		expect(queue.completeCalls).toEqual([{ clientId: "client-a", runId: "run-success", workerId: "worker-a" }]);
-		expect(events.appendCalls).toEqual([
+		expect(store.committedEvents).toEqual([
 			expect.objectContaining({
 				clientId: "client-a",
 				runId: "run-success",
@@ -67,6 +73,92 @@ describe("AgentV2WorkerService", () => {
 				}),
 			}),
 		]);
+	});
+
+	it("does not couple durable worker success to the legacy event projection seam", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-projection-isolated");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-projection-isolated" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: {
+				append: async () => {
+					throw new Error("projection unavailable");
+				},
+			},
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(store.getRunSnapshot("client-a", "run-projection-isolated")?.status).toBe("succeeded");
+		expect(queue.completedClaims).toEqual([expect.objectContaining({ claimToken: "recording-1" })]);
+	});
+
+	it("does not complete a claim before the terminal transition commit resolves", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-terminal-commit-pending");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-terminal-commit-pending" }]);
+		const terminalCommit = deferred<void>();
+		store.holdCommitForStatus("succeeded", terminalCommit.promise);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+			now: timestampSequence("2026-07-08T09:00:00.000Z", "2026-07-08T09:00:01.000Z"),
+		});
+
+		const processing = worker.processOne();
+		await waitFor(() => store.commitCalls.some((input) => input.update.status === "succeeded"));
+		expect(queue.completeCalls).toEqual([]);
+		terminalCommit.resolve();
+		await expect(processing).resolves.toBe(true);
+		expect(queue.completedClaims).toEqual([
+			expect.objectContaining({ workerId: "worker-a", claimToken: "recording-1" }),
+		]);
+	});
+
+	it("keeps the exact claim owned when a durable transition commit rejects", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-commit-rejected");
+		store.rejectNextCommit = new Error("database password=secret unavailable");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-commit-rejected" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+		});
+
+		await expect(worker.processOne()).rejects.toThrow("Agent v2 durable worker transition commit failed");
+		expect(queue.completeCalls).toEqual([]);
+		expect(store.getRunSnapshot("client-a", "run-commit-rejected")?.status).toBe("queued");
+		expect(store.committedEvents).toEqual([]);
+		expect(store.outboxIntentIds).toEqual([]);
+	});
+
+	it("does not turn an uncertain terminal commit into a second terminal write or claim completion", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-terminal-commit-rejected");
+		store.rejectCommitForStatus("succeeded", new Error("postgres://user:secret@db unavailable"));
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-terminal-commit-rejected" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([{ status: "complete", diagnosticIds: [] }]),
+			workerId: "worker-a",
+		});
+
+		await expect(worker.processOne()).rejects.toThrow("Agent v2 durable worker transition commit failed");
+		expect(queue.completeCalls).toEqual([]);
+		expect(store.getRunSnapshot("client-a", "run-terminal-commit-rejected")?.status).toBe("running");
+		expect(store.commitCalls.map((input) => input.update.status)).toEqual(["running", "succeeded"]);
+		expect(JSON.stringify(store.diagnostics)).not.toContain("secret");
 	});
 
 	it("backs off repeated empty queue claims", async () => {
@@ -257,7 +349,7 @@ describe("AgentV2WorkerService", () => {
 		expect(JSON.stringify(store.diagnostics)).not.toContain("queue:active");
 	});
 
-	it("stores terminal failures as v2 errors and emits diagnostic events", async () => {
+	it("atomically stores terminal failure state, phase event, and diagnostic", async () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-failed");
 		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-failed" }]);
@@ -285,18 +377,18 @@ describe("AgentV2WorkerService", () => {
 			expect.objectContaining({
 				code: "agent_v2.worker_execution_failed",
 				category: "worker",
-				message: "execution exploded",
+				message: "Agent v2 worker recorded a durable terminal failure.",
 				runId: "run-failed",
 			}),
 		]);
-		expect(events.appendCalls).toEqual(
+		expect(store.committedEvents).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					type: "agent_v2.diagnostic_recorded",
+					type: "agent_v2.phase_changed",
 					payload: expect.objectContaining({
-						type: "agent_v2.diagnostic_recorded",
-						code: "agent_v2.worker_execution_failed",
-						message: "execution exploded",
+						type: "agent_v2.phase_changed",
+						status: "failed",
+						phase: "failed",
 					}),
 				}),
 			]),
@@ -392,7 +484,7 @@ describe("AgentV2WorkerService", () => {
 			status: "cancelled",
 			phase: "cancelled",
 		});
-		expect(events.appendCalls).toEqual(
+		expect(store.committedEvents).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					type: "agent_v2.phase_changed",
@@ -426,7 +518,7 @@ describe("AgentV2WorkerService", () => {
 			phase: "cancelled",
 			endedAt: "2026-07-08T09:03:32.000Z",
 		});
-		expect(events.appendCalls).toEqual(
+		expect(store.committedEvents).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					type: "agent_v2.phase_changed",
@@ -461,7 +553,7 @@ describe("AgentV2WorkerService", () => {
 			phase: "cancelled",
 			endedAt: "2026-07-08T09:03:35.000Z",
 		});
-		expect(events.appendCalls).not.toEqual(
+		expect(store.committedEvents).not.toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					type: "agent_v2.phase_changed",
@@ -606,7 +698,7 @@ describe("AgentV2WorkerService", () => {
 
 		await expect(worker.processOne()).resolves.toBe(true);
 
-		const phaseStatuses = events.appendCalls
+		const phaseStatuses = store.committedEvents
 			.filter((event) => event.type === "agent_v2.phase_changed")
 			.map((event) => event.payload.status);
 		expect(phaseStatuses).toEqual(["running", "cancelled"]);
@@ -642,7 +734,9 @@ describe("AgentV2WorkerService", () => {
 		await expect(worker.processOne()).resolves.toBe(true);
 
 		expect(execution.callCount).toBe(0);
-		expect(events.appendCalls.filter((event) => event.type === "agent_v2.phase_changed")).toEqual([]);
+		expect(store.committedEvents.filter((event) => event.type === "agent_v2.phase_changed")).toEqual([]);
+		expect(store.outboxIntentIds).toEqual([]);
+		expect(queue.completeCalls).toEqual([]);
 		expect(store.getRunSnapshot("client-a", "run-claim-cas-miss")).toMatchObject({
 			status: "running",
 			workerId: "worker-race",
@@ -671,7 +765,7 @@ describe("AgentV2WorkerService", () => {
 
 		await expect(worker.processOne()).resolves.toBe(true);
 
-		const phaseStatuses = events.appendCalls
+		const phaseStatuses = store.committedEvents
 			.filter((event) => event.type === "agent_v2.phase_changed")
 			.map((event) => event.payload.status);
 		expect(phaseStatuses).toEqual(["running", "cancelling", "cancelled"]);
@@ -892,8 +986,14 @@ describe("AgentV2WorkerService", () => {
 
 class MemoryWorkerStore {
 	readonly diagnostics: AgentV2DiagnosticEvent[] = [];
+	readonly commitCalls: AgentV2RunTransitionCommitInput[] = [];
+	readonly committedEvents: AgentV2RunEventRecord[] = [];
+	readonly outboxIntentIds: string[] = [];
+	rejectNextCommit: Error | undefined;
 	simulateStaleTerminalOverwriteWithoutGuard = false;
 	private readonly beforeUpdateCallbacks: Array<(input: Parameters<MemoryWorkerStore["update"]>[0]) => void> = [];
+	private readonly commitGates = new Map<AgentV2RunStatus, Promise<void>>();
+	private readonly commitRejections = new Map<AgentV2RunStatus, Error>();
 	private readonly runs = new Map<string, AgentV2RunSnapshot>();
 	private readonly staleReads = new Map<string, AgentV2RunSnapshot[]>();
 
@@ -1040,6 +1140,85 @@ class MemoryWorkerStore {
 		return this.updateWithResult(input);
 	}
 
+	holdCommitForStatus(status: AgentV2RunStatus, gate: Promise<void>): void {
+		this.commitGates.set(status, gate);
+	}
+
+	rejectCommitForStatus(status: AgentV2RunStatus, error: Error): void {
+		this.commitRejections.set(status, error);
+	}
+
+	async commitAgentV2RunTransition(input: AgentV2RunTransitionCommitInput): Promise<AgentV2RunTransitionCommitResult> {
+		this.commitCalls.push(input);
+		const rejection = this.rejectNextCommit;
+		this.rejectNextCommit = undefined;
+		if (rejection) throw rejection;
+		const statusRejection = input.update.status ? this.commitRejections.get(input.update.status) : undefined;
+		if (statusRejection) {
+			this.commitRejections.delete(input.update.status as AgentV2RunStatus);
+			throw statusRejection;
+		}
+		const gate = input.update.status ? this.commitGates.get(input.update.status) : undefined;
+		if (gate) {
+			this.commitGates.delete(input.update.status as AgentV2RunStatus);
+			await gate;
+		}
+		const current = this.getRunSnapshot(input.update.clientId, input.update.runId);
+		if (!current) throw new Error(`Missing run ${input.update.clientId}/${input.update.runId}`);
+		const expected = input.expectedRun;
+		if (
+			current.status !== expected.status ||
+			current.phase !== expected.phase ||
+			current.attempt !== expected.attempt ||
+			(current.workerId ?? null) !== expected.workerId ||
+			current.updatedAt !== expected.updatedAt
+		) {
+			return { update: { run: current, applied: false }, outboxIntentIds: [] };
+		}
+		const update = this.updateWithResult(input.update);
+		if (!update.applied) return { update, outboxIntentIds: [] };
+		const event: AgentV2RunEventRecord = {
+			clientId: update.run.clientId,
+			runId: update.run.runId,
+			seq: this.committedEvents.length + 1,
+			type: String(input.event.type),
+			payload: input.event.payload as Record<string, unknown>,
+			createdAt: typeof input.event.createdAt === "string" ? input.event.createdAt : update.run.updatedAt,
+		};
+		this.committedEvents.push(event);
+		const outboxIntentId = `live:${event.runId}:${event.seq}`;
+		this.outboxIntentIds.push(outboxIntentId);
+		if (input.diagnostic) this.diagnostics.push(input.diagnostic);
+		return { update, event, outboxIntentIds: [outboxIntentId] };
+	}
+
+	async commitAgentV2Diagnostic(input: AgentV2DiagnosticCommitInput): Promise<AgentV2DiagnosticCommitResult> {
+		this.diagnostics.push(input.diagnostic);
+		let event: AgentV2RunEventRecord | undefined;
+		const outboxIntentIds = [`diagnostic:${input.diagnostic.diagnosticId}`];
+		if (input.emitRunEvent) {
+			event = {
+				clientId: input.diagnostic.clientId,
+				runId: input.diagnostic.runId,
+				seq: this.committedEvents.length + 1,
+				type: "agent_v2.diagnostic_recorded",
+				payload: {
+					type: "agent_v2.diagnostic_recorded",
+					diagnosticId: input.diagnostic.diagnosticId,
+					severity: input.diagnostic.severity,
+					code: input.diagnostic.code,
+					message: input.diagnostic.message,
+					at: input.diagnostic.createdAt,
+				},
+				createdAt: input.diagnostic.createdAt,
+			};
+			this.committedEvents.push(event);
+			outboxIntentIds.push(`live:${event.runId}:${event.seq}`);
+		}
+		this.outboxIntentIds.push(...outboxIntentIds);
+		return { diagnostic: input.diagnostic, ...(event ? { event } : {}), outboxIntentIds };
+	}
+
 	async listAgentV2RunsByWorker(workerId: string): Promise<AgentV2RunSnapshot[]> {
 		return [...this.runs.values()].filter(
 			(run) => run.workerId === workerId && (run.status === "running" || run.status === "cancelling"),
@@ -1058,6 +1237,7 @@ class MemoryWorkerStore {
 
 class RecordingQueue implements AgentV2RunQueue {
 	readonly completeCalls: Array<{ clientId: string; runId: string; workerId: string }> = [];
+	readonly completedClaims: AgentV2ClaimedRun[] = [];
 	readonly enqueuedClaims: Array<{ clientId: string; runId: string }> = [];
 	readonly operations: string[] = [];
 	readonly requeueActiveCalls: string[] = [];
@@ -1097,6 +1277,7 @@ class RecordingQueue implements AgentV2RunQueue {
 		}
 		this.operations.push(`complete:${claim.clientId}:${claim.runId}`);
 		this.completeCalls.push({ clientId: claim.clientId, runId: claim.runId, workerId: claim.workerId });
+		this.completedClaims.push(claim);
 		return true;
 	}
 
@@ -1334,6 +1515,16 @@ function timestampSequence(...timestamps: string[]): () => string {
 		index += 1;
 		return value;
 	};
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {

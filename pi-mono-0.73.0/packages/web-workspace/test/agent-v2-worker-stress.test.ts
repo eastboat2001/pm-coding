@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
+import type { AgentV2DiagnosticCommitInput, AgentV2RunTransitionCommitInput } from "../src/agent-v2-durable-store.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import {
@@ -97,7 +98,7 @@ describe("agent v2 worker stress", () => {
 		expect(queue.activeClaimCount()).toBe(0);
 		expect(closeDrainResult).toEqual({ queueItemsDeleted: 0, activeClaimsDeleted: 0, cancelKeysDeleted: 0 });
 		expect(queue.completedRuns()).toHaveLength(20);
-		expect(events.appendCalls.filter((event) => event.type === "agent_v2.phase_changed")).toEqual(
+		expect(store.committedEvents.filter((event) => event.type === "agent_v2.phase_changed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ payload: expect.objectContaining({ status: "running" }) }),
 				expect.objectContaining({ payload: expect.objectContaining({ status: "cancelled" }) }),
@@ -154,6 +155,7 @@ describe("agent v2 worker stress", () => {
 
 class MemoryStressStore {
 	readonly diagnostics: AgentV2DiagnosticEvent[] = [];
+	readonly committedEvents: AgentV2RunEventRecord[] = [];
 	private readonly runs = new Map<string, AgentV2RunSnapshot>();
 
 	async createAgentV2Run(input: CreateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
@@ -179,6 +181,39 @@ class MemoryStressStore {
 		const next = applyAgentV2RunUpdate(current, input);
 		this.runs.set(runKey(input.clientId, input.runId), next);
 		return { run: next, applied: true };
+	}
+
+	async commitAgentV2RunTransition(input: AgentV2RunTransitionCommitInput) {
+		const current = this.runs.get(runKey(input.update.clientId, input.update.runId));
+		if (!current) throw new Error(`Missing run ${input.update.clientId}/${input.update.runId}`);
+		const expected = input.expectedRun;
+		if (
+			current.status !== expected.status ||
+			current.phase !== expected.phase ||
+			current.attempt !== expected.attempt ||
+			(current.workerId ?? null) !== expected.workerId ||
+			current.updatedAt !== expected.updatedAt
+		) {
+			return { update: { run: current, applied: false }, outboxIntentIds: [] };
+		}
+		const update = await this.updateAgentV2RunWithResult(input.update);
+		if (!update.applied) return { update, outboxIntentIds: [] };
+		const event: AgentV2RunEventRecord = {
+			clientId: update.run.clientId,
+			runId: update.run.runId,
+			seq: this.committedEvents.length + 1,
+			type: String(input.event.type),
+			payload: input.event.payload as Record<string, unknown>,
+			createdAt: typeof input.event.createdAt === "string" ? input.event.createdAt : update.run.updatedAt,
+		};
+		this.committedEvents.push(event);
+		if (input.diagnostic) this.diagnostics.push(input.diagnostic);
+		return { update, event, outboxIntentIds: [`live:${event.runId}:${event.seq}`] };
+	}
+
+	async commitAgentV2Diagnostic(input: AgentV2DiagnosticCommitInput) {
+		this.diagnostics.push(input.diagnostic);
+		return { diagnostic: input.diagnostic, outboxIntentIds: [`diagnostic:${input.diagnostic.diagnosticId}`] };
 	}
 
 	async listAgentV2Runs(clientId: string): Promise<AgentV2RunSnapshot[]> {

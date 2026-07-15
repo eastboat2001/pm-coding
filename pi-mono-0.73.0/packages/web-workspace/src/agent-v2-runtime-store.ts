@@ -1,5 +1,12 @@
 import type { AgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
-import type { AgentV2ExecutionMutationInput, AgentV2ExecutionMutationResult } from "./agent-v2-durable-store.js";
+import type {
+	AgentV2DiagnosticCommitInput,
+	AgentV2DiagnosticCommitResult,
+	AgentV2ExecutionMutationInput,
+	AgentV2ExecutionMutationResult,
+	AgentV2RunTransitionCommitInput,
+	AgentV2RunTransitionCommitResult,
+} from "./agent-v2-durable-store.js";
 import type {
 	AgentV2ArtifactRecord,
 	AgentV2DocumentRecord,
@@ -74,6 +81,10 @@ export interface AgentV2WorkerStore {
 	updateAgentV2Run(input: UpdateAgentV2RunInput): AgentV2StoreResult<AgentV2RunSnapshot>;
 	updateAgentV2RunWithResult(input: UpdateAgentV2RunInput): AgentV2StoreResult<AgentV2RunUpdateResult>;
 	appendAgentV2Diagnostic(input: AgentV2DiagnosticEvent): AgentV2StoreResult<AgentV2DiagnosticEvent>;
+	commitAgentV2RunTransition(
+		input: AgentV2RunTransitionCommitInput,
+	): AgentV2StoreResult<AgentV2RunTransitionCommitResult>;
+	commitAgentV2Diagnostic(input: AgentV2DiagnosticCommitInput): AgentV2StoreResult<AgentV2DiagnosticCommitResult>;
 	/** Lists this worker's runs whose status is running or cancelling. */
 	listAgentV2RunsByWorker(workerId: string): AgentV2StoreResult<AgentV2RunSnapshot[]>;
 }

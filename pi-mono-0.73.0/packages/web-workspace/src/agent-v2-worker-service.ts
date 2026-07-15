@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
+import type { AgentV2RunTransitionCommitResult } from "./agent-v2-durable-store.js";
 import type { AgentV2ExecutionStepResult } from "./agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import type { AgentV2ClaimedRun, AgentV2RunQueue, AgentV2RunQueueIdentity } from "./agent-v2-run-queue.js";
 import type { AgentV2WorkerStore } from "./agent-v2-runtime-store.js";
-import type { AgentV2RunUpdateResult } from "./agent-v2-store.js";
 import type { AgentV2Phase, AgentV2RunSnapshot, AgentV2RunStatus } from "./agent-v2-types.js";
 
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
@@ -45,7 +45,7 @@ export interface AgentV2WorkerServiceOptions {
 	maxStepsPerRun?: number;
 }
 
-type AgentV2RunTransitionResult = AgentV2RunUpdateResult;
+type AgentV2RunTransitionResult = AgentV2RunTransitionCommitResult["update"];
 
 export class AgentV2WorkerService {
 	private readonly activeAbortControllers = new Map<string, AbortController>();
@@ -53,7 +53,6 @@ export class AgentV2WorkerService {
 	private readonly cancelPollIntervalMs: number;
 	private readonly claimTimeoutMs: number;
 	private readonly concurrency: number;
-	private readonly events: Pick<AgentV2RunEventLog, "append">;
 	private readonly execution: AgentV2WorkerExecution;
 	private readonly expiredClaimRecoveryIntervalMs: number;
 	private readonly idleSleepMs: number;
@@ -73,7 +72,6 @@ export class AgentV2WorkerService {
 	constructor(options: AgentV2WorkerServiceOptions) {
 		this.store = options.store;
 		this.queue = options.queue;
-		this.events = options.events;
 		this.execution = options.execution;
 		this.workerId = options.workerId;
 		this.now = options.now ?? (() => new Date().toISOString());
@@ -135,10 +133,18 @@ export class AgentV2WorkerService {
 		const claimed = await this.queue.claim(this.workerId, this.claimTimeoutMs);
 		if (!claimed) return false;
 
+		let safelyCompleteClaim = false;
 		try {
 			const run = await this.store.getAgentV2Run(claimed.clientId, claimed.runId);
-			if (!run) return true;
-			if (isTerminalRun(run.status) || run.status !== "queued") return true;
+			if (!run) {
+				safelyCompleteClaim = true;
+				return true;
+			}
+			if (isTerminalRun(run.status)) {
+				safelyCompleteClaim = true;
+				return true;
+			}
+			if (run.status !== "queued") return true;
 
 			const running = await this.transitionRun(run, {
 				status: "running",
@@ -146,12 +152,16 @@ export class AgentV2WorkerService {
 				startedAt: run.startedAt ?? this.now(),
 				expectedStatuses: ["queued"],
 			});
-			if (!running.applied) return true;
-			await this.appendPhaseEvent(running.run, "running");
+			if (!running.applied) {
+				safelyCompleteClaim = isTerminalRun(running.run.status);
+				return true;
+			}
 			await this.executeClaimedRun(running.run, claimed);
+			const durable = await this.store.getAgentV2Run(claimed.clientId, claimed.runId);
+			safelyCompleteClaim = durable !== undefined && isTerminalRun(durable.status);
 			return true;
 		} finally {
-			await this.queue.complete(claimed);
+			if (safelyCompleteClaim) await this.queue.complete(claimed);
 		}
 	}
 
@@ -183,37 +193,7 @@ export class AgentV2WorkerService {
 			},
 			createdAt: this.now(),
 		});
-		await this.store.appendAgentV2Diagnostic(diagnostic);
-		await this.events.append({
-			clientId: run.clientId,
-			runId: run.runId,
-			type: "agent_v2.diagnostic_recorded",
-			payload: {
-				type: "agent_v2.diagnostic_recorded",
-				diagnosticId: diagnostic.diagnosticId,
-				severity: diagnostic.severity,
-				code: diagnostic.code,
-				message: diagnostic.message,
-				at: diagnostic.createdAt,
-			},
-			createdAt: diagnostic.createdAt,
-		});
-	}
-
-	private async appendPhaseEvent(run: AgentV2RunSnapshot, status: AgentV2RunStatus): Promise<void> {
-		await this.events.append({
-			clientId: run.clientId,
-			runId: run.runId,
-			type: "agent_v2.phase_changed",
-			payload: {
-				type: "agent_v2.phase_changed",
-				phase: run.phase,
-				status,
-				attempt: run.attempt,
-				at: run.updatedAt,
-			},
-			createdAt: run.updatedAt,
-		});
+		await this.store.commitAgentV2Diagnostic({ diagnostic, emitRunEvent: true });
 	}
 
 	private async cancelRun(run: AgentV2RunSnapshot): Promise<void> {
@@ -226,7 +206,6 @@ export class AgentV2WorkerService {
 			expectedStatuses: ["running", "cancelling"],
 		});
 		if (!cancelled.applied) return;
-		await this.appendPhaseEvent(cancelled.run, cancelled.run.status);
 	}
 
 	private async cancelRequestedRun(run: AgentV2RunSnapshot): Promise<void> {
@@ -237,9 +216,6 @@ export class AgentV2WorkerService {
 				expectedStatuses: ["running"],
 			});
 			current = cancelling.run;
-			if (cancelling.applied) {
-				await this.appendPhaseEvent(current, current.status);
-			}
 		}
 		await this.cancelRun(current);
 	}
@@ -353,6 +329,7 @@ export class AgentV2WorkerService {
 				`Agent v2 worker exceeded ${this.maxStepsPerRun} execution steps without reaching a terminal state.`,
 			);
 		} catch (error) {
+			if (error instanceof AgentV2WorkerCommitError) throw error;
 			const latest = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
 			if (isTerminalRun(latest.status)) return;
 			if (leaseLost) {
@@ -390,13 +367,16 @@ export class AgentV2WorkerService {
 				retryable,
 			},
 			expectedStatuses: ["running"],
+			diagnostic: {
+				code,
+				message: "Agent v2 worker recorded a durable terminal failure.",
+				retryable,
+			},
 		});
 		if (!failed.applied) {
 			await this.finishContendedTerminalWrite(failed.run);
 			return;
 		}
-		await this.appendDiagnostic(failed.run, code, message);
-		await this.appendPhaseEvent(failed.run, failed.run.status);
 	}
 
 	private async interruptRun(run: AgentV2RunSnapshot): Promise<void> {
@@ -408,7 +388,6 @@ export class AgentV2WorkerService {
 			expectedStatuses: ["running", "cancelling"],
 		});
 		if (!interrupted.applied) return;
-		await this.appendPhaseEvent(interrupted.run, interrupted.run.status);
 	}
 
 	private async markOwnedRunsInterrupted(): Promise<void> {
@@ -438,10 +417,7 @@ export class AgentV2WorkerService {
 
 		const latest = await this.store.getAgentV2Run(run.clientId, run.runId);
 		if (latest?.status === "running") {
-			const cancelling = await this.transitionRun(latest, { status: "cancelling", expectedStatuses: ["running"] });
-			if (cancelling.applied) {
-				await this.appendPhaseEvent(cancelling.run, cancelling.run.status);
-			}
+			await this.transitionRun(latest, { status: "cancelling", expectedStatuses: ["running"] });
 		}
 		abortController.abort();
 		return true;
@@ -505,7 +481,6 @@ export class AgentV2WorkerService {
 			await this.finishContendedTerminalWrite(succeeded.run);
 			return;
 		}
-		await this.appendPhaseEvent(succeeded.run, succeeded.run.status);
 	}
 
 	private async transitionRun(
@@ -518,21 +493,68 @@ export class AgentV2WorkerService {
 			endedAt?: string;
 			error?: AgentV2RunSnapshot["error"];
 			expectedStatuses?: readonly AgentV2RunStatus[];
+			diagnostic?: { code: string; message: string; retryable: boolean };
 		},
 	): Promise<AgentV2RunTransitionResult> {
-		const updatedAt = this.now();
-		return await this.store.updateAgentV2RunWithResult({
-			clientId: run.clientId,
-			runId: run.runId,
-			status: patch.status,
-			...(patch.phase !== undefined ? { phase: patch.phase } : {}),
-			...(patch.workerId !== undefined ? { workerId: patch.workerId } : {}),
-			...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
-			...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
-			...(patch.error !== undefined ? { error: patch.error } : {}),
-			...(patch.expectedStatuses !== undefined ? { expectedStatuses: patch.expectedStatuses } : {}),
-			updatedAt,
-		});
+		const updatedAt = monotonicRevision(this.now(), run.updatedAt);
+		const nextPhase = patch.phase ?? run.phase;
+		const diagnostic = patch.diagnostic
+			? createAgentV2DiagnosticEvent({
+					diagnosticId: `${patch.diagnostic.code}:${run.runId}:${randomUUID()}`,
+					clientId: run.clientId,
+					runId: run.runId,
+					severity: "error",
+					category: "worker",
+					code: patch.diagnostic.code,
+					phase: nextPhase,
+					message: patch.diagnostic.message,
+					data: {
+						status: patch.status,
+						workerId: this.workerId,
+						retryable: patch.diagnostic.retryable,
+					},
+					createdAt: updatedAt,
+				})
+			: undefined;
+		let committed: AgentV2RunTransitionCommitResult;
+		try {
+			committed = await this.store.commitAgentV2RunTransition({
+				update: {
+					clientId: run.clientId,
+					runId: run.runId,
+					status: patch.status,
+					...(patch.phase !== undefined ? { phase: patch.phase } : {}),
+					...(patch.workerId !== undefined ? { workerId: patch.workerId } : {}),
+					...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
+					...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
+					...(patch.error !== undefined ? { error: patch.error } : {}),
+					...(patch.expectedStatuses !== undefined ? { expectedStatuses: patch.expectedStatuses } : {}),
+					updatedAt,
+				},
+				expectedRun: {
+					status: run.status,
+					phase: run.phase,
+					attempt: run.attempt,
+					workerId: run.workerId ?? null,
+					updatedAt: run.updatedAt,
+				},
+				event: {
+					type: "agent_v2.phase_changed",
+					payload: {
+						type: "agent_v2.phase_changed",
+						phase: nextPhase,
+						status: patch.status,
+						attempt: run.attempt,
+						at: updatedAt,
+					},
+					createdAt: updatedAt,
+				},
+				...(diagnostic ? { diagnostic } : {}),
+			});
+		} catch {
+			throw new AgentV2WorkerCommitError();
+		}
+		return committed.update;
 	}
 
 	private async finishContendedTerminalWrite(run: AgentV2RunSnapshot): Promise<void> {
@@ -542,9 +564,25 @@ export class AgentV2WorkerService {
 	}
 }
 
+class AgentV2WorkerCommitError extends Error {
+	constructor() {
+		super("Agent v2 durable worker transition commit failed");
+		this.name = "AgentV2WorkerCommitError";
+	}
+}
+
 function errorMessage(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	return String(error);
+}
+
+function monotonicRevision(candidate: string, current: string): string {
+	const candidateMs = Date.parse(candidate);
+	const currentMs = Date.parse(current);
+	if (!Number.isFinite(candidateMs) || !Number.isFinite(currentMs)) {
+		throw new Error("Agent v2 worker requires canonical timestamp revisions");
+	}
+	return new Date(Math.max(candidateMs, currentMs + 1)).toISOString();
 }
 
 function isTerminalRun(status: AgentV2RunStatus): boolean {

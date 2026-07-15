@@ -310,7 +310,7 @@ describe("agent v2 production chain rehearsal", () => {
 		expect(workerDiagnostics).toHaveLength(1);
 		expect(workerDiagnostics[0]).toMatchObject({
 			code: "agent_v2.worker_execution_failed",
-			message: "Agent v2 committed input store operation failed.",
+			message: "Agent v2 worker recorded a durable terminal failure.",
 		});
 		expect(JSON.stringify({ failed, storedDiagnostics })).not.toContain(sentinel);
 	});

@@ -13,7 +13,6 @@ export class AgentV2WorkerService {
     cancelPollIntervalMs;
     claimTimeoutMs;
     concurrency;
-    events;
     execution;
     expiredClaimRecoveryIntervalMs;
     idleSleepMs;
@@ -32,7 +31,6 @@ export class AgentV2WorkerService {
     constructor(options) {
         this.store = options.store;
         this.queue = options.queue;
-        this.events = options.events;
         this.execution = options.execution;
         this.workerId = options.workerId;
         this.now = options.now ?? (() => new Date().toISOString());
@@ -87,11 +85,18 @@ export class AgentV2WorkerService {
         const claimed = await this.queue.claim(this.workerId, this.claimTimeoutMs);
         if (!claimed)
             return false;
+        let safelyCompleteClaim = false;
         try {
             const run = await this.store.getAgentV2Run(claimed.clientId, claimed.runId);
-            if (!run)
+            if (!run) {
+                safelyCompleteClaim = true;
                 return true;
-            if (isTerminalRun(run.status) || run.status !== "queued")
+            }
+            if (isTerminalRun(run.status)) {
+                safelyCompleteClaim = true;
+                return true;
+            }
+            if (run.status !== "queued")
                 return true;
             const running = await this.transitionRun(run, {
                 status: "running",
@@ -99,14 +104,18 @@ export class AgentV2WorkerService {
                 startedAt: run.startedAt ?? this.now(),
                 expectedStatuses: ["queued"],
             });
-            if (!running.applied)
+            if (!running.applied) {
+                safelyCompleteClaim = isTerminalRun(running.run.status);
                 return true;
-            await this.appendPhaseEvent(running.run, "running");
+            }
             await this.executeClaimedRun(running.run, claimed);
+            const durable = await this.store.getAgentV2Run(claimed.clientId, claimed.runId);
+            safelyCompleteClaim = durable !== undefined && isTerminalRun(durable.status);
             return true;
         }
         finally {
-            await this.queue.complete(claimed);
+            if (safelyCompleteClaim)
+                await this.queue.complete(claimed);
         }
     }
     async recoverOwnedRuns() {
@@ -131,36 +140,7 @@ export class AgentV2WorkerService {
             },
             createdAt: this.now(),
         });
-        await this.store.appendAgentV2Diagnostic(diagnostic);
-        await this.events.append({
-            clientId: run.clientId,
-            runId: run.runId,
-            type: "agent_v2.diagnostic_recorded",
-            payload: {
-                type: "agent_v2.diagnostic_recorded",
-                diagnosticId: diagnostic.diagnosticId,
-                severity: diagnostic.severity,
-                code: diagnostic.code,
-                message: diagnostic.message,
-                at: diagnostic.createdAt,
-            },
-            createdAt: diagnostic.createdAt,
-        });
-    }
-    async appendPhaseEvent(run, status) {
-        await this.events.append({
-            clientId: run.clientId,
-            runId: run.runId,
-            type: "agent_v2.phase_changed",
-            payload: {
-                type: "agent_v2.phase_changed",
-                phase: run.phase,
-                status,
-                attempt: run.attempt,
-                at: run.updatedAt,
-            },
-            createdAt: run.updatedAt,
-        });
+        await this.store.commitAgentV2Diagnostic({ diagnostic, emitRunEvent: true });
     }
     async cancelRun(run) {
         if (run.status !== "running" && run.status !== "cancelling")
@@ -174,7 +154,6 @@ export class AgentV2WorkerService {
         });
         if (!cancelled.applied)
             return;
-        await this.appendPhaseEvent(cancelled.run, cancelled.run.status);
     }
     async cancelRequestedRun(run) {
         let current = run;
@@ -184,9 +163,6 @@ export class AgentV2WorkerService {
                 expectedStatuses: ["running"],
             });
             current = cancelling.run;
-            if (cancelling.applied) {
-                await this.appendPhaseEvent(current, current.status);
-            }
         }
         await this.cancelRun(current);
     }
@@ -290,6 +266,8 @@ export class AgentV2WorkerService {
             await this.failRun(current, "agent_v2.worker_step_limit_exceeded", `Agent v2 worker exceeded ${this.maxStepsPerRun} execution steps without reaching a terminal state.`);
         }
         catch (error) {
+            if (error instanceof AgentV2WorkerCommitError)
+                throw error;
             const latest = (await this.store.getAgentV2Run(current.clientId, current.runId)) ?? current;
             if (isTerminalRun(latest.status))
                 return;
@@ -329,13 +307,16 @@ export class AgentV2WorkerService {
                 retryable,
             },
             expectedStatuses: ["running"],
+            diagnostic: {
+                code,
+                message: "Agent v2 worker recorded a durable terminal failure.",
+                retryable,
+            },
         });
         if (!failed.applied) {
             await this.finishContendedTerminalWrite(failed.run);
             return;
         }
-        await this.appendDiagnostic(failed.run, code, message);
-        await this.appendPhaseEvent(failed.run, failed.run.status);
     }
     async interruptRun(run) {
         if (run.status !== "running" && run.status !== "cancelling")
@@ -348,7 +329,6 @@ export class AgentV2WorkerService {
         });
         if (!interrupted.applied)
             return;
-        await this.appendPhaseEvent(interrupted.run, interrupted.run.status);
     }
     async markOwnedRunsInterrupted() {
         for (const run of await this.store.listAgentV2RunsByWorker(this.workerId)) {
@@ -378,10 +358,7 @@ export class AgentV2WorkerService {
             return false;
         const latest = await this.store.getAgentV2Run(run.clientId, run.runId);
         if (latest?.status === "running") {
-            const cancelling = await this.transitionRun(latest, { status: "cancelling", expectedStatuses: ["running"] });
-            if (cancelling.applied) {
-                await this.appendPhaseEvent(cancelling.run, cancelling.run.status);
-            }
+            await this.transitionRun(latest, { status: "cancelling", expectedStatuses: ["running"] });
         }
         abortController.abort();
         return true;
@@ -446,22 +423,68 @@ export class AgentV2WorkerService {
             await this.finishContendedTerminalWrite(succeeded.run);
             return;
         }
-        await this.appendPhaseEvent(succeeded.run, succeeded.run.status);
     }
     async transitionRun(run, patch) {
-        const updatedAt = this.now();
-        return await this.store.updateAgentV2RunWithResult({
-            clientId: run.clientId,
-            runId: run.runId,
-            status: patch.status,
-            ...(patch.phase !== undefined ? { phase: patch.phase } : {}),
-            ...(patch.workerId !== undefined ? { workerId: patch.workerId } : {}),
-            ...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
-            ...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
-            ...(patch.error !== undefined ? { error: patch.error } : {}),
-            ...(patch.expectedStatuses !== undefined ? { expectedStatuses: patch.expectedStatuses } : {}),
-            updatedAt,
-        });
+        const updatedAt = monotonicRevision(this.now(), run.updatedAt);
+        const nextPhase = patch.phase ?? run.phase;
+        const diagnostic = patch.diagnostic
+            ? createAgentV2DiagnosticEvent({
+                diagnosticId: `${patch.diagnostic.code}:${run.runId}:${randomUUID()}`,
+                clientId: run.clientId,
+                runId: run.runId,
+                severity: "error",
+                category: "worker",
+                code: patch.diagnostic.code,
+                phase: nextPhase,
+                message: patch.diagnostic.message,
+                data: {
+                    status: patch.status,
+                    workerId: this.workerId,
+                    retryable: patch.diagnostic.retryable,
+                },
+                createdAt: updatedAt,
+            })
+            : undefined;
+        let committed;
+        try {
+            committed = await this.store.commitAgentV2RunTransition({
+                update: {
+                    clientId: run.clientId,
+                    runId: run.runId,
+                    status: patch.status,
+                    ...(patch.phase !== undefined ? { phase: patch.phase } : {}),
+                    ...(patch.workerId !== undefined ? { workerId: patch.workerId } : {}),
+                    ...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
+                    ...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
+                    ...(patch.error !== undefined ? { error: patch.error } : {}),
+                    ...(patch.expectedStatuses !== undefined ? { expectedStatuses: patch.expectedStatuses } : {}),
+                    updatedAt,
+                },
+                expectedRun: {
+                    status: run.status,
+                    phase: run.phase,
+                    attempt: run.attempt,
+                    workerId: run.workerId ?? null,
+                    updatedAt: run.updatedAt,
+                },
+                event: {
+                    type: "agent_v2.phase_changed",
+                    payload: {
+                        type: "agent_v2.phase_changed",
+                        phase: nextPhase,
+                        status: patch.status,
+                        attempt: run.attempt,
+                        at: updatedAt,
+                    },
+                    createdAt: updatedAt,
+                },
+                ...(diagnostic ? { diagnostic } : {}),
+            });
+        }
+        catch {
+            throw new AgentV2WorkerCommitError();
+        }
+        return committed.update;
     }
     async finishContendedTerminalWrite(run) {
         if (run.status === "cancelling") {
@@ -469,10 +492,24 @@ export class AgentV2WorkerService {
         }
     }
 }
+class AgentV2WorkerCommitError extends Error {
+    constructor() {
+        super("Agent v2 durable worker transition commit failed");
+        this.name = "AgentV2WorkerCommitError";
+    }
+}
 function errorMessage(error) {
     if (error instanceof Error)
         return error.message;
     return String(error);
+}
+function monotonicRevision(candidate, current) {
+    const candidateMs = Date.parse(candidate);
+    const currentMs = Date.parse(current);
+    if (!Number.isFinite(candidateMs) || !Number.isFinite(currentMs)) {
+        throw new Error("Agent v2 worker requires canonical timestamp revisions");
+    }
+    return new Date(Math.max(candidateMs, currentMs + 1)).toISOString();
 }
 function isTerminalRun(status) {
     return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";

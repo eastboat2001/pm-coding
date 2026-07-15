@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "redis";
 import { describe, expect, it } from "vitest";
 import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
+import type { AgentV2DiagnosticCommitInput, AgentV2RunTransitionCommitInput } from "../src/agent-v2-durable-store.js";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import type { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
 import { type AgentV2RunQueue, createRedisAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
@@ -421,6 +422,45 @@ class MemoryWorkerStore {
 		const next = applyAgentV2RunUpdate(current, input);
 		this.runs.set(runKey(input.clientId, input.runId), next);
 		return { run: next, applied: true };
+	}
+
+	async commitAgentV2RunTransition(input: AgentV2RunTransitionCommitInput) {
+		const current = this.getRunSnapshot(input.update.clientId, input.update.runId);
+		if (!current) throw new Error(`Missing run ${input.update.clientId}/${input.update.runId}`);
+		const expected = input.expectedRun;
+		if (
+			current.status !== expected.status ||
+			current.phase !== expected.phase ||
+			current.attempt !== expected.attempt ||
+			(current.workerId ?? null) !== expected.workerId ||
+			current.updatedAt !== expected.updatedAt
+		) {
+			return { update: { run: current, applied: false }, outboxIntentIds: [] };
+		}
+		const update = await this.updateAgentV2RunWithResult(input.update);
+		if (input.diagnostic && update.applied) this.diagnostics.push(input.diagnostic);
+		return {
+			update,
+			...(update.applied
+				? {
+						event: {
+							clientId: update.run.clientId,
+							runId: update.run.runId,
+							seq: 1,
+							type: String(input.event.type),
+							payload: input.event.payload as Record<string, unknown>,
+							createdAt:
+								typeof input.event.createdAt === "string" ? input.event.createdAt : update.run.updatedAt,
+						},
+						outboxIntentIds: [`live:${update.run.runId}`],
+					}
+				: { outboxIntentIds: [] }),
+		};
+	}
+
+	async commitAgentV2Diagnostic(input: AgentV2DiagnosticCommitInput) {
+		this.diagnostics.push(input.diagnostic);
+		return { diagnostic: input.diagnostic, outboxIntentIds: [`diagnostic:${input.diagnostic.diagnosticId}`] };
 	}
 
 	async listAgentV2RunsByWorker(workerId: string): Promise<AgentV2RunSnapshot[]> {

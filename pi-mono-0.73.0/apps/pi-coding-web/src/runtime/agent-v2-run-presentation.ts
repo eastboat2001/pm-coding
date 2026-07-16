@@ -20,6 +20,9 @@ export interface AgentV2RunPresentation {
 	phase: AgentV2Phase;
 	stage: AgentV2UserStage;
 	active: boolean;
+	repairing: boolean;
+	repairReason?: string;
+	repairAttempt?: number;
 	startedAt: string;
 	updatedAt: string;
 	endedAt?: string;
@@ -64,6 +67,7 @@ export interface SerializedAgentV2TerminalRunPresentation {
 	phase: AgentV2Phase;
 	stage: AgentV2UserStage;
 	active: false;
+	repairing: false;
 	startedAt: string;
 	updatedAt: string;
 	endedAt: string;
@@ -86,7 +90,7 @@ const STAGE_BY_PHASE: Record<AgentV2Phase, AgentV2UserStage> = {
 	plan_draft: "planning",
 	task_generation: "planning",
 	implementation: "implementation",
-	repair: "implementation",
+	repair: "validation",
 	validation: "validation",
 	preview: "validation",
 	delivery: "delivery",
@@ -116,6 +120,7 @@ export function reduceAgentV2RunPresentation(
 			phase: action.phase,
 			stage: agentV2StageForPhase(action.phase),
 			active: !TERMINAL_STATUSES.has(action.status),
+			repairing: action.phase === "repair",
 			startedAt: action.at,
 			updatedAt: action.at,
 			tasks: new Map(),
@@ -130,15 +135,19 @@ export function reduceAgentV2RunPresentation(
 
 	const run = requireRun(store, action.runId);
 	switch (action.type) {
-		case "phase":
+		case "phase": {
+			const repair = action.phase === "repair" ? latestFailedValidation(run) : undefined;
 			return setRun(store, action.runId, {
 				...run,
 				phase: action.phase,
 				stage: agentV2StageForPhase(action.phase),
 				status: action.status,
 				active: !TERMINAL_STATUSES.has(action.status),
+				repairing: action.phase === "repair",
+				...(repair ? { repairReason: repair.summary, repairAttempt: repair.attempt } : {}),
 				updatedAt: action.at,
 			});
+		}
 		case "task":
 			return setRun(store, action.runId, {
 				...run,
@@ -198,6 +207,7 @@ export function reduceAgentV2RunPresentation(
 				...run,
 				status: action.status,
 				active: false,
+				repairing: false,
 				updatedAt: action.at,
 				endedAt: action.at,
 				...(action.error ? { error: action.error } : {}),
@@ -220,6 +230,7 @@ export function serializeAgentV2TerminalRunPresentation(
 		phase: run.phase,
 		stage: run.stage,
 		active: false,
+		repairing: false,
 		startedAt: run.startedAt,
 		updatedAt: run.updatedAt,
 		endedAt: run.endedAt,
@@ -236,6 +247,14 @@ export function serializeAgentV2TerminalRunPresentation(
 		...(run.deliveryReport ? { deliveryReport: run.deliveryReport } : {}),
 		...(run.error ? { error: run.error } : {}),
 	};
+}
+
+function latestFailedValidation(run: AgentV2RunPresentation): AgentV2ValidationRecordedTransportEvent | undefined {
+	return Array.from(run.validations.values())
+		.flatMap((attempts) => Array.from(attempts.values()))
+		.filter((validation) => validation.status === "failed" || validation.status === "blocked")
+		.sort((left, right) => left.attempt - right.attempt || left.at.localeCompare(right.at))
+		.at(-1);
 }
 
 function outputKey(event: AgentV2OutputRecordedTransportEvent): string {

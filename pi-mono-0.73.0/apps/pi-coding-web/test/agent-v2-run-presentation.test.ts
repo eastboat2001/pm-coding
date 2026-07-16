@@ -19,7 +19,7 @@ describe("Agent v2 run presentation", () => {
 			plan_draft: "planning",
 			task_generation: "planning",
 			implementation: "implementation",
-			repair: "implementation",
+			repair: "validation",
 			validation: "validation",
 			preview: "validation",
 			delivery: "delivery",
@@ -34,6 +34,49 @@ describe("Agent v2 run presentation", () => {
 		expect(new Set(Object.values(expected))).toEqual(
 			new Set(["understanding", "planning", "implementation", "validation", "delivery"]),
 		);
+	});
+
+	it("keeps repair inside validation and exposes the concrete reason and attempt count", () => {
+		let store = reduceAgentV2RunPresentation(createAgentV2RunPresentationStore(), {
+			type: "begin",
+			runId: "run-repair",
+			phase: "validation",
+			status: "running",
+			at: NOW,
+		});
+		store = reduceAgentV2RunPresentation(store, {
+			type: "validation",
+			runId: "run-repair",
+			event: validation(1, "failed"),
+		});
+		store = reduceAgentV2RunPresentation(store, {
+			type: "phase",
+			runId: "run-repair",
+			phase: "repair",
+			status: "running",
+			at: NOW,
+		});
+
+		expect(store.runs.get("run-repair")).toMatchObject({
+			stage: "validation",
+			repairing: true,
+			repairReason: "failed validation",
+			repairAttempt: 1,
+		});
+
+		store = reduceAgentV2RunPresentation(store, {
+			type: "validation",
+			runId: "run-repair",
+			event: validation(2, "passed"),
+		});
+		store = reduceAgentV2RunPresentation(store, {
+			type: "phase",
+			runId: "run-repair",
+			phase: "validation",
+			status: "running",
+			at: NOW,
+		});
+		expect(store.runs.get("run-repair")).toMatchObject({ stage: "validation", repairing: false });
 	});
 
 	it("reconciles indexed records and de-duplicates append-only presentation data", () => {

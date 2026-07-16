@@ -53,6 +53,7 @@ import {
 	type PmHandoffPayload,
 	prepareHandoffDocumentFiles,
 } from "../integrations/pm-handoff.js";
+import { selectAgentV2ActiveRunPresentation } from "../runtime/agent-v2-active-run.js";
 import { registerLegacyAgentV2ActivityMessageRenderer } from "../runtime/agent-v2-activity-renderer.js";
 import {
 	AgentV2BrowserController,
@@ -75,6 +76,7 @@ import {
 	startAgentV2Run,
 } from "../runtime/agent-v2-run-client.js";
 import type { AgentV2RunPresentation } from "../runtime/agent-v2-run-presentation.js";
+import { restoreAgentV2BrowserRunProjection } from "../runtime/agent-v2-run-restoration.js";
 import { registerAgentV2RunResultMessageRenderer } from "../runtime/agent-v2-run-result-message.js";
 import { piClientHeaders } from "../runtime/client-id.js";
 import {
@@ -152,6 +154,7 @@ import {
 	reduceWorkspaceExpansion,
 	type WorkspaceExpansionAction,
 	type WorkspaceExpansionState,
+	workspaceViewportForWidth,
 } from "./workspace-expansion-coordinator.js";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set(["queued", "running", "cancelling"]);
@@ -265,7 +268,9 @@ type SlashSuggestionHost = {
 document.documentElement.lang = getCurrentLanguage();
 registerLegacyAgentV2ActivityMessageRenderer();
 registerAgentV2RunResultMessageRenderer({
+	detailOpenForRun: historicalRunDetailOpen,
 	expandedSectionForRun: historicalRunExpandedSection,
+	onDetailChange: setHistoricalRunDetailOpen,
 	onSectionChange: setHistoricalRunExpandedSection,
 });
 registerLegacyDefaultSkillLoadMessageRenderer();
@@ -502,7 +507,7 @@ const resetRemoteRunState = (): void => {
 };
 
 function currentWorkspaceViewport(): WorkspaceExpansionState["viewport"] {
-	return window.matchMedia?.("(max-width: 767px)").matches ? "compact" : "desktop";
+	return workspaceViewportForWidth(window.innerWidth);
 }
 
 function updateWorkspaceExpansion(action: WorkspaceExpansionAction): void {
@@ -523,6 +528,13 @@ function activeRunExpandedSection(): AgentV2ProgressSection | null {
 		return null;
 	}
 	return workspaceExpansionState.internalSection;
+}
+
+function setActiveRunDetailOpen(expanded: boolean): void {
+	updateWorkspaceExpansion({ type: expanded ? "open_active_run_detail" : "close_active_run_detail" });
+	if (!expanded) updateWorkspaceExpansion({ type: "close_internal_section" });
+	requestChatPanelUpdate();
+	renderApp();
 }
 
 function setActiveRunExpandedSection(section: AgentV2ProgressSection | null): void {
@@ -547,6 +559,19 @@ function historicalRunExpandedSection(runId: string): AgentV2ProgressSection | n
 	return workspaceExpansionState.internalSection;
 }
 
+function historicalRunDetailOpen(runId: string): boolean {
+	return workspaceExpansionState.historicalRunDetailId === runId;
+}
+
+function setHistoricalRunDetailOpen(runId: string, expanded: boolean): void {
+	updateWorkspaceExpansion(
+		expanded ? { type: "open_historical_run_detail", runId } : { type: "close_historical_run_detail" },
+	);
+	if (!expanded) updateWorkspaceExpansion({ type: "close_internal_section" });
+	requestChatPanelUpdate();
+	renderApp();
+}
+
 function setHistoricalRunExpandedSection(runId: string, section: AgentV2ProgressSection | null): void {
 	if (section) {
 		updateWorkspaceExpansion({ type: "open_historical_run_detail", runId });
@@ -564,15 +589,17 @@ const syncAgentV2ActiveRunContent = (): void => {
 		| (NonNullable<ChatPanel["agentInterface"]> & { activeRunContent?: ReturnType<typeof html> })
 		| undefined;
 	if (!agentInterface) return;
-	agentInterface.activeRunContent =
-		currentSessionMode === "app_generation" && activeAgentV2Presentation
-			? html`<agent-v2-progress-card
-					.presentation=${activeAgentV2Presentation}
+	const selectedPresentation = selectAgentV2ActiveRunPresentation(currentSessionMode, activeAgentV2Presentation);
+	agentInterface.activeRunContent = selectedPresentation
+		? html`<agent-v2-progress-card
+					.presentation=${selectedPresentation}
 					.terminal=${false}
+					.detailsExpanded=${workspaceExpansionState.activeRunDetailOpen}
 					.expandedSection=${activeRunExpandedSection()}
+					.onDetailChange=${setActiveRunDetailOpen}
 					.onSectionChange=${setActiveRunExpandedSection}
 				></agent-v2-progress-card>`
-			: undefined;
+		: undefined;
 };
 
 const requestChatPanelUpdate = (): void => {
@@ -1772,13 +1799,7 @@ const restoreActiveRemoteRunFromMetadata = async (
 
 	const restoredStatus =
 		restoredRunStatusFromEvents(replayedEvents) ?? (run ? run.status : sessionMetadata?.runStatus);
-	if (!restoredStatus || !isActiveRunStatus(restoredStatus)) {
-		currentActiveRunId = undefined;
-		currentLastRunId = run?.runId ?? sessionMetadata?.lastRunId ?? activeRunId;
-		currentRunStatus = restoredStatus;
-		currentRunUpdatedAt = run?.updatedAt ?? sessionMetadata?.runUpdatedAt ?? sessionData.lastModified;
-		return false;
-	}
+	if (!restoredStatus) return false;
 
 	const runSnapshot: AgentV2RunSnapshot =
 		run ??
@@ -1793,13 +1814,29 @@ const restoreActiveRemoteRunFromMetadata = async (
 			createdAt: sessionData.lastModified,
 			updatedAt: sessionMetadata?.runUpdatedAt ?? sessionData.lastModified,
 		} satisfies AgentV2RunSnapshot);
-	const controller = new AgentV2BrowserController(createBrowserRunProjectionSink(agent));
-	controller.start(runSnapshot);
-	if (replayedEvents.length > 0) {
-		controller.hydrate(replayedEvents, replayedEvents.at(-1)?.seq ?? 0);
-	}
-	agentV2BrowserController = controller;
+	const restored = restoreAgentV2BrowserRunProjection({
+		snapshot: runSnapshot,
+		events: replayedEvents,
+		sink: createBrowserRunProjectionSink(agent),
+		...(isTerminalRunStatus(restoredStatus)
+			? {
+					terminalStatus: restoredStatus,
+					terminalAt: run?.updatedAt ?? sessionMetadata?.runUpdatedAt ?? sessionData.lastModified,
+					...(run?.error ? { error: run.error } : {}),
+				}
+			: {}),
+	});
 	clearRemoteRunTransientStatusTexts();
+	if (!restored.active) {
+		agentV2BrowserController = undefined;
+		currentActiveRunId = undefined;
+		currentLastRunId = run?.runId ?? sessionMetadata?.lastRunId ?? activeRunId;
+		currentRunStatus = restoredStatus;
+		currentRunUpdatedAt = run?.updatedAt ?? sessionMetadata?.runUpdatedAt ?? sessionData.lastModified;
+		return false;
+	}
+	const controller = restored.controller;
+	agentV2BrowserController = controller;
 	const trackedRun: TrackedRemoteRun = run
 		? toTrackedRemoteRun(run, sessionId)
 		: {

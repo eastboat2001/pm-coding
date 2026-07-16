@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
 	createWorkspaceExpansionState,
 	reduceWorkspaceExpansion,
+	workspaceViewportForWidth,
 } from "../src/app/workspace-expansion-coordinator.js";
 
 describe("workspace expansion coordinator", () => {
-	it("allows desktop sidebar and run details to coexist", () => {
+	it("allows a desktop sidebar to coexist while active and historical details remain mutually exclusive", () => {
 		let state = createWorkspaceExpansionState("desktop");
 		state = reduceWorkspaceExpansion(state, { type: "open_sidebar", sidebar: "files" });
 		state = reduceWorkspaceExpansion(state, { type: "open_active_run_detail" });
@@ -14,9 +15,19 @@ describe("workspace expansion coordinator", () => {
 		expect(state).toMatchObject({
 			viewport: "desktop",
 			sidebar: "files",
-			activeRunDetailOpen: true,
+			activeRunDetailOpen: false,
 			historicalRunDetailId: "run-old",
+			internalSection: null,
 		});
+	});
+
+	it.each([
+		[767, "compact"],
+		[768, "compact"],
+		[900, "compact"],
+		[901, "desktop"],
+	] as const)("maps %dpx to the shared 900px viewport contract", (width, expected) => {
+		expect(workspaceViewportForWidth(width)).toBe(expected);
 	});
 
 	it("enforces compact mutual exclusion and normalizes a desktop state when the viewport shrinks", () => {

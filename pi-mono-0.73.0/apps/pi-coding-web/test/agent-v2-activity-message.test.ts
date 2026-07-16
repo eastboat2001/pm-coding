@@ -149,17 +149,24 @@ describe("Agent v2 durable run results", () => {
 			"../src/runtime/agent-v2-run-result-message.js"
 		);
 		const message = createAgentV2RunResultMessage(terminalPresentation("succeeded"));
+		const onDetailChange = vi.fn();
 		const onSectionChange = vi.fn();
 		const rendered = renderAgentV2RunResultMessage(message, {
+			detailOpenForRun: (runId) => runId === "run-1",
 			expandedSectionForRun: (runId) => (runId === "run-1" ? "technical" : null),
+			onDetailChange,
 			onSectionChange,
 		}) as unknown as { values: unknown[] };
 
+		expect(rendered.values).toContain(true);
 		expect(rendered.values).toContain("technical");
-		const callback = rendered.values.find((value) => typeof value === "function") as
+		const callbacks = rendered.values.filter((value) => typeof value === "function") as Array<
 			| ((section: string | null) => void)
-			| undefined;
-		callback?.("files");
+			| ((expanded: boolean) => void)
+		>;
+		callbacks[0]?.(false);
+		callbacks[1]?.("files");
+		expect(onDetailChange).toHaveBeenCalledWith("run-1", false);
 		expect(onSectionChange).toHaveBeenCalledWith("run-1", "files");
 	});
 
@@ -180,6 +187,7 @@ function terminalPresentation(
 		phase: status === "failed" ? "failed" : "delivery",
 		stage: "delivery",
 		active: false,
+		repairing: false,
 		startedAt: NOW,
 		updatedAt: NOW,
 		endedAt: NOW,

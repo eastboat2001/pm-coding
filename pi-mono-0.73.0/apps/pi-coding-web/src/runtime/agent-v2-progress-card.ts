@@ -33,11 +33,13 @@ export interface AgentV2ProgressSectionView {
 export interface AgentV2ProgressCardView {
 	status: AgentV2ProgressStatusView;
 	stages: AgentV2ProgressStageView[];
+	currentStage: string;
 	currentAction: string;
 	elapsedLabel: string;
 	sections: AgentV2ProgressSectionView[];
 	deliveryHref?: string;
-	failure?: { cause: string; retrySafety: string };
+	completion?: { validation: string; build: string; files: string; usageInstructions: string };
+	failure?: { cause: string; retrySafety: string; completedWork: string; nextAction: string };
 }
 
 export interface AgentV2ProgressCardViewOptions {
@@ -65,9 +67,28 @@ const SECTION_LABELS: Record<AgentV2ProgressSection, string> = {
 export class AgentV2ProgressCard extends LitElement {
 	@property({ attribute: false }) presentation!: AgentV2ProgressPresentation;
 	@property({ type: Boolean }) terminal = false;
+	@property({ type: Boolean }) detailsExpanded = false;
 	@property({ attribute: false }) expandedSection: AgentV2ProgressSection | null = null;
+	@property({ attribute: false }) onDetailChange?: (expanded: boolean) => void;
 	@property({ attribute: false }) onSectionChange?: (section: AgentV2ProgressSection | null) => void;
 	@property({ attribute: false }) now = Date.now();
+	private readonly elapsedTicker = createAgentV2ElapsedTicker((now) => {
+		this.now = now;
+	});
+
+	override connectedCallback(): void {
+		super.connectedCallback();
+		this.syncElapsedTicker();
+	}
+
+	override disconnectedCallback(): void {
+		this.elapsedTicker.stop();
+		super.disconnectedCallback();
+	}
+
+	protected override updated(): void {
+		this.syncElapsedTicker();
+	}
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
 		return this;
@@ -90,12 +111,21 @@ export class AgentV2ProgressCard extends LitElement {
 							<span class="agent-v2-progress-card__status-icon" aria-hidden="true">${statusGlyph(view.status.icon)}</span>
 							<span>${view.status.text}</span>
 						</div>
+						<p class="agent-v2-progress-card__phase">${view.currentStage}</p>
 						<p class="agent-v2-progress-card__action">${view.currentAction}</p>
 					</div>
 					<span class="agent-v2-progress-card__elapsed" aria-hidden="true">${view.elapsedLabel}</span>
+					<button
+						type="button"
+						class="agent-v2-progress-card__detail-toggle"
+						aria-expanded=${String(this.detailsExpanded)}
+						@click=${() => this.onDetailChange?.(!this.detailsExpanded)}
+					>${this.detailsExpanded ? "Hide details" : "View details"}</button>
 				</header>
 
-				<ol class="agent-v2-progress-card__stages" aria-label="Run phases">
+				${
+					this.detailsExpanded
+						? html`<ol class="agent-v2-progress-card__stages" aria-label="Run phases">
 					${view.stages.map(
 						(stage) => html`
 							<li class="agent-v2-progress-card__stage agent-v2-progress-card__stage--${stage.state}">
@@ -104,22 +134,41 @@ export class AgentV2ProgressCard extends LitElement {
 							</li>
 						`,
 					)}
-				</ol>
+				</ol>`
+						: ""
+				}
+
+				${
+					view.completion
+						? html`
+					<div class="agent-v2-progress-card__completion">
+						<span>Validation: ${view.completion.validation}</span>
+						<span>Build: ${view.completion.build}</span>
+						<span>Files: ${view.completion.files}</span>
+						${this.detailsExpanded ? html`<span>${view.completion.usageInstructions}</span>` : ""}
+					</div>`
+						: ""
+				}
 
 				${
 					view.failure
 						? html`
 							<div class="agent-v2-progress-card__failure">
 								<strong>Failure:</strong> ${view.failure.cause}
-								<span>${view.failure.retrySafety}</span>
+								<span>${view.failure.completedWork}</span>
+								<span>${view.failure.retrySafety}. ${view.failure.nextAction}</span>
 							</div>
 						`
 						: ""
 				}
 
-				<div class="agent-v2-progress-card__sections">
+				${
+					this.detailsExpanded
+						? html`<div class="agent-v2-progress-card__sections">
 					${view.sections.map((section) => this.renderSection(section))}
-				</div>
+				</div>`
+						: ""
+				}
 
 				${
 					view.deliveryHref
@@ -135,6 +184,11 @@ export class AgentV2ProgressCard extends LitElement {
 				}
 			</section>
 		`;
+	}
+
+	private syncElapsedTicker(): void {
+		if (!this.terminal && this.presentation?.active) this.elapsedTicker.start();
+		else this.elapsedTicker.stop();
 	}
 
 	private renderSection(section: AgentV2ProgressSectionView): TemplateResult {
@@ -191,17 +245,34 @@ export function createAgentV2ProgressCardView(
 	};
 	const safeRunId = presentation.runId.replace(/[^a-zA-Z0-9_-]/gu, "-");
 	const deliveryHref = safeDeliveryHref(presentation);
+	const delivery = presentation.deliveryReport;
+	const completion =
+		presentation.status === "succeeded" && delivery
+			? {
+					validation: "Passed",
+					build: delivery.buildStatus === "passed" ? "Passed" : "Not required",
+					files: `${delivery.createdFiles.length} created, ${delivery.updatedFiles.length} modified`,
+					usageInstructions: delivery.usageInstructions,
+				}
+			: undefined;
+	const completedTasks = taskEvents(presentation).filter((task) => task.status === "succeeded").length;
+	const changedFiles = artifactEvents(presentation).length;
 	const failure =
 		presentation.status === "failed" && presentation.error
 			? {
 					cause: presentation.error.message,
 					retrySafety: presentation.error.retryable ? "Safe to retry" : "Do not retry without changes",
+					completedWork: `${completedTasks} ${completedTasks === 1 ? "task" : "tasks"} completed; ${changedFiles} ${changedFiles === 1 ? "file" : "files"} created or updated.`,
+					nextAction: presentation.error.retryable
+						? "Retry this run."
+						: "Review the diagnostic details, then update the request or project files.",
 				}
 			: undefined;
 
 	return {
-		status: statusView(presentation.status),
+		status: statusView(presentation),
 		stages: stageViews(presentation),
+		currentStage: currentStageLabel(presentation.stage),
 		currentAction: currentAction(presentation),
 		elapsedLabel: elapsedLabel(presentation, options.now),
 		sections: (Object.keys(SECTION_LABELS) as AgentV2ProgressSection[]).map((id) => ({
@@ -212,12 +283,14 @@ export function createAgentV2ProgressCardView(
 			rows: rows[id],
 		})),
 		...(deliveryHref ? { deliveryHref } : {}),
+		...(completion ? { completion } : {}),
 		...(failure ? { failure } : {}),
 	};
 }
 
-function statusView(status: AgentV2ProgressPresentation["status"]): AgentV2ProgressStatusView {
-	switch (status) {
+function statusView(presentation: AgentV2ProgressPresentation): AgentV2ProgressStatusView {
+	if (presentation.repairing) return { text: "Repairing", icon: "spinner", tone: "warning" };
+	switch (presentation.status) {
 		case "queued":
 			return { text: "Queued", icon: "circle", tone: "muted" };
 		case "running":
@@ -246,6 +319,10 @@ function stageViews(presentation: AgentV2ProgressPresentation): AgentV2ProgressS
 }
 
 function currentAction(presentation: AgentV2ProgressPresentation): string {
+	if (presentation.repairing) {
+		const attempt = presentation.repairAttempt ? ` (attempt ${presentation.repairAttempt})` : "";
+		return `Repairing${attempt}: ${presentation.repairReason ?? "validation issue"}`;
+	}
 	if (presentation.status === "failed" && presentation.error) return presentation.error.message;
 	if (presentation.status === "succeeded" && presentation.deliveryReport) {
 		return presentation.deliveryReport.completedSummary;
@@ -274,7 +351,15 @@ function elapsedLabel(presentation: AgentV2ProgressPresentation, now: number): s
 
 function safeDeliveryHref(presentation: AgentV2ProgressPresentation): string | undefined {
 	if (presentation.status !== "succeeded") return undefined;
-	const href = presentation.deliveryReport?.previewUrl.trim();
+	const delivery = presentation.deliveryReport;
+	if (
+		!delivery ||
+		delivery.validationStatus !== "passed" ||
+		(delivery.buildStatus !== "passed" && delivery.buildStatus !== "not_required") ||
+		delivery.previewStatus !== "running"
+	)
+		return undefined;
+	const href = delivery.previewUrl.trim();
 	if (!href) return undefined;
 	if (href.startsWith("/") && !href.startsWith("//")) return href;
 	try {
@@ -283,6 +368,32 @@ function safeDeliveryHref(presentation: AgentV2ProgressPresentation): string | u
 	} catch {
 		return undefined;
 	}
+}
+
+function currentStageLabel(stage: AgentV2UserStage): string {
+	const index = STAGES.findIndex((candidate) => candidate.id === stage);
+	const label = STAGES[index]?.label ?? "Working";
+	return `${label} · stage ${Math.max(1, index + 1)} of ${STAGES.length}`;
+}
+
+export interface AgentV2ElapsedTicker {
+	start(): void;
+	stop(): void;
+}
+
+export function createAgentV2ElapsedTicker(onTick: (now: number) => void, intervalMs = 1000): AgentV2ElapsedTicker {
+	let timer: ReturnType<typeof setInterval> | undefined;
+	return {
+		start() {
+			if (timer !== undefined) return;
+			timer = setInterval(() => onTick(Date.now()), intervalMs);
+		},
+		stop() {
+			if (timer === undefined) return;
+			clearInterval(timer);
+			timer = undefined;
+		},
+	};
 }
 
 function taskEvents(presentation: AgentV2ProgressPresentation) {

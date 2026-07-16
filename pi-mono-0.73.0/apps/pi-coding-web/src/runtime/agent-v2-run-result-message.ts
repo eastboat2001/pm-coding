@@ -22,7 +22,9 @@ declare module "@mariozechner/pi-agent-core" {
 let resultRendererRegistered = false;
 
 export interface AgentV2RunResultRendererOptions {
+	detailOpenForRun: (runId: string) => boolean;
 	expandedSectionForRun: (runId: string) => AgentV2ProgressSection | null;
+	onDetailChange: (runId: string, expanded: boolean) => void;
 	onSectionChange: (runId: string, section: AgentV2ProgressSection | null) => void;
 }
 
@@ -73,7 +75,9 @@ export function renderAgentV2RunResultMessage(
 		<agent-v2-progress-card
 			.presentation=${message.presentation}
 			.terminal=${true}
+			.detailsExpanded=${options?.detailOpenForRun(message.runId) ?? false}
 			.expandedSection=${options?.expandedSectionForRun(message.runId) ?? null}
+			.onDetailChange=${options ? (expanded: boolean) => options.onDetailChange(message.runId, expanded) : undefined}
 			.onSectionChange=${options ? (section: AgentV2ProgressSection | null) => options.onSectionChange(message.runId, section) : undefined}
 		></agent-v2-progress-card>
 	`;

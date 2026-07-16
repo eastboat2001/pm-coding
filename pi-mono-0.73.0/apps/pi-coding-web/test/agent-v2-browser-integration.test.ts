@@ -1,46 +1,61 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { describe, expect, it, vi } from "vitest";
+import { reduceWorkspaceExpansion, createWorkspaceExpansionState } from "../src/app/workspace-expansion-coordinator.js";
+import { selectAgentV2ActiveRunPresentation } from "../src/runtime/agent-v2-active-run.js";
+import { createAgentV2BrowserRunSink } from "../src/runtime/agent-v2-browser-run-sink.js";
+import type { AgentV2RunPresentation } from "../src/runtime/agent-v2-run-presentation.js";
 
-const bootstrapSource = readFileSync(join(import.meta.dirname, "../src/app/bootstrap.ts"), "utf8");
+vi.hoisted(() => {
+	vi.stubGlobal("HTMLElement", class {});
+	vi.stubGlobal("DOMMatrix", class {});
+	vi.stubGlobal("ImageData", class {});
+	vi.stubGlobal("Path2D", class {});
+	vi.stubGlobal("customElements", { define: vi.fn(), get: vi.fn(() => undefined) });
+	vi.stubGlobal("document", { addEventListener: vi.fn(), createTreeWalker: vi.fn(() => ({})), removeEventListener: vi.fn() });
+});
 
-describe("Agent v2 browser integration source", () => {
-	it("registers legacy read-only history and the unified terminal result without creating new activity messages", () => {
-		expect(bootstrapSource).toContain("registerLegacyAgentV2ActivityMessageRenderer");
-		expect(bootstrapSource).toContain("registerAgentV2RunResultMessageRenderer");
-		expect(bootstrapSource).not.toContain("createAgentV2ActivityMessage");
-		expect(bootstrapSource).not.toContain("appendAgentV2ActivityMessage");
-		expect(bootstrapSource).not.toContain("formatAgentV2DeliveryReport");
-		expect(bootstrapSource).not.toContain("formatAgentV2FailureReport");
+describe("Agent v2 executable browser integration", () => {
+	it("isolates the active run slot from Chat mode and switches one active presentation to one result", () => {
+		const browserAgent = {
+			state: { messages: [] as AgentMessage[], isStreaming: false, pendingToolCalls: new Set<string>() },
+		};
+		let active: AgentV2RunPresentation | undefined;
+		const sink = createAgentV2BrowserRunSink({
+			browserAgent,
+			locale: () => "en",
+			onPresentationChange: (presentation) => {
+				active = presentation;
+			},
+		});
+		sink.beginRun("run-integration", "2026-07-16T00:00:00.000Z");
+		sink.setPhase("implementation", "running", "2026-07-16T00:00:01.000Z");
+
+		expect(selectAgentV2ActiveRunPresentation("chat", active)).toBeUndefined();
+		expect(selectAgentV2ActiveRunPresentation("app_generation", active)?.runId).toBe("run-integration");
+		expect(browserAgent.state.messages.filter((message) => message.role === "agent-v2-run-result")).toHaveLength(0);
+
+		sink.settle("failed", "2026-07-16T00:00:02.000Z", {
+			code: "static.invalid_html",
+			message: "Generated HTML is invalid.",
+			retryable: true,
+		});
+		expect(selectAgentV2ActiveRunPresentation("app_generation", active)).toBeUndefined();
+		expect(browserAgent.state.messages.filter((message) => message.role === "agent-v2-run-result")).toHaveLength(1);
 	});
 
-	it("keeps one active presentation and renders it only through the app-generation active-run slot", () => {
-		expect(bootstrapSource.match(/let activeAgentV2Presentation\b/gu)).toHaveLength(1);
-		expect(bootstrapSource.match(/let workspaceExpansionState\b/gu)).toHaveLength(1);
-		expect(bootstrapSource).toContain("agentInterface.activeRunContent");
-		expect(bootstrapSource).toMatch(/currentSessionMode === "app_generation"[\s\S]*activeAgentV2Presentation/u);
-		expect(bootstrapSource).not.toMatch(/let activeSidebarPanel\b/u);
-		expect(bootstrapSource).not.toMatch(/let currentProjectFilePreviewFilename\b/u);
-	});
+	it("coordinates active and historical detail ownership without sharing expansion state", () => {
+		let state = createWorkspaceExpansionState("desktop");
+		state = reduceWorkspaceExpansion(state, { type: "open_active_run_detail" });
+		state = reduceWorkspaceExpansion(state, { type: "open_internal_section", section: "files" });
+		expect(state).toMatchObject({ activeRunDetailOpen: true, historicalRunDetailId: null, internalSection: "files" });
 
-	it("routes workspace regions and settings through the expansion coordinator", () => {
-		for (const action of [
-			"open_sidebar",
-			"open_file_preview",
-			"open_active_run_detail",
-			"open_historical_run_detail",
-			"open_internal_section",
-			"open_settings",
-			"close_settings",
-		]) {
-			expect(bootstrapSource).toContain(`type: "${action}"`);
-		}
-	});
-
-	it("retains the existing Chat prompt and skill-runtime path", () => {
-		expect(bootstrapSource).toContain("chat: async (chatInput, chatImages) => {");
-		expect(bootstrapSource).toContain("const runtime = await createChatSkillRuntime({");
-		expect(bootstrapSource).toContain("await invokeChatPrompt(chatInput, chatImages);");
-		expect(bootstrapSource).toContain("appGeneration: startRemotePrompt");
+		state = reduceWorkspaceExpansion(state, { type: "open_historical_run_detail", runId: "run-old" });
+		expect(state).toMatchObject({
+			activeRunDetailOpen: false,
+			historicalRunDetailId: "run-old",
+			internalSection: null,
+		});
+		state = reduceWorkspaceExpansion(state, { type: "open_internal_section", section: "validation" });
+		expect(state.internalSection).toBe("validation");
 	});
 });

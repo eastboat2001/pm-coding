@@ -42,6 +42,10 @@ export function createWorkspaceExpansionState(viewport: WorkspaceViewport): Work
 	};
 }
 
+export function workspaceViewportForWidth(width: number): WorkspaceViewport {
+	return width <= 900 ? "compact" : "desktop";
+}
+
 export function reduceWorkspaceExpansion(
 	state: WorkspaceExpansionState,
 	action: WorkspaceExpansionAction,
@@ -94,9 +98,9 @@ export function reduceWorkspaceExpansion(
 			return {
 				...state,
 				activeRunDetailOpen: true,
-				...(state.viewport === "compact"
-					? { sidebar: null, filePreviewPath: null, historicalRunDetailId: null }
-					: {}),
+				historicalRunDetailId: null,
+				internalSection: null,
+				...(state.viewport === "compact" ? { sidebar: null, filePreviewPath: null } : {}),
 			};
 		case "close_active_run_detail":
 			return { ...state, activeRunDetailOpen: false };
@@ -104,9 +108,9 @@ export function reduceWorkspaceExpansion(
 			return {
 				...state,
 				historicalRunDetailId: action.runId,
-				...(state.viewport === "compact"
-					? { sidebar: null, filePreviewPath: null, activeRunDetailOpen: false }
-					: {}),
+				activeRunDetailOpen: false,
+				internalSection: null,
+				...(state.viewport === "compact" ? { sidebar: null, filePreviewPath: null } : {}),
 			};
 		case "close_historical_run_detail":
 			return { ...state, historicalRunDetailId: null };

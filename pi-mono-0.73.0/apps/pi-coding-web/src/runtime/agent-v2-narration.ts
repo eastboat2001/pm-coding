@@ -74,6 +74,13 @@ const STAGE_COPY: Record<SupportedNarrationLocale, Record<AgentV2UserStage, stri
 	},
 };
 
+const REPAIR_COPY: Record<SupportedNarrationLocale, string> = {
+	zh: "检查发现问题，正在自动修复。",
+	en: "I found a validation issue and I’m repairing it.",
+	de: "Ich habe ein Validierungsproblem gefunden und behebe es.",
+	ms: "Saya menemui isu pengesahan dan sedang membaikinya.",
+};
+
 export function createAgentV2NarrationState(): AgentV2NarrationState {
 	return { seenSemanticKeys: new Set() };
 }
@@ -136,10 +143,11 @@ function narrationCandidate(
 		return undefined;
 	}
 	const stage = agentV2StageForPhase(event.phase);
+	const normalizedLocale = normalizeLocale(locale);
 	return {
 		source: "phase",
 		semanticKey: `phase\u0000${runId}\u0000${event.phase}\u0000${event.at}`,
-		text: STAGE_COPY[normalizeLocale(locale)][stage],
+		text: event.phase === "repair" ? REPAIR_COPY[normalizedLocale] : STAGE_COPY[normalizedLocale][stage],
 		at: event.at,
 		stage,
 		phase: event.phase,

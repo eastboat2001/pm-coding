@@ -103,6 +103,20 @@ describe("Agent v2 narration", () => {
 		expect(result.candidate?.text).toBe(expected);
 	});
 
+	it("uses a distinct repair narration instead of regressing to implementation", () => {
+		const result = projectAgentV2Narration(createAgentV2NarrationState(), {
+			runId: "run-1",
+			locale: "en",
+			event: phase("repair"),
+		});
+
+		expect(result.candidate).toMatchObject({
+			stage: "validation",
+			phase: "repair",
+			text: "I found a validation issue and I’m repairing it.",
+		});
+	});
+
 	it("converts event text with zero usage and preserves provider-backed output identity", () => {
 		const phaseCandidate = projectAgentV2Narration(createAgentV2NarrationState(), {
 			runId: "run-1",

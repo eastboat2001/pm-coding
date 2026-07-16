@@ -99,7 +99,7 @@ describe("Agent v2 browser run sink", () => {
 		]);
 		expect(browserAgent.state.messages.filter((message) => message.role === "assistant").map(assistantText)).toEqual([
 			"I’m checking the result and fixing issues.",
-			"I’m implementing the plan.",
+			"I found a validation issue and I’m repairing it.",
 			"I’m checking the result and fixing issues.",
 		]);
 	});

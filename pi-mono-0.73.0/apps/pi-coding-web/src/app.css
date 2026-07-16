@@ -389,8 +389,10 @@ body {
 
 .agent-v2-progress-card__header,
 .agent-v2-progress-card__status,
+.agent-v2-progress-card__detail-toggle,
 .agent-v2-progress-card__section-button,
 .agent-v2-progress-card__failure,
+.agent-v2-progress-card__completion,
 .agent-v2-progress-card__delivery {
 	display: flex;
 	align-items: center;
@@ -405,6 +407,13 @@ body {
 	display: grid;
 	min-width: 0;
 	gap: 0.15rem;
+}
+
+.agent-v2-progress-card__phase {
+	margin: 0;
+	font-size: 0.72rem;
+	font-weight: 650;
+	color: var(--foreground);
 }
 
 .agent-v2-progress-card__status {
@@ -453,6 +462,23 @@ body {
 	flex: none;
 	color: var(--muted-foreground);
 	font-variant-numeric: tabular-nums;
+}
+
+.agent-v2-progress-card__detail-toggle {
+	flex: none;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 0.28rem 0.55rem;
+	background: transparent;
+	color: var(--muted-foreground);
+	font: inherit;
+	cursor: pointer;
+}
+
+.agent-v2-progress-card__completion {
+	flex-wrap: wrap;
+	gap: 0.3rem 0.75rem;
+	color: var(--muted-foreground);
 }
 
 .agent-v2-progress-card__stages {
@@ -525,6 +551,7 @@ body {
 }
 
 .agent-v2-progress-card__section-button:focus-visible,
+.agent-v2-progress-card__detail-toggle:focus-visible,
 .agent-interface__new-progress:focus-visible {
 	outline: 2px solid var(--ring);
 	outline-offset: 2px;

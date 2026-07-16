@@ -51,13 +51,21 @@ export function getLatestExplicitSkillNames(messages: AgentMessage[]): string[] 
 	return [];
 }
 
+export function validateSelectedSkillNames(
+	selectedSkillNames: readonly string[],
+	availableSkillNames: readonly string[],
+): string[] {
+	const availableNames = new Set(availableSkillNames);
+	const unknownName = selectedSkillNames.find((name) => !availableNames.has(name));
+	if (unknownName) throw new Error(`Unknown selected skill: ${unknownName}`);
+	return [...selectedSkillNames];
+}
+
 async function expandSkillCommandText(text: string, options: ExpandSkillCommandOptions = {}): Promise<string> {
 	const parsed = parseSkillCommandPrefix(text);
 	if (!parsed) return text;
 	if (options.availableSkillNames) {
-		const availableNames = new Set(options.availableSkillNames);
-		const unknownName = parsed.skillNames.find((name) => !availableNames.has(name));
-		if (unknownName) throw new Error(`Unknown selected skill: ${unknownName}`);
+		validateSelectedSkillNames(parsed.skillNames, options.availableSkillNames);
 	}
 
 	const loadSkill = options.loadSkill ?? defaultLoadSkill;

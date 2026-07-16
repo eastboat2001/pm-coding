@@ -2,7 +2,11 @@ import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import { createChatSystemPrompt } from "./chat-system-prompt.js";
 import { requestSkillApi } from "./client.js";
 import type { SkillLoadDetails, SkillSummary } from "./schemas.js";
-import { expandSkillCommandsInMessages, getLatestExplicitSkillNames } from "./skill-command.js";
+import {
+	expandSkillCommandsInMessages,
+	getLatestExplicitSkillNames,
+	validateSelectedSkillNames,
+} from "./skill-command.js";
 import { createServerSkillTools } from "./tools.js";
 
 export type ChatPromptInput = string | AgentMessage | AgentMessage[];
@@ -25,10 +29,11 @@ export async function createChatSkillRuntime(input: {
 	signal?: AbortSignal;
 }): Promise<ChatSkillRuntimeSnapshot> {
 	const skills = input.skills.map((skill) => ({ ...skill }));
-	const completeNames = new Set(skills.map((skill) => skill.name));
-	const explicitSkillNames = getLatestExplicitSkillNames(promptInputMessages(input.input));
-	const unknownName = explicitSkillNames.find((name) => !completeNames.has(name));
-	if (unknownName) throw new Error(`Unknown selected skill: ${unknownName}`);
+	const availableSkillNames = skills.map((skill) => skill.name);
+	const explicitSkillNames = validateSelectedSkillNames(
+		getLatestExplicitSkillNames(promptInputMessages(input.input)),
+		availableSkillNames,
+	);
 
 	const loadSkill = input.loadSkill ?? loadServerSkill;
 	const preloadedSkills: SkillLoadDetails[] = [];
@@ -40,7 +45,6 @@ export async function createChatSkillRuntime(input: {
 		preloadedByName.set(name, loaded);
 	}
 
-	const availableSkillNames = [...completeNames];
 	const systemPrompt = createChatSystemPrompt(skills, input.contextWindowTokens);
 	const tools = createServerSkillTools({
 		skills,

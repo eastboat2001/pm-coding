@@ -105,7 +105,11 @@ import { loadServerSkillList } from "../skill-tools/client.js";
 import { registerLegacyDefaultSkillLoadMessageRenderer } from "../skill-tools/legacy-default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
 import type { SkillListDetails, SkillSummary } from "../skill-tools/schemas.js";
-import { getLatestExplicitSkillNames, parseSkillCommandPrefix } from "../skill-tools/skill-command.js";
+import {
+	getLatestExplicitSkillNames,
+	parseSkillCommandPrefix,
+	validateSelectedSkillNames,
+} from "../skill-tools/skill-command.js";
 import { setBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
@@ -1645,6 +1649,10 @@ const startRemotePrompt = async (
 	if (!isRecord(message)) {
 		throw new Error("Remote runs require a JSON-object prompt message.");
 	}
+	const selectedSkillNames = validateSelectedSkillNames(
+		getLatestExplicitSkillNames([message]),
+		piRuntimeConfig.skills.map((skill) => skill.name),
+	);
 
 	const previousMessages = agent.state.messages.slice();
 	agent.state.messages = [...previousMessages, message];
@@ -1660,7 +1668,6 @@ const startRemotePrompt = async (
 			: undefined;
 		const title = sessionTitle(currentTitle, agent.state.messages);
 		const rawObjective = objectiveTextFromMessage(message) ?? title;
-		const selectedSkillNames = getLatestExplicitSkillNames([message]);
 		const objective = parseSkillCommandPrefix(rawObjective)?.args || rawObjective;
 		const selectedModel = agent.state.model;
 		const conversation = await buildConversationSnapshot({

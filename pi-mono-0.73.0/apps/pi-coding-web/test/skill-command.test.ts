@@ -4,6 +4,7 @@ import {
 	expandSkillCommandsInMessages,
 	getLatestExplicitSkillNames,
 	parseSkillCommandPrefix,
+	validateSelectedSkillNames,
 } from "../src/skill-tools/skill-command.js";
 import type { SkillLoadDetails } from "../src/skill-tools/schemas.js";
 
@@ -112,6 +113,15 @@ describe("parseSkillCommandPrefix", () => {
 				{ role: "user", content: "/skill:frontend-design /skill:style-neon-console build a page" },
 			]),
 		).toEqual(["frontend-design", "style-neon-console"]);
+	});
+
+	it("validates selected names against the complete catalog before submission", () => {
+		expect(validateSelectedSkillNames(["explicit-only"], ["implicit", "explicit-only"])).toEqual([
+			"explicit-only",
+		]);
+		expect(() => validateSelectedSkillNames(["invented"], ["implicit", "explicit-only"])).toThrow(
+			/unknown selected skill: invented/i,
+		);
 	});
 
 	it("adds a Chinese language hint for a Chinese current request", async () => {

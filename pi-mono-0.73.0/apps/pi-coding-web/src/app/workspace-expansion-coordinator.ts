@@ -24,6 +24,9 @@ export type WorkspaceExpansionAction =
 	| { type: "close_historical_run_detail" }
 	| { type: "open_internal_section"; section: string }
 	| { type: "close_internal_section" }
+	| { type: "set_active_run_section"; section: string | null }
+	| { type: "set_historical_run_section"; runId: string; section: string | null }
+	| { type: "reset_active_run_expansion" }
 	| { type: "open_settings" }
 	| { type: "close_settings" }
 	| { type: "dismiss_error"; fingerprint: string }
@@ -118,6 +121,18 @@ export function reduceWorkspaceExpansion(
 			return { ...state, internalSection: action.section };
 		case "close_internal_section":
 			return { ...state, internalSection: null };
+		case "set_active_run_section":
+			if (!state.activeRunDetailOpen) return state;
+			return { ...state, internalSection: action.section };
+		case "set_historical_run_section":
+			if (state.historicalRunDetailId !== action.runId) return state;
+			return { ...state, internalSection: action.section };
+		case "reset_active_run_expansion":
+			return {
+				...state,
+				activeRunDetailOpen: false,
+				...(state.historicalRunDetailId === null ? { internalSection: null } : {}),
+			};
 		case "open_settings":
 			return { ...state, settingsModalOpen: true };
 		case "close_settings":

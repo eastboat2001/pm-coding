@@ -48,6 +48,7 @@ import {
 	type AgentV2ValidationGateContext,
 	runAgentV2StaticValidationGate,
 } from "./agent-v2-validation-gate.js";
+import { PreviewReadinessChecker, type PreviewReadinessResult } from "./preview-readiness-checker.js";
 import type { StorageConfig } from "./types.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 
@@ -78,6 +79,7 @@ export interface ExecuteAgentV2NextTaskInput {
 	maxRepairAttempts?: number;
 	toolRegistry?: AgentV2ToolRegistry;
 	signal?: AbortSignal;
+	previewReadinessChecker?: Pick<PreviewReadinessChecker, "check">;
 }
 
 export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput): Promise<AgentV2ExecutionStepResult> {
@@ -175,6 +177,25 @@ async function executeDeliveryTask(
 	if (preview.status !== "running" || !preview.previewUrl) {
 		return commitDeliveryFailure(input, run, task, proposedNow, classifyPreviewFailure(preview.logs));
 	}
+	let readiness: PreviewReadinessResult;
+	try {
+		readiness = await (input.previewReadinessChecker ?? new PreviewReadinessChecker(input.config)).check(
+			input.context,
+		);
+	} catch (error) {
+		throwIfAborted(input.signal);
+		return commitDeliveryFailure(input, run, task, proposedNow, previewReadinessFailure("probe_error", error));
+	}
+	throwIfAborted(input.signal);
+	if (!readiness.ready || readiness.reasonCode !== "ready") {
+		return commitDeliveryFailure(
+			input,
+			run,
+			task,
+			proposedNow,
+			previewReadinessFailure(readiness.reasonCode, readiness.detail),
+		);
+	}
 	const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt);
 	const transitioned = transitionAgentV2Task({
 		task,
@@ -238,6 +259,7 @@ function deliveryReportPayload(
 		validationStatus: "passed",
 		buildStatus: "not_required",
 		previewStatus: "running",
+		previewReadiness: { verified: true, ready: true, reasonCode: "ready" },
 		previewUrl: preview.previewUrl,
 		projectId: preview.projectId,
 		usageInstructions: "Open the preview URL to use and review the generated application.",
@@ -245,13 +267,28 @@ function deliveryReportPayload(
 	};
 }
 
-type AgentV2PreviewFailureTaxonomy = "workspace_empty" | "build_required" | "missing_entry" | "publish_failed";
+type AgentV2PreviewFailureTaxonomy =
+	| "workspace_empty"
+	| "build_required"
+	| "missing_entry"
+	| "publish_failed"
+	| "not_ready";
 
 interface AgentV2PreviewFailure {
 	taxonomy: AgentV2PreviewFailureTaxonomy;
 	code: string;
 	message: string;
 	retryable: boolean;
+}
+
+function previewReadinessFailure(reasonCode: string, detail: unknown): AgentV2PreviewFailure {
+	const boundedDetail = typeof detail === "string" && detail.trim() ? ` ${detail.trim().slice(0, 500)}` : "";
+	return {
+		taxonomy: "not_ready",
+		code: "agent_v2.preview_not_ready",
+		message: `Published preview did not pass readiness verification (${reasonCode}).${boundedDetail}`,
+		retryable: true,
+	};
 }
 
 function classifyPreviewFailure(value: unknown): AgentV2PreviewFailure {

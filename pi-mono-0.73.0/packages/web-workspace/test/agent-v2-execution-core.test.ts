@@ -858,6 +858,7 @@ describe("agent v2 execution core", () => {
 		expect(events[1]?.payload).toMatchObject({
 			type: "agent_v2.delivery_reported",
 			previewStatus: "running",
+			previewReadiness: { verified: true, ready: true, reasonCode: "ready" },
 			previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
 			validationStatus: "passed",
 			buildStatus: "not_required",
@@ -895,6 +896,41 @@ describe("agent v2 execution core", () => {
 		expect(store.getAgentV2Run("client-a", "run-delivery-cancelled")?.status).toBe("cancelling");
 		expect(store.listAgentV2Tasks("client-a", "run-delivery-cancelled")[0]?.status).toBe("ready");
 		expect(store.listAgentV2RunEvents("client-a", "run-delivery-cancelled", 0)).toEqual([]);
+	});
+
+	it("fails delivery when publication succeeds but the readiness probe does not", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createDeliveryTask(store, "run-delivery-not-ready", { running: true });
+		vi.spyOn(WorkspacePreviewService.prototype, "preview").mockResolvedValue(previewSuccess());
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-delivery-not-ready",
+			now: () => "2026-07-08T00:02:00.000Z",
+			previewReadinessChecker: {
+				check: vi.fn(async () => ({
+					ready: false,
+					reasonCode: "http_not_ok" as const,
+					projectId: "project-client-a-session-",
+					previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
+					status: "running",
+					detail: "HTTP 503",
+				})),
+			},
+		});
+
+		expect(result).toMatchObject({ status: "task_failed", taskId: "deliver" });
+		expect(
+			store.listAgentV2RunEvents("client-a", "run-delivery-not-ready", 0).map((event) => event.type),
+		).not.toContain("agent_v2.delivery_reported");
+		expect(store.listAgentV2Tasks("client-a", "run-delivery-not-ready")[0]).toMatchObject({
+			status: "failed",
+			error: { code: "agent_v2.preview_not_ready", retryable: true },
+		});
 	});
 
 	it("does not commit delivery success after lease ownership changes", async () => {
@@ -1128,6 +1164,7 @@ function recordingModelExecution(
 function unusedExecutionDependencies(): {
 	materializer: AgentV2InputMaterializer;
 	modelExecution: AgentV2ModelExecution;
+	previewReadinessChecker: { check: () => Promise<{ ready: true; reasonCode: "ready" }> };
 } {
 	return {
 		materializer: {
@@ -1142,6 +1179,9 @@ function unusedExecutionDependencies(): {
 			generateRepair: async () => {
 				throw new Error("repair model must not be called for this task");
 			},
+		},
+		previewReadinessChecker: {
+			check: async () => ({ ready: true, reasonCode: "ready" }),
 		},
 	};
 }

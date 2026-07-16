@@ -356,7 +356,10 @@ function safeDeliveryHref(presentation: AgentV2ProgressPresentation): string | u
 		!delivery ||
 		delivery.validationStatus !== "passed" ||
 		(delivery.buildStatus !== "passed" && delivery.buildStatus !== "not_required") ||
-		delivery.previewStatus !== "running"
+		delivery.previewStatus !== "running" ||
+		delivery.previewReadiness.verified !== true ||
+		delivery.previewReadiness.ready !== true ||
+		delivery.previewReadiness.reasonCode !== "ready"
 	)
 		return undefined;
 	const href = delivery.previewUrl.trim();

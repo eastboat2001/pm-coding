@@ -301,6 +301,11 @@ export interface AgentV2DeliveryReportPayload {
 	validationStatus: "passed";
 	buildStatus: "not_required" | "passed";
 	previewStatus: "running";
+	previewReadiness: {
+		verified: true;
+		ready: boolean;
+		reasonCode: string;
+	};
 	previewUrl: string;
 	projectId: string;
 	usageInstructions: string;

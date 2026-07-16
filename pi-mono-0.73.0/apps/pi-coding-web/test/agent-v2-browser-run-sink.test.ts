@@ -237,6 +237,7 @@ function projectSuccessfulRun(sink: ReturnType<typeof createAgentV2BrowserRunSin
 		validationStatus: "passed",
 		buildStatus: "not_required",
 		previewStatus: "running",
+		previewReadiness: { verified: true, ready: true, reasonCode: "ready" },
 		previewUrl: "https://example.test/preview/dashboard/",
 		projectId: "dashboard",
 		usageInstructions: "Open the preview.",

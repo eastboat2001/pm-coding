@@ -63,6 +63,7 @@ describe("Agent v2 activity messages", () => {
 				validationStatus: "passed",
 				buildStatus: "not_required",
 				previewStatus: "running",
+				previewReadiness: { verified: true, ready: true, reasonCode: "ready" },
 				previewUrl: "http://localhost/preview/demo/",
 				projectId: "demo",
 				usageInstructions: "Open the preview URL to use and review the generated application.",

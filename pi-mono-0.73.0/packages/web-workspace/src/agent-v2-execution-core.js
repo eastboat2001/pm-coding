@@ -9,6 +9,7 @@ import { phaseForAgentV2Task } from "./agent-v2-state-machine.js";
 import { transitionAgentV2Task } from "./agent-v2-task-engine.js";
 import { assertAgentV2ToolAllowed, createAgentV2ToolRegistry, } from "./agent-v2-tool-governance.js";
 import { runAgentV2StaticValidationGate, } from "./agent-v2-validation-gate.js";
+import { PreviewReadinessChecker } from "./preview-readiness-checker.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 export async function executeAgentV2NextTask(input) {
     throwIfAborted(input.signal);
@@ -87,6 +88,18 @@ async function executeDeliveryTask(input, run, tasks, artifacts, task, proposedN
     if (preview.status !== "running" || !preview.previewUrl) {
         return commitDeliveryFailure(input, run, task, proposedNow, classifyPreviewFailure(preview.logs));
     }
+    let readiness;
+    try {
+        readiness = await (input.previewReadinessChecker ?? new PreviewReadinessChecker(input.config)).check(input.context);
+    }
+    catch (error) {
+        throwIfAborted(input.signal);
+        return commitDeliveryFailure(input, run, task, proposedNow, previewReadinessFailure("probe_error", error));
+    }
+    throwIfAborted(input.signal);
+    if (!readiness.ready || readiness.reasonCode !== "ready") {
+        return commitDeliveryFailure(input, run, task, proposedNow, previewReadinessFailure(readiness.reasonCode, readiness.detail));
+    }
     const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt);
     const transitioned = transitionAgentV2Task({
         task,
@@ -138,10 +151,20 @@ function deliveryReportPayload(input, tasks, artifacts, deliveryTask, preview, n
         validationStatus: "passed",
         buildStatus: "not_required",
         previewStatus: "running",
+        previewReadiness: { verified: true, ready: true, reasonCode: "ready" },
         previewUrl: preview.previewUrl,
         projectId: preview.projectId,
         usageInstructions: "Open the preview URL to use and review the generated application.",
         at: now,
+    };
+}
+function previewReadinessFailure(reasonCode, detail) {
+    const boundedDetail = typeof detail === "string" && detail.trim() ? ` ${detail.trim().slice(0, 500)}` : "";
+    return {
+        taxonomy: "not_ready",
+        code: "agent_v2.preview_not_ready",
+        message: `Published preview did not pass readiness verification (${reasonCode}).${boundedDetail}`,
+        retryable: true,
     };
 }
 function classifyPreviewFailure(value) {

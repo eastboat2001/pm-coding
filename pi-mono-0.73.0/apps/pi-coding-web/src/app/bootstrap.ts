@@ -501,6 +501,7 @@ const resetRemoteRunState = (): void => {
 	agentV2BrowserController = undefined;
 	activeAgentV2Presentation = undefined;
 	reportedQueuedRunTimeouts.clear();
+	updateWorkspaceExpansion({ type: "reset_active_run_expansion" });
 	clearRemoteRunTransientStatusTexts();
 	trackRemoteRun(undefined);
 	currentLastRunId = undefined;
@@ -538,13 +539,7 @@ function setActiveRunDetailOpen(expanded: boolean): void {
 }
 
 function setActiveRunExpandedSection(section: AgentV2ProgressSection | null): void {
-	if (section) {
-		updateWorkspaceExpansion({ type: "open_active_run_detail" });
-		updateWorkspaceExpansion({ type: "open_internal_section", section });
-	} else {
-		updateWorkspaceExpansion({ type: "close_active_run_detail" });
-		updateWorkspaceExpansion({ type: "close_internal_section" });
-	}
+	updateWorkspaceExpansion({ type: "set_active_run_section", section });
 	requestChatPanelUpdate();
 	renderApp();
 }
@@ -573,13 +568,7 @@ function setHistoricalRunDetailOpen(runId: string, expanded: boolean): void {
 }
 
 function setHistoricalRunExpandedSection(runId: string, section: AgentV2ProgressSection | null): void {
-	if (section) {
-		updateWorkspaceExpansion({ type: "open_historical_run_detail", runId });
-		updateWorkspaceExpansion({ type: "open_internal_section", section });
-	} else {
-		updateWorkspaceExpansion({ type: "close_historical_run_detail" });
-		updateWorkspaceExpansion({ type: "close_internal_section" });
-	}
+	updateWorkspaceExpansion({ type: "set_historical_run_section", runId, section });
 	requestChatPanelUpdate();
 	renderApp();
 }
@@ -619,6 +608,7 @@ const markRemoteRunSettled = (runId: string, status: AgentV2RunStatus, updatedAt
 	currentRunStatus = status;
 	currentRunUpdatedAt = updatedAt ?? currentRunUpdatedAt;
 	clearRemoteRunTransientStatusTexts();
+	updateWorkspaceExpansion({ type: "reset_active_run_expansion" });
 };
 
 const buildSessionMetadata = (
@@ -1649,6 +1639,7 @@ const startRemotePrompt = async (
 	}
 
 	const controller = new AgentV2BrowserController(createBrowserRunProjectionSink(agent));
+	updateWorkspaceExpansion({ type: "reset_active_run_expansion" });
 	controller.start(runResult);
 	clearRemoteRunTransientStatusTexts();
 	agentV2BrowserController = controller;
@@ -1833,6 +1824,7 @@ const restoreActiveRemoteRunFromMetadata = async (
 		currentLastRunId = run?.runId ?? sessionMetadata?.lastRunId ?? activeRunId;
 		currentRunStatus = restoredStatus;
 		currentRunUpdatedAt = run?.updatedAt ?? sessionMetadata?.runUpdatedAt ?? sessionData.lastModified;
+		updateWorkspaceExpansion({ type: "reset_active_run_expansion" });
 		return false;
 	}
 	const controller = restored.controller;

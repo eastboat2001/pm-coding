@@ -107,6 +107,7 @@ describe("AgentV2BrowserController", () => {
 			validationStatus: "passed",
 			buildStatus: "not_required",
 			previewStatus: "running",
+			previewReadiness: { verified: true, ready: true, reasonCode: "ready" },
 			previewUrl: "http://localhost/preview/app/",
 			projectId: "app",
 			usageInstructions: "Open the preview URL.",

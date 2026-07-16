@@ -82,6 +82,36 @@ describe("workspace expansion coordinator", () => {
 		expect(state.internalSection).toBe("validation");
 	});
 
+	it("collapses an accordion section without collapsing its active or historical detail", () => {
+		let state = createWorkspaceExpansionState("desktop");
+		state = reduceWorkspaceExpansion(state, { type: "open_active_run_detail" });
+		state = reduceWorkspaceExpansion(state, { type: "set_active_run_section", section: "files" });
+		state = reduceWorkspaceExpansion(state, { type: "set_active_run_section", section: null });
+		expect(state).toMatchObject({ activeRunDetailOpen: true, internalSection: null });
+
+		state = reduceWorkspaceExpansion(state, { type: "open_historical_run_detail", runId: "run-old" });
+		state = reduceWorkspaceExpansion(state, {
+			type: "set_historical_run_section",
+			runId: "run-old",
+			section: "validation",
+		});
+		state = reduceWorkspaceExpansion(state, {
+			type: "set_historical_run_section",
+			runId: "run-old",
+			section: null,
+		});
+		expect(state).toMatchObject({ historicalRunDetailId: "run-old", internalSection: null });
+	});
+
+	it("clears active detail state between a terminal run and the next run", () => {
+		let state = createWorkspaceExpansionState("desktop");
+		state = reduceWorkspaceExpansion(state, { type: "open_active_run_detail" });
+		state = reduceWorkspaceExpansion(state, { type: "set_active_run_section", section: "technical" });
+		state = reduceWorkspaceExpansion(state, { type: "reset_active_run_expansion" });
+
+		expect(state).toMatchObject({ activeRunDetailOpen: false, internalSection: null });
+	});
+
 	it("tracks file preview independently and Settings preserves the underlying expansion state", () => {
 		let state = createWorkspaceExpansionState("desktop");
 		state = reduceWorkspaceExpansion(state, { type: "open_sidebar", sidebar: "files" });

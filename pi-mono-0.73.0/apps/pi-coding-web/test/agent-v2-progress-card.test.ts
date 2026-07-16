@@ -144,7 +144,10 @@ describe("Agent v2 progress card", () => {
 		});
 		expect(view.deliveryHref).toBe("https://example.test/preview/demo/");
 
-		presentation.deliveryReport = { ...presentation.deliveryReport!, previewStatus: "stopped" } as never;
+		presentation.deliveryReport = {
+			...presentation.deliveryReport!,
+			previewReadiness: { verified: true, ready: false, reasonCode: "http_not_ok" },
+		};
 		expect(
 			createAgentV2ProgressCardView(presentation, {
 				expandedSection: null,
@@ -216,6 +219,7 @@ function successPresentation(): SerializedAgentV2TerminalRunPresentation {
 			validationStatus: "passed",
 			buildStatus: "not_required",
 			previewStatus: "running",
+			previewReadiness: { verified: true, ready: true, reasonCode: "ready" },
 			previewUrl: "https://example.test/preview/demo/",
 			projectId: "demo",
 			usageInstructions: "Open the preview.",

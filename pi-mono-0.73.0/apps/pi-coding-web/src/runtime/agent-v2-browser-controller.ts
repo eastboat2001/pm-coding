@@ -92,6 +92,11 @@ export interface AgentV2DeliveryReportPayload {
 	validationStatus: "passed";
 	buildStatus: "not_required" | "passed";
 	previewStatus: "running";
+	previewReadiness: {
+		verified: true;
+		ready: boolean;
+		reasonCode: string;
+	};
 	previewUrl: string;
 	projectId: string;
 	usageInstructions: string;
@@ -464,11 +469,20 @@ export class AgentV2BrowserController {
 					"validationStatus",
 					"buildStatus",
 					"previewStatus",
+					"previewReadiness",
 					"previewUrl",
 					"projectId",
 					"usageInstructions",
 					"at",
 				]);
+				const previewReadiness = requireRecord(payload.previewReadiness, `${type}.previewReadiness`);
+				assertOnlyPayloadFields(previewReadiness, `${type}.previewReadiness`, ["verified", "ready", "reasonCode"]);
+				if (previewReadiness.verified !== true) {
+					throw new Error(`Invalid ${type}.previewReadiness.verified.`);
+				}
+				if (typeof previewReadiness.ready !== "boolean") {
+					throw new Error(`Invalid ${type}.previewReadiness.ready.`);
+				}
 				const event: AgentV2DeliveryReportPayload = {
 					type,
 					taskId: nonEmptyString(payload.taskId, `${type}.taskId`),
@@ -489,6 +503,11 @@ export class AgentV2BrowserController {
 						PREVIEW_STATUSES,
 						`${type}.previewStatus`,
 					) as "running",
+					previewReadiness: {
+						verified: true,
+						ready: previewReadiness.ready,
+						reasonCode: nonEmptyString(previewReadiness.reasonCode, `${type}.previewReadiness.reasonCode`),
+					},
 					previewUrl: requireHttpUrl(payload.previewUrl, `${type}.previewUrl`),
 					projectId: nonEmptyString(payload.projectId, `${type}.projectId`),
 					usageInstructions: boundedString(payload.usageInstructions, `${type}.usageInstructions`, 2000),

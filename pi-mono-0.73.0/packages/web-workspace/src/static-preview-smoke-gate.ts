@@ -23,11 +23,21 @@ type ScriptBlock = {
 };
 
 type Listener = (event: SmokeEvent) => void;
+type ListenerInvoker = (listener: Listener, event: SmokeEvent) => void;
+type SmokeTimerKind = "timeout" | "interval" | "animation_frame";
+
+interface SmokeTimer {
+	id: number;
+	kind: SmokeTimerKind;
+	callback: () => void;
+}
 
 const SCRIPT_TAG_PATTERN = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
 const ID_ATTRIBUTE_PATTERN = /\bid\s*=\s*(['"])([^'"]+)\1/i;
 const CLASS_ATTRIBUTE_PATTERN = /\bclass\s*=\s*(['"])([^'"]*)\1/i;
 const STYLE_ATTRIBUTE_PATTERN = /\bstyle\s*=\s*(['"])([^'"]*)\1/i;
+const WIDTH_ATTRIBUTE_PATTERN = /\bwidth\s*=\s*(['"]?)(\d+)\1/i;
+const HEIGHT_ATTRIBUTE_PATTERN = /\bheight\s*=\s*(['"]?)(\d+)\1/i;
 const OPEN_TAG_PATTERN = /<([a-z][\w:-]*)\b([^>]*)>/gi;
 const DATA_ATTRIBUTE_PATTERN = /\bdata-([a-z0-9_.:-]+)\s*=\s*(['"])([^'"]*)\2/gi;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 500;
@@ -69,17 +79,17 @@ export async function runStaticPreviewSmokeGate(
 	checkedFiles.push(...scripts.map((script) => script.label));
 	checkedFiles.push(...authorizeLinkedResources(guard, html, errors));
 
-	const runtime = new SmokeRuntime(html, new Map(scripts.map((script) => [script.label, script.content])));
-	const context = runtime.context();
 	const timeout = input.scriptTimeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS;
+	const runtime = new SmokeRuntime(html, new Map(scripts.map((script) => [script.label, script.content])), timeout);
+	const context = runtime.context();
 	for (const script of scripts) {
-		runScript(script, context, timeout, "script evaluation", errors);
-		runtime.flushTimers(errors);
+		runScript(script, context, timeout, "script evaluation", errors, warnings);
+		runtime.flushTimers(errors, warnings);
 	}
-	runtime.dispatchDocumentEvent("DOMContentLoaded", errors);
-	runtime.flushTimers(errors);
-	runtime.dispatchWindowEvent("load", errors);
-	runtime.flushTimers(errors);
+	runtime.dispatchDocumentEvent("DOMContentLoaded", errors, warnings);
+	runtime.flushTimers(errors, warnings);
+	runtime.dispatchWindowEvent("load", errors, warnings);
+	runtime.flushTimers(errors, warnings);
 
 	errors.push(...runtime.validationErrors());
 
@@ -139,13 +149,25 @@ function authorizeLinkedResources(guard: WorkspacePathGuard, html: string, error
 	return checked;
 }
 
-function runScript(script: ScriptBlock, context: Context, timeoutMs: number, phase: string, errors: string[]): void {
+function runScript(
+	script: ScriptBlock,
+	context: Context,
+	timeoutMs: number,
+	phase: string,
+	errors: string[],
+	warnings: string[],
+): void {
 	try {
 		new Script(`${script.content}\n//# sourceURL=${script.label}`, { filename: script.label }).runInContext(context, {
 			timeout: timeoutMs,
 		});
 	} catch (error) {
-		errors.push(`Runtime smoke gate: ${script.label} failed during ${phase}: ${describeScriptError(script, error)}`);
+		recordRuntimeIssue(
+			error,
+			`Runtime smoke gate: ${script.label} failed during ${phase}: ${describeScriptError(script, error)}`,
+			errors,
+			warnings,
+		);
 	}
 }
 
@@ -167,7 +189,9 @@ function sourceLineForError(script: ScriptBlock, error: unknown): string {
 class SmokeRuntime {
 	private readonly document: SmokeDocument;
 	private readonly windowTarget = new SmokeEventTarget("window");
-	private readonly timers: Array<() => void> = [];
+	private readonly contextValues: Record<string, unknown> = {};
+	private readonly timers: SmokeTimer[] = [];
+	private readonly cancelledTimerIds = new Set<number>();
 	private readonly consoleErrors: string[] = [];
 	private readonly missingSelectors = new Set<string>();
 	private timerId = 0;
@@ -175,6 +199,7 @@ class SmokeRuntime {
 	constructor(
 		html: string,
 		private readonly sources: Map<string, string>,
+		private readonly scriptTimeoutMs: number,
 	) {
 		this.document = new SmokeDocument(html, this.missingSelectors);
 	}
@@ -193,55 +218,91 @@ class SmokeRuntime {
 				this.windowTarget.removeEventListener(type, listener),
 			dispatchEvent: (event: SmokeEvent) => this.windowTarget.dispatchEvent(event),
 			setTimeout: (listener: (...args: unknown[]) => void, _delay?: number, ...args: unknown[]) =>
-				this.enqueueTimer(() => listener(...args)),
-			clearTimeout: () => undefined,
+				this.enqueueTimer("timeout", () => listener(...args)),
+			clearTimeout: (timerId: number) => this.cancelTimer(timerId),
 			setInterval: (listener: (...args: unknown[]) => void, _delay?: number, ...args: unknown[]) =>
-				this.enqueueTimer(() => listener(...args)),
-			clearInterval: () => undefined,
-			requestAnimationFrame: (listener: (time: number) => void) => this.enqueueTimer(() => listener(Date.now())),
-			cancelAnimationFrame: () => undefined,
+				this.enqueueTimer("interval", () => listener(...args)),
+			clearInterval: (timerId: number) => this.cancelTimer(timerId),
+			requestAnimationFrame: (listener: (time: number) => void) =>
+				this.enqueueTimer("animation_frame", () => listener(Date.now())),
+			cancelAnimationFrame: (timerId: number) => this.cancelTimer(timerId),
 			localStorage: new SmokeStorage(),
 			sessionStorage: new SmokeStorage(),
 			location: { href: "http://localhost/preview/", pathname: "/preview/", search: "", hash: "" },
-			navigator: { userAgent: "pi-static-preview-smoke-gate" },
+			navigator: {
+				userAgent: "pi-static-preview-smoke-gate",
+				geolocation: {
+					getCurrentPosition: () => {
+						throw new UnsupportedSmokeCapabilityError("navigator.geolocation.getCurrentPosition");
+					},
+				},
+			},
 			Chart: SmokeChart,
 			Event: SmokeEvent,
 		};
 		windowObject.window = windowObject;
 		windowObject.self = windowObject;
 		windowObject.globalThis = windowObject;
-		return createContext(windowObject);
+		Object.assign(this.contextValues, windowObject);
+		return createContext(this.contextValues);
 	}
 
-	dispatchDocumentEvent(type: string, errors: string[]): void {
+	dispatchDocumentEvent(type: string, errors: string[], warnings: string[]): void {
 		this.document.readyState = type === "DOMContentLoaded" ? "interactive" : this.document.readyState;
-		this.document.dispatchSmokeEvent(type, errors, this.sources);
+		this.document.dispatchSmokeEvent(type, errors, warnings, this.sources, (listener, event) =>
+			this.invokeCallback(listener, [event]),
+		);
 	}
 
-	dispatchWindowEvent(type: string, errors: string[]): void {
+	dispatchWindowEvent(type: string, errors: string[], warnings: string[]): void {
 		if (type === "load") this.document.readyState = "complete";
 		try {
-			this.windowTarget.dispatchEvent(new SmokeEvent(type));
+			this.windowTarget.dispatchEvent(new SmokeEvent(type), (listener, event) =>
+				this.invokeCallback(listener, [event]),
+			);
 		} catch (error) {
-			errors.push(`Runtime smoke gate: window ${type} handler failed: ${describeRuntimeError(error, this.sources)}`);
+			recordRuntimeIssue(
+				error,
+				`Runtime smoke gate: window ${type} handler failed: ${describeRuntimeError(error, this.sources)}`,
+				errors,
+				warnings,
+			);
 		}
 	}
 
-	flushTimers(errors: string[]): void {
-		let count = 0;
-		while (this.timers.length > 0 && count < MAX_TIMER_FLUSH) {
+	flushTimers(errors: string[], warnings: string[]): void {
+		let timeoutCount = 0;
+		const sampledPersistentTimerIds = new Set(
+			this.timers.filter((timer) => timer.kind !== "timeout").map((timer) => timer.id),
+		);
+		while (this.timers.length > 0) {
 			const timer = this.timers.shift();
-			count += 1;
+			if (!timer || this.cancelledTimerIds.delete(timer.id)) continue;
+			if (timer.kind !== "timeout" && !sampledPersistentTimerIds.delete(timer.id)) continue;
+			if (timer.kind === "timeout") {
+				if (timeoutCount >= MAX_TIMER_FLUSH) {
+					this.timers.unshift(timer);
+					break;
+				}
+				timeoutCount += 1;
+			}
 			try {
-				timer?.();
+				this.invokeCallback(timer.callback, []);
 			} catch (error) {
-				errors.push(`Runtime smoke gate: timer callback failed: ${describeRuntimeError(error, this.sources)}`);
+				recordRuntimeIssue(
+					error,
+					`Runtime smoke gate: timer callback failed: ${describeRuntimeError(error, this.sources)}`,
+					errors,
+					warnings,
+				);
 			}
 		}
-		if (this.timers.length > 0) {
+		if (this.timers.some((timer) => timer.kind === "timeout" && !this.cancelledTimerIds.has(timer.id))) {
 			this.timers.length = 0;
 			errors.push(`Runtime smoke gate: timer queue exceeded ${MAX_TIMER_FLUSH} callbacks.`);
 		}
+		this.timers.length = 0;
+		this.cancelledTimerIds.clear();
 	}
 
 	validationErrors(): string[] {
@@ -258,10 +319,27 @@ class SmokeRuntime {
 		return errors;
 	}
 
-	private enqueueTimer(listener: () => void): number {
-		this.timers.push(listener);
+	private enqueueTimer(kind: SmokeTimerKind, callback: () => void): number {
 		this.timerId += 1;
+		this.timers.push({ id: this.timerId, kind, callback });
 		return this.timerId;
+	}
+
+	private cancelTimer(timerId: number): void {
+		this.cancelledTimerIds.add(timerId);
+	}
+
+	private invokeCallback(callback: unknown, args: unknown[]): void {
+		this.contextValues.__piSmokeCallback = callback;
+		this.contextValues.__piSmokeCallbackArgs = args;
+		try {
+			new Script("__piSmokeCallback(...__piSmokeCallbackArgs)").runInContext(this.contextValues, {
+				timeout: this.scriptTimeoutMs,
+			});
+		} finally {
+			delete this.contextValues.__piSmokeCallback;
+			delete this.contextValues.__piSmokeCallbackArgs;
+		}
 	}
 }
 
@@ -298,11 +376,12 @@ class SmokeEventTarget {
 		);
 	}
 
-	dispatchEvent(event: SmokeEvent): boolean {
+	dispatchEvent(event: SmokeEvent, invokeListener?: ListenerInvoker): boolean {
 		event.target = this;
 		for (const listener of this.listeners.get(event.type) ?? []) {
 			try {
-				listener(event);
+				if (invokeListener) invokeListener(listener, event);
+				else listener(event);
 			} catch (error) {
 				throw enrichListenerError(error, listener);
 			}
@@ -329,7 +408,8 @@ class SmokeDocument extends SmokeEventTarget {
 	}
 
 	createElement(tagName: string): SmokeElement {
-		const element = new SmokeElement(tagName, this);
+		const element =
+			tagName.toLowerCase() === "canvas" ? new SmokeCanvasElement(this) : new SmokeElement(tagName, this);
 		this.track(element);
 		return element;
 	}
@@ -352,11 +432,22 @@ class SmokeDocument extends SmokeEventTarget {
 		return matches;
 	}
 
-	dispatchSmokeEvent(type: string, errors: string[], sources?: Map<string, string>): void {
+	dispatchSmokeEvent(
+		type: string,
+		errors: string[],
+		warnings: string[],
+		sources?: Map<string, string>,
+		invokeListener?: ListenerInvoker,
+	): void {
 		try {
-			this.dispatchEvent(new SmokeEvent(type));
+			this.dispatchEvent(new SmokeEvent(type), invokeListener);
 		} catch (error) {
-			errors.push(`Runtime smoke gate: document ${type} handler failed: ${describeRuntimeError(error, sources)}`);
+			recordRuntimeIssue(
+				error,
+				`Runtime smoke gate: document ${type} handler failed: ${describeRuntimeError(error, sources)}`,
+				errors,
+				warnings,
+			);
 		}
 	}
 
@@ -377,6 +468,10 @@ class SmokeDocument extends SmokeEventTarget {
 			element.id = attributeMatch(attrs, ID_ATTRIBUTE_PATTERN);
 			element.className = attributeMatch(attrs, CLASS_ATTRIBUTE_PATTERN);
 			element.style.cssText = attributeMatch(attrs, STYLE_ATTRIBUTE_PATTERN);
+			if (element instanceof SmokeCanvasElement) {
+				element.width = numericAttributeMatch(attrs, WIDTH_ATTRIBUTE_PATTERN, element.width);
+				element.height = numericAttributeMatch(attrs, HEIGHT_ATTRIBUTE_PATTERN, element.height);
+			}
 			element.textContent = elementText(html, tagName, match);
 			for (const [name, value] of dataAttributes(attrs)) element.dataset[name] = value;
 			if (element.id) this.byId.set(element.id, element);
@@ -471,6 +566,52 @@ class SmokeElement extends SmokeEventTarget {
 	}
 }
 
+class SmokeCanvasElement extends SmokeElement {
+	width = 300;
+	height = 150;
+	private readonly context2d = new SmokeCanvasRenderingContext2D();
+
+	constructor(ownerDocument: SmokeDocument) {
+		super("canvas", ownerDocument);
+	}
+
+	getContext(contextId: string): SmokeCanvasRenderingContext2D | null {
+		return contextId.toLowerCase() === "2d" ? this.context2d : null;
+	}
+}
+
+class SmokeCanvasRenderingContext2D {
+	fillStyle: string | object = "#000000";
+	strokeStyle: string | object = "#000000";
+	lineWidth = 1;
+	shadowColor = "rgba(0, 0, 0, 0)";
+	shadowBlur = 0;
+	font = "10px sans-serif";
+	textAlign = "start";
+	globalAlpha = 1;
+
+	beginPath(): void {}
+	closePath(): void {}
+	moveTo(_x: number, _y: number): void {}
+	lineTo(_x: number, _y: number): void {}
+	rect(_x: number, _y: number, _width: number, _height: number): void {}
+	arc(_x: number, _y: number, _radius: number, _startAngle: number, _endAngle: number): void {}
+	fill(): void {}
+	stroke(): void {}
+	fillRect(_x: number, _y: number, _width: number, _height: number): void {}
+	strokeRect(_x: number, _y: number, _width: number, _height: number): void {}
+	clearRect(_x: number, _y: number, _width: number, _height: number): void {}
+	fillText(_text: string, _x: number, _y: number): void {}
+	strokeText(_text: string, _x: number, _y: number): void {}
+	save(): void {}
+	restore(): void {}
+	translate(_x: number, _y: number): void {}
+	rotate(_angle: number): void {}
+	scale(_x: number, _y: number): void {}
+	setTransform(..._values: number[]): void {}
+	drawImage(..._values: unknown[]): void {}
+}
+
 class SmokeClassList {
 	constructor(private readonly element: SmokeElement) {}
 
@@ -559,6 +700,13 @@ class SmokeStorage {
 	}
 }
 
+class UnsupportedSmokeCapabilityError extends Error {
+	constructor(readonly capability: string) {
+		super(`Static smoke runtime does not simulate ${capability}.`);
+		this.name = "UnsupportedSmokeCapabilityError";
+	}
+}
+
 class SmokeChart {
 	destroy(): void {}
 	update(): void {}
@@ -567,6 +715,12 @@ class SmokeChart {
 function attributeMatch(attrs: string, pattern: RegExp): string {
 	pattern.lastIndex = 0;
 	return pattern.exec(attrs)?.[2]?.trim() ?? "";
+}
+
+function numericAttributeMatch(attrs: string, pattern: RegExp, fallback: number): number {
+	pattern.lastIndex = 0;
+	const value = Number(pattern.exec(attrs)?.[2]);
+	return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 function dataAttributes(attrs: string): Array<[string, string]> {
@@ -619,7 +773,16 @@ function describeRuntimeError(error: unknown, sources?: Map<string, string>): st
 	return line ? `${message} near \`${line}\`` : message;
 }
 
+function recordRuntimeIssue(error: unknown, message: string, errors: string[], warnings: string[]): void {
+	if (error instanceof UnsupportedSmokeCapabilityError) {
+		warnings.push(`Runtime smoke gate skipped unsupported browser capability ${error.capability}.`);
+		return;
+	}
+	errors.push(message);
+}
+
 function enrichListenerError(error: unknown, listener: Listener): Error {
+	if (error instanceof UnsupportedSmokeCapabilityError) return error;
 	const message = error instanceof Error ? error.message : String(error);
 	const line = sourceLineFromListener(listener, message);
 	return new Error(line ? `${message} near \`${line}\`` : message);

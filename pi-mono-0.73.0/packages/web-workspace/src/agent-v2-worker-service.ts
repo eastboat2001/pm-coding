@@ -421,7 +421,11 @@ export class AgentV2WorkerService {
 				if (step.status === "task_blocked") {
 					const terminal = await this.prepareOwnedTerminal(control, current);
 					if (!terminal) return;
-					await this.failRun(terminal, "agent_v2.worker_task_blocked", "Agent v2 task graph is blocked.");
+					const rootCause = step.blockingError?.message.trim().slice(0, 1_000);
+					const message = rootCause
+						? `Agent v2 task graph is blocked: ${rootCause}`
+						: "Agent v2 task graph is blocked.";
+					await this.failRun(terminal, "agent_v2.worker_task_blocked", message);
 					return;
 				}
 				if (step.status === "no_task") {

@@ -76,6 +76,37 @@ describe("AgentV2WorkerService", () => {
 		]);
 	});
 
+	it("includes the blocking task root cause in the durable terminal error", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-blocked");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-blocked" }]);
+		const execution = new SequencedExecution([
+			{
+				status: "task_blocked",
+				diagnosticIds: [],
+				blockingError: {
+					code: "agent_v2.validation_failed",
+					message: "canvas.getContext is not a function",
+					retryable: false,
+				},
+			},
+		]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution,
+			workerId: "worker-a",
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(store.getRunSnapshot("client-a", "run-blocked")?.error).toEqual({
+			code: "agent_v2.worker_task_blocked",
+			message: "Agent v2 task graph is blocked: canvas.getContext is not a function",
+			retryable: false,
+		});
+	});
+
 	it("does not couple durable worker success to the legacy event projection seam", async () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-projection-isolated");

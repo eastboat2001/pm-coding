@@ -66,6 +66,69 @@ describe("agent v2 execution core", () => {
 		});
 	});
 
+	it("returns the root failed dependency error when the task graph is blocked", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-blocked",
+			input: { objective: "Build a canvas game" },
+			model: { provider: "test" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-blocked",
+			taskId: "revalidate:validate:3",
+			kind: "validation",
+			title: "Revalidate",
+			status: "failed",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			error: {
+				code: "agent_v2.validation_failed",
+				message: "canvas.getContext is not a function",
+				retryable: false,
+			},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-blocked",
+			taskId: "deliver",
+			kind: "delivery",
+			title: "Deliver",
+			status: "pending",
+			dependsOn: ["revalidate:validate:3"],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.001Z",
+			updatedAt: "2026-07-08T00:00:00.001Z",
+		});
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store,
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-blocked",
+		});
+
+		expect(result).toEqual({
+			status: "task_blocked",
+			diagnosticIds: [],
+			blockingError: {
+				code: "agent_v2.validation_failed",
+				message: "canvas.getContext is not a function",
+				retryable: false,
+			},
+		});
+	});
+
 	it("atomically expands a retryable validation failure into repair and revalidation tasks", async () => {
 		const root = tempRoot();
 		const store = createStore(root);
@@ -293,6 +356,7 @@ describe("agent v2 execution core", () => {
 			status: "failed",
 			error: expect.objectContaining({
 				code: "agent_v2.validation_failed",
+				message: "Static validation failed and cannot be repaired: Workspace has no project files to validate.",
 				retryable: false,
 				data: expect.objectContaining({
 					attempt: 3,

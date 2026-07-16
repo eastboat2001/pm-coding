@@ -34,6 +34,7 @@ import type {
 	AgentV2ArtifactIndexedPayload,
 	AgentV2DeliveryReportPayload,
 	AgentV2DiagnosticRecordedPayload,
+	AgentV2Error,
 	AgentV2OutputRecordedPayload,
 	AgentV2RunSnapshot,
 	AgentV2SkillAppliedPayload,
@@ -62,6 +63,7 @@ export interface AgentV2ExecutionStepResult {
 	status: AgentV2ExecutionStepStatus;
 	taskId?: string;
 	diagnosticIds: string[];
+	blockingError?: AgentV2Error;
 }
 
 export interface ExecuteAgentV2NextTaskInput {
@@ -93,7 +95,15 @@ export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput)
 			return { status: "complete", diagnosticIds: [] };
 		}
 		if (selection.reason === "blocked_by_dependencies" || selection.reason === "failed_dependency") {
-			return { status: "task_blocked", diagnosticIds: [] };
+			const affectedTaskIds = [...selection.failedDependencyTaskIds, ...selection.blockedTaskIds];
+			const blockingError = affectedTaskIds
+				.map((taskId) => snapshot.tasks.find((candidate) => candidate.taskId === taskId)?.error)
+				.find((error): error is AgentV2Error => error !== undefined);
+			return {
+				status: "task_blocked",
+				diagnosticIds: [],
+				...(blockingError ? { blockingError } : {}),
+			};
 		}
 		return { status: "no_task", diagnosticIds: [] };
 	}
@@ -593,6 +603,10 @@ async function executeValidationTask(
 	const failedArtifacts = relevantArtifacts.map((artifact) => validationArtifactUpdate(artifact, "failed", now));
 
 	if (!canRepair) {
+		const primaryFailure = result.failures[0]?.message.trim().slice(0, 1_000);
+		const terminalMessage = primaryFailure
+			? `Static validation failed and cannot be repaired: ${primaryFailure}`
+			: "Static validation failed and cannot be repaired.";
 		const transitioned = transitionAgentV2Task({
 			task,
 			status: "failed",
@@ -600,7 +614,7 @@ async function executeValidationTask(
 			output: { ...task.output, validationId, attempt, maxAttempts },
 			error: {
 				code: "agent_v2.validation_failed",
-				message: "Static validation failed and cannot be repaired.",
+				message: terminalMessage,
 				retryable: false,
 				data: { validationId, attempt, maxAttempts, failureCodes },
 			},

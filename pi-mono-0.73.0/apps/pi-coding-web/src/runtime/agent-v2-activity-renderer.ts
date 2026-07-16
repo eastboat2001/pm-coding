@@ -2,15 +2,20 @@ import { getCurrentLanguage, type MessageRenderer, registerMessageRenderer } fro
 import { html } from "lit";
 import { type AgentV2ActivityMessage, agentV2ActivityView } from "./agent-v2-activity-message.js";
 
-let registered = false;
+let legacyRendererRegistered = false;
 
 export function registerAgentV2ActivityMessageRenderer(): void {
-	if (registered) return;
-	registered = true;
-	registerMessageRenderer("agent-v2-activity", new AgentV2ActivityMessageRenderer());
+	registerLegacyAgentV2ActivityMessageRenderer();
 }
 
-class AgentV2ActivityMessageRenderer implements MessageRenderer<AgentV2ActivityMessage> {
+/** Registers read-only rendering for activity records stored by legacy sessions. */
+export function registerLegacyAgentV2ActivityMessageRenderer(): void {
+	if (legacyRendererRegistered) return;
+	legacyRendererRegistered = true;
+	registerMessageRenderer("agent-v2-activity", new LegacyReadOnlyAgentV2ActivityMessageRenderer());
+}
+
+class LegacyReadOnlyAgentV2ActivityMessageRenderer implements MessageRenderer<AgentV2ActivityMessage> {
 	render(message: AgentV2ActivityMessage) {
 		const view = agentV2ActivityView(message.activity, getCurrentLanguage());
 		return html`

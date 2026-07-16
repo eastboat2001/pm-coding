@@ -352,83 +352,249 @@ body {
 	opacity: 0.55;
 }
 
-.agent-v2-activity-card {
-	margin: 0.35rem 1rem;
-	border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-	border-radius: 0.65rem;
-	background: color-mix(in srgb, var(--card) 92%, transparent);
+.agent-interface__active-run-slot {
+	display: grid;
+	gap: 0.4rem;
+	margin-bottom: 0.45rem;
+}
+
+.agent-interface__new-progress {
+	justify-self: center;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 0.3rem 0.75rem;
+	background: var(--primary);
+	color: var(--primary-foreground);
+	font-size: 0.75rem;
+	font-weight: 650;
+	box-shadow: 0 0.25rem 0.9rem color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+.agent-v2-progress-card {
+	display: grid;
+	gap: 0.65rem;
+	border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+	border-radius: 0.75rem;
+	padding: 0.75rem;
+	background: color-mix(in srgb, var(--card) 95%, transparent);
 	color: var(--card-foreground);
 	font-size: 0.8rem;
+	box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--foreground) 6%, transparent);
 }
 
-.agent-v2-activity-card summary {
-	display: grid;
-	grid-template-columns: auto auto minmax(0, 1fr);
+.agent-v2-progress-card--terminal {
+	margin: 0.35rem 0;
+	box-shadow: none;
+}
+
+.agent-v2-progress-card__header,
+.agent-v2-progress-card__status,
+.agent-v2-progress-card__section-button,
+.agent-v2-progress-card__failure,
+.agent-v2-progress-card__delivery {
+	display: flex;
 	align-items: center;
-	gap: 0.5rem;
-	padding: 0.55rem 0.7rem;
-	cursor: pointer;
-	list-style: none;
 }
 
-.agent-v2-activity-card summary::-webkit-details-marker {
-	display: none;
+.agent-v2-progress-card__header {
+	justify-content: space-between;
+	gap: 0.75rem;
 }
 
-.agent-v2-activity-card__dot {
-	width: 0.5rem;
-	height: 0.5rem;
-	border-radius: 999px;
-	background: var(--muted-foreground);
+.agent-v2-progress-card__announcement {
+	display: grid;
+	min-width: 0;
+	gap: 0.15rem;
 }
 
-.agent-v2-activity-card__dot--active {
-	background: #3b82f6;
+.agent-v2-progress-card__status {
+	gap: 0.35rem;
+	font-weight: 700;
 }
 
-.agent-v2-activity-card__dot--success {
-	background: #22c55e;
+.agent-v2-progress-card__status--active {
+	color: #2563eb;
 }
 
-.agent-v2-activity-card__dot--warning {
-	background: #f59e0b;
+.agent-v2-progress-card__status--success,
+.agent-v2-progress-card__stage--complete {
+	color: #15803d;
 }
 
-.agent-v2-activity-card__dot--error {
-	background: #ef4444;
+.agent-v2-progress-card__status--warning {
+	color: #b45309;
 }
 
-.agent-v2-activity-card__title {
-	font-weight: 650;
-	white-space: nowrap;
+.agent-v2-progress-card__status--error,
+.agent-v2-progress-card__stage--error {
+	color: #b91c1c;
 }
 
-.agent-v2-activity-card__summary {
+.agent-v2-progress-card__status-icon {
+	display: inline-grid;
+	width: 1rem;
+	height: 1rem;
+	place-items: center;
+}
+
+.agent-v2-progress-card__status--active .agent-v2-progress-card__status-icon {
+	animation: agent-v2-progress-pulse 1.4s ease-in-out infinite;
+}
+
+.agent-v2-progress-card__action {
 	overflow: hidden;
+	margin: 0;
 	color: var(--muted-foreground);
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.agent-v2-activity-card__details {
-	display: grid;
-	gap: 0.4rem;
-	padding: 0 0.7rem 0.65rem 1.7rem;
+.agent-v2-progress-card__elapsed {
+	flex: none;
+	color: var(--muted-foreground);
+	font-variant-numeric: tabular-nums;
 }
 
-.agent-v2-activity-card__details > div {
+.agent-v2-progress-card__stages {
 	display: grid;
-	grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
-	gap: 0.65rem;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: 0.35rem;
+	margin: 0;
+	padding: 0;
+	list-style: none;
 }
 
-.agent-v2-activity-card__details span {
+.agent-v2-progress-card__stage {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	gap: 0.3rem;
+	color: var(--muted-foreground);
+	font-size: 0.72rem;
+}
+
+.agent-v2-progress-card__stage span:last-child {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-v2-progress-card__stage--active {
+	color: var(--foreground);
+	font-weight: 650;
+}
+
+.agent-v2-progress-card__failure {
+	flex-wrap: wrap;
+	gap: 0.3rem 0.45rem;
+	border-left: 0.2rem solid #dc2626;
+	padding: 0.45rem 0.6rem;
+	background: color-mix(in srgb, #dc2626 8%, var(--card));
+	color: var(--foreground);
+}
+
+.agent-v2-progress-card__failure span {
 	color: var(--muted-foreground);
 }
 
-.agent-v2-activity-card__details code {
+.agent-v2-progress-card__sections {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: 0.35rem;
+}
+
+.agent-v2-progress-card__section {
+	min-width: 0;
+}
+
+.agent-v2-progress-card__section:has(.agent-v2-progress-card__section-content:not([hidden])) {
+	grid-column: 1 / -1;
+}
+
+.agent-v2-progress-card__section-button {
+	width: 100%;
+	justify-content: space-between;
+	gap: 0.3rem;
+	border: 1px solid var(--border);
+	border-radius: 0.45rem;
+	padding: 0.35rem 0.45rem;
+	background: var(--muted);
+	color: var(--foreground);
+	font: inherit;
+	cursor: pointer;
+}
+
+.agent-v2-progress-card__section-button:focus-visible,
+.agent-interface__new-progress:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 2px;
+}
+
+.agent-v2-progress-card__section-content {
+	grid-column: 1 / -1;
+	margin-top: 0.35rem;
+	border-radius: 0.45rem;
+	padding: 0.45rem 0.55rem;
+	background: color-mix(in srgb, var(--muted) 65%, transparent);
+	color: var(--muted-foreground);
+}
+
+.agent-v2-progress-card__section-content[hidden] {
+	display: none;
+}
+
+.agent-v2-progress-card__section-content :is(ul, p) {
+	margin: 0;
+}
+
+.agent-v2-progress-card__section-content ul {
+	display: grid;
+	gap: 0.25rem;
+	padding-left: 1.1rem;
+}
+
+.agent-v2-progress-card__section-content li {
 	overflow-wrap: anywhere;
-	white-space: normal;
+}
+
+.agent-v2-progress-card__delivery {
+	justify-self: start;
+	gap: 0.35rem;
+	color: var(--primary);
+	font-weight: 650;
+	text-decoration: underline;
+	text-underline-offset: 0.15rem;
+}
+
+@keyframes agent-v2-progress-pulse {
+	50% {
+		opacity: 0.45;
+		transform: scale(0.88);
+	}
+}
+
+@media (max-width: 640px) {
+	.agent-v2-progress-card__stages,
+	.agent-v2-progress-card__sections {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.agent-v2-progress-card__stage:last-child,
+	.agent-v2-progress-card__section:last-child {
+		grid-column: 1 / -1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.agent-v2-progress-card__status--active .agent-v2-progress-card__status-icon {
+		animation: none;
+	}
+
+	.agent-v2-progress-card *,
+	.agent-interface__new-progress {
+		scroll-behavior: auto;
+		transition-duration: 0.01ms !important;
+	}
 }
 
 .example-header :is(button, theme-toggle) {

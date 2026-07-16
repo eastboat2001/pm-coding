@@ -1,13 +1,27 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	appendAgentV2ActivityMessage,
 	createAgentV2ActivityMessage,
 	formatAgentV2DeliveryReport,
 	formatAgentV2FailureReport,
 } from "../src/runtime/agent-v2-activity-message.js";
+import type { SerializedAgentV2TerminalRunPresentation } from "../src/runtime/agent-v2-run-presentation.js";
 
 const NOW = "2026-07-15T00:00:00.000Z";
+
+beforeAll(() => {
+	vi.stubGlobal("HTMLElement", class {});
+	vi.stubGlobal("DOMMatrix", class {});
+	vi.stubGlobal("ImageData", class {});
+	vi.stubGlobal("Path2D", class {});
+	vi.stubGlobal("customElements", { define: vi.fn(), get: vi.fn(() => undefined) });
+	vi.stubGlobal("document", {
+		addEventListener: vi.fn(),
+		createTreeWalker: vi.fn(() => ({})),
+		removeEventListener: vi.fn(),
+	});
+});
 
 describe("Agent v2 activity messages", () => {
 	it("creates durable custom-role activity records and de-duplicates replay by event identity", () => {
@@ -99,3 +113,60 @@ describe("Agent v2 activity messages", () => {
 		expect(text).not.toContain("预览已就绪");
 	});
 });
+
+describe("Agent v2 durable run results", () => {
+	it("uses a stable run ID and appends or replaces one JSON-safe terminal presentation", async () => {
+		const {
+			appendOrReplaceAgentV2RunResultMessage,
+			createAgentV2RunResultMessage,
+			renderAgentV2RunResultMessage,
+		} = await import(
+			"../src/runtime/agent-v2-run-result-message.js"
+		);
+		const presentation = terminalPresentation("succeeded");
+		const first = createAgentV2RunResultMessage(presentation);
+		const replacement = createAgentV2RunResultMessage({ ...presentation, status: "failed" });
+		const appended = appendOrReplaceAgentV2RunResultMessage([] as AgentMessage[], first);
+		const replaced = appendOrReplaceAgentV2RunResultMessage(appended, replacement);
+
+		expect(first).toMatchObject({
+			role: "agent-v2-run-result",
+			id: "agent-v2-run-result:run-1",
+			runId: "run-1",
+		});
+		expect(replaced).toHaveLength(1);
+		expect(replaced[0]).toMatchObject({ id: first.id, presentation: { status: "failed" } });
+		expect(() => JSON.stringify(replaced[0])).not.toThrow();
+		expect(JSON.stringify(replaced[0])).not.toContain("Map");
+		const rendered = renderAgentV2RunResultMessage(first) as unknown as { strings: readonly string[]; values: unknown[] };
+		expect(rendered.strings.join("")).toContain("<agent-v2-progress-card");
+		expect(rendered.values).toContain(presentation);
+		expect(rendered.values).toContain(true);
+	});
+
+	it("keeps an explicitly named legacy read-only activity renderer registration", async () => {
+		const { registerLegacyAgentV2ActivityMessageRenderer } = await import(
+			"../src/runtime/agent-v2-activity-renderer.js"
+		);
+		expect(registerLegacyAgentV2ActivityMessageRenderer).toBeTypeOf("function");
+	});
+});
+
+function terminalPresentation(
+	status: SerializedAgentV2TerminalRunPresentation["status"],
+): SerializedAgentV2TerminalRunPresentation {
+	return {
+		runId: "run-1",
+		status,
+		phase: status === "failed" ? "failed" : "delivery",
+		stage: "delivery",
+		active: false,
+		tasks: [],
+		artifacts: [],
+		validations: [],
+		diagnostics: [],
+		outputs: [],
+		skills: [],
+		resources: [],
+	};
+}

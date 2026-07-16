@@ -1,5 +1,5 @@
 import { streamSimple, type ToolResultMessage, type Usage } from "@mariozechner/pi-ai";
-import { html, LitElement } from "lit";
+import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 import { ModelSelector } from "../dialogs/ModelSelector.js";
 import type { MessageEditor, MessageEditorExtensionAction } from "./MessageEditor.js";
@@ -13,6 +13,7 @@ import type { Attachment } from "../utils/attachment-utils.js";
 import { formatUsage } from "../utils/format.js";
 import { i18n } from "../utils/i18n.js";
 import { createStreamFn } from "../utils/proxy-utils.js";
+import { decideConversationFollow } from "./conversation-follow-state.js";
 import type { UserMessageWithAttachments } from "./Messages.js";
 import type { StreamingMessageContainer } from "./StreamingMessageContainer.js";
 import type { SlashSuggestionItem } from "./slash-suggestions.js";
@@ -42,6 +43,7 @@ export class AgentInterface extends LitElement {
 	@property({ type: String }) transientStatusText = "";
 	@property({ type: String }) appPreviewGoalStatusText = "";
 	@property({ type: String }) appPreviewGoalStatusDetail = "";
+	@property({ attribute: false }) activeRunContent?: TemplateResult;
 
 	// References
 	@query("message-editor") private _messageEditor!: MessageEditor;
@@ -49,7 +51,6 @@ export class AgentInterface extends LitElement {
 
 	private _autoScroll = true;
 	private _lastScrollTop = 0;
-	private _lastClientHeight = 0;
 	private _scrollContainer?: HTMLElement;
 	private _resizeObserver?: ResizeObserver;
 	private _unsubscribeSession?: () => void;
@@ -69,7 +70,9 @@ export class AgentInterface extends LitElement {
 	}
 
 	public setAutoScroll(enabled: boolean) {
+		if (this._autoScroll === enabled) return;
 		this._autoScroll = enabled;
+		this.requestUpdate();
 	}
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
@@ -100,6 +103,7 @@ export class AgentInterface extends LitElement {
 		this._scrollContainer = this.querySelector(".overflow-y-auto") as HTMLElement;
 
 		if (this._scrollContainer) {
+			this._lastScrollTop = this._scrollContainer.scrollTop;
 			// Set up ResizeObserver to detect content changes
 			this._resizeObserver = new ResizeObserver(() => {
 				if (this._autoScroll && this._scrollContainer) {
@@ -112,6 +116,7 @@ export class AgentInterface extends LitElement {
 			if (contentContainer) {
 				this._resizeObserver.observe(contentContainer);
 			}
+			this._resizeObserver.observe(this._scrollContainer);
 
 			// Set up scroll listener with better detection
 			this._scrollContainer.addEventListener("scroll", this._handleScroll);
@@ -199,31 +204,35 @@ export class AgentInterface extends LitElement {
 		});
 	}
 
-	private _handleScroll = (_ev: any) => {
+	private _handleScroll = (_event: Event) => {
 		if (!this._scrollContainer) return;
 
 		const currentScrollTop = this._scrollContainer.scrollTop;
 		const scrollHeight = this._scrollContainer.scrollHeight;
 		const clientHeight = this._scrollContainer.clientHeight;
-		const distanceFromBottom = scrollHeight - currentScrollTop - clientHeight;
-
-		// Ignore relayout due to message editor getting pushed up by stats
-		if (clientHeight < this._lastClientHeight) {
-			this._lastClientHeight = clientHeight;
-			return;
-		}
-
-		// Only disable auto-scroll if user scrolled UP or is far from bottom
-		if (currentScrollTop !== 0 && currentScrollTop < this._lastScrollTop && distanceFromBottom > 50) {
-			this._autoScroll = false;
-		} else if (distanceFromBottom < 10) {
-			// Re-enable if very close to bottom
-			this._autoScroll = true;
-		}
+		const distanceFromBottom = Math.max(0, scrollHeight - currentScrollTop - clientHeight);
+		const nextAutoScroll = decideConversationFollow({
+			following: this._autoScroll,
+			previousScrollTop: this._lastScrollTop,
+			scrollTop: currentScrollTop,
+			distanceFromBottom,
+		});
 
 		this._lastScrollTop = currentScrollTop;
-		this._lastClientHeight = clientHeight;
+		if (nextAutoScroll !== this._autoScroll) {
+			this._autoScroll = nextAutoScroll;
+			this.requestUpdate();
+		}
 	};
+
+	private _scrollToLatest() {
+		this._autoScroll = true;
+		if (this._scrollContainer) {
+			this._scrollContainer.scrollTop = this._scrollContainer.scrollHeight;
+			this._lastScrollTop = this._scrollContainer.scrollTop;
+		}
+		this.requestUpdate();
+	}
 
 	public async sendMessage(input: string, attachments?: Attachment[]) {
 		if ((!input.trim() && attachments?.length === 0) || this.session?.state.isStreaming) return;
@@ -390,6 +399,26 @@ export class AgentInterface extends LitElement {
 		`;
 	}
 
+	private renderActiveRunSlot(): TemplateResult | string {
+		if (!this.activeRunContent) return "";
+		return html`
+			<div class="agent-interface__active-run-slot">
+				${
+					this._autoScroll
+						? ""
+						: html`<button
+								type="button"
+								class="agent-interface__new-progress"
+								@click=${this._scrollToLatest}
+							>
+								New progress
+							</button>`
+				}
+				${this.activeRunContent}
+			</div>
+		`;
+	}
+
 	override render() {
 		if (!this.session)
 			return html`<div class="p-4 text-center text-muted-foreground">${i18n("No session set")}</div>`;
@@ -407,6 +436,7 @@ export class AgentInterface extends LitElement {
 				<div class="shrink-0">
 					<div class="max-w-3xl mx-auto px-2">
 						${this.renderAppPreviewGoalStatus()}
+						${this.renderActiveRunSlot()}
 						<message-editor
 							.isStreaming=${state.isStreaming}
 							.currentModel=${state.model}

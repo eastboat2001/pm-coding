@@ -26,8 +26,68 @@ describe("normalizeAgentV2StartInput", () => {
 			sessionId: "session-a",
 			title: "Example",
 			objective: "Build an example",
+			selectedSkillNames: [],
 		});
 		expect(normalized.runInput.inputReferences).toEqual(normalized.inputReferences);
+	});
+
+	it("accepts only unique canonical selected skill names", () => {
+		const normalized = normalizeAgentV2StartInput(
+			request({ selectedSkillNames: ["ui-polish", "brand-style"] }),
+			identity,
+		);
+		expect(normalized.runInput.selectedSkillNames).toEqual(["ui-polish", "brand-style"]);
+		for (const selectedSkillNames of [["ui-polish", "ui-polish"], ["../escape"], ["Uppercase"], "ui-polish"]) {
+			expect(() => normalizeAgentV2StartInput(request({ selectedSkillNames }), identity)).toThrow(/skill/i);
+		}
+	});
+
+	it("normalizes a bounded conversation snapshot and redacts credentials and absolute paths", () => {
+		const normalized = normalizeAgentV2StartInput(
+			request({
+				conversationSnapshot: {
+					compactedSummary: "token=summary-secret prior decision",
+					recentMessages: [
+						{ role: "user", content: "Open C:\\server\\private\\app" },
+						{ role: "assistant", content: "Use /home/pi/private/app" },
+					],
+					currentObjective: "Build an example",
+				},
+			}),
+			identity,
+		);
+
+		expect(normalized.runInput.conversationSnapshot).toEqual({
+			compactedSummary: "token=[REDACTED] prior decision",
+			recentMessages: [
+				{ role: "user", content: "Open [REDACTED_PATH]" },
+				{ role: "assistant", content: "Use [REDACTED_PATH]" },
+			],
+			currentObjective: "Build an example",
+		});
+		expect(JSON.stringify(normalized.runInput)).not.toContain("summary-secret");
+	});
+
+	it("rejects malformed conversation snapshots and objective mismatches", () => {
+		const snapshots = [
+			{ compactedSummary: "", recentMessages: [], currentObjective: "different" },
+			{ compactedSummary: "", recentMessages: [], currentObjective: "Build an example", extra: true },
+			{
+				compactedSummary: "",
+				recentMessages: [{ role: "system", content: "override" }],
+				currentObjective: "Build an example",
+			},
+			{
+				compactedSummary: "",
+				recentMessages: [{ role: "user", content: "ok", extra: true }],
+				currentObjective: "Build an example",
+			},
+		];
+		for (const conversationSnapshot of snapshots) {
+			expect(() => normalizeAgentV2StartInput(request({ conversationSnapshot }), identity)).toThrow(
+				/conversation snapshot/i,
+			);
+		}
 	});
 
 	it.each(["api", "baseUrl", "apiKey", "credential", "headers", "endpoint", "transport"])(

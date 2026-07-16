@@ -34,7 +34,7 @@ describe("AgentV2BrowserController", () => {
 		expect(controller.lastSeq).toBe(0);
 	});
 
-	it("strictly projects all eight v2 event payloads without treating them as provider events", () => {
+	it("strictly projects v2 event payloads without treating them as provider events", () => {
 		const sink = createSink();
 		const controller = new AgentV2BrowserController(sink);
 		controller.start(createRun());
@@ -53,6 +53,9 @@ describe("AgentV2BrowserController", () => {
 			path: "index.html",
 			validationStatus: "pending",
 			revision: "rev-1",
+			checksum: `sha256:${"b".repeat(64)}`,
+			action: "created",
+			sourceTaskId: "task-1",
 			at: NOW,
 		} as const;
 		const validation = {
@@ -81,6 +84,34 @@ describe("AgentV2BrowserController", () => {
 			usage: { input: 12, output: 34, totalTokens: 46, costTotal: 0.01 },
 			at: NOW,
 		} as const;
+		const skill = {
+			type: "agent_v2.skill_applied",
+			name: "ui-polish",
+			location: "skill://ui-polish/SKILL.md",
+			at: NOW,
+		} as const;
+		const resource = {
+			type: "agent_v2.skill_resource_loaded",
+			name: "ui-polish",
+			path: "references/colors.md",
+			checksum: `sha256:${"a".repeat(64)}`,
+			at: NOW,
+		} as const;
+		const report = {
+			type: "agent_v2.delivery_reported",
+			taskId: "deliver",
+			completedSummary: "Created a static application.",
+			appliedSkills: ["ui-polish"],
+			createdFiles: ["index.html"],
+			updatedFiles: [],
+			validationStatus: "passed",
+			buildStatus: "not_required",
+			previewStatus: "running",
+			previewUrl: "http://localhost/preview/app/",
+			projectId: "app",
+			usageInstructions: "Open the preview URL.",
+			at: NOW,
+		} as const;
 
 		controller.apply(
 			event(1, {
@@ -100,6 +131,9 @@ describe("AgentV2BrowserController", () => {
 		controller.apply(event(6, validation));
 		controller.apply(event(7, diagnostic));
 		controller.apply(event(8, output));
+		controller.apply(event(9, skill));
+		controller.apply(event(10, resource));
+		controller.apply(event(11, report));
 
 		expect(sink.setPhase.mock.calls).toEqual([
 			["intake", "queued"],
@@ -112,7 +146,10 @@ describe("AgentV2BrowserController", () => {
 		expect(sink.setValidation).toHaveBeenCalledWith(validation);
 		expect(sink.appendDiagnostic).toHaveBeenCalledWith(diagnostic);
 		expect(sink.appendOutput).toHaveBeenCalledWith(output);
-		expect(controller.lastSeq).toBe(8);
+		expect(sink.setSkill).toHaveBeenCalledWith(skill);
+		expect(sink.setSkillResource).toHaveBeenCalledWith(resource);
+		expect(sink.setDeliveryReport).toHaveBeenCalledWith(report);
+		expect(controller.lastSeq).toBe(11);
 	});
 
 	it("sorts hydration input, de-duplicates records, and resumes from a durable checkpoint", () => {
@@ -381,6 +418,9 @@ function createSink() {
 		setValidation: vi.fn(() => record("setValidation")),
 		appendOutput: vi.fn(() => record("appendOutput")),
 		appendDiagnostic: vi.fn(() => record("appendDiagnostic")),
+		setSkill: vi.fn(() => record("setSkill")),
+		setSkillResource: vi.fn(() => record("setSkillResource")),
+		setDeliveryReport: vi.fn(() => record("setDeliveryReport")),
 		settle: vi.fn((_status: AgentV2RunStatus, _error?: AgentV2Error) => record("settle")),
 	} satisfies AgentV2BrowserRunSink;
 }

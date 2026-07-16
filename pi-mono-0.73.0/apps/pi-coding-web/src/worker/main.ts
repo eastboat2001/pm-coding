@@ -14,13 +14,16 @@ import {
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
 	type AgentV2WorkerStopResult,
+	createAgentV2DiagnosticEvent,
 	createAgentV2DiagnosticProjectionAdapters,
 	DurableAgentV2InputMaterializer,
 	executeAgentV2NextTask,
+	loadAgentV2SkillContext,
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
 	type RedisAgentV2RunEventBusOptions,
 	runAgentV2ShutdownSteps,
+	WorkspaceSkillService,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
 import {
 	type AgentV2ProductionStore,
@@ -127,12 +130,40 @@ export function createAgentV2WorkerExecution(
 		maxOutputTokens: config.modelMaxOutputTokens,
 	});
 	const materializer = new DurableAgentV2InputMaterializer(store);
+	const skills = new WorkspaceSkillService(config);
 	return {
 		materializer,
 		modelExecution,
 		async executeNextTask(
 			input: AgentV2WorkerExecutionInput,
 		): Promise<Awaited<ReturnType<typeof executeAgentV2NextTask>>> {
+			let skillContext: ReturnType<typeof loadAgentV2SkillContext>;
+			try {
+				skillContext = loadAgentV2SkillContext({
+					selectedSkillNames: readSelectedSkillNames(input.run.input.selectedSkillNames),
+					skills,
+				});
+			} catch (error) {
+				const code = agentV2SkillLoadErrorCode(error);
+				const createdAt = new Date().toISOString();
+				await store.commitAgentV2Diagnostic({
+					diagnostic: createAgentV2DiagnosticEvent({
+						diagnosticId: `${code}:${input.run.runId}`,
+						clientId: input.run.clientId,
+						runId: input.run.runId,
+						severity: "error",
+						category: "worker",
+						code,
+						phase: input.run.phase,
+						message:
+							"A selected Agent v2 skill or referenced resource could not be loaded from server configuration.",
+						data: { retryable: false },
+						createdAt,
+					}),
+					emitRunEvent: true,
+				});
+				throw new Error("Agent v2 server skill loading failed.");
+			}
 			return await executeAgentV2NextTask({
 				store,
 				config,
@@ -140,10 +171,27 @@ export function createAgentV2WorkerExecution(
 				runId: input.run.runId,
 				materializer,
 				modelExecution,
+				...(skillContext.skills.length > 0 || skillContext.resources.length > 0 ? { skillContext } : {}),
 				signal: input.signal,
 			});
 		},
 	};
+}
+
+function readSelectedSkillNames(value: unknown): string[] {
+	if (!Array.isArray(value) || value.some((name) => typeof name !== "string")) return [];
+	return value as string[];
+}
+
+function agentV2SkillLoadErrorCode(error: unknown): string {
+	if (typeof error !== "object" || error === null || !("code" in error)) return "agent_v2.skill_load_failed";
+	const code = (error as { code?: unknown }).code;
+	return code === "skill_not_authorized" ||
+		code === "skill_load_failed" ||
+		code === "skill_limit_exceeded" ||
+		code === "skill_resource_failed"
+		? `agent_v2.${code}`
+		: "agent_v2.skill_load_failed";
 }
 
 export function agentV2ContextFromRunInput(run: AgentV2RunSnapshot): {

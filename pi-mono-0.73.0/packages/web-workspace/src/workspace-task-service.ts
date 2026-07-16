@@ -71,7 +71,8 @@ export class WorkspaceTaskService {
 		if (files.length === 0) errors.push("Project workspace is empty.");
 		if (!staticRoot) {
 			const buildSourceEntry =
-				findBuildSourceEntry(projectDir, ["", "public"]) || (hasPackageJson ? join(projectDir, "package.json") : undefined);
+				findBuildSourceEntry(projectDir, ["", "public"]) ||
+				(hasPackageJson ? join(projectDir, "package.json") : undefined);
 			errors.push(
 				buildSourceEntry
 					? `Static preview found a build source entry at ${buildSourceEntry}. Run build_static before preview so PI can serve browser-ready dist/build output.`

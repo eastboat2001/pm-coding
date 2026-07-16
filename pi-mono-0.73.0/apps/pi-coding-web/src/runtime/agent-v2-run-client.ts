@@ -18,9 +18,17 @@ export interface AgentV2BrowserStartRunRequest {
 	sessionId: string;
 	title: string;
 	objective: string;
+	conversationSnapshot?: AgentV2BrowserConversationSnapshot;
+	selectedSkillNames?: string[];
 	attachments?: unknown[];
 	projectFiles?: AgentV2BrowserProjectFile[];
 	model: unknown;
+}
+
+export interface AgentV2BrowserConversationSnapshot {
+	compactedSummary: string;
+	recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
+	currentObjective: string;
 }
 
 type AgentV2BrowserAttachmentDescriptor = {
@@ -52,10 +60,15 @@ export async function startAgentV2Run(request: AgentV2BrowserStartRunRequest): P
 	const model = requireStableModelReference(request.model);
 	const projectFiles = validateProjectFiles(request.projectFiles ?? []);
 	const attachments = validateAttachmentDescriptors(request.attachments ?? [], projectFiles);
+	const objective = requireNonEmptyString(request.objective, "objective");
+	const conversationSnapshot = validateConversationSnapshot(request.conversationSnapshot, objective);
+	const selectedSkillNames = validateSelectedSkillNames(request.selectedSkillNames ?? []);
 	const input = {
 		sessionId: requireNonEmptyString(request.sessionId, "sessionId"),
 		title: requireNonEmptyString(request.title, "title"),
-		objective: requireNonEmptyString(request.objective, "objective"),
+		objective,
+		...(conversationSnapshot ? { conversationSnapshot } : {}),
+		...(selectedSkillNames.length > 0 ? { selectedSkillNames } : {}),
 		...(attachments.length > 0 ? { attachments } : {}),
 		...(projectFiles.length > 0 ? { projectFiles } : {}),
 	};
@@ -63,6 +76,71 @@ export async function startAgentV2Run(request: AgentV2BrowserStartRunRequest): P
 		method: "POST",
 		body: JSON.stringify({ input, model }),
 	});
+}
+
+function validateSelectedSkillNames(value: unknown): string[] {
+	if (!Array.isArray(value) || value.length > 16) throw new Error("Agent v2 selected skill names are invalid.");
+	const names: string[] = [];
+	const seen = new Set<string>();
+	for (const candidate of value) {
+		if (typeof candidate !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(candidate)) {
+			throw new Error("Agent v2 selected skill name is invalid.");
+		}
+		if (seen.has(candidate)) throw new Error("Agent v2 selected skill names must be unique.");
+		seen.add(candidate);
+		names.push(candidate);
+	}
+	return names;
+}
+
+function validateConversationSnapshot(
+	value: unknown,
+	objective: string,
+): AgentV2BrowserConversationSnapshot | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) throw new Error("Agent v2 conversation snapshot must be an object.");
+	const keys = Object.keys(value).sort();
+	if (
+		keys.length !== 3 ||
+		keys[0] !== "compactedSummary" ||
+		keys[1] !== "currentObjective" ||
+		keys[2] !== "recentMessages"
+	) {
+		throw new Error("Agent v2 conversation snapshot contains unsupported fields.");
+	}
+	if (typeof value.compactedSummary !== "string" || value.compactedSummary.length > 32_768) {
+		throw new Error("Agent v2 conversation snapshot compactedSummary is invalid.");
+	}
+	if (value.currentObjective !== objective) {
+		throw new Error("Agent v2 conversation snapshot currentObjective must match objective.");
+	}
+	if (!Array.isArray(value.recentMessages) || value.recentMessages.length > 64) {
+		throw new Error("Agent v2 conversation snapshot recentMessages is invalid.");
+	}
+	const recentMessages = value.recentMessages.map((candidate) => {
+		if (!isRecord(candidate)) throw new Error("Agent v2 conversation snapshot message must be an object.");
+		const messageKeys = Object.keys(candidate).sort();
+		if (messageKeys.length !== 2 || messageKeys[0] !== "content" || messageKeys[1] !== "role") {
+			throw new Error("Agent v2 conversation snapshot message contains unsupported fields.");
+		}
+		if (candidate.role !== "user" && candidate.role !== "assistant") {
+			throw new Error("Agent v2 conversation snapshot message role is invalid.");
+		}
+		const role: "user" | "assistant" = candidate.role;
+		if (typeof candidate.content !== "string" || !candidate.content.trim() || candidate.content.length > 8_192) {
+			throw new Error("Agent v2 conversation snapshot message content is invalid.");
+		}
+		return { role, content: candidate.content };
+	});
+	const snapshot = {
+		compactedSummary: value.compactedSummary,
+		recentMessages,
+		currentObjective: objective,
+	};
+	if (JSON.stringify(snapshot).length > 60_000) {
+		throw new Error("Agent v2 conversation snapshot exceeds the maximum size.");
+	}
+	return snapshot;
 }
 
 function requireStableModelReference(value: unknown): AgentV2BrowserModelReference {

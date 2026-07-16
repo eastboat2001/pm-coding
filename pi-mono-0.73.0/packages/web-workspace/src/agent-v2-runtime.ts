@@ -1,4 +1,5 @@
 export * from "./agent-v2-diagnostic-projections.js";
+export { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 export type * from "./agent-v2-durable-store.js";
 export {
 	type AgentV2ExecutionStepResult,
@@ -61,6 +62,7 @@ export type {
 	AgentV2WorkerStore,
 	MaybeAsyncIterable,
 } from "./agent-v2-runtime-store.js";
+export { loadAgentV2SkillContext } from "./agent-v2-skill-context.js";
 export {
 	AGENT_V2_MODEL_ID_MAX_LENGTH,
 	AGENT_V2_MODEL_PROVIDER_MAX_LENGTH,
@@ -75,3 +77,4 @@ export {
 	AgentV2WorkerService,
 	type AgentV2WorkerServiceOptions,
 } from "./agent-v2-worker-service.js";
+export { WorkspaceSkillService } from "./workspace-skill-service.js";

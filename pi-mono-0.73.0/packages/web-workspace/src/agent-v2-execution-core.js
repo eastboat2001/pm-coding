@@ -40,7 +40,7 @@ export async function executeAgentV2NextTask(input) {
         return executeRepairTask(input, snapshot.run, snapshot.contextPacket, snapshot.artifacts, snapshot.diagnostics, task, now);
     }
     if (task.kind === "delivery") {
-        return executeDeliveryTask(input, snapshot.run, task, now);
+        return executeDeliveryTask(input, snapshot.run, snapshot.tasks, snapshot.artifacts, task, now);
     }
     await advanceAgentV2Task({
         store: input.store,
@@ -63,7 +63,7 @@ export async function executeAgentV2NextTask(input) {
         diagnosticIds: [],
     };
 }
-async function executeDeliveryTask(input, run, task, proposedNow) {
+async function executeDeliveryTask(input, run, tasks, artifacts, task, proposedNow) {
     const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
     assertAgentV2ToolAllowed(registry, "preview.publish", "delivery");
     throwIfAborted(input.signal);
@@ -92,6 +92,7 @@ async function executeDeliveryTask(input, run, task, proposedNow) {
         },
     });
     const phase = phaseForAgentV2Task(task, transitioned.status);
+    const report = deliveryReportPayload(input, tasks, artifacts, transitioned, preview, now);
     const mutation = await Promise.resolve(input.store.commitAgentV2ExecutionMutation({
         clientId: input.context.clientId,
         runId: input.runId,
@@ -100,11 +101,40 @@ async function executeDeliveryTask(input, run, task, proposedNow) {
         updatedAt: now,
         nextRunPhase: phase,
         tasks: [toUpsertTaskInput(input.context.clientId, input.runId, transitioned)],
-        events: [taskEvent(transitioned, phase, now)],
+        events: [
+            taskEvent(transitioned, phase, now),
+            { type: report.type, payload: report, createdAt: now },
+        ],
     }));
     return mutation.applied
         ? { status: "task_succeeded", taskId: task.taskId, diagnosticIds: [] }
         : { status: "task_conflict", taskId: task.taskId, diagnosticIds: [] };
+}
+function deliveryReportPayload(input, tasks, artifacts, deliveryTask, preview, now) {
+    const actionFiles = (action) => artifacts
+        .filter((artifact) => artifact.metadataJson.action === action)
+        .map((artifact) => artifact.path)
+        .sort(compareStrings);
+    const modelNotes = tasks
+        .filter((candidate) => candidate.kind === "implementation" || candidate.kind === "repair")
+        .map((candidate) => (typeof candidate.output.modelSummary === "string" ? candidate.output.modelSummary : ""))
+        .filter(Boolean);
+    return {
+        type: "agent_v2.delivery_reported",
+        taskId: deliveryTask.taskId,
+        completedSummary: modelNotes.at(-1) ??
+            `Created and validated ${artifacts.length} generated ${artifacts.length === 1 ? "file" : "files"}.`,
+        appliedSkills: input.skillContext?.skills.map((skill) => skill.name) ?? [],
+        createdFiles: actionFiles("created"),
+        updatedFiles: actionFiles("updated"),
+        validationStatus: "passed",
+        buildStatus: "not_required",
+        previewStatus: "running",
+        previewUrl: preview.previewUrl,
+        projectId: preview.projectId,
+        usageInstructions: "Open the preview URL to use and review the generated application.",
+        at: now,
+    };
 }
 function classifyPreviewFailure(value) {
     const messages = Array.isArray(value)
@@ -198,6 +228,7 @@ async function executeImplementationTask(input, run, contextPacket, task, propos
         contextPacket,
         task,
         inputs: materializedInputs,
+        ...(input.skillContext ? { skillContext: input.skillContext } : {}),
         signal,
     });
     throwIfAborted(signal);
@@ -246,6 +277,7 @@ async function executeImplementationTask(input, run, contextPacket, task, propos
         now,
         output: {
             ...task.output,
+            modelSummary: sanitizeUserVisibleSummary(result.summary, artifacts.length, "implementation"),
             artifactIds,
             changedFiles,
             phase4: {
@@ -271,12 +303,15 @@ async function executeImplementationTask(input, run, contextPacket, task, propos
         path: artifact.path,
         validationStatus: "pending",
         revision: artifact.version,
+        checksum: artifact.checksum,
+        action: artifactAction(artifact),
+        sourceTaskId: artifact.sourceTaskId,
         at: now,
     }));
     const outputPayload = {
         type: "agent_v2.output_recorded",
         taskId: task.taskId,
-        summary: implementationOutputSummary(artifacts.length),
+        summary: sanitizeUserVisibleSummary(result.summary, artifacts.length, "implementation"),
         provider: trustedModel.provider,
         model: trustedModel.id,
         ...(usage ? { usage } : {}),
@@ -291,7 +326,7 @@ async function executeImplementationTask(input, run, contextPacket, task, propos
         nextRunPhase: phase,
         tasks: [toUpsertTaskInput(input.context.clientId, input.runId, transitioned)],
         artifacts,
-        events: [taskPayload, ...artifactPayloads, outputPayload].map((payload) => ({
+        events: [...skillEvents(input.skillContext, now), taskPayload, ...artifactPayloads, outputPayload].map((payload) => ({
             type: payload.type,
             payload: payload,
             createdAt: now,
@@ -508,6 +543,7 @@ async function executeRepairTask(input, run, contextPacket, artifacts, diagnosti
         inputs: materializedInputs,
         diagnostics: repairDiagnostics,
         workspaceFiles,
+        ...(input.skillContext ? { skillContext: input.skillContext } : {}),
         signal,
     });
     throwIfAborted(signal);
@@ -569,6 +605,7 @@ async function executeRepairTask(input, run, contextPacket, artifacts, diagnosti
         now,
         output: {
             ...task.output,
+            modelSummary: repairOutputSummary(updatedArtifacts.length),
             artifactIds: updatedArtifacts.map((artifact) => artifact.artifactId),
             changedFiles: updatedArtifacts.map((artifact) => artifact.path),
             addressedDiagnosticIds: diagnosticIds,
@@ -688,6 +725,9 @@ function artifactEvent(artifact, validationStatus, now) {
         path: artifact.path,
         validationStatus,
         revision: artifact.version,
+        checksum: artifact.checksum,
+        action: artifactAction(artifact),
+        sourceTaskId: artifact.sourceTaskId,
         at: now,
     };
     return { type: payload.type, payload: payload, createdAt: now };
@@ -911,6 +951,41 @@ function sameStrings(left, right) {
 }
 function repairOutputSummary(fileCount) {
     return `Repair updated ${fileCount} generated ${fileCount === 1 ? "file" : "files"}.`;
+}
+function skillEvents(context, now) {
+    if (!context)
+        return [];
+    return [
+        ...context.skills.map((skill) => ({
+            type: "agent_v2.skill_applied",
+            name: skill.name,
+            location: skill.location,
+            at: now,
+        })),
+        ...context.resources.map((resource) => ({
+            type: "agent_v2.skill_resource_loaded",
+            name: resource.skillName,
+            path: resource.path,
+            checksum: resource.checksum,
+            at: now,
+        })),
+    ];
+}
+function artifactAction(artifact) {
+    return artifact.metadataJson?.action === "updated" ? "updated" : "created";
+}
+function sanitizeUserVisibleSummary(value, fileCount, mode) {
+    let summary = value.trim();
+    summary = summary.replace(/\b(Bearer\s+)[^\s,;]+/giu, "$1[redacted]");
+    summary = summary.replace(/\b(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret|credential)\s*[:=]\s*[^\s,;]+/giu, "$1=[redacted]");
+    summary = summary.replace(/\bsk-(?:(?:proj|ant)-)?[A-Za-z0-9_-]{16,}\b/gu, "[redacted]");
+    summary = summary.replace(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){2,}\b/gu, "[redacted]");
+    summary = summary.replace(/\b[A-Za-z]:\\(?:[^\s<>:"|?*]+\\)*[^\s<>:"|?*]*/gu, "[local-path]");
+    summary = summary.replace(/(^|[\s(])\/(?:Users|home|var|tmp|opt|private|workspace)\/[^\s),;]+/gmu, "$1[local-path]");
+    summary = summary.slice(0, 4000).trim();
+    if (summary && summary !== "[redacted]")
+        return summary;
+    return mode === "repair" ? repairOutputSummary(fileCount) : implementationOutputSummary(fileCount);
 }
 function expectedRunState(run) {
     return {

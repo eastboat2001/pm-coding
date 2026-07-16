@@ -184,6 +184,9 @@ export const AGENT_V2_RUN_EVENT_TYPES = [
     "agent_v2.validation_recorded",
     "agent_v2.diagnostic_recorded",
     "agent_v2.output_recorded",
+    "agent_v2.skill_applied",
+    "agent_v2.skill_resource_loaded",
+    "agent_v2.delivery_reported",
 ];
 export const AGENT_V2_TASK_STATUSES = [
     "pending",

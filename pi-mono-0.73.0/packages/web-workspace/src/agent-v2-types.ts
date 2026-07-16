@@ -192,6 +192,9 @@ export const AGENT_V2_RUN_EVENT_TYPES = [
 	"agent_v2.validation_recorded",
 	"agent_v2.diagnostic_recorded",
 	"agent_v2.output_recorded",
+	"agent_v2.skill_applied",
+	"agent_v2.skill_resource_loaded",
+	"agent_v2.delivery_reported",
 ] as const;
 export type AgentV2RunEventType = (typeof AGENT_V2_RUN_EVENT_TYPES)[number];
 
@@ -238,6 +241,9 @@ export interface AgentV2ArtifactIndexedPayload {
 	path: string;
 	validationStatus: AgentV2ArtifactValidationStatus;
 	revision: string;
+	checksum: string;
+	action: "created" | "updated";
+	sourceTaskId: string;
 	at: string;
 }
 
@@ -270,6 +276,37 @@ export interface AgentV2DiagnosticRecordedPayload {
 	at: string;
 }
 
+export interface AgentV2SkillAppliedPayload {
+	type: "agent_v2.skill_applied";
+	name: string;
+	location: string;
+	at: string;
+}
+
+export interface AgentV2SkillResourceLoadedPayload {
+	type: "agent_v2.skill_resource_loaded";
+	name: string;
+	path: string;
+	checksum: string;
+	at: string;
+}
+
+export interface AgentV2DeliveryReportPayload {
+	type: "agent_v2.delivery_reported";
+	taskId: string;
+	completedSummary: string;
+	appliedSkills: string[];
+	createdFiles: string[];
+	updatedFiles: string[];
+	validationStatus: "passed";
+	buildStatus: "not_required" | "passed";
+	previewStatus: "running";
+	previewUrl: string;
+	projectId: string;
+	usageInstructions: string;
+	at: string;
+}
+
 export type AgentV2DocumentKind = "capability_decision" | "spec" | "plan" | "tasks";
 export type AgentV2CapabilityDeliveryMode =
 	| "static_app"
@@ -288,6 +325,17 @@ export type AgentV2TaskKind =
 	| "artifact"
 	| "delivery";
 export type AgentV2PlanStepId = "capability" | "spec" | "plan" | "implement" | "validate" | "deliver";
+
+export interface AgentV2ConversationSnapshotMessage {
+	role: "user" | "assistant";
+	content: string;
+}
+
+export interface AgentV2ConversationSnapshot {
+	compactedSummary: string;
+	recentMessages: AgentV2ConversationSnapshotMessage[];
+	currentObjective: string;
+}
 
 export type AgentV2RunInput = Record<string, unknown>;
 export type AgentV2DocumentMetadata = Record<string, unknown>;

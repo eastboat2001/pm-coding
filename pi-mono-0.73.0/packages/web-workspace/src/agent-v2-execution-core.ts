@@ -9,6 +9,7 @@ import {
 	type AgentV2ModelExecution,
 	type AgentV2ModelUsageSummary,
 	type AgentV2RepairWorkspaceFile,
+	type AgentV2SkillInstructionContext,
 	parseAgentV2ImplementationResult,
 	parseAgentV2RepairResult,
 } from "./agent-v2-model-execution.js";
@@ -31,9 +32,12 @@ import {
 } from "./agent-v2-tool-governance.js";
 import type {
 	AgentV2ArtifactIndexedPayload,
+	AgentV2DeliveryReportPayload,
 	AgentV2DiagnosticRecordedPayload,
 	AgentV2OutputRecordedPayload,
 	AgentV2RunSnapshot,
+	AgentV2SkillAppliedPayload,
+	AgentV2SkillResourceLoadedPayload,
 	AgentV2TaskNode,
 	AgentV2TaskUpdatedPayload,
 	AgentV2ValidationRecordedPayload,
@@ -67,6 +71,7 @@ export interface ExecuteAgentV2NextTaskInput {
 	runId: string;
 	materializer: AgentV2InputMaterializer;
 	modelExecution: AgentV2ModelExecution;
+	skillContext?: AgentV2SkillInstructionContext;
 	now?: () => string;
 	maxRepairAttempts?: number;
 	toolRegistry?: AgentV2ToolRegistry;
@@ -112,7 +117,7 @@ export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput)
 		);
 	}
 	if (task.kind === "delivery") {
-		return executeDeliveryTask(input, snapshot.run, task, now);
+		return executeDeliveryTask(input, snapshot.run, snapshot.tasks, snapshot.artifacts, task, now);
 	}
 
 	await advanceAgentV2Task({
@@ -141,6 +146,8 @@ export async function executeAgentV2NextTask(input: ExecuteAgentV2NextTaskInput)
 async function executeDeliveryTask(
 	input: ExecuteAgentV2NextTaskInput,
 	run: AgentV2RunSnapshot,
+	tasks: readonly AgentV2TaskNode[],
+	artifacts: readonly AgentV2ArtifactRecord[],
 	task: AgentV2TaskNode,
 	proposedNow: string,
 ): Promise<AgentV2ExecutionStepResult> {
@@ -171,6 +178,7 @@ async function executeDeliveryTask(
 		},
 	});
 	const phase = phaseForAgentV2Task(task, transitioned.status);
+	const report = deliveryReportPayload(input, tasks, artifacts, transitioned, preview, now);
 	const mutation = await Promise.resolve(
 		input.store.commitAgentV2ExecutionMutation({
 			clientId: input.context.clientId,
@@ -180,12 +188,51 @@ async function executeDeliveryTask(
 			updatedAt: now,
 			nextRunPhase: phase,
 			tasks: [toUpsertTaskInput(input.context.clientId, input.runId, transitioned)],
-			events: [taskEvent(transitioned, phase, now)],
+			events: [
+				taskEvent(transitioned, phase, now),
+				{ type: report.type, payload: report as unknown as Record<string, unknown>, createdAt: now },
+			],
 		}),
 	);
 	return mutation.applied
 		? { status: "task_succeeded", taskId: task.taskId, diagnosticIds: [] }
 		: { status: "task_conflict", taskId: task.taskId, diagnosticIds: [] };
+}
+
+function deliveryReportPayload(
+	input: ExecuteAgentV2NextTaskInput,
+	tasks: readonly AgentV2TaskNode[],
+	artifacts: readonly AgentV2ArtifactRecord[],
+	deliveryTask: AgentV2TaskNode,
+	preview: Awaited<ReturnType<WorkspacePreviewService["preview"]>> & { previewUrl: string },
+	now: string,
+): AgentV2DeliveryReportPayload {
+	const actionFiles = (action: "created" | "updated") =>
+		artifacts
+			.filter((artifact) => artifact.metadataJson.action === action)
+			.map((artifact) => artifact.path)
+			.sort(compareStrings);
+	const modelNotes = tasks
+		.filter((candidate) => candidate.kind === "implementation" || candidate.kind === "repair")
+		.map((candidate) => (typeof candidate.output.modelSummary === "string" ? candidate.output.modelSummary : ""))
+		.filter(Boolean);
+	return {
+		type: "agent_v2.delivery_reported",
+		taskId: deliveryTask.taskId,
+		completedSummary:
+			modelNotes.at(-1) ??
+			`Created and validated ${artifacts.length} generated ${artifacts.length === 1 ? "file" : "files"}.`,
+		appliedSkills: input.skillContext?.skills.map((skill) => skill.name) ?? [],
+		createdFiles: actionFiles("created"),
+		updatedFiles: actionFiles("updated"),
+		validationStatus: "passed",
+		buildStatus: "not_required",
+		previewStatus: "running",
+		previewUrl: preview.previewUrl,
+		projectId: preview.projectId,
+		usageInstructions: "Open the preview URL to use and review the generated application.",
+		at: now,
+	};
 }
 
 type AgentV2PreviewFailureTaxonomy = "workspace_empty" | "build_required" | "missing_entry" | "publish_failed";
@@ -310,6 +357,7 @@ async function executeImplementationTask(
 		contextPacket,
 		task,
 		inputs: materializedInputs,
+		...(input.skillContext ? { skillContext: input.skillContext } : {}),
 		signal,
 	});
 	throwIfAborted(signal);
@@ -362,6 +410,7 @@ async function executeImplementationTask(
 		now,
 		output: {
 			...task.output,
+			modelSummary: sanitizeUserVisibleSummary(result.summary, artifacts.length, "implementation"),
 			artifactIds,
 			changedFiles,
 			phase4: {
@@ -387,12 +436,15 @@ async function executeImplementationTask(
 		path: artifact.path,
 		validationStatus: "pending",
 		revision: artifact.version,
+		checksum: artifact.checksum,
+		action: artifactAction(artifact),
+		sourceTaskId: artifact.sourceTaskId!,
 		at: now,
 	}));
 	const outputPayload: AgentV2OutputRecordedPayload = {
 		type: "agent_v2.output_recorded",
 		taskId: task.taskId,
-		summary: implementationOutputSummary(artifacts.length),
+		summary: sanitizeUserVisibleSummary(result.summary, artifacts.length, "implementation"),
 		provider: trustedModel.provider,
 		model: trustedModel.id,
 		...(usage ? { usage } : {}),
@@ -408,11 +460,13 @@ async function executeImplementationTask(
 			nextRunPhase: phase,
 			tasks: [toUpsertTaskInput(input.context.clientId, input.runId, transitioned)],
 			artifacts,
-			events: [taskPayload, ...artifactPayloads, outputPayload].map((payload) => ({
-				type: payload.type,
-				payload: payload as unknown as Record<string, unknown>,
-				createdAt: now,
-			})),
+			events: [...skillEvents(input.skillContext, now), taskPayload, ...artifactPayloads, outputPayload].map(
+				(payload) => ({
+					type: payload.type,
+					payload: payload as unknown as Record<string, unknown>,
+					createdAt: now,
+				}),
+			),
 		}),
 	);
 	if (!mutation.applied) {
@@ -657,6 +711,7 @@ async function executeRepairTask(
 		inputs: materializedInputs,
 		diagnostics: repairDiagnostics as AgentV2DiagnosticEvent[],
 		workspaceFiles,
+		...(input.skillContext ? { skillContext: input.skillContext } : {}),
 		signal,
 	});
 	throwIfAborted(signal);
@@ -721,6 +776,7 @@ async function executeRepairTask(
 		now,
 		output: {
 			...task.output,
+			modelSummary: repairOutputSummary(updatedArtifacts.length),
 			artifactIds: updatedArtifacts.map((artifact) => artifact.artifactId),
 			changedFiles: updatedArtifacts.map((artifact) => artifact.path),
 			addressedDiagnosticIds: diagnosticIds,
@@ -872,6 +928,9 @@ function artifactEvent(
 		path: artifact.path,
 		validationStatus,
 		revision: artifact.version,
+		checksum: artifact.checksum,
+		action: artifactAction(artifact),
+		sourceTaskId: artifact.sourceTaskId!,
 		at: now,
 	};
 	return { type: payload.type, payload: payload as unknown as Record<string, unknown>, createdAt: now };
@@ -1157,6 +1216,52 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
 
 function repairOutputSummary(fileCount: number): string {
 	return `Repair updated ${fileCount} generated ${fileCount === 1 ? "file" : "files"}.`;
+}
+
+function skillEvents(
+	context: AgentV2SkillInstructionContext | undefined,
+	now: string,
+): Array<AgentV2SkillAppliedPayload | AgentV2SkillResourceLoadedPayload> {
+	if (!context) return [];
+	return [
+		...context.skills.map(
+			(skill): AgentV2SkillAppliedPayload => ({
+				type: "agent_v2.skill_applied",
+				name: skill.name,
+				location: skill.location,
+				at: now,
+			}),
+		),
+		...context.resources.map(
+			(resource): AgentV2SkillResourceLoadedPayload => ({
+				type: "agent_v2.skill_resource_loaded",
+				name: resource.skillName,
+				path: resource.path,
+				checksum: resource.checksum,
+				at: now,
+			}),
+		),
+	];
+}
+
+function artifactAction(artifact: Pick<UpsertAgentV2ArtifactInput, "metadataJson">): "created" | "updated" {
+	return artifact.metadataJson?.action === "updated" ? "updated" : "created";
+}
+
+function sanitizeUserVisibleSummary(value: string, fileCount: number, mode: "implementation" | "repair"): string {
+	let summary = value.trim();
+	summary = summary.replace(/\b(Bearer\s+)[^\s,;]+/giu, "$1[redacted]");
+	summary = summary.replace(
+		/\b(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret|credential)\s*[:=]\s*[^\s,;]+/giu,
+		"$1=[redacted]",
+	);
+	summary = summary.replace(/\bsk-(?:(?:proj|ant)-)?[A-Za-z0-9_-]{16,}\b/gu, "[redacted]");
+	summary = summary.replace(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){2,}\b/gu, "[redacted]");
+	summary = summary.replace(/\b[A-Za-z]:\\(?:[^\s<>:"|?*]+\\)*[^\s<>:"|?*]*/gu, "[local-path]");
+	summary = summary.replace(/(^|[\s(])\/(?:Users|home|var|tmp|opt|private|workspace)\/[^\s),;]+/gmu, "$1[local-path]");
+	summary = summary.slice(0, 4000).trim();
+	if (summary && summary !== "[redacted]") return summary;
+	return mode === "repair" ? repairOutputSummary(fileCount) : implementationOutputSummary(fileCount);
 }
 
 function expectedRunState(run: AgentV2RunSnapshot): AgentV2ExpectedRunState {

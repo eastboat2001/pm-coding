@@ -318,6 +318,119 @@ body {
 	align-self: stretch;
 }
 
+.session-mode-control {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.45rem;
+	color: var(--example-header-text);
+	font-size: 0.75rem;
+	white-space: nowrap;
+}
+
+.session-mode-control__label {
+	font-weight: 600;
+	opacity: 0.82;
+}
+
+.session-mode-control__select {
+	min-height: 2rem;
+	border: 1px solid rgba(255, 255, 255, 0.24);
+	border-radius: 999px;
+	padding: 0.25rem 1.75rem 0.25rem 0.7rem;
+	background: rgba(255, 255, 255, 0.08);
+	color: var(--example-header-text);
+	font: inherit;
+}
+
+.session-mode-control__select option {
+	background: var(--color-card);
+	color: var(--color-foreground);
+}
+
+.session-mode-control__select:disabled {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
+.agent-v2-activity-card {
+	margin: 0.35rem 1rem;
+	border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+	border-radius: 0.65rem;
+	background: color-mix(in srgb, var(--card) 92%, transparent);
+	color: var(--card-foreground);
+	font-size: 0.8rem;
+}
+
+.agent-v2-activity-card summary {
+	display: grid;
+	grid-template-columns: auto auto minmax(0, 1fr);
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.55rem 0.7rem;
+	cursor: pointer;
+	list-style: none;
+}
+
+.agent-v2-activity-card summary::-webkit-details-marker {
+	display: none;
+}
+
+.agent-v2-activity-card__dot {
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 999px;
+	background: var(--muted-foreground);
+}
+
+.agent-v2-activity-card__dot--active {
+	background: #3b82f6;
+}
+
+.agent-v2-activity-card__dot--success {
+	background: #22c55e;
+}
+
+.agent-v2-activity-card__dot--warning {
+	background: #f59e0b;
+}
+
+.agent-v2-activity-card__dot--error {
+	background: #ef4444;
+}
+
+.agent-v2-activity-card__title {
+	font-weight: 650;
+	white-space: nowrap;
+}
+
+.agent-v2-activity-card__summary {
+	overflow: hidden;
+	color: var(--muted-foreground);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-v2-activity-card__details {
+	display: grid;
+	gap: 0.4rem;
+	padding: 0 0.7rem 0.65rem 1.7rem;
+}
+
+.agent-v2-activity-card__details > div {
+	display: grid;
+	grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
+	gap: 0.65rem;
+}
+
+.agent-v2-activity-card__details span {
+	color: var(--muted-foreground);
+}
+
+.agent-v2-activity-card__details code {
+	overflow-wrap: anywhere;
+	white-space: normal;
+}
+
 .example-header :is(button, theme-toggle) {
 	position: relative;
 	border-radius: 999px;

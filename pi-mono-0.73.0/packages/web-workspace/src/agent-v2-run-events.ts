@@ -1,9 +1,17 @@
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
 import type {
+	AgentV2ArtifactIndexedPayload,
+	AgentV2DeliveryReportPayload,
+	AgentV2DiagnosticRecordedPayload,
+	AgentV2OutputRecordedPayload,
 	AgentV2Phase,
 	AgentV2PlanningReadyTransportEvent,
 	AgentV2RunEventType,
 	AgentV2RunStatus,
+	AgentV2SkillAppliedPayload,
+	AgentV2SkillResourceLoadedPayload,
+	AgentV2TaskUpdatedPayload,
+	AgentV2ValidationRecordedPayload,
 } from "./agent-v2-types.js";
 
 export type { AgentV2PlanningReadyTransportEvent } from "./agent-v2-types.js";
@@ -42,33 +50,14 @@ export type AgentV2PhaseChangedTransportEvent = AgentV2TransportEventBase & {
 	cancelFingerprint?: string;
 };
 
-export type AgentV2TaskUpdatedTransportEvent = AgentV2TransportEventBase & {
-	type: "agent_v2.task_updated";
-	taskId: string;
-	status: string;
-};
-
-export type AgentV2ArtifactIndexedTransportEvent = AgentV2TransportEventBase & {
-	type: "agent_v2.artifact_indexed";
-	artifactId: string;
-	kind?: string;
-	path?: string;
-};
-
-export type AgentV2ValidationRecordedTransportEvent = AgentV2TransportEventBase & {
-	type: "agent_v2.validation_recorded";
-	validationId: string;
-	status: string;
-	summary: string;
-};
-
-export type AgentV2DiagnosticRecordedTransportEvent = AgentV2TransportEventBase & {
-	type: "agent_v2.diagnostic_recorded";
-	diagnosticId: string;
-	severity: string;
-	code: string;
-	message: string;
-};
+export type AgentV2TaskUpdatedTransportEvent = AgentV2TaskUpdatedPayload;
+export type AgentV2ArtifactIndexedTransportEvent = AgentV2ArtifactIndexedPayload;
+export type AgentV2ValidationRecordedTransportEvent = AgentV2ValidationRecordedPayload;
+export type AgentV2DiagnosticRecordedTransportEvent = AgentV2DiagnosticRecordedPayload;
+export type AgentV2OutputRecordedTransportEvent = AgentV2OutputRecordedPayload;
+export type AgentV2SkillAppliedTransportEvent = AgentV2SkillAppliedPayload;
+export type AgentV2SkillResourceLoadedTransportEvent = AgentV2SkillResourceLoadedPayload;
+export type AgentV2DeliveryReportedTransportEvent = AgentV2DeliveryReportPayload;
 
 export type AgentV2RunTransportEvent =
 	| AgentV2RunCreatedTransportEvent
@@ -77,4 +66,8 @@ export type AgentV2RunTransportEvent =
 	| AgentV2TaskUpdatedTransportEvent
 	| AgentV2ArtifactIndexedTransportEvent
 	| AgentV2ValidationRecordedTransportEvent
-	| AgentV2DiagnosticRecordedTransportEvent;
+	| AgentV2DiagnosticRecordedTransportEvent
+	| AgentV2OutputRecordedTransportEvent
+	| AgentV2SkillAppliedTransportEvent
+	| AgentV2SkillResourceLoadedTransportEvent
+	| AgentV2DeliveryReportedTransportEvent;

@@ -120,11 +120,17 @@ export type AgentV2MaterializedInput =
 			checksum: string;
 	  };
 
+export interface AgentV2SkillInstructionContext {
+	skills: Array<{ name: string; location: string; content: string }>;
+	resources: Array<{ skillName: string; path: string; content: string; checksum: string }>;
+}
+
 export interface AgentV2ModelExecutionInput {
 	run: AgentV2RunSnapshot;
 	contextPacket: AgentV2ContextPacket;
 	task: AgentV2TaskNode;
 	inputs: readonly AgentV2MaterializedInput[];
+	skillContext?: AgentV2SkillInstructionContext;
 	signal: AbortSignal;
 }
 

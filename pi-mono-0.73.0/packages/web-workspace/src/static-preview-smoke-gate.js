@@ -354,7 +354,7 @@ class SmokeElement extends SmokeEventTarget {
     ownerDocument;
     id = "";
     className = "";
-    textContent = "";
+    text = "";
     innerHTML = "";
     value = "";
     checked = false;
@@ -368,6 +368,12 @@ class SmokeElement extends SmokeEventTarget {
     }
     get classList() {
         return new SmokeClassList(this);
+    }
+    get textContent() {
+        return this.text;
+    }
+    set textContent(value) {
+        this.text = value === null ? "" : String(value);
     }
     setAttribute(name, value) {
         if (name === "id")

@@ -73,6 +73,27 @@ document.addEventListener('DOMContentLoaded', () => {
 		expect(result.checkedFiles).toEqual(["index.html", "inline script 1"]);
 	});
 
+	it("coerces numeric textContent assignments like the browser DOM", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html>
+<html>
+  <body>
+    <output id="countValue">0</output>
+    <script>
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('countValue').textContent = 1;
+});
+    </script>
+  </body>
+</html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
+	});
+
 	it("does not fail optional selector probes when first screen state is rendered", async () => {
 		const root = writeProject({
 			"index.html": `<!doctype html>

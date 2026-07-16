@@ -53,7 +53,14 @@ import {
 	type PmHandoffPayload,
 	prepareHandoffDocumentFiles,
 } from "../integrations/pm-handoff.js";
-import { createServerProjectTools } from "../project-tools/tools.js";
+import {
+	type AgentV2ActivityEvent,
+	appendAgentV2ActivityMessage,
+	createAgentV2ActivityMessage,
+	formatAgentV2DeliveryReport,
+	formatAgentV2FailureReport,
+} from "../runtime/agent-v2-activity-message.js";
+import { registerAgentV2ActivityMessageRenderer } from "../runtime/agent-v2-activity-renderer.js";
 import {
 	AgentV2BrowserController,
 	type AgentV2BrowserRunEventDrainResult,
@@ -72,6 +79,11 @@ import {
 	startAgentV2Run,
 } from "../runtime/agent-v2-run-client.js";
 import { piClientHeaders } from "../runtime/client-id.js";
+import {
+	buildConversationSnapshot,
+	type ConversationSnapshotState,
+	normalizeConversationSnapshotState,
+} from "../runtime/conversation-snapshot.js";
 import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
 import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
@@ -91,7 +103,11 @@ import { loadServerSkillList } from "../skill-tools/client.js";
 import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
 import type { SkillListDetails, SkillSummary } from "../skill-tools/schemas.js";
-import { expandSkillCommandsInMessages, getLatestRequiredSkillNames } from "../skill-tools/skill-command.js";
+import {
+	expandSkillCommandsInMessages,
+	getLatestExplicitSkillNames,
+	parseSkillCommandPrefix,
+} from "../skill-tools/skill-command.js";
 import { createServerSkillTools } from "../skill-tools/tools.js";
 import { setBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
@@ -123,6 +139,15 @@ import {
 import { ModelController, SELECTED_MODEL_KEY } from "./model-controller.js";
 import { createCoalescedRenderScheduler } from "./render-scheduler.js";
 import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessionTitle } from "./session-controller.js";
+import {
+	canSwitchSessionMode,
+	defaultSessionModeForEntry,
+	dispatchSessionPrompt,
+	normalizeSessionMode,
+	type SessionMode,
+	sessionModeLabel,
+	sessionModeTools,
+} from "./session-mode.js";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set(["queued", "running", "cancelling"]);
 const TERMINAL_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set([
@@ -221,6 +246,7 @@ type SkillSlashSuggestion = {
 
 type SkillDiagnostic = SkillListDetails["diagnostics"][number];
 type SessionMetadataWithRunState = SessionMetadata & {
+	mode?: SessionMode;
 	runStatus?: AgentV2RunStatus;
 	activeRunId?: string;
 	lastRunId?: string;
@@ -233,6 +259,7 @@ type SlashSuggestionHost = {
 };
 
 document.documentElement.lang = getCurrentLanguage();
+registerAgentV2ActivityMessageRenderer();
 
 const configuredStorage = new ConfiguredServerStorage();
 const settings = new SettingsStore();
@@ -344,6 +371,8 @@ const isTerminalRunStatus = (status: AgentV2RunStatus | undefined): status is Ag
 let currentSessionId: string | undefined;
 let currentSessionCreatedAt: string | undefined;
 let currentTitle = "";
+let currentSessionMode: SessionMode = defaultSessionModeForEntry("standalone");
+let conversationSnapshotState: ConversationSnapshotState | undefined;
 let isEditingTitle = false;
 let agent: Agent;
 let chatPanel: ChatPanel;
@@ -495,6 +524,7 @@ const buildSessionMetadata = (
 	usage: EMPTY_USAGE,
 	thinkingLevel: state.thinkingLevel,
 	preview: generateTitle(state.messages),
+	mode: currentSessionMode,
 	...(currentRunStatus ? { runStatus: currentRunStatus } : {}),
 	...(currentActiveRunId ? { activeRunId: currentActiveRunId } : {}),
 	...(currentLastRunId ? { lastRunId: currentLastRunId } : {}),
@@ -657,6 +687,7 @@ const saveSession = async () => {
 			messages: state.messages,
 			createdAt,
 			lastModified,
+			...(conversationSnapshotState ? { conversationSnapshotState } : {}),
 		};
 
 		const metadata = buildSessionMetadata(state, createdAt, resolvedTitle, lastModified);
@@ -671,6 +702,26 @@ const saveSession = async () => {
 			data: errorDiagnosticData(err, { sessionId: currentSessionId }),
 		});
 	}
+};
+
+const sessionModeSwitchEnabled = (): boolean =>
+	canSwitchSessionMode({
+		isStreaming: agent?.state?.isStreaming === true,
+		hasActiveRun: currentActiveRunId !== undefined,
+	});
+
+const syncSessionModeTools = (): void => {
+	if (!agent) return;
+	agent.state.tools = sessionModeTools(currentSessionMode, createServerSkillTools());
+};
+
+const changeSessionMode = async (mode: SessionMode): Promise<void> => {
+	if (mode === currentSessionMode || !sessionModeSwitchEnabled()) return;
+	currentSessionMode = mode;
+	syncSessionModeTools();
+	if (currentSessionId && agent.state.messages.length > 0) await saveSession();
+	renderApp();
+	requestChatPanelUpdate();
 };
 
 const getBrowserSessions = async (): Promise<MergedSessionEntry[]> => {
@@ -1075,10 +1126,28 @@ type AgentV2BrowserMutableState = {
 
 function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink {
 	let activeRunId: string | undefined;
+	let deliveryReported = false;
+	let lastPhase = "intake";
+	const taskProgress = new Map<string, { kind: string; status: string }>();
+	const artifactProgress = new Map<string, { path: string; action: "created" | "updated" }>();
+	const appliedSkills = new Set<string>();
+	const diagnosticMessages: string[] = [];
+	const validationFailures: string[] = [];
 	const mutableState = (): AgentV2BrowserMutableState => browserAgent.state as unknown as AgentV2BrowserMutableState;
+	const appendActivity = (event: AgentV2ActivityEvent): void => {
+		const message = createAgentV2ActivityMessage(event, activeRunId);
+		browserAgent.state.messages = appendAgentV2ActivityMessage(browserAgent.state.messages, message);
+	};
 	return {
 		beginRun(runId) {
 			activeRunId = runId;
+			deliveryReported = false;
+			lastPhase = "intake";
+			taskProgress.clear();
+			artifactProgress.clear();
+			appliedSkills.clear();
+			diagnosticMessages.length = 0;
+			validationFailures.length = 0;
 			const state = mutableState();
 			state.isStreaming = true;
 			state.streamingMessage = undefined;
@@ -1086,6 +1155,7 @@ function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink
 			state.errorMessage = undefined;
 		},
 		setPhase(phase, status) {
+			lastPhase = phase;
 			currentRunStatus = status;
 			writeDiagnosticEvent({
 				level: "info",
@@ -1095,6 +1165,8 @@ function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink
 			});
 		},
 		setTask(event) {
+			taskProgress.set(event.taskId, { kind: event.kind, status: event.status });
+			appendActivity(event);
 			writeDiagnosticEvent({
 				level: "info",
 				category: "agent",
@@ -1109,6 +1181,8 @@ function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink
 			});
 		},
 		setArtifact(event) {
+			artifactProgress.set(event.artifactId, { path: event.path, action: event.action });
+			appendActivity(event);
 			writeDiagnosticEvent({
 				level: "info",
 				category: "agent",
@@ -1125,6 +1199,9 @@ function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink
 			if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 		},
 		setValidation(event) {
+			if (event.status !== "passed")
+				validationFailures.push(`${event.validationId}: ${event.status} — ${event.summary}`);
+			appendActivity(event);
 			writeDiagnosticEvent({
 				level: event.status === "failed" || event.status === "blocked" ? "warn" : "info",
 				category: "agent",
@@ -1140,10 +1217,51 @@ function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink
 			});
 		},
 		appendOutput(event) {
+			appendActivity(event);
 			appendAgentV2BrowserOutput(browserAgent, event);
 		},
 		appendDiagnostic(event) {
+			diagnosticMessages.push(`${event.code}: ${event.message}`);
+			appendActivity(event);
 			writeAgentV2BrowserDiagnostic(activeRunId, event);
+		},
+		setSkill(event) {
+			appliedSkills.add(event.name);
+			appendActivity(event);
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: { runId: activeRunId, name: event.name, location: event.location },
+			});
+		},
+		setSkillResource(event) {
+			appendActivity(event);
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: { runId: activeRunId, name: event.name, path: event.path, checksum: event.checksum },
+			});
+		},
+		setDeliveryReport(event) {
+			deliveryReported = true;
+			appendActivity(event);
+			appendAgentV2BrowserReport(browserAgent, formatAgentV2DeliveryReport(event, getCurrentLanguage()), {
+				model: "delivery-report",
+				timestamp: Date.parse(event.at),
+			});
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: {
+					runId: activeRunId,
+					taskId: event.taskId,
+					projectId: event.projectId,
+					previewUrl: event.previewUrl,
+				},
+			});
 		},
 		settle(status, error) {
 			const state = mutableState();
@@ -1151,8 +1269,44 @@ function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink
 			state.streamingMessage = undefined;
 			state.pendingToolCalls = new Set<string>();
 			state.errorMessage = error?.message;
-			if ((status === "failed" || status === "interrupted") && error?.message) {
-				appendAgentV2BrowserTerminalError(browserAgent, error.message);
+			if ((status === "failed" || status === "interrupted") && !deliveryReported) {
+				const completedItems = [...taskProgress.values()].map((task) => `${task.kind}: ${task.status}`);
+				const remainingItems = [...taskProgress.values()]
+					.filter((task) => task.status !== "succeeded" && task.status !== "cancelled")
+					.map((task) => task.kind);
+				if (!remainingItems.includes("delivery")) remainingItems.push("delivery");
+				const artifacts = [...artifactProgress.values()];
+				const failureCause = error?.message ?? diagnosticMessages.at(-1) ?? "Agent v2 run did not complete.";
+				const failedTask = [...taskProgress.entries()].find(
+					([, task]) => task.status === "failed" || task.status === "blocked",
+				);
+				const report = formatAgentV2FailureReport(
+					{
+						failureStage: lastPhase,
+						failureTask: failedTask?.[0] ?? "run",
+						completedItems,
+						failureCause,
+						repairAttempts: [...taskProgress.values()].filter((task) => task.kind === "repair").length,
+						diagnostics: diagnosticMessages,
+						unpassedValidations: validationFailures,
+						safeToRetry: error?.retryable === true,
+						remainingItems,
+						nextSuggestions: [agentV2FailureSuggestion(getCurrentLanguage(), error?.retryable === true)],
+						appliedSkills: [...appliedSkills],
+						createdFiles: artifacts
+							.filter((artifact) => artifact.action === "created")
+							.map((artifact) => artifact.path),
+						updatedFiles: artifacts
+							.filter((artifact) => artifact.action === "updated")
+							.map((artifact) => artifact.path),
+					},
+					getCurrentLanguage(),
+				);
+				appendAgentV2BrowserReport(browserAgent, report, {
+					model: "failure-report",
+					timestamp: Date.now(),
+					errorMessage: failureCause,
+				});
 			}
 			activeRunId = undefined;
 		},
@@ -1177,8 +1331,11 @@ function appendAgentV2BrowserOutput(browserAgent: Agent, event: AgentV2OutputRec
 	browserAgent.state.messages = [...browserAgent.state.messages, message];
 }
 
-function appendAgentV2BrowserTerminalError(browserAgent: Agent, errorMessage: string): void {
-	const text = `Run failed: ${errorMessage}`;
+function appendAgentV2BrowserReport(
+	browserAgent: Agent,
+	text: string,
+	options: { model: "delivery-report" | "failure-report"; timestamp: number; errorMessage?: string },
+): void {
 	if (
 		browserAgent.state.messages.some(
 			(message) =>
@@ -1195,7 +1352,7 @@ function appendAgentV2BrowserTerminalError(browserAgent: Agent, errorMessage: st
 		content: [{ type: "text", text }],
 		api: "agent-v2",
 		provider: "agent-v2",
-		model: "runtime",
+		model: options.model,
 		usage: {
 			input: 0,
 			output: 0,
@@ -1204,11 +1361,28 @@ function appendAgentV2BrowserTerminalError(browserAgent: Agent, errorMessage: st
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
-		stopReason: "error",
-		errorMessage,
-		timestamp: Date.now(),
+		stopReason: options.errorMessage ? "error" : "stop",
+		...(options.errorMessage ? { errorMessage: options.errorMessage } : {}),
+		timestamp: options.timestamp,
 	};
 	browserAgent.state.messages = [...browserAgent.state.messages, message];
+}
+
+function agentV2FailureSuggestion(language: string, retryable: boolean): string {
+	const code = language.toLowerCase().split(/[-_]/u)[0];
+	if (code === "zh")
+		return retryable ? "修复上述问题后重试本次运行。" : "检查诊断信息并调整需求或项目文件后重新运行。";
+	if (code === "de")
+		return retryable
+			? "Beheben Sie das gemeldete Problem und starten Sie den Lauf erneut."
+			: "Prüfen Sie die Diagnose und passen Sie die Anforderung oder Projektdateien vor einem neuen Lauf an.";
+	if (code === "ms")
+		return retryable
+			? "Baiki masalah yang dilaporkan dan cuba semula larian ini."
+			: "Semak diagnostik dan laraskan keperluan atau fail projek sebelum menjalankan semula.";
+	return retryable
+		? "Fix the reported issue and retry this run."
+		: "Review the diagnostics and adjust the request or project files before running again.";
 }
 
 function writeAgentV2BrowserDiagnostic(runId: string | undefined, event: AgentV2DiagnosticRecordedPayload): void {
@@ -1482,16 +1656,35 @@ const startRemotePrompt = async (
 			? ((message as { attachments?: unknown[] }).attachments ?? [])
 			: undefined;
 		const title = sessionTitle(currentTitle, agent.state.messages);
-		const objective = objectiveTextFromMessage(message) ?? title;
+		const rawObjective = objectiveTextFromMessage(message) ?? title;
+		const selectedSkillNames = getLatestExplicitSkillNames([message]);
+		const objective = parseSkillCommandPrefix(rawObjective)?.args || rawObjective;
 		const selectedModel = agent.state.model;
+		const conversation = await buildConversationSnapshot({
+			messages: previousMessages,
+			currentObjective: objective,
+			contextWindowTokens: selectedModel?.contextWindow ?? 128_000,
+			...(conversationSnapshotState ? { previousState: conversationSnapshotState } : {}),
+		});
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId!,
 			title,
-			objective,
+			objective: conversation.snapshot.currentObjective,
+			conversationSnapshot: conversation.snapshot,
+			...(selectedSkillNames.length > 0 ? { selectedSkillNames } : {}),
 			...(attachments ? { attachments } : {}),
 			model: selectedModel ? { provider: selectedModel.provider, id: selectedModel.id } : undefined,
 			...(projectFiles.length > 0 ? { projectFiles } : {}),
 		});
+		conversationSnapshotState = conversation.state;
+		if (conversation.warning) {
+			writeDiagnosticEvent({
+				level: "warn",
+				category: "agent",
+				eventType: "agent.conversation_snapshot.incomplete",
+				data: { sessionId: currentSessionId, warning: conversation.warning },
+			});
+		}
 	} catch (error) {
 		agent.state.messages = previousMessages;
 		await saveSession();
@@ -1541,6 +1734,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		),
 		getApiKey: getProviderApiKey,
 	});
+	const chatPrompt = agent.prompt.bind(agent);
 	(agent as Agent & { repairToolCalls: boolean }).repairToolCalls = true;
 	const abortAgentLocally = agent.abort.bind(agent);
 	agent.abort = () => {
@@ -1550,7 +1744,15 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		abortAgentLocally();
 	};
 	agent.prompt = (async (input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void> => {
-		await startRemotePrompt(input, images);
+		await dispatchSessionPrompt(
+			currentSessionMode,
+			{
+				chat: chatPrompt,
+				appGeneration: startRemotePrompt,
+			},
+			input,
+			images,
+		);
 	}) as typeof agent.prompt;
 
 	agentUnsubscribe = agent.subscribe((event: AgentEvent) => {
@@ -1565,9 +1767,11 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		},
 		onBeforeSend: async () => {
 			await ensureSessionIdentity();
-			await enqueueDefaultSkillLoadMessages(agent, piRuntimeConfig.defaultSkills);
+			if (currentSessionMode === "chat") {
+				await enqueueDefaultSkillLoadMessages(agent, piRuntimeConfig.defaultSkills);
+			}
 			await modelController.persistSelectedModel(agent.state.model);
-			await saveSession();
+			if (agent.state.messages.length > 0 || currentActiveRunId) await saveSession();
 			if (activeSidebarPanel === "apps") refreshGeneratedAppsPanel();
 			if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
 		},
@@ -1577,17 +1781,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			await saveSession();
 		},
 		enableArtifacts: false,
-		toolsFactory: (toolAgent: Agent) => [
-			...createServerSkillTools(),
-			...createServerProjectTools(() => ({
-				sessionId: currentSessionId,
-				title: sessionTitle(currentTitle, toolAgent.state.messages),
-				activeSkillNames: getLatestRequiredSkillNames(
-					toolAgent.state.messages,
-					piRuntimeConfig.defaultSkills.map((skill) => skill.name),
-				),
-			})),
-		],
+		toolsFactory: () => sessionModeTools(currentSessionMode, createServerSkillTools()),
 	});
 	applySkillSlashSuggestions();
 };
@@ -1694,6 +1888,10 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 	currentSessionCreatedAt = sessionData.createdAt;
 	currentTitle = isDefaultNewSessionTitle(sessionData.title) ? "" : sessionData.title || "";
 	const sessionMetadata = (await storage.sessions.getMetadata(sessionId)) as SessionMetadataWithRunState | null;
+	currentSessionMode = normalizeSessionMode(sessionMetadata?.mode);
+	conversationSnapshotState = normalizeConversationSnapshotState(
+		(sessionData as typeof sessionData & { conversationSnapshotState?: unknown }).conversationSnapshotState,
+	);
 	const sessionModel = await modelController.resolveCustomModel(sessionData.model);
 	if (sessionModel) {
 		await modelController.persistSelectedModel(sessionModel);
@@ -1717,8 +1915,10 @@ const loadSession = async (sessionId: string): Promise<boolean> => {
 	return true;
 };
 
-const startFreshSession = async (persistImmediately = false) => {
+const startFreshSession = async (persistImmediately = false, entry: "standalone" | "pm_handoff" = "standalone") => {
 	currentTitle = "";
+	currentSessionMode = defaultSessionModeForEntry(entry);
+	conversationSnapshotState = undefined;
 	currentSessionCreatedAt = undefined;
 	resetRemoteRunState();
 	await setCurrentSessionId(undefined);
@@ -1726,7 +1926,6 @@ const startFreshSession = async (persistImmediately = false) => {
 	await createAgent(createInitialAgentState(model));
 	if (persistImmediately) {
 		await ensureSessionIdentity();
-		await saveSession();
 	}
 	renderApp();
 };
@@ -1763,7 +1962,7 @@ const bootstrapHandoffSession = async (payload: PmHandoffPayload) => {
 			loadAttachment(buildPmApiUrl(document.download_url), document.filename),
 		),
 	);
-	await startFreshSession(false);
+	await startFreshSession(false, "pm_handoff");
 	if (payload.title) {
 		currentTitle = payload.title;
 	}
@@ -1960,10 +2159,26 @@ const renderApp = () => {
 				}
           </div>
         </div>
-        <div
-          class="example-header__actions flex items-center gap-1 px-2 py-2 shrink-0"
-        >
-          <theme-toggle></theme-toggle>
+		<div
+			class="example-header__actions flex items-center gap-1 px-2 py-2 shrink-0"
+		>
+			<label class="session-mode-control">
+				<span class="session-mode-control__label">${sessionModeLabel(currentSessionMode, getCurrentLanguage())}</span>
+				<select
+					class="session-mode-control__select"
+					aria-label="Session mode"
+					.value=${currentSessionMode}
+					?disabled=${!sessionModeSwitchEnabled()}
+					@change=${(event: Event) => {
+						const mode = normalizeSessionMode((event.target as HTMLSelectElement).value);
+						void changeSessionMode(mode);
+					}}
+				>
+					<option value="chat">${sessionModeLabel("chat", getCurrentLanguage())}</option>
+					<option value="app_generation">${sessionModeLabel("app_generation", getCurrentLanguage())}</option>
+				</select>
+			</label>
+			<theme-toggle></theme-toggle>
           ${Button({
 					variant: "ghost",
 					size: "sm",

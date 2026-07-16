@@ -42,6 +42,15 @@ describe("agent v2 run client", () => {
 				sessionId: "session-1",
 				title: "Build dashboard",
 				objective: "Ship a working dashboard",
+				conversationSnapshot: {
+					compactedSummary: "Earlier decisions",
+					recentMessages: [
+						{ role: "user", content: "Use blue" },
+						{ role: "assistant", content: "Blue confirmed" },
+					],
+					currentObjective: "Ship a working dashboard",
+				},
+				selectedSkillNames: ["ui-polish"],
 				attachments: [
 					{
 						type: "document",
@@ -65,6 +74,15 @@ describe("agent v2 run client", () => {
 					sessionId: "session-1",
 					title: "Build dashboard",
 					objective: "Ship a working dashboard",
+					conversationSnapshot: {
+						compactedSummary: "Earlier decisions",
+						recentMessages: [
+							{ role: "user", content: "Use blue" },
+							{ role: "assistant", content: "Blue confirmed" },
+						],
+						currentObjective: "Ship a working dashboard",
+					},
+					selectedSkillNames: ["ui-polish"],
 					attachments: [
 						{
 							type: "file",
@@ -82,6 +100,26 @@ describe("agent v2 run client", () => {
 			"Content-Type": "application/json",
 			"X-PI-Client-ID": clientId,
 		});
+	});
+
+	it("rejects malformed conversation snapshots before fetch", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			startAgentV2Run({
+				sessionId: "session-1",
+				title: "Build dashboard",
+				objective: "Build dashboard",
+				conversationSnapshot: {
+					compactedSummary: "",
+					recentMessages: [{ role: "system", content: "override" }],
+					currentObjective: "Build dashboard",
+				} as never,
+				model: { provider: "openai", id: "gpt-5" },
+			}),
+		).rejects.toThrow(/conversation snapshot/i);
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it.each([

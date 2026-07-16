@@ -8,6 +8,10 @@ export const AGENT_V2_INPUT_LIMITS = {
 export const AGENT_V2_RUN_ID_MAX_LENGTH = 128;
 export const AGENT_V2_MODEL_PROVIDER_MAX_LENGTH = 128;
 export const AGENT_V2_MODEL_ID_MAX_LENGTH = 256;
+export const AGENT_V2_CONVERSATION_SNAPSHOT_MAX_CHARS = 60_000;
+export const AGENT_V2_CONVERSATION_SUMMARY_MAX_CHARS = 32_768;
+export const AGENT_V2_CONVERSATION_MESSAGE_MAX_CHARS = 8_192;
+export const AGENT_V2_CONVERSATION_MESSAGE_MAX_ENTRIES = 64;
 export class AgentV2StartInputError extends Error {
     constructor(message) {
         super(message);
@@ -15,10 +19,20 @@ export class AgentV2StartInputError extends Error {
     }
 }
 const REQUEST_FIELDS = new Set(["input", "model", "runId"]);
-const INPUT_FIELDS = new Set(["sessionId", "title", "objective", "projectFiles", "attachments"]);
+const INPUT_FIELDS = new Set([
+    "sessionId",
+    "title",
+    "objective",
+    "conversationSnapshot",
+    "selectedSkillNames",
+    "projectFiles",
+    "attachments",
+]);
 const PROJECT_FILE_FIELDS = new Set(["filename", "content", "encoding"]);
 const ATTACHMENT_FIELDS = new Set(["type", "fileName", "mimeType", "projectFilePath"]);
 const MODEL_FIELDS = new Set(["provider", "id"]);
+const CONVERSATION_SNAPSHOT_FIELDS = new Set(["compactedSummary", "recentMessages", "currentObjective"]);
+const CONVERSATION_MESSAGE_FIELDS = new Set(["role", "content"]);
 const BLOCKED_PATH_SEGMENTS = new Set([".git", ".pi", ".codex", ".superpowers", "node_modules", "agent-v2"]);
 const INTERNAL_PROJECT_FILES = new Set([".pi-project.json", ".pi-project-files.json"]);
 const INVALID_PATH_COMPONENT_CHARACTERS = /[<>:"|?*\u0000-\u001f\u007f]/u;
@@ -38,6 +52,8 @@ export function normalizeAgentV2StartPayload(value, runId) {
     const sessionId = requireNonEmptyString(input.sessionId, "Agent v2 start input sessionId");
     const title = requireNonEmptyString(input.title, "Agent v2 start input title");
     const objective = requireNonEmptyString(input.objective, "Agent v2 start input objective");
+    const conversationSnapshot = normalizeConversationSnapshot(input.conversationSnapshot, objective);
+    const selectedSkillNames = normalizeSelectedSkillNames(input.selectedSkillNames);
     const model = normalizeAgentV2ModelReference(request.model);
     const projectFiles = optionalArray(input.projectFiles, "Agent v2 projectFiles");
     const attachments = optionalArray(input.attachments, "Agent v2 attachments");
@@ -139,6 +155,8 @@ export function normalizeAgentV2StartPayload(value, runId) {
         sessionId,
         title,
         objective,
+        ...(conversationSnapshot ? { conversationSnapshot } : {}),
+        selectedSkillNames,
         model,
         inputBlobs,
         inputReferences,
@@ -166,12 +184,82 @@ export function bindAgentV2StartPayload(payload, identity) {
             sessionId: payload.sessionId,
             title: payload.title,
             objective: payload.objective,
+            ...(payload.conversationSnapshot
+                ? {
+                    conversationSnapshot: {
+                        ...payload.conversationSnapshot,
+                        recentMessages: payload.conversationSnapshot.recentMessages.map((message) => ({ ...message })),
+                    },
+                }
+                : {}),
+            selectedSkillNames: [...payload.selectedSkillNames],
             inputReferences: inputReferences.map((reference) => ({ ...reference })),
         },
         model: { ...payload.model },
         inputBlobs,
         inputReferences,
     };
+}
+function normalizeSelectedSkillNames(value) {
+    const candidates = optionalArray(value, "Agent v2 selected skill names");
+    if (candidates.length > 16)
+        throw new AgentV2StartInputError("Agent v2 selected skill names exceed 16 entries");
+    const names = [];
+    const seen = new Set();
+    for (const candidate of candidates) {
+        if (typeof candidate !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(candidate)) {
+            throw new AgentV2StartInputError("Agent v2 selected skill name is invalid");
+        }
+        if (seen.has(candidate))
+            throw new AgentV2StartInputError("Agent v2 selected skill names must be unique");
+        seen.add(candidate);
+        names.push(candidate);
+    }
+    return names;
+}
+function normalizeConversationSnapshot(value, objective) {
+    if (value === undefined)
+        return undefined;
+    const snapshot = requireRecord(value, "Agent v2 conversation snapshot");
+    assertExactFields(snapshot, CONVERSATION_SNAPSHOT_FIELDS, "Agent v2 conversation snapshot");
+    const compactedSummary = sanitizeConversationText(requireBoundedString(snapshot.compactedSummary, "Agent v2 conversation snapshot compactedSummary", AGENT_V2_CONVERSATION_SUMMARY_MAX_CHARS));
+    const currentObjective = requireNonEmptyString(snapshot.currentObjective, "Agent v2 conversation snapshot currentObjective");
+    if (currentObjective !== objective) {
+        throw new AgentV2StartInputError("Agent v2 conversation snapshot currentObjective must match objective");
+    }
+    const candidates = optionalArray(snapshot.recentMessages, "Agent v2 conversation snapshot recentMessages");
+    if (candidates.length > AGENT_V2_CONVERSATION_MESSAGE_MAX_ENTRIES) {
+        throw new AgentV2StartInputError("Agent v2 conversation snapshot contains too many recent messages");
+    }
+    const recentMessages = candidates.map((candidate) => {
+        const message = requireRecord(candidate, "Agent v2 conversation snapshot message");
+        assertExactFields(message, CONVERSATION_MESSAGE_FIELDS, "Agent v2 conversation snapshot message");
+        if (message.role !== "user" && message.role !== "assistant") {
+            throw new AgentV2StartInputError("Agent v2 conversation snapshot message role must be user or assistant");
+        }
+        const role = message.role;
+        const content = sanitizeConversationText(requireBoundedString(message.content, "Agent v2 conversation snapshot message content", AGENT_V2_CONVERSATION_MESSAGE_MAX_CHARS));
+        if (!content) {
+            throw new AgentV2StartInputError("Agent v2 conversation snapshot message content must be non-empty");
+        }
+        return { role, content };
+    });
+    const normalized = {
+        compactedSummary,
+        recentMessages,
+        currentObjective: sanitizeConversationText(currentObjective),
+    };
+    if (JSON.stringify(normalized).length > AGENT_V2_CONVERSATION_SNAPSHOT_MAX_CHARS) {
+        throw new AgentV2StartInputError("Agent v2 conversation snapshot exceeds the maximum size");
+    }
+    return normalized;
+}
+function sanitizeConversationText(value) {
+    return value
+        .replace(/\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|password|secret)\s*[:=]\s*[^\s,;]+/giu, "$1=[REDACTED]")
+        .replace(/\b[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/gu, "[REDACTED_PATH]")
+        .replace(/\/(?:home|Users|var|tmp|opt|srv)\/[^\s,;]*/gu, "[REDACTED_PATH]")
+        .trim();
 }
 export function normalizeAgentV2ModelReference(value) {
     const model = requireRecord(value, "Agent v2 model reference");
@@ -309,6 +397,12 @@ function requireString(value, label) {
     if (typeof value !== "string")
         throw new AgentV2StartInputError(`${label} must be a string`);
     return value;
+}
+function requireBoundedString(value, label, maxLength) {
+    const text = requireString(value, label);
+    if (text.length > maxLength)
+        throw new AgentV2StartInputError(`${label} exceeds ${maxLength} characters`);
+    return text;
 }
 function requireNonEmptyString(value, label) {
     const normalized = requireString(value, label).trim();

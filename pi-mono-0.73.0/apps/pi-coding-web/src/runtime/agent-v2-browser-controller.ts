@@ -27,6 +27,9 @@ export interface AgentV2ArtifactIndexedPayload {
 	path: string;
 	validationStatus: AgentV2ArtifactValidationStatus;
 	revision: string;
+	checksum: string;
+	action: "created" | "updated";
+	sourceTaskId: string;
 	at: string;
 }
 
@@ -64,6 +67,37 @@ export interface AgentV2DiagnosticRecordedPayload {
 	at: string;
 }
 
+export interface AgentV2SkillAppliedPayload {
+	type: "agent_v2.skill_applied";
+	name: string;
+	location: string;
+	at: string;
+}
+
+export interface AgentV2SkillResourceLoadedPayload {
+	type: "agent_v2.skill_resource_loaded";
+	name: string;
+	path: string;
+	checksum: string;
+	at: string;
+}
+
+export interface AgentV2DeliveryReportPayload {
+	type: "agent_v2.delivery_reported";
+	taskId: string;
+	completedSummary: string;
+	appliedSkills: string[];
+	createdFiles: string[];
+	updatedFiles: string[];
+	validationStatus: "passed";
+	buildStatus: "not_required" | "passed";
+	previewStatus: "running";
+	previewUrl: string;
+	projectId: string;
+	usageInstructions: string;
+	at: string;
+}
+
 export interface AgentV2BrowserRunSink {
 	beginRun(runId: string): void;
 	setPhase(phase: AgentV2Phase, status: AgentV2RunStatus): void;
@@ -72,6 +106,9 @@ export interface AgentV2BrowserRunSink {
 	setValidation(event: AgentV2ValidationRecordedPayload): void;
 	appendOutput(event: AgentV2OutputRecordedPayload): void;
 	appendDiagnostic(event: AgentV2DiagnosticRecordedPayload): void;
+	setSkill(event: AgentV2SkillAppliedPayload): void;
+	setSkillResource(event: AgentV2SkillResourceLoadedPayload): void;
+	setDeliveryReport(event: AgentV2DeliveryReportPayload): void;
 	settle(status: AgentV2RunStatus, error?: AgentV2Error): void;
 }
 
@@ -165,6 +202,10 @@ const TASK_KINDS = new Set<string>([
 ]);
 const ARTIFACT_VALIDATION_STATUSES = new Set<string>(["not_started", "pending", "passed", "failed", "accepted"]);
 const DIAGNOSTIC_SEVERITIES = new Set<string>(["debug", "info", "warn", "error"]);
+const ARTIFACT_ACTIONS = new Set<string>(["created", "updated"]);
+const DELIVERY_VALIDATION_STATUSES = new Set<string>(["passed"]);
+const BUILD_STATUSES = new Set<string>(["not_required", "passed"]);
+const PREVIEW_STATUSES = new Set<string>(["running"]);
 
 export class AgentV2BrowserController {
 	private _activeRunId: string | undefined;
@@ -305,6 +346,9 @@ export class AgentV2BrowserController {
 					"path",
 					"validationStatus",
 					"revision",
+					"checksum",
+					"action",
+					"sourceTaskId",
 					"at",
 				]);
 				const event: AgentV2ArtifactIndexedPayload = {
@@ -317,6 +361,9 @@ export class AgentV2BrowserController {
 						`${type}.validationStatus`,
 					) as AgentV2ArtifactValidationStatus,
 					revision: nonEmptyString(payload.revision, `${type}.revision`),
+					checksum: requireSha256(payload.checksum, `${type}.checksum`),
+					action: requireSetValue(payload.action, ARTIFACT_ACTIONS, `${type}.action`) as "created" | "updated",
+					sourceTaskId: nonEmptyString(payload.sourceTaskId, `${type}.sourceTaskId`),
 					at: requireTimestamp(payload.at, `${type}.at`),
 				};
 				this.sink.setArtifact(event);
@@ -379,6 +426,73 @@ export class AgentV2BrowserController {
 				this.sink.appendOutput(event);
 				return;
 			}
+			case "agent_v2.skill_applied": {
+				assertOnlyPayloadFields(payload, type, ["type", "name", "location", "at"]);
+				const event: AgentV2SkillAppliedPayload = {
+					type,
+					name: nonEmptyString(payload.name, `${type}.name`),
+					location: nonEmptyString(payload.location, `${type}.location`),
+					at: requireTimestamp(payload.at, `${type}.at`),
+				};
+				this.sink.setSkill(event);
+				return;
+			}
+			case "agent_v2.skill_resource_loaded": {
+				assertOnlyPayloadFields(payload, type, ["type", "name", "path", "checksum", "at"]);
+				const event: AgentV2SkillResourceLoadedPayload = {
+					type,
+					name: nonEmptyString(payload.name, `${type}.name`),
+					path: requireRelativePath(payload.path, `${type}.path`),
+					checksum: requireSha256(payload.checksum, `${type}.checksum`),
+					at: requireTimestamp(payload.at, `${type}.at`),
+				};
+				this.sink.setSkillResource(event);
+				return;
+			}
+			case "agent_v2.delivery_reported": {
+				assertOnlyPayloadFields(payload, type, [
+					"type",
+					"taskId",
+					"completedSummary",
+					"appliedSkills",
+					"createdFiles",
+					"updatedFiles",
+					"validationStatus",
+					"buildStatus",
+					"previewStatus",
+					"previewUrl",
+					"projectId",
+					"usageInstructions",
+					"at",
+				]);
+				const event: AgentV2DeliveryReportPayload = {
+					type,
+					taskId: nonEmptyString(payload.taskId, `${type}.taskId`),
+					completedSummary: boundedString(payload.completedSummary, `${type}.completedSummary`, 4000),
+					appliedSkills: requireStringArray(payload.appliedSkills, `${type}.appliedSkills`, 16, false),
+					createdFiles: requirePathArray(payload.createdFiles, `${type}.createdFiles`),
+					updatedFiles: requirePathArray(payload.updatedFiles, `${type}.updatedFiles`),
+					validationStatus: requireSetValue(
+						payload.validationStatus,
+						DELIVERY_VALIDATION_STATUSES,
+						`${type}.validationStatus`,
+					) as "passed",
+					buildStatus: requireSetValue(payload.buildStatus, BUILD_STATUSES, `${type}.buildStatus`) as
+						| "not_required"
+						| "passed",
+					previewStatus: requireSetValue(
+						payload.previewStatus,
+						PREVIEW_STATUSES,
+						`${type}.previewStatus`,
+					) as "running",
+					previewUrl: requireHttpUrl(payload.previewUrl, `${type}.previewUrl`),
+					projectId: nonEmptyString(payload.projectId, `${type}.projectId`),
+					usageInstructions: boundedString(payload.usageInstructions, `${type}.usageInstructions`, 2000),
+					at: requireTimestamp(payload.at, `${type}.at`),
+				};
+				this.sink.setDeliveryReport(event);
+				return;
+			}
 			default:
 				throw new Error(`Unsupported Agent v2 browser event payload type ${type}.`);
 		}
@@ -416,6 +530,60 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function nonEmptyString(value: unknown, label: string): string {
 	if (typeof value !== "string" || !value.trim()) throw new Error(`Invalid ${label}.`);
 	return value;
+}
+
+function boundedString(value: unknown, label: string, maxLength: number): string {
+	const text = nonEmptyString(value, label);
+	if (text.length > maxLength) throw new Error(`Invalid ${label}.`);
+	return text;
+}
+
+function requireStringArray(value: unknown, label: string, maxItems: number, requireItems = true): string[] {
+	if (!Array.isArray(value) || value.length > maxItems || (requireItems && value.length === 0)) {
+		throw new Error(`Invalid ${label}.`);
+	}
+	const items = value.map((item, index) => boundedString(item, `${label}[${index}]`, 500));
+	if (new Set(items).size !== items.length) throw new Error(`Invalid ${label}.`);
+	return items;
+}
+
+function requireRelativePath(value: unknown, label: string): string {
+	const path = boundedString(value, label, 1000);
+	if (
+		path.startsWith("/") ||
+		path.startsWith("\\") ||
+		path.includes("\\") ||
+		/^[A-Za-z]:/u.test(path) ||
+		path.split("/").some((segment) => !segment || segment === "." || segment === "..")
+	) {
+		throw new Error(`Invalid ${label}.`);
+	}
+	return path;
+}
+
+function requirePathArray(value: unknown, label: string): string[] {
+	return requireStringArray(value, label, 500, false).map((path, index) =>
+		requireRelativePath(path, `${label}[${index}]`),
+	);
+}
+
+function requireSha256(value: unknown, label: string): string {
+	const checksum = nonEmptyString(value, label);
+	if (!/^sha256:[a-f0-9]{64}$/u.test(checksum)) throw new Error(`Invalid ${label}.`);
+	return checksum;
+}
+
+function requireHttpUrl(value: unknown, label: string): string {
+	const url = boundedString(value, label, 2000);
+	try {
+		const parsed = new URL(url);
+		if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password) {
+			throw new Error(`Invalid ${label}.`);
+		}
+		return url;
+	} catch {
+		throw new Error(`Invalid ${label}.`);
+	}
 }
 
 function requireTimestamp(value: unknown, label: string): string {

@@ -94,12 +94,16 @@ export {
 export { AgentV2RunEventLog, type AgentV2RunEventLogOptions } from "./agent-v2-run-event-log.js";
 export type {
 	AgentV2ArtifactIndexedTransportEvent,
+	AgentV2DeliveryReportedTransportEvent,
 	AgentV2DiagnosticRecordedTransportEvent,
+	AgentV2OutputRecordedTransportEvent,
 	AgentV2PhaseChangedTransportEvent,
 	AgentV2RunCreatedTransportEvent,
 	AgentV2RunEventIdentity,
 	AgentV2RunEventReadRequest,
 	AgentV2RunTransportEvent,
+	AgentV2SkillAppliedTransportEvent,
+	AgentV2SkillResourceLoadedTransportEvent,
 	AgentV2TaskUpdatedTransportEvent,
 	AgentV2ValidationRecordedTransportEvent,
 } from "./agent-v2-run-events.js";
@@ -124,6 +128,11 @@ export {
 	type LoadAgentV2RuntimeSnapshotInput,
 	loadAgentV2RuntimeSnapshot,
 } from "./agent-v2-runtime-core.js";
+export {
+	AgentV2SkillContextError,
+	type AgentV2SkillContextErrorCode,
+	loadAgentV2SkillContext,
+} from "./agent-v2-skill-context.js";
 export {
 	advanceAgentV2Phase,
 	assertAgentV2RunTransition,
@@ -199,6 +208,9 @@ export {
 	AGENT_V2_VALIDATION_STATUSES,
 	type AgentV2CapabilityDecision,
 	type AgentV2CapabilityDeliveryMode,
+	type AgentV2ConversationSnapshot,
+	type AgentV2ConversationSnapshotMessage,
+	type AgentV2DeliveryReportPayload,
 	type AgentV2Error,
 	type AgentV2Phase,
 	type AgentV2PlanDocument,
@@ -208,6 +220,8 @@ export {
 	type AgentV2RunSnapshot,
 	type AgentV2RunSnapshotInput,
 	type AgentV2RunStatus,
+	type AgentV2SkillAppliedPayload,
+	type AgentV2SkillResourceLoadedPayload,
 	type AgentV2SpecDocument,
 	type AgentV2TaskGraph,
 	type AgentV2TaskKind,

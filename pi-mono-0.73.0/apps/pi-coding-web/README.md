@@ -258,21 +258,17 @@ PI resolves the token through PM, downloads the PRD/design documents as attachme
 
 For the current stage, PM demos should target static HTML/CSS/JS projects or build-based static frontend projects such as Vite React/Vue. Backend services, databases, auth providers, queues, external APIs, and deployment topology from PM documents are treated as target-system context and should be simulated in the static frontend with sample data, local state, mock responses, and clear loading/empty/error/success states. Node services, multi-service stacks, Docker, external databases, and custom reverse-proxy routing are outside the current preview scope.
 
-## Server Workspace Flow
+## Chat and Application Generation modes
 
-The application keeps the regular Web UI agent conversation, model selector, API key flow, and tool-card rendering. No extra project panel, log panel, or preview button is added to the UI.
+Each session has an explicit mode selector:
 
-Expected conversation flow:
-
-1. The user sends a request in the chat input.
-2. The Web UI agent decides whether project execution is needed.
-3. If a configured global skill matches the task, it calls `skill_load`, then optionally `skill_resource` for referenced text resources.
-4. For app/site/project work, it calls `project_file` repeatedly to create or update server-side files.
-5. For dependency-free static projects, it calls `project_task validate` and then `project_task preview`.
-6. For build-based static frontend projects, it calls `project_task build_static`, then `project_task validate`, and finally `project_task preview`.
-7. `build_static` uses the server-controlled ephemeral container runner and restricted registry allowlist; `preview` never runs package scripts.
-8. The server serves `dist/`, `build/`, `public/`, or a root static `index.html` when present.
-9. The browser displays skill, file, and task tool cards plus the final assistant message with the preview URL.
+1. A standalone new session defaults to **Chat**. Chat uses the normal multi-turn model stream, can read configured skills, and never creates Agent v2 runs, tasks, artifacts, or project files.
+2. **App Generation** sends the current objective, selected skill names, attachments, and the bounded conversation snapshot to the server-owned Agent v2 runtime.
+3. A trusted PM handoff defaults to App Generation; users can switch modes before execution starts.
+4. The selected mode is stored with session metadata and restored after reload. Switching is disabled while a chat stream or Agent v2 run is active.
+5. Agent v2 loads authorized skill instructions on the server, generates files, validates them, repairs retryable failures, and publishes the preview.
+6. The browser renders replay-safe activity cards for skills, tasks, artifacts, validation, diagnostics, and preview delivery without synthesizing provider tool calls.
+7. A successful run ends with a fact-based delivery report. A failed run reports the failed stage/task, completed work, diagnostics, repair attempts, remaining validation, safe-retry status, and next steps.
 
 Preview URLs are served from this PI server at:
 
@@ -299,6 +295,17 @@ If a project root `index.html` still references build-source files such as `src/
 - The configured storage API is provided by this application's Vite dev/preview server.
 - If the app is served as static files without that server, the browser can still use IndexedDB, but disk mirroring and generated project file output are unavailable.
 - Generated code dependencies and build scripts may execute on the server during `project_task build_static`. For production multi-user deployment, run the PI server inside an isolated environment and restrict filesystem, network, CPU, memory, dependency installation, and command timeout limits.
+
+### Agent v2 reset and rollback
+
+The Application Generation Agent v2 durable schema is intentionally reset as one unit; old run data is not migrated.
+
+1. Stop v2 workers.
+2. Run the Agent v2 reset maintenance operation with confirmation token application-generation-agent-v2.
+3. Start v2 workers.
+4. Verify /api/agent-v2/runs/start and event replay.
+
+Rollback: redeploy the previous code version and restore from backup if required.
 
 ## Project Structure
 

@@ -434,7 +434,7 @@ describe("agent v2 execution core", () => {
 				result: {
 					version: 1 as const,
 					taskId: "implement",
-					summary: "MATERIALIZED_INPUT_SENTINEL RAW_FILE_SENTINEL sk-model-summary-key-1234567890",
+					summary: "Built an accessible dashboard with responsive navigation.",
 					files: [
 						{ path: "src/app.js", content: "export const secret = 'RAW_FILE_SENTINEL';\n" },
 						{ path: "index.html", content: "<!doctype html><main>Ready</main>\n" },
@@ -462,6 +462,19 @@ describe("agent v2 execution core", () => {
 			runId: "run-implementation",
 			materializer,
 			modelExecution,
+			skillContext: {
+				skills: [
+					{ name: "ui-polish", location: "skill://ui-polish/SKILL.md", content: "Use accessible contrast." },
+				],
+				resources: [
+					{
+						skillName: "ui-polish",
+						path: "references/colors.md",
+						content: "Use blue.",
+						checksum: `sha256:${"a".repeat(64)}`,
+					},
+				],
+			},
 			now: () => "2026-07-08T00:02:00.000Z",
 		});
 
@@ -493,17 +506,35 @@ describe("agent v2 execution core", () => {
 		expect(store.getAgentV2Run("client-a", "run-implementation")).toMatchObject({ phase: "validation" });
 		const events = store.listAgentV2RunEvents("client-a", "run-implementation", 0);
 		expect(events.map((event) => event.type)).toEqual([
+			"agent_v2.skill_applied",
+			"agent_v2.skill_resource_loaded",
 			"agent_v2.task_updated",
 			"agent_v2.artifact_indexed",
 			"agent_v2.artifact_indexed",
 			"agent_v2.output_recorded",
 		]);
 		expect(events.at(-1)?.payload).toMatchObject({
-			summary: "Generated 2 files.",
+			summary: "Built an accessible dashboard with responsive navigation.",
 			provider: "test",
 			model: "v2-test-model",
 			usage: { input: 10, output: 20, totalTokens: 30, costTotal: 0.01 },
 		});
+		expect(
+			events.filter((event) => event.type === "agent_v2.artifact_indexed").map((event) => event.payload),
+		).toEqual([
+			expect.objectContaining({
+				action: "created",
+				path: "index.html",
+				sourceTaskId: "implement",
+				checksum: expect.any(String),
+			}),
+			expect.objectContaining({
+				action: "created",
+				path: "src/app.js",
+				sourceTaskId: "implement",
+				checksum: expect.any(String),
+			}),
+		]);
 		const outbox = store.leaseAgentV2Outbox({
 			ownerId: "task7-red",
 			kinds: ["live_event"],
@@ -752,13 +783,20 @@ describe("agent v2 execution core", () => {
 		expect(commit).toHaveBeenCalledTimes(1);
 		expect(directTaskWrite).not.toHaveBeenCalled();
 		const events = store.listAgentV2RunEvents("client-a", "run-delivery-preview", 0);
-		expect(events.map((event) => event.type)).toEqual(["agent_v2.task_updated"]);
+		expect(events.map((event) => event.type)).toEqual(["agent_v2.task_updated", "agent_v2.delivery_reported"]);
 		expect(events[0]?.payload).toMatchObject({
 			type: "agent_v2.task_updated",
 			taskId: "deliver",
 			kind: "delivery",
 			status: "succeeded",
 			phase: "delivery",
+		});
+		expect(events[1]?.payload).toMatchObject({
+			type: "agent_v2.delivery_reported",
+			previewStatus: "running",
+			previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
+			validationStatus: "passed",
+			buildStatus: "not_required",
 		});
 		expect(
 			JSON.stringify({ events, tasks: store.listAgentV2Tasks("client-a", "run-delivery-preview") }),

@@ -392,7 +392,7 @@ class SmokeDocument extends SmokeEventTarget {
 class SmokeElement extends SmokeEventTarget {
 	id = "";
 	className = "";
-	textContent = "";
+	private text = "";
 	innerHTML = "";
 	value = "";
 	checked = false;
@@ -409,6 +409,14 @@ class SmokeElement extends SmokeEventTarget {
 
 	get classList(): SmokeClassList {
 		return new SmokeClassList(this);
+	}
+
+	get textContent(): string {
+		return this.text;
+	}
+
+	set textContent(value: unknown) {
+		this.text = value === null ? "" : String(value);
 	}
 
 	setAttribute(name: string, value: string): void {

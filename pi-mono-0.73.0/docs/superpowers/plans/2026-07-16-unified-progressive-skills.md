@@ -404,4 +404,3 @@ Classify any intentional legacy/test hits. Confirm no temporary fixture, generat
 ### Step 7: Apply `verification-before-completion`
 
 Report only evidence observed in the final commands and browser runs. If any acceptance item is not run or fails, state it explicitly rather than claiming completion.
-

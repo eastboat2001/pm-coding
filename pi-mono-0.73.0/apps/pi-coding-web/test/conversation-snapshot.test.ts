@@ -45,6 +45,26 @@ describe("conversation snapshot", () => {
 		expect(JSON.stringify(result.snapshot)).not.toContain("Generated 3 files");
 	});
 
+	it("bounds long Chat messages to the app-generation submission contract", async () => {
+		const result = await buildConversationSnapshot({
+			messages: [
+				{ role: "user", content: "生成详细方案", timestamp: 1 },
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "a".repeat(16_972) }],
+					timestamp: 2,
+				},
+			] as never,
+			currentObjective: "生成应用",
+			contextWindowTokens: 128_000,
+		});
+
+		expect(result.snapshot.recentMessages).toHaveLength(2);
+		expect(Math.max(...result.snapshot.recentMessages.map((message) => message.content.length))).toBeLessThanOrEqual(
+			8_192,
+		);
+	});
+
 	it("compacts at 75 percent of the snapshot budget using 55/35/10 allocation", async () => {
 		const budget = conversationSnapshotBudget(400);
 		expect(budget).toEqual({ totalChars: 400, recentChars: 220, summaryChars: 140, safetyChars: 40, triggerChars: 300 });

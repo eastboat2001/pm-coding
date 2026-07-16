@@ -46,7 +46,8 @@ export interface BuildConversationSnapshotResult {
 	warning?: ConversationSnapshotWarning;
 }
 
-const MAX_MESSAGE_CHARS = 32_768;
+const MAX_TEXT_CHARS = 32_768;
+export const CONVERSATION_SNAPSHOT_MESSAGE_MAX_CHARS = 8_192;
 
 export function conversationSnapshotBudget(contextWindowTokens: number): ConversationSnapshotBudget {
 	// Four characters per token, with one quarter of the context reserved for the snapshot.
@@ -74,7 +75,7 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
 	return Object.keys(value).every((key) => keys.includes(key));
 }
 
-function sanitizeText(value: string): string {
+function sanitizeText(value: string, maxChars = MAX_TEXT_CHARS): string {
 	return value
 		.replace(
 			/\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|password|secret)\s*[:=]\s*[^\s,;]+/gi,
@@ -83,7 +84,7 @@ function sanitizeText(value: string): string {
 		.replace(/\b[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*/g, "[REDACTED_PATH]")
 		.replace(/\/(?:home|Users|var|tmp|opt|srv)\/[^\s,;]*/g, "[REDACTED_PATH]")
 		.trim()
-		.slice(0, MAX_MESSAGE_CHARS);
+		.slice(0, maxChars);
 }
 
 function textFromContent(content: unknown): string {
@@ -112,7 +113,7 @@ function toNaturalLanguageMessage(value: unknown): ConversationSnapshotMessage |
 	) {
 		return undefined;
 	}
-	const content = sanitizeText(textFromContent(value.content));
+	const content = sanitizeText(textFromContent(value.content), CONVERSATION_SNAPSHOT_MESSAGE_MAX_CHARS);
 	if (!content) {
 		return undefined;
 	}
@@ -126,7 +127,7 @@ function normalizeSnapshotMessage(value: unknown): ConversationSnapshotMessage |
 	if ((value.role !== "user" && value.role !== "assistant") || typeof value.content !== "string") {
 		return undefined;
 	}
-	const content = sanitizeText(value.content);
+	const content = sanitizeText(value.content, CONVERSATION_SNAPSHOT_MESSAGE_MAX_CHARS);
 	return content ? { role: value.role, content } : undefined;
 }
 

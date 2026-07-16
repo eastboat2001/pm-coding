@@ -1,5 +1,6 @@
 import type { AgentV2RunEventRecord, AgentV2RunSnapshot } from "@mariozechner/pi-web-workspace";
 import { piClientHeaders } from "./client-id.js";
+import { CONVERSATION_SNAPSHOT_MESSAGE_MAX_CHARS } from "./conversation-snapshot.js";
 
 export const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 
@@ -127,7 +128,11 @@ function validateConversationSnapshot(
 			throw new Error("Agent v2 conversation snapshot message role is invalid.");
 		}
 		const role: "user" | "assistant" = candidate.role;
-		if (typeof candidate.content !== "string" || !candidate.content.trim() || candidate.content.length > 8_192) {
+		if (
+			typeof candidate.content !== "string" ||
+			!candidate.content.trim() ||
+			candidate.content.length > CONVERSATION_SNAPSHOT_MESSAGE_MAX_CHARS
+		) {
 			throw new Error("Agent v2 conversation snapshot message content is invalid.");
 		}
 		return { role, content: candidate.content };

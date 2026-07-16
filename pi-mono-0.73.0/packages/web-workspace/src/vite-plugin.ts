@@ -184,7 +184,6 @@ function createConfiguredStoragePlugin({
 			sessions.ensureDirs();
 			mkdirSync(dirname(config.settingsFile), { recursive: true });
 			mkdirSync(config.skillsDir, { recursive: true });
-			mkdirSync(config.defaultSkillsDir, { recursive: true });
 			diagnostics.ensureDirs();
 			await runtimeDb.ensureAgentV2Schema();
 			const startupReadiness = await readinessGate.check(readinessAbort.signal, { force: true });
@@ -460,7 +459,6 @@ function storageWatchIgnoredPaths(config: StorageConfig): string[] {
 	return [
 		`${normalizeWatchPath(config.clientsRootDir)}/**`,
 		`${normalizeWatchPath(config.skillsDir)}/**`,
-		`${normalizeWatchPath(config.defaultSkillsDir)}/**`,
 		normalizeWatchPath(config.logsDbFile),
 		normalizeWatchPath(config.runtimeDbFile),
 		normalizeWatchPath(config.settingsFile),
@@ -620,7 +618,6 @@ async function handleStorageApi(
 				settingsFile: config.settingsFile,
 				clientsRootDir: config.clientsRootDir,
 				skillsDir: config.skillsDir,
-				defaultSkillsDir: config.defaultSkillsDir,
 				previewBaseUrl: config.previewBaseUrl,
 				defaultModelProvider: config.defaultModelProvider,
 				defaultModelId: config.defaultModelId,

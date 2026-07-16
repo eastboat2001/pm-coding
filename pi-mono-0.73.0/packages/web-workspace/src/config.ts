@@ -38,6 +38,17 @@ export class RetiredApplicationGenerationConfigError extends Error {
 	}
 }
 
+export class RetiredSkillConfigError extends Error {
+	readonly variable = "PI_DEFAULT_SKILLS_DIR";
+
+	constructor() {
+		super(
+			"Retired skill configuration is not supported: PI_DEFAULT_SKILLS_DIR. Move each skill directory under PI_SKILLS_DIR and control implicit invocation with agents/openai.yaml.",
+		);
+		this.name = "RetiredSkillConfigError";
+	}
+}
+
 export class InvalidRuntimeConfigError extends Error {
 	constructor(
 		readonly variable: string,
@@ -57,6 +68,9 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		(name) => process.env[name] !== undefined || Object.hasOwn(configEnv.values, name),
 	);
 	if (retiredVariables.length > 0) throw new RetiredApplicationGenerationConfigError([...retiredVariables]);
+	if (process.env.PI_DEFAULT_SKILLS_DIR !== undefined || Object.hasOwn(configEnv.values, "PI_DEFAULT_SKILLS_DIR")) {
+		throw new RetiredSkillConfigError();
+	}
 	const env = (name: string) => envValue(name, configEnv.values);
 	const containerBuild = containerBuildConfig(env);
 	const envStorageDir = stringValue(env("PI_STORAGE_DIR"));
@@ -73,10 +87,6 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		),
 		clientsRootDir,
 		skillsDir: resolveConfiguredPath(rootDir, stringValue(env("PI_SKILLS_DIR")) || "data/skills"),
-		defaultSkillsDir: resolveConfiguredPath(
-			rootDir,
-			stringValue(env("PI_DEFAULT_SKILLS_DIR")) || "data/default-skills",
-		),
 		runtimeDbFile: resolveConfiguredPath(
 			rootDir,
 			stringValue(env("PI_DB_FILE")) ||

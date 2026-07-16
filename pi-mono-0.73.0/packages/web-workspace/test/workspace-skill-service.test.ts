@@ -135,6 +135,7 @@ Read references/layout.md when building a page.
 		expect(skill).toMatchObject({
 			name: "page-style",
 			description: "Create static pages with a distinctive visual system.",
+			allowImplicitInvocation: true,
 			interface: {
 				displayName: "Page Style",
 				shortDescription: "Distinctive static page design",
@@ -145,6 +146,44 @@ Read references/layout.md when building a page.
 
 		const loaded = service.load({ name: "page-style" });
 		expect(loaded.resources.map((resource) => resource.path)).toEqual(["references/layout.md", "scripts/audit.py"]);
+	});
+
+	it("uses agents/openai.yaml policy to control implicit invocation safely", () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		for (const [name, policy] of [
+			["explicit-only", "false"],
+			["invalid-policy", '"false"'],
+		] as const) {
+			writeSkill(
+				config.skillsDir,
+				name,
+				`Use this skill when testing ${name} invocation policy. Do not use for unrelated work.`,
+			);
+			const agentsDir = join(config.skillsDir, name, "agents");
+			mkdirSync(agentsDir, { recursive: true });
+			writeFileSync(
+				join(agentsDir, "openai.yaml"),
+				`policy:\n  allow_implicit_invocation: ${policy}\n`,
+				"utf8",
+			);
+		}
+
+		const list = new WorkspaceSkillService(config).list();
+
+		expect(list.skills).toEqual([
+			expect.objectContaining({ name: "explicit-only", allowImplicitInvocation: false }),
+			expect.objectContaining({ name: "invalid-policy", allowImplicitInvocation: false }),
+		]);
+		expect(list.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "error",
+					path: "invalid-policy/agents/openai.yaml",
+					message: "policy.allow_implicit_invocation must be a boolean",
+				}),
+			]),
+		);
 	});
 
 	it("reports quality warnings for vague skill descriptions", () => {
@@ -267,7 +306,7 @@ description: Use this skill when creating UI/UX design. Do not use for backend-o
 		);
 	});
 
-	it("keeps default forced skills hidden from selectable skills while allowing backend load", () => {
+	it("returns one catalog without legacy default or prompt projections", () => {
 		const root = tempRoot();
 		const config = testConfig(root);
 		writeSkill(
@@ -275,29 +314,13 @@ description: Use this skill when creating UI/UX design. Do not use for backend-o
 			"selectable-style",
 			"Use this skill when creating selectable page styles. Do not use for backend-only tasks.",
 		);
-		writeSkill(
-			config.defaultSkillsDir,
-			"platform-defaults",
-			"Use this skill when any PI static app is generated. Do not use outside PI static preview delivery.",
-			"Always preserve PI platform defaults.",
-		);
-		writeSkill(
-			config.skillsDir,
-			"platform-defaults",
-			"Use this skill when selecting visible platform defaults. Do not use for backend-forced defaults.",
-			"This duplicate should stay hidden behind the default skill.",
-		);
 
 		const service = new WorkspaceSkillService(config);
 		const list = service.list();
 
 		expect(list.skills.map((skill) => skill.name)).toEqual(["selectable-style"]);
-		expect(list.promptSkills.map((skill) => skill.name)).toEqual(["selectable-style"]);
-		expect(list.defaultSkills.map((skill) => skill.name)).toEqual(["platform-defaults"]);
-		expect(list.diagnostics.map((diagnostic) => diagnostic.message)).toContain(
-			'name "platform-defaults" collision between selectable and default skills',
-		);
-		expect(service.load({ name: "platform-defaults" }).content).toContain("Always preserve PI platform defaults.");
+		expect(list).not.toHaveProperty("promptSkills");
+		expect(list).not.toHaveProperty("defaultSkills");
 	});
 });
 

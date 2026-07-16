@@ -30,7 +30,7 @@ export { AGENT_V2_PHASES, AGENT_V2_RUN_EVENT_TYPES, AGENT_V2_RUN_STATUSES, AGENT
 export { runAgentV2StaticValidationGate, } from "./agent-v2-validation-gate.js";
 export { AgentV2WorkerService, } from "./agent-v2-worker-service.js";
 export { normalizeClientId, readClientIdHeader } from "./client-id.js";
-export { InvalidRuntimeConfigError, loadStorageConfig, RetiredApplicationGenerationConfigError, } from "./config.js";
+export { InvalidRuntimeConfigError, loadStorageConfig, RetiredApplicationGenerationConfigError, RetiredSkillConfigError, } from "./config.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";
 export { LangfuseDiagnosticExporter } from "./langfuse-exporter.js";

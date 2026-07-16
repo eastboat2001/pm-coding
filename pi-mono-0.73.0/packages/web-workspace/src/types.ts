@@ -220,7 +220,6 @@ export interface StorageConfig {
 	settingsFile: string;
 	clientsRootDir: string;
 	skillsDir: string;
-	defaultSkillsDir: string;
 	runtimeDbFile: string;
 	redisUrl: string;
 	runtimeStore: "postgres" | "sqlite";
@@ -553,7 +552,7 @@ export interface SkillSummary extends JsonObject {
 	name: string;
 	description: string;
 	location: string;
-	disableModelInvocation: boolean;
+	allowImplicitInvocation: boolean;
 	interface?: SkillInterfaceMetadata;
 }
 
@@ -568,8 +567,6 @@ export interface SkillInterfaceMetadata extends JsonObject {
 
 export interface SkillListResult extends JsonObject {
 	skills: SkillSummary[];
-	defaultSkills: SkillSummary[];
-	promptSkills: SkillSummary[];
 	diagnostics: ResourceDiagnostic[];
 }
 

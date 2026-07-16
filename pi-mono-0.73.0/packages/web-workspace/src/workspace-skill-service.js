@@ -37,12 +37,8 @@ export class WorkspaceSkillService {
     }
     list() {
         const result = this.discover();
-        const skills = result.skills.map(toSummary);
-        const defaultSkills = result.defaultSkills.map(toSummary);
         return {
-            skills,
-            defaultSkills,
-            promptSkills: skills.filter((skill) => !skill.disableModelInvocation),
+            skills: result.skills.map(toSummary),
             diagnostics: result.diagnostics,
         };
     }
@@ -80,7 +76,7 @@ export class WorkspaceSkillService {
         if (!normalizedName)
             throw new Error("Field `name` is required.");
         const result = this.discover();
-        const skill = [...result.defaultSkills, ...result.skills].find((candidate) => candidate.name === normalizedName);
+        const skill = result.skills.find((candidate) => candidate.name === normalizedName);
         if (!skill)
             throw new Error(`Skill not found: ${normalizedName}`);
         return skill;
@@ -88,30 +84,7 @@ export class WorkspaceSkillService {
     discover() {
         const diagnostics = [];
         const skills = discoverSkillsInDir(this.config.skillsDir, diagnostics);
-        const defaultSkills = discoverSkillsInDir(this.config.defaultSkillsDir, diagnostics);
-        const defaultNames = new Set(defaultSkills.map((skill) => skill.name));
-        const selectableSkills = [];
-        for (const skill of skills) {
-            if (!defaultNames.has(skill.name)) {
-                selectableSkills.push(skill);
-                continue;
-            }
-            const defaultSkill = defaultSkills.find((candidate) => candidate.name === skill.name);
-            if (!defaultSkill)
-                continue;
-            diagnostics.push({
-                type: "collision",
-                message: `name "${skill.name}" collision between selectable and default skills`,
-                path: skill.location,
-                collision: {
-                    resourceType: "skill",
-                    name: skill.name,
-                    winnerPath: defaultSkill.location,
-                    loserPath: skill.location,
-                },
-            });
-        }
-        return { skills: selectableSkills, defaultSkills, diagnostics };
+        return { skills, diagnostics };
     }
 }
 function discoverSkillsInDir(root, diagnostics) {
@@ -179,8 +152,8 @@ function loadSkillFromFile(filePath, expectedName, realRootDir, diagnostics) {
     const name = (frontmatterName || expectedName).trim();
     const description = frontmatter.description?.trim() || "";
     const skillDir = dirname(realFilePath);
-    const interfaceMetadata = readOpenAiInterfaceMetadata(skillDir);
     const diagnosticPath = relativeToRoot(realRootDir, realFilePath);
+    const metadata = readOpenAiMetadata(skillDir, realRootDir, diagnostics);
     const nameErrors = validateSkillName(frontmatterName, name, expectedName);
     const descriptionErrors = validateDescriptionErrors(description);
     for (const message of nameErrors) {
@@ -200,8 +173,8 @@ function loadSkillFromFile(filePath, expectedName, realRootDir, diagnostics) {
         filePath: realFilePath,
         baseDir: skillDir,
         location: skillLocation(name, SKILL_FILE),
-        disableModelInvocation: frontmatter["disable-model-invocation"] === true,
-        ...(interfaceMetadata ? { interface: interfaceMetadata } : {}),
+        allowImplicitInvocation: metadata.allowImplicitInvocation,
+        ...(metadata.interface ? { interface: metadata.interface } : {}),
     };
 }
 function readDirectorySafe(dir) {
@@ -220,7 +193,7 @@ function toSummary(skill) {
         name: skill.name,
         description: skill.description,
         location: skill.location,
-        disableModelInvocation: skill.disableModelInvocation,
+        allowImplicitInvocation: skill.allowImplicitInvocation,
         ...(skill.interface ? { interface: skill.interface } : {}),
     };
 }
@@ -351,17 +324,63 @@ function parseSimpleYamlFrontmatter(yaml) {
     }
     return frontmatter;
 }
-function readOpenAiInterfaceMetadata(skillDir) {
+function readOpenAiMetadata(skillDir, realRootDir, diagnostics) {
     const metadataPath = join(skillDir, ...OPENAI_AGENT_METADATA_PATH);
     if (!existsSync(metadataPath))
-        return undefined;
+        return { allowImplicitInvocation: true };
     const stats = statSync(metadataPath);
-    if (!stats.isFile() || stats.size > MAX_RESOURCE_BYTES)
-        return undefined;
+    if (!stats.isFile() || stats.size > MAX_RESOURCE_BYTES) {
+        return { allowImplicitInvocation: false };
+    }
     const realSkillDir = realpathSync(skillDir);
     const realMetadataPath = realpathSync(metadataPath);
     assertInsideRealPath(realSkillDir, realMetadataPath, "Resolved OpenAI skill metadata path escapes skill root.");
-    return parseOpenAiInterfaceMetadata(readFileSync(realMetadataPath, "utf8"));
+    const content = readFileSync(realMetadataPath, "utf8");
+    const policy = parseOpenAiImplicitPolicy(content);
+    if (policy.error) {
+        diagnostics.push({
+            type: "error",
+            message: policy.error,
+            path: relativeToRoot(realRootDir, realMetadataPath),
+        });
+    }
+    const interfaceMetadata = parseOpenAiInterfaceMetadata(content);
+    return {
+        allowImplicitInvocation: policy.value,
+        ...(interfaceMetadata ? { interface: interfaceMetadata } : {}),
+    };
+}
+function parseOpenAiImplicitPolicy(content) {
+    const lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        if (!line.trim() || line.trimStart().startsWith("#"))
+            continue;
+        const section = line.match(/^(\s*)policy:\s*(.*)$/);
+        if (!section)
+            continue;
+        if (section[2].trim()) {
+            return { value: false, error: "policy.allow_implicit_invocation must be a boolean" };
+        }
+        const sectionIndent = section[1].length;
+        for (let childIndex = index + 1; childIndex < lines.length; childIndex++) {
+            const child = lines[childIndex];
+            if (!child.trim() || child.trimStart().startsWith("#"))
+                continue;
+            if (leadingWhitespaceLength(child) <= sectionIndent)
+                break;
+            const match = child.match(/^\s+allow_implicit_invocation:\s*(.*)$/);
+            if (!match)
+                continue;
+            if (match[1].trim() === "true")
+                return { value: true };
+            if (match[1].trim() === "false")
+                return { value: false };
+            return { value: false, error: "policy.allow_implicit_invocation must be a boolean" };
+        }
+        return { value: true };
+    }
+    return { value: true };
 }
 function parseOpenAiInterfaceMetadata(content) {
     const metadata = {};
@@ -450,9 +469,6 @@ function assignFrontmatterValue(frontmatter, key, value) {
         frontmatter.name = value;
     if (key === "description" && typeof value === "string")
         frontmatter.description = value;
-    if (key === "disable-model-invocation" && typeof value === "boolean") {
-        frontmatter["disable-model-invocation"] = value;
-    }
 }
 function skillLocation(name, path) {
     return `skill://${encodeURIComponent(name)}/${toPosixPath(path)}`;

@@ -43,6 +43,7 @@ const INVALID_REGISTRY_MESSAGE =
 
 const CONFIG_ENV_KEYS = [
 	"PI_STORAGE_ENV_FILE",
+	"PI_DEFAULT_SKILLS_DIR",
 	"PI_REDIS_URL",
 	...RETIRED_APPLICATION_GENERATION_ENV,
 	"PI_LOG_STDOUT",
@@ -94,6 +95,21 @@ function withIsolatedConfigEnv<T>(run: () => T): T {
 }
 
 describe("storage config diagnostics", () => {
+	it("rejects PI_DEFAULT_SKILLS_DIR with one-directory migration guidance", () => {
+		withIsolatedConfigEnv(() => {
+			const root = mkdtempSync(join(tmpdir(), "pi-config-retired-default-skills-"));
+			process.env.PI_DEFAULT_SKILLS_DIR = SECRET_SENTINEL;
+
+			expect(() => loadStorageConfig(root)).toThrow(/move each skill directory under PI_SKILLS_DIR/i);
+			try {
+				loadStorageConfig(root);
+			} catch (error) {
+				expect(String(error)).toContain("PI_DEFAULT_SKILLS_DIR");
+				expect(String(error)).not.toContain(SECRET_SENTINEL);
+			}
+		});
+	});
+
 	it.each([
 		["PI_RUNTIME_STORE", "postgress"],
 		["PI_RUNTIME_STORE", ""],

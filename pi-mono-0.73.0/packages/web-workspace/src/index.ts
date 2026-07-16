@@ -248,6 +248,7 @@ export {
 	InvalidRuntimeConfigError,
 	loadStorageConfig,
 	RetiredApplicationGenerationConfigError,
+	RetiredSkillConfigError,
 } from "./config.js";
 export { WorkspaceDiagnosticExportService } from "./diagnostic-export-service.js";
 export { WorkspaceDiagnosticLogService } from "./diagnostic-log-service.js";

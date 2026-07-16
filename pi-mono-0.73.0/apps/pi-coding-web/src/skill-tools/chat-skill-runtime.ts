@@ -1,8 +1,8 @@
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import { createChatSystemPrompt } from "./chat-system-prompt.js";
 import { requestSkillApi } from "./client.js";
-import { expandSkillCommandsInMessages, getLatestExplicitSkillNames } from "./skill-command.js";
 import type { SkillLoadDetails, SkillSummary } from "./schemas.js";
+import { expandSkillCommandsInMessages, getLatestExplicitSkillNames } from "./skill-command.js";
 import { createServerSkillTools } from "./tools.js";
 
 export type ChatPromptInput = string | AgentMessage | AgentMessage[];

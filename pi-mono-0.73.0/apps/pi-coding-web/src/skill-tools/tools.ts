@@ -111,13 +111,15 @@ function createSkillResourceTool(input: {
 			if (cached) return skillResourceToolResult(cached);
 			let pending = input.resourceRequests.get(cacheKey);
 			if (!pending) {
-				pending = input.request("/resource", { body: { name: args.name, path: args.path }, signal }).then((result) => {
-					if (result.name !== args.name || result.path !== args.path) {
-						throw new Error(`Skill resource catalog became stale: ${args.name}/${args.path}`);
-					}
-					input.resourceCache.set(cacheKey, result);
-					return result;
-				});
+				pending = input
+					.request("/resource", { body: { name: args.name, path: args.path }, signal })
+					.then((result) => {
+						if (result.name !== args.name || result.path !== args.path) {
+							throw new Error(`Skill resource catalog became stale: ${args.name}/${args.path}`);
+						}
+						input.resourceCache.set(cacheKey, result);
+						return result;
+					});
 				input.resourceRequests.set(cacheKey, pending);
 				void pending.finally(() => input.resourceRequests.delete(cacheKey)).catch(() => undefined);
 			}

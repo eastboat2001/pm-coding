@@ -4,10 +4,8 @@ PI supports server-configured global skills under `data/skills/<skill-name>/SKIL
 Skills are instructions and reference material for the agent. They do not grant extra
 permissions and PI does not execute skill scripts.
 
-PI also supports backend-forced default skills under
-`data/default-skills/<skill-name>/SKILL.md`. Default skills use the same file format and
-quality rules, but they are not shown in the frontend skill picker. The server injects
-them into every latest user request as mandatory instructions.
+All reusable capabilities use this one Skill type and directory. Permanent PI platform
+rules belong in the Chat system prompt rather than an automatically injected Skill.
 
 ## Required Structure
 
@@ -52,6 +50,17 @@ Describe the specialized behavior this skill adds.
 - Keep `description` under 1024 characters.
 - Prefer 80-300 characters for simple skills and 300-700 characters for broad skills.
 
+To keep a Skill available only through `/skill:<name>` or an explicit application-generation
+selection, add `agents/openai.yaml`:
+
+```yaml
+policy:
+  allow_implicit_invocation: false
+```
+
+The default is `true`. PI initially discloses only bounded metadata for implicitly invokable
+Skills, then loads `SKILL.md` after activation and referenced resources only on demand.
+
 ## Body Rules
 
 - Keep `SKILL.md` concise and operational. Put long examples and reference material in
@@ -78,7 +87,7 @@ mandatory instructions. Skill authors should still make composition explicit:
 
 PI can read text resources referenced by a loaded skill through `skill_resource`.
 
-Recommended layout for selectable skills:
+Recommended layout:
 
 ```text
 data/skills/frontend-design/
@@ -89,15 +98,6 @@ data/skills/frontend-design/
     accessibility.md
   agents/
     openai.yaml
-```
-
-Recommended layout for backend-forced default skills:
-
-```text
-data/default-skills/pi-platform-defaults/
-  SKILL.md
-  references/
-    platform-rules.md
 ```
 
 Use resources for:

@@ -51,10 +51,7 @@ export function getLatestExplicitSkillNames(messages: AgentMessage[]): string[] 
 	return [];
 }
 
-async function expandSkillCommandText(
-	text: string,
-	options: ExpandSkillCommandOptions = {},
-): Promise<string> {
+async function expandSkillCommandText(text: string, options: ExpandSkillCommandOptions = {}): Promise<string> {
 	const parsed = parseSkillCommandPrefix(text);
 	if (!parsed) return text;
 	if (options.availableSkillNames) {
@@ -258,18 +255,6 @@ function findLatestExpandableMessageIndex(messages: AgentMessage[]): number {
 		if (readExpandableTextContent(messages[index]) !== undefined) return index;
 	}
 	return -1;
-}
-
-function uniqueNames(names: string[]): string[] {
-	const unique: string[] = [];
-	const seen = new Set<string>();
-	for (const rawName of names) {
-		const name = rawName.trim();
-		if (!name || seen.has(name)) continue;
-		unique.push(name);
-		seen.add(name);
-	}
-	return unique;
 }
 
 function formatUserRequestSection(userRequest: string): string {

@@ -14,7 +14,6 @@ function testConfig(root: string): StorageConfig {
 		settingsFile: join(root, "data", "settings.json"),
 		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
-		defaultSkillsDir: join(root, "data", "default-skills"),
 		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
 		runtimeStore: "postgres",

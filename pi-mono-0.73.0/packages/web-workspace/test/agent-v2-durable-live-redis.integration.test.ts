@@ -81,7 +81,6 @@ async function createMiddleware(options: {
 			settingsFile: join(options.root, "settings.json"),
 			clientsRootDir: join(options.root, "clients"),
 			skillsDir: join(options.root, "skills"),
-			defaultSkillsDir: join(options.root, "default-skills"),
 			runtimeDbFile: join(options.root, "runtime.sqlite"),
 			logsDbFile: join(options.root, "logs.sqlite"),
 			redisUrl: redisUrl!,

@@ -55,7 +55,7 @@ describe("skill tool contract", () => {
 			name: 'ui<&"polish',
 			description: "Improve UI",
 			location: 'C:\\Skills\\ui<&"polish',
-			disableModelInvocation: false,
+			allowImplicitInvocation: true,
 			interface: {
 				displayName: "UI Polish",
 				shortDescription: "Make the interface production ready.",

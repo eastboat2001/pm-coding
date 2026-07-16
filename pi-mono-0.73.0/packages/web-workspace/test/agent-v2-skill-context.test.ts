@@ -68,9 +68,9 @@ describe("agent v2 skill context", () => {
 		).toThrow(AgentV2SkillContextError);
 		try {
 			loadAgentV2SkillContext({
-			selectedSkillNames: ["attacker-skill"],
-			skills: {
-				list: () => ({ skills: [], diagnostics: [] }),
+				selectedSkillNames: ["attacker-skill"],
+				skills: {
+					list: () => ({ skills: [], diagnostics: [] }),
 					load: vi.fn(),
 					readResource: vi.fn(),
 				},

@@ -24,7 +24,6 @@ function testConfig(root, overrides = {}) {
 		settingsFile: join(root, "data", "settings.json"),
 		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
-		defaultSkillsDir: join(root, "data", "default-skills"),
 		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		agentV2: {
 			queueName: "pi:agent-v2:runs",
@@ -163,7 +162,6 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 			"PI_SETTINGS_FILE=env/settings.json",
 			"PI_CLIENTS_ROOT_DIR=env/clients",
 			"PI_SKILLS_DIR=env/skills",
-			"PI_DEFAULT_SKILLS_DIR=env/default-skills",
 			"PI_PREVIEW_BASE_URL=http://env.local/",
 			"PI_BUILD_CONTAINER_ENGINE=podman",
 			"PI_BUILD_CONTAINER_IMAGE=node@sha256:e21fc383b50d5347dc7a9f1cae45b8f4e2f0d39f7ade28e4eef7d2934522b752",
@@ -190,7 +188,6 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 		"PI_SETTINGS_FILE",
 		"PI_CLIENTS_ROOT_DIR",
 		"PI_SKILLS_DIR",
-		"PI_DEFAULT_SKILLS_DIR",
 		"PI_PREVIEW_BASE_URL",
 		"PI_BUILD_CONTAINER_ENGINE",
 		"PI_BUILD_CONTAINER_IMAGE",
@@ -219,7 +216,6 @@ await test("loadStorageConfig supports an explicit env file path", () => {
 		assert.equal(config.settingsFile, resolve(root, "env/settings.json"));
 		assert.equal(config.clientsRootDir, resolve(root, "env/clients"));
 		assert.equal(config.skillsDir, resolve(root, "env/skills"));
-		assert.equal(config.defaultSkillsDir, resolve(root, "env/default-skills"));
 		assert.equal(config.previewBaseUrl, "http://env.local");
 		assert.deepEqual(config.containerBuild, {
 			engine: "podman",
@@ -687,7 +683,7 @@ await test("WorkspaceDiagnosticLogService exports readable generation input and 
 	assert.match(JSON.stringify(output), /project_file/);
 });
 
-await test("WorkspaceSkillService loads global skills and hides disabled skills from prompt metadata", () => {
+await test("WorkspaceSkillService loads one catalog and honors explicit-only OpenAI policy", () => {
 	const root = tempRoot();
 	const config = testConfig(root);
 	const skillDir = join(config.skillsDir, "ui-polish");
@@ -706,16 +702,21 @@ Use stronger layout hierarchy.
 		"utf8",
 	);
 	mkdirSync(join(config.skillsDir, "private-skill"), { recursive: true });
+	mkdirSync(join(config.skillsDir, "private-skill", "agents"), { recursive: true });
 	writeFileSync(
 		join(config.skillsDir, "private-skill", "SKILL.md"),
 		`---
 name: private-skill
 description: Use this skill when testing hidden skills. Do not use for visible model invocation.
-disable-model-invocation: true
 ---
 
 # Private
 `,
+		"utf8",
+	);
+	writeFileSync(
+		join(config.skillsDir, "private-skill", "agents", "openai.yaml"),
+		"policy:\n  allow_implicit_invocation: false\n",
 		"utf8",
 	);
 
@@ -726,10 +727,8 @@ disable-model-invocation: true
 		list.skills.map((skill) => skill.name),
 		["private-skill", "ui-polish"],
 	);
-	assert.deepEqual(
-		list.promptSkills.map((skill) => skill.name),
-		["ui-polish"],
-	);
+	assert.equal(list.skills.find((skill) => skill.name === "private-skill")?.allowImplicitInvocation, false);
+	assert.equal(list.skills.find((skill) => skill.name === "ui-polish")?.allowImplicitInvocation, true);
 	assert.equal(list.diagnostics.length, 0);
 
 	const loaded = service.load({ name: "ui-polish" });

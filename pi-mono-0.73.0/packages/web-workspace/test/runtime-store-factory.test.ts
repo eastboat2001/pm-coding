@@ -368,7 +368,6 @@ function createTestConfig(): StorageConfig {
 		settingsFile: join(root, "settings.json"),
 		clientsRootDir: join(root, "clients"),
 		skillsDir: join(root, "skills"),
-		defaultSkillsDir: join(root, "default-skills"),
 		runtimeDbFile: join(root, "runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
 		runtimeStore: "sqlite",

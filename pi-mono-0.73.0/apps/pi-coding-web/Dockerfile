@@ -31,8 +31,7 @@ ENV NODE_ENV=production
 RUN mkdir -p /app/apps/pi-coding-web/data/clients \
   /app/apps/pi-coding-web/data/runtime \
   /app/apps/pi-coding-web/data/logs \
-  /app/apps/pi-coding-web/data/skills \
-  /app/apps/pi-coding-web/data/default-skills
+  /app/apps/pi-coding-web/data/skills
 
 WORKDIR /app/apps/pi-coding-web
 

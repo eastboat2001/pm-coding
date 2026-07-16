@@ -213,7 +213,7 @@ cp -r ./your-skill-folder data/app/skills/your-skill-folder
 docker compose restart pi-coding-web pi-worker
 ```
 
-Do not put custom skills under `data/app/default-skills`; that directory is for bundled/default skills.
+All reusable skills use the same `data/app/skills/<skill-name>/SKILL.md` layout. Configure explicit-only invocation with `agents/openai.yaml` inside the skill directory.
 
 ## Ports and Security
 

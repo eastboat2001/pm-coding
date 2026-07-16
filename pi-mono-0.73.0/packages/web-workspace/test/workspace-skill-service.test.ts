@@ -14,7 +14,6 @@ function testConfig(root: string): StorageConfig {
 		settingsFile: join(root, "data", "settings.json"),
 		clientsRootDir: join(root, "data", "clients"),
 		skillsDir: join(root, "data", "skills"),
-		defaultSkillsDir: join(root, "data", "default-skills"),
 		runtimeDbFile: join(root, "data", "runtime", "pi-runtime.sqlite"),
 		redisUrl: "redis://127.0.0.1:6379",
 		runtimeStore: "postgres",
@@ -162,11 +161,7 @@ Read references/layout.md when building a page.
 			);
 			const agentsDir = join(config.skillsDir, name, "agents");
 			mkdirSync(agentsDir, { recursive: true });
-			writeFileSync(
-				join(agentsDir, "openai.yaml"),
-				`policy:\n  allow_implicit_invocation: ${policy}\n`,
-				"utf8",
-			);
+			writeFileSync(join(agentsDir, "openai.yaml"), `policy:\n  allow_implicit_invocation: ${policy}\n`, "utf8");
 		}
 
 		const list = new WorkspaceSkillService(config).list();

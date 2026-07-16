@@ -67,7 +67,8 @@ declare module "@mariozechner/mini-lit" {
 		"Skill issues found": string;
 		"Review configured PI skills and format diagnostics.": string;
 		"Available skills": string;
-		"Default skills": string;
+		"Implicit skills": string;
+		"Explicit-only skills": string;
 		Issues: string;
 		Diagnostics: string;
 		Errors: string;
@@ -417,7 +418,8 @@ export const translations = {
 		"Skill issues found": "Skill issues found",
 		"Review configured PI skills and format diagnostics.": "Review configured PI skills and format diagnostics.",
 		"Available skills": "Available skills",
-		"Default skills": "Default skills",
+		"Implicit skills": "Implicit skills",
+		"Explicit-only skills": "Explicit-only skills",
 		Issues: "Issues",
 		Diagnostics: "Diagnostics",
 		Errors: "Errors",
@@ -795,7 +797,8 @@ export const translations = {
 		"Skill issues found": "Fähigkeitenprobleme gefunden",
 		"Review configured PI skills and format diagnostics.": "Konfigurierte PI-Fähigkeiten und Formatdiagnosen prüfen.",
 		"Available skills": "Verfügbare Fähigkeiten",
-		"Default skills": "Standardfähigkeiten",
+		"Implicit skills": "Implizit aufrufbare Skills",
+		"Explicit-only skills": "Nur explizite Skills",
 		Issues: "Probleme",
 		Diagnostics: "Diagnosen",
 		Errors: "Fehler",
@@ -1190,7 +1193,8 @@ mutableTranslations.zh = {
 	"Skill issues found": "发现技能问题",
 	"Review configured PI skills and format diagnostics.": "查看已配置的 PI 技能和格式诊断。",
 	"Available skills": "可用技能",
-	"Default skills": "默认技能",
+	"Implicit skills": "可隐式调用技能",
+	"Explicit-only skills": "仅显式调用技能",
 	Issues: "问题",
 	Diagnostics: "诊断",
 	Errors: "错误",
@@ -1566,7 +1570,8 @@ mutableTranslations.ms = {
 	"Review configured PI skills and format diagnostics.":
 		"Semak kemahiran PI yang dikonfigurasi dan diagnostik format.",
 	"Available skills": "Kemahiran tersedia",
-	"Default skills": "Kemahiran lalai",
+	"Implicit skills": "Kemahiran tersirat",
+	"Explicit-only skills": "Kemahiran eksplisit sahaja",
 	Issues: "Isu",
 	Diagnostics: "Diagnostik",
 	Errors: "Ralat",

@@ -9,15 +9,13 @@ describe("SkillStatusTab", () => {
 					name: "frontend-design",
 					description: "Use this skill when creating frontend pages. Do not use for backend-only tasks.",
 					location: "skill://frontend-design/SKILL.md",
-					disableModelInvocation: false,
+					allowImplicitInvocation: true,
 				},
-			],
-			defaultSkills: [
 				{
-					name: "pi-default",
-					description: "Use this skill when generating PI previews. Do not use outside PI.",
-					location: "skill://pi-default/SKILL.md",
-					disableModelInvocation: false,
+					name: "explicit-design",
+					description: "Use this skill only when explicitly selected for design work.",
+					location: "skill://explicit-design/SKILL.md",
+					allowImplicitInvocation: false,
 				},
 			],
 			diagnostics: [
@@ -27,8 +25,9 @@ describe("SkillStatusTab", () => {
 		});
 
 		expect(summary).toEqual({
-			selectableCount: 1,
-			defaultCount: 1,
+			availableCount: 2,
+			implicitCount: 1,
+			explicitOnlyCount: 1,
 			issueCount: 2,
 			errorCount: 1,
 			warningCount: 1,

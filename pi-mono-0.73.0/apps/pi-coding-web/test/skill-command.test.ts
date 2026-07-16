@@ -49,8 +49,8 @@ describe("parseSkillCommandPrefix", () => {
 		const skillList = await loadServerSkillList();
 
 		expect(skillList.skills).toEqual([]);
-		expect(skillList.defaultSkills).toEqual([]);
-		expect(skillList.promptSkills).toEqual([]);
+		expect(skillList).not.toHaveProperty("defaultSkills");
+		expect(skillList).not.toHaveProperty("promptSkills");
 		expect(skillList.diagnostics).toEqual([
 			expect.objectContaining({ type: "error", path: "/api/pi-skills", message: expect.stringContaining("disk unavailable") }),
 		]);

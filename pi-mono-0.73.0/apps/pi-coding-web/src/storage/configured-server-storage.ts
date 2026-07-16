@@ -10,7 +10,6 @@ export interface ConfiguredStorageStatus {
 	settingsFile: string;
 	clientsRootDir: string;
 	skillsDir?: string;
-	defaultSkillsDir?: string;
 	previewBaseUrl?: string;
 	defaultModelProvider?: string;
 	defaultModelId?: string;

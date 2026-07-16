@@ -16,7 +16,6 @@ const t = (message: string) => i18n(message as Parameters<typeof i18n>[0]);
 @customElement("pi-skill-status-tab")
 export class SkillStatusTab extends SettingsTab {
 	@property({ attribute: false }) skills: SkillSummary[] = [];
-	@property({ attribute: false }) defaultSkills: SkillSummary[] = [];
 	@property({ attribute: false }) diagnostics: SkillDiagnostic[] = [];
 	@state() private expandedDiagnosticKeys = new Set<string>();
 
@@ -27,7 +26,6 @@ export class SkillStatusTab extends SettingsTab {
 	render(): TemplateResult {
 		const summary = summarizeSkillStatus({
 			skills: this.skills,
-			defaultSkills: this.defaultSkills,
 			diagnostics: this.diagnostics,
 		});
 
@@ -40,15 +38,15 @@ export class SkillStatusTab extends SettingsTab {
 					</p>
 				</div>
 
-				<div class="grid gap-3 sm:grid-cols-3">
-					${this.renderMetric(t("Available skills"), summary.selectableCount)}
-					${this.renderMetric(t("Default skills"), summary.defaultCount)}
+				<div class="grid gap-3 sm:grid-cols-4">
+					${this.renderMetric(t("Available skills"), summary.availableCount)}
+					${this.renderMetric(t("Implicit skills"), summary.implicitCount)}
+					${this.renderMetric(t("Explicit-only skills"), summary.explicitOnlyCount)}
 					${this.renderMetric(t("Issues"), summary.issueCount, summary.errorCount > 0 ? "error" : "neutral")}
 				</div>
 
 				${this.renderDiagnostics(summary)}
 				${this.renderSkillList(t("Available skills"), this.skills)}
-				${this.renderSkillList(t("Default skills"), this.defaultSkills)}
 			</div>
 		`;
 	}
@@ -156,8 +154,13 @@ export class SkillStatusTab extends SettingsTab {
 							<div class="mt-3 flex flex-col divide-y divide-border">
 								${skills.map(
 									(skill) => html`
-										<div class="py-3">
-											<div class="text-sm font-medium text-foreground">${skill.interface?.displayName || skill.name}</div>
+									<div class="py-3">
+											<div class="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
+												<span>${skill.interface?.displayName || skill.name}</span>
+												<span class="rounded border border-border px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+													${skill.allowImplicitInvocation ? t("Implicit skills") : t("Explicit-only skills")}
+												</span>
+											</div>
 											<div class="mt-1 text-xs text-muted-foreground break-words">${skill.description}</div>
 											<div class="mt-1 text-[11px] text-muted-foreground break-all">${skill.location}</div>
 										</div>

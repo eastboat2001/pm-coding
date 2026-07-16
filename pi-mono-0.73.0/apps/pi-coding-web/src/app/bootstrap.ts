@@ -625,7 +625,9 @@ const skillApiErrorDetail = (diagnostics: SkillDiagnostic[]): string | undefined
 const skillToSlashSuggestion = (skill: SkillSummary): SkillSlashSuggestion => ({
 	id: `skill:${skill.name}`,
 	label: skill.interface?.displayName || skill.name,
-	detail: skill.interface?.shortDescription || skill.description,
+	detail: skill.allowImplicitInvocation
+		? skill.interface?.shortDescription || skill.description
+		: `${i18n("Explicit-only skills" as Parameters<typeof i18n>[0])}: ${skill.interface?.shortDescription || skill.description}`,
 	trigger: "/skill",
 	insertText: `/skill:${skill.name} `,
 });

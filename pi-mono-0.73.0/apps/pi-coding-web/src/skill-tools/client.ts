@@ -20,8 +20,6 @@ export async function loadServerSkillList(): Promise<SkillListDetails> {
 	} catch (error) {
 		return {
 			skills: [],
-			defaultSkills: [],
-			promptSkills: [],
 			diagnostics: [
 				{
 					type: "error",

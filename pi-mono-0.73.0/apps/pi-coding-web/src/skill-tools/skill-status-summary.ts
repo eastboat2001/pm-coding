@@ -1,10 +1,11 @@
 import type { SkillListDetails } from "./schemas.js";
 
-export type SkillStatusData = Pick<SkillListDetails, "skills" | "defaultSkills" | "diagnostics">;
+export type SkillStatusData = Pick<SkillListDetails, "skills" | "diagnostics">;
 
 export interface SkillStatusSummary {
-	selectableCount: number;
-	defaultCount: number;
+	availableCount: number;
+	implicitCount: number;
+	explicitOnlyCount: number;
 	issueCount: number;
 	errorCount: number;
 	warningCount: number;
@@ -23,9 +24,11 @@ export interface SkillDiagnosticPresentation {
 }
 
 export function summarizeSkillStatus(data: SkillStatusData): SkillStatusSummary {
+	const implicitCount = data.skills.filter((skill) => skill.allowImplicitInvocation).length;
 	const summary: SkillStatusSummary = {
-		selectableCount: data.skills.length,
-		defaultCount: data.defaultSkills.length,
+		availableCount: data.skills.length,
+		implicitCount,
+		explicitOnlyCount: data.skills.length - implicitCount,
 		issueCount: data.diagnostics.length,
 		errorCount: 0,
 		warningCount: 0,
@@ -61,7 +64,7 @@ function diagnosticToneClass(type: SkillDiagnostic["type"]): string {
 function createSkillDiagnosticSuggestion(diagnostic: SkillDiagnostic): string {
 	const message = diagnostic.message.toLowerCase();
 	if (diagnostic.type === "collision") {
-		return "Rename one of the conflicting skill folders or frontmatter names so every selectable/default skill name is unique.";
+		return "Rename one of the conflicting skill folders or frontmatter names so every skill name is unique.";
 	}
 	if (message.includes("frontmatter")) {
 		return "Add YAML frontmatter at the top of SKILL.md with name and description fields before the Markdown body.";

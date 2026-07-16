@@ -39,6 +39,27 @@ describe("workspace expansion coordinator", () => {
 		expect(desktop).toMatchObject({ sidebar: null, historicalRunDetailId: "run-old" });
 	});
 
+	it("keeps compact sidebars, file previews, active details, and historical details mutually exclusive", () => {
+		let state = createWorkspaceExpansionState("compact");
+		state = reduceWorkspaceExpansion(state, { type: "open_sidebar", sidebar: "files" });
+		state = reduceWorkspaceExpansion(state, { type: "open_file_preview", path: "src/main.ts" });
+		expect(state).toMatchObject({ sidebar: null, filePreviewPath: "src/main.ts" });
+
+		state = reduceWorkspaceExpansion(state, { type: "open_active_run_detail" });
+		expect(state).toMatchObject({ filePreviewPath: null, activeRunDetailOpen: true, historicalRunDetailId: null });
+
+		state = reduceWorkspaceExpansion(state, { type: "open_historical_run_detail", runId: "run-old" });
+		expect(state).toMatchObject({ activeRunDetailOpen: false, historicalRunDetailId: "run-old" });
+
+		state = reduceWorkspaceExpansion(state, { type: "open_sidebar", sidebar: "apps" });
+		expect(state).toMatchObject({
+			sidebar: "apps",
+			filePreviewPath: null,
+			activeRunDetailOpen: false,
+			historicalRunDetailId: null,
+		});
+	});
+
 	it("keeps at most one historical detail and one internal section", () => {
 		let state = createWorkspaceExpansionState("desktop");
 		state = reduceWorkspaceExpansion(state, { type: "open_historical_run_detail", runId: "run-1" });

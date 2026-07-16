@@ -20,6 +20,9 @@ export interface AgentV2RunPresentation {
 	phase: AgentV2Phase;
 	stage: AgentV2UserStage;
 	active: boolean;
+	startedAt: string;
+	updatedAt: string;
+	endedAt?: string;
 	tasks: ReadonlyMap<string, AgentV2TaskUpdatedTransportEvent>;
 	artifacts: ReadonlyMap<string, AgentV2ArtifactIndexedTransportEvent>;
 	validations: ReadonlyMap<string, ReadonlyMap<number, AgentV2ValidationRecordedTransportEvent>>;
@@ -36,8 +39,8 @@ export interface AgentV2RunPresentationStore {
 }
 
 export type AgentV2RunPresentationAction =
-	| { type: "begin"; runId: string; phase: AgentV2Phase; status: AgentV2RunStatus }
-	| { type: "phase"; runId: string; phase: AgentV2Phase; status: AgentV2RunStatus }
+	| { type: "begin"; runId: string; phase: AgentV2Phase; status: AgentV2RunStatus; at: string }
+	| { type: "phase"; runId: string; phase: AgentV2Phase; status: AgentV2RunStatus; at: string }
 	| { type: "task"; runId: string; event: AgentV2TaskUpdatedTransportEvent }
 	| { type: "artifact"; runId: string; event: AgentV2ArtifactIndexedTransportEvent }
 	| { type: "validation"; runId: string; event: AgentV2ValidationRecordedTransportEvent }
@@ -46,12 +49,9 @@ export type AgentV2RunPresentationAction =
 	| { type: "skill"; runId: string; event: AgentV2SkillAppliedTransportEvent }
 	| { type: "resource"; runId: string; event: AgentV2SkillResourceLoadedTransportEvent }
 	| { type: "delivery"; runId: string; event: AgentV2DeliveryReportedTransportEvent }
-	| { type: "settle"; runId: string; status: TerminalAgentV2RunStatus; error?: AgentV2Error };
+	| { type: "settle"; runId: string; status: TerminalAgentV2RunStatus; at: string; error?: AgentV2Error };
 
-export type TerminalAgentV2RunStatus = Extract<
-	AgentV2RunStatus,
-	"succeeded" | "failed" | "cancelled" | "interrupted"
->;
+export type TerminalAgentV2RunStatus = Extract<AgentV2RunStatus, "succeeded" | "failed" | "cancelled" | "interrupted">;
 
 export interface SerializedAgentV2Validation {
 	validationId: string;
@@ -64,6 +64,9 @@ export interface SerializedAgentV2TerminalRunPresentation {
 	phase: AgentV2Phase;
 	stage: AgentV2UserStage;
 	active: false;
+	startedAt: string;
+	updatedAt: string;
+	endedAt: string;
 	tasks: AgentV2TaskUpdatedTransportEvent[];
 	artifacts: AgentV2ArtifactIndexedTransportEvent[];
 	validations: SerializedAgentV2Validation[];
@@ -113,6 +116,8 @@ export function reduceAgentV2RunPresentation(
 			phase: action.phase,
 			stage: agentV2StageForPhase(action.phase),
 			active: !TERMINAL_STATUSES.has(action.status),
+			startedAt: action.at,
+			updatedAt: action.at,
 			tasks: new Map(),
 			artifacts: new Map(),
 			validations: new Map(),
@@ -132,12 +137,18 @@ export function reduceAgentV2RunPresentation(
 				stage: agentV2StageForPhase(action.phase),
 				status: action.status,
 				active: !TERMINAL_STATUSES.has(action.status),
+				updatedAt: action.at,
 			});
 		case "task":
-			return setRun(store, action.runId, { ...run, tasks: setMapValue(run.tasks, action.event.taskId, action.event) });
+			return setRun(store, action.runId, {
+				...run,
+				updatedAt: action.event.at,
+				tasks: setMapValue(run.tasks, action.event.taskId, action.event),
+			});
 		case "artifact":
 			return setRun(store, action.runId, {
 				...run,
+				updatedAt: action.event.at,
 				artifacts: setMapValue(run.artifacts, action.event.artifactId, action.event),
 			});
 		case "validation": {
@@ -148,27 +159,32 @@ export function reduceAgentV2RunPresentation(
 			);
 			return setRun(store, action.runId, {
 				...run,
+				updatedAt: action.event.at,
 				validations: setMapValue(run.validations, action.event.validationId, attempts),
 			});
 		}
 		case "diagnostic":
 			return setRun(store, action.runId, {
 				...run,
+				updatedAt: action.event.at,
 				diagnostics: setMapValue(run.diagnostics, action.event.diagnosticId, action.event),
 			});
 		case "output":
 			return setRun(store, action.runId, {
 				...run,
+				updatedAt: action.event.at,
 				outputs: setMapValue(run.outputs, outputKey(action.event), action.event),
 			});
 		case "skill":
 			return setRun(store, action.runId, {
 				...run,
+				updatedAt: action.event.at,
 				skills: setMapValue(run.skills, `${action.event.name}\u0000${action.event.location}`, action.event),
 			});
 		case "resource":
 			return setRun(store, action.runId, {
 				...run,
+				updatedAt: action.event.at,
 				resources: setMapValue(
 					run.resources,
 					`${action.event.name}\u0000${action.event.path}\u0000${action.event.checksum}`,
@@ -176,12 +192,14 @@ export function reduceAgentV2RunPresentation(
 				),
 			});
 		case "delivery":
-			return setRun(store, action.runId, { ...run, deliveryReport: action.event });
+			return setRun(store, action.runId, { ...run, updatedAt: action.event.at, deliveryReport: action.event });
 		case "settle":
 			return setRun(store, action.runId, {
 				...run,
 				status: action.status,
 				active: false,
+				updatedAt: action.at,
+				endedAt: action.at,
 				...(action.error ? { error: action.error } : {}),
 			});
 	}
@@ -195,12 +213,16 @@ export function serializeAgentV2TerminalRunPresentation(
 	if (run.active || !isTerminalStatus(run.status)) {
 		throw new Error(`Agent v2 run ${runId} is not terminal.`);
 	}
+	if (!run.endedAt) throw new Error(`Agent v2 run ${runId} has no terminal timestamp.`);
 	return {
 		runId: run.runId,
 		status: run.status,
 		phase: run.phase,
 		stage: run.stage,
 		active: false,
+		startedAt: run.startedAt,
+		updatedAt: run.updatedAt,
+		endedAt: run.endedAt,
 		tasks: Array.from(run.tasks.values()),
 		artifacts: Array.from(run.artifacts.values()),
 		validations: Array.from(run.validations, ([validationId, attempts]) => ({

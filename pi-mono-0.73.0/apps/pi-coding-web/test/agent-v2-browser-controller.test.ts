@@ -19,8 +19,8 @@ describe("AgentV2BrowserController", () => {
 
 		controller.start(createRun());
 
-		expect(sink.beginRun).toHaveBeenCalledWith("run-1");
-		expect(sink.setPhase).toHaveBeenCalledWith("intake", "queued");
+		expect(sink.beginRun).toHaveBeenCalledWith("run-1", NOW);
+		expect(sink.setPhase).toHaveBeenCalledWith("intake", "queued", NOW);
 		expect(() => controller.start(createRun({ runId: "run-2" }))).toThrow("run-1 is already active");
 		expect(() =>
 			controller.apply(
@@ -136,10 +136,10 @@ describe("AgentV2BrowserController", () => {
 		controller.apply(event(11, report));
 
 		expect(sink.setPhase.mock.calls).toEqual([
-			["intake", "queued"],
-			["intake", "queued"],
-			["spec_draft", "queued"],
-			["implementation", "running"],
+			["intake", "queued", NOW],
+			["intake", "queued", NOW],
+			["spec_draft", "queued", NOW],
+			["implementation", "running", NOW],
 		]);
 		expect(sink.setTask).toHaveBeenCalledWith(task);
 		expect(sink.setArtifact).toHaveBeenCalledWith(artifact);
@@ -164,10 +164,10 @@ describe("AgentV2BrowserController", () => {
 		controller.apply(event(8, phasePayload("validation")));
 
 		expect(sink.setPhase.mock.calls).toEqual([
-			["implementation", "running"],
-			["spec_draft", "running"],
-			["implementation", "running"],
-			["validation", "running"],
+			["implementation", "running", NOW],
+			["spec_draft", "running", NOW],
+			["implementation", "running", NOW],
+			["validation", "running", NOW],
 		]);
 		expect(controller.lastSeq).toBe(8);
 	});
@@ -217,9 +217,9 @@ describe("AgentV2BrowserController", () => {
 		const failure: AgentV2Error = { code: "agent_v2.failed", message: "Validation failed.", retryable: false };
 		controller.start(createRun({ status: "running", phase: "validation" }));
 
-		controller.settle("failed", failure);
+		controller.settle("failed", NOW, failure);
 
-		expect(sink.settle).toHaveBeenCalledWith("failed", failure);
+		expect(sink.settle).toHaveBeenCalledWith("failed", NOW, failure);
 		expect(controller.activeRunId).toBeUndefined();
 		expect(controller.lastSeq).toBe(0);
 		expect(JSON.stringify(sink.calls)).not.toMatch(/agent_start|message_end|agent_end/);
@@ -233,7 +233,7 @@ describe("AgentV2BrowserController", () => {
 			throw new Error("terminal projection failed");
 		});
 
-		expect(() => controller.settle("succeeded")).toThrow("terminal projection failed");
+		expect(() => controller.settle("succeeded", NOW)).toThrow("terminal projection failed");
 		expect(controller.activeRunId).toBe("run-1");
 	});
 
@@ -283,6 +283,7 @@ describe("AgentV2BrowserController", () => {
 			controller,
 			runId: "run-1",
 			status: "succeeded",
+			at: NOW,
 			drain,
 			onSettled,
 		});
@@ -298,6 +299,7 @@ describe("AgentV2BrowserController", () => {
 			controller,
 			runId: "run-1",
 			status: "succeeded",
+			at: NOW,
 			drain,
 			onSettled,
 		});
@@ -305,6 +307,7 @@ describe("AgentV2BrowserController", () => {
 			controller,
 			runId: "run-1",
 			status: "succeeded",
+			at: NOW,
 			drain,
 			onSettled,
 		});
@@ -333,6 +336,7 @@ describe("AgentV2BrowserController", () => {
 				controller,
 				runId: "run-1",
 				status: "succeeded",
+				at: NOW,
 				drain: async () => ({ ok: true, afterSeq: 0 }),
 				onSettled,
 			}),
@@ -421,6 +425,6 @@ function createSink() {
 		setSkill: vi.fn(() => record("setSkill")),
 		setSkillResource: vi.fn(() => record("setSkillResource")),
 		setDeliveryReport: vi.fn(() => record("setDeliveryReport")),
-		settle: vi.fn((_status: AgentV2RunStatus, _error?: AgentV2Error) => record("settle")),
+		settle: vi.fn((_status: AgentV2RunStatus, _at: string, _error?: AgentV2Error) => record("settle")),
 	} satisfies AgentV2BrowserRunSink;
 }

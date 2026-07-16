@@ -48,11 +48,26 @@ export function reduceWorkspaceExpansion(
 ): WorkspaceExpansionState {
 	switch (action.type) {
 		case "set_viewport": {
-			const hasRunDetail = state.activeRunDetailOpen || state.historicalRunDetailId !== null;
+			if (action.viewport === "compact") {
+				if (state.historicalRunDetailId !== null) {
+					return {
+						...state,
+						viewport: action.viewport,
+						sidebar: null,
+						filePreviewPath: null,
+						activeRunDetailOpen: false,
+					};
+				}
+				if (state.activeRunDetailOpen) {
+					return { ...state, viewport: action.viewport, sidebar: null, filePreviewPath: null };
+				}
+				if (state.filePreviewPath !== null) {
+					return { ...state, viewport: action.viewport, sidebar: null };
+				}
+			}
 			return {
 				...state,
 				viewport: action.viewport,
-				sidebar: action.viewport === "compact" && state.sidebar && hasRunDetail ? null : state.sidebar,
 			};
 		}
 		case "open_sidebar":
@@ -60,24 +75,38 @@ export function reduceWorkspaceExpansion(
 				...state,
 				sidebar: action.sidebar,
 				...(state.viewport === "compact"
-					? { activeRunDetailOpen: false, historicalRunDetailId: null }
+					? { filePreviewPath: null, activeRunDetailOpen: false, historicalRunDetailId: null }
 					: {}),
 			};
 		case "close_sidebar":
 			return { ...state, sidebar: null };
 		case "open_file_preview":
-			return { ...state, filePreviewPath: action.path };
+			return {
+				...state,
+				filePreviewPath: action.path,
+				...(state.viewport === "compact"
+					? { sidebar: null, activeRunDetailOpen: false, historicalRunDetailId: null }
+					: {}),
+			};
 		case "close_file_preview":
 			return { ...state, filePreviewPath: null };
 		case "open_active_run_detail":
-			return { ...state, activeRunDetailOpen: true, ...(state.viewport === "compact" ? { sidebar: null } : {}) };
+			return {
+				...state,
+				activeRunDetailOpen: true,
+				...(state.viewport === "compact"
+					? { sidebar: null, filePreviewPath: null, historicalRunDetailId: null }
+					: {}),
+			};
 		case "close_active_run_detail":
 			return { ...state, activeRunDetailOpen: false };
 		case "open_historical_run_detail":
 			return {
 				...state,
 				historicalRunDetailId: action.runId,
-				...(state.viewport === "compact" ? { sidebar: null } : {}),
+				...(state.viewport === "compact"
+					? { sidebar: null, filePreviewPath: null, activeRunDetailOpen: false }
+					: {}),
 			};
 		case "close_historical_run_detail":
 			return { ...state, historicalRunDetailId: null };

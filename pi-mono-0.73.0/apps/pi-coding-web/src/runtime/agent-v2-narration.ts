@@ -4,7 +4,7 @@ import type {
 	AgentV2Phase,
 	AgentV2RunTransportEvent,
 } from "@mariozechner/pi-web-workspace";
-import { agentV2StageForPhase, type AgentV2UserStage } from "./agent-v2-run-presentation.js";
+import { type AgentV2UserStage, agentV2StageForPhase } from "./agent-v2-run-presentation.js";
 
 type AgentV2ModelUsageSummary = NonNullable<AgentV2OutputRecordedTransportEvent["usage"]>;
 
@@ -97,9 +97,7 @@ export function projectAgentV2Narration(
 	return { state: { seenSemanticKeys, lastText: candidate.text }, candidate };
 }
 
-export function markAgentV2NarrationCandidateNarrated(
-	candidate: AgentV2NarrationCandidate,
-): AgentV2NarrationCandidate {
+export function markAgentV2NarrationCandidateNarrated(candidate: AgentV2NarrationCandidate): AgentV2NarrationCandidate {
 	return { ...candidate, alreadyNarrated: true };
 }
 

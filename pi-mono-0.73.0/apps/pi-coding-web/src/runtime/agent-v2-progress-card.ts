@@ -320,6 +320,9 @@ function resourceEvents(presentation: AgentV2ProgressPresentation) {
 
 function eventTimes(presentation: AgentV2ProgressPresentation): number[] {
 	return [
+		presentation.startedAt,
+		presentation.updatedAt,
+		...(presentation.endedAt ? [presentation.endedAt] : []),
 		...taskEvents(presentation),
 		...artifactEvents(presentation),
 		...validationEvents(presentation),
@@ -329,7 +332,7 @@ function eventTimes(presentation: AgentV2ProgressPresentation): number[] {
 		...resourceEvents(presentation),
 		...(presentation.deliveryReport ? [presentation.deliveryReport] : []),
 	]
-		.map((event) => Date.parse(event.at))
+		.map((event) => Date.parse(typeof event === "string" ? event : event.at))
 		.filter(Number.isFinite);
 }
 

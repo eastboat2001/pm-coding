@@ -1,7 +1,7 @@
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ImageContent, Model } from "@mariozechner/pi-ai";
+import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import {
 	type AgentState,
 	ApiKeyPromptDialog,
@@ -53,23 +53,19 @@ import {
 	type PmHandoffPayload,
 	prepareHandoffDocumentFiles,
 } from "../integrations/pm-handoff.js";
-import {
-	type AgentV2ActivityEvent,
-	appendAgentV2ActivityMessage,
-	createAgentV2ActivityMessage,
-	formatAgentV2DeliveryReport,
-	formatAgentV2FailureReport,
-} from "../runtime/agent-v2-activity-message.js";
-import { registerAgentV2ActivityMessageRenderer } from "../runtime/agent-v2-activity-renderer.js";
+import { registerLegacyAgentV2ActivityMessageRenderer } from "../runtime/agent-v2-activity-renderer.js";
 import {
 	AgentV2BrowserController,
 	type AgentV2BrowserRunEventDrainResult,
-	type AgentV2BrowserRunSink,
 	type AgentV2DiagnosticRecordedPayload,
-	type AgentV2OutputRecordedPayload,
-	agentV2OutputToAssistantMessage,
 	settleAgentV2BrowserTerminalSnapshot,
 } from "../runtime/agent-v2-browser-controller.js";
+import {
+	type AgentV2BrowserProjectedEvent,
+	createAgentV2BrowserRunSink,
+} from "../runtime/agent-v2-browser-run-sink.js";
+import type { AgentV2ProgressSection } from "../runtime/agent-v2-progress-card.js";
+import "../runtime/agent-v2-progress-card.js";
 import {
 	cancelAgentV2Run,
 	connectAgentV2RunEvents,
@@ -78,6 +74,8 @@ import {
 	type AgentV2RunEventConnection as RunEventConnection,
 	startAgentV2Run,
 } from "../runtime/agent-v2-run-client.js";
+import type { AgentV2RunPresentation } from "../runtime/agent-v2-run-presentation.js";
+import { registerAgentV2RunResultMessageRenderer } from "../runtime/agent-v2-run-result-message.js";
 import { piClientHeaders } from "../runtime/client-id.js";
 import {
 	buildConversationSnapshot,
@@ -149,6 +147,12 @@ import {
 	sessionModeLabel,
 	sessionModeTools,
 } from "./session-mode.js";
+import {
+	createWorkspaceExpansionState,
+	reduceWorkspaceExpansion,
+	type WorkspaceExpansionAction,
+	type WorkspaceExpansionState,
+} from "./workspace-expansion-coordinator.js";
 
 const ACTIVE_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set(["queued", "running", "cancelling"]);
 const TERMINAL_RUN_STATUSES: ReadonlySet<AgentV2RunStatus> = new Set([
@@ -259,7 +263,11 @@ type SlashSuggestionHost = {
 };
 
 document.documentElement.lang = getCurrentLanguage();
-registerAgentV2ActivityMessageRenderer();
+registerLegacyAgentV2ActivityMessageRenderer();
+registerAgentV2RunResultMessageRenderer({
+	expandedSectionForRun: historicalRunExpandedSection,
+	onSectionChange: setHistoricalRunExpandedSection,
+});
 registerLegacyDefaultSkillLoadMessageRenderer();
 
 const configuredStorage = new ConfiguredServerStorage();
@@ -387,10 +395,10 @@ let currentRunStatus: AgentV2RunStatus | undefined;
 let currentRunUpdatedAt: string | undefined;
 const remoteRunTransientStatusTexts: RunTransientStatusTexts = {};
 const reportedQueuedRunTimeouts = new Set<string>();
-let activeSidebarPanel: "files" | "apps" | null = null;
+let activeAgentV2Presentation: AgentV2RunPresentation | undefined;
+let workspaceExpansionState: WorkspaceExpansionState = createWorkspaceExpansionState(currentWorkspaceViewport());
 let currentProjectFilesPanelWidth = safeReadCurrentProjectFilesPanelWidth();
 let generatedAppsPanelWidth = safeReadGeneratedAppsPanelWidth();
-let currentProjectFilePreviewFilename = "";
 let currentProjectFilePreviewDrawerWidth = safeReadCurrentProjectFilePreviewDrawerWidth();
 const scheduleRemoteRunRender = createCoalescedRenderScheduler(() => {
 	renderApp();
@@ -486,13 +494,89 @@ const resetRemoteRunState = (): void => {
 	closeRemoteRunConnection();
 	clearProviderStallStatusTimer();
 	agentV2BrowserController = undefined;
+	activeAgentV2Presentation = undefined;
 	reportedQueuedRunTimeouts.clear();
 	clearRemoteRunTransientStatusTexts();
 	trackRemoteRun(undefined);
 	currentLastRunId = undefined;
 };
 
+function currentWorkspaceViewport(): WorkspaceExpansionState["viewport"] {
+	return window.matchMedia?.("(max-width: 767px)").matches ? "compact" : "desktop";
+}
+
+function updateWorkspaceExpansion(action: WorkspaceExpansionAction): void {
+	workspaceExpansionState = reduceWorkspaceExpansion(workspaceExpansionState, action);
+}
+
+function isAgentV2ProgressSection(value: string | null): value is AgentV2ProgressSection {
+	return (
+		value === "tasks" || value === "files" || value === "validation" || value === "skills" || value === "technical"
+	);
+}
+
+function activeRunExpandedSection(): AgentV2ProgressSection | null {
+	if (
+		!workspaceExpansionState.activeRunDetailOpen ||
+		!isAgentV2ProgressSection(workspaceExpansionState.internalSection)
+	) {
+		return null;
+	}
+	return workspaceExpansionState.internalSection;
+}
+
+function setActiveRunExpandedSection(section: AgentV2ProgressSection | null): void {
+	if (section) {
+		updateWorkspaceExpansion({ type: "open_active_run_detail" });
+		updateWorkspaceExpansion({ type: "open_internal_section", section });
+	} else {
+		updateWorkspaceExpansion({ type: "close_active_run_detail" });
+		updateWorkspaceExpansion({ type: "close_internal_section" });
+	}
+	requestChatPanelUpdate();
+	renderApp();
+}
+
+function historicalRunExpandedSection(runId: string): AgentV2ProgressSection | null {
+	if (
+		workspaceExpansionState.historicalRunDetailId !== runId ||
+		!isAgentV2ProgressSection(workspaceExpansionState.internalSection)
+	) {
+		return null;
+	}
+	return workspaceExpansionState.internalSection;
+}
+
+function setHistoricalRunExpandedSection(runId: string, section: AgentV2ProgressSection | null): void {
+	if (section) {
+		updateWorkspaceExpansion({ type: "open_historical_run_detail", runId });
+		updateWorkspaceExpansion({ type: "open_internal_section", section });
+	} else {
+		updateWorkspaceExpansion({ type: "close_historical_run_detail" });
+		updateWorkspaceExpansion({ type: "close_internal_section" });
+	}
+	requestChatPanelUpdate();
+	renderApp();
+}
+
+const syncAgentV2ActiveRunContent = (): void => {
+	const agentInterface = chatPanel?.agentInterface as
+		| (NonNullable<ChatPanel["agentInterface"]> & { activeRunContent?: ReturnType<typeof html> })
+		| undefined;
+	if (!agentInterface) return;
+	agentInterface.activeRunContent =
+		currentSessionMode === "app_generation" && activeAgentV2Presentation
+			? html`<agent-v2-progress-card
+					.presentation=${activeAgentV2Presentation}
+					.terminal=${false}
+					.expandedSection=${activeRunExpandedSection()}
+					.onSectionChange=${setActiveRunExpandedSection}
+				></agent-v2-progress-card>`
+			: undefined;
+};
+
 const requestChatPanelUpdate = (): void => {
+	syncAgentV2ActiveRunContent();
 	chatPanel?.requestUpdate();
 	chatPanel?.agentInterface?.requestUpdate();
 };
@@ -593,7 +677,7 @@ const updateUrl = (sessionId?: string) => {
 
 const setCurrentSessionId = async (sessionId: string | undefined) => {
 	if (currentSessionId !== sessionId) {
-		currentProjectFilePreviewFilename = "";
+		updateWorkspaceExpansion({ type: "close_file_preview" });
 	}
 	currentSessionId = sessionId;
 	if (sessionId) {
@@ -767,7 +851,7 @@ const deleteSessionEverywhere = async (sessionId: string) => {
 		await storage.sessions.deleteSession(sessionId);
 	}
 	if (sessionId === currentSessionId) {
-		currentProjectFilePreviewFilename = "";
+		updateWorkspaceExpansion({ type: "close_file_preview" });
 		resetRemoteRunState();
 		await setCurrentSessionId(undefined);
 		const browserSessions = await getBrowserSessions();
@@ -779,14 +863,14 @@ const deleteSessionEverywhere = async (sessionId: string) => {
 		return;
 	}
 	refreshGeneratedAppsPanel();
-	if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+	if (workspaceExpansionState.sidebar === "files") refreshCurrentProjectFilesPanel();
 };
 
 const handleAgentEvent = async (event: AgentEvent) => {
 	recordAgentEvent(event);
 	switch (event.type) {
 		case "tool_execution_end": {
-			if (activeSidebarPanel === "files" && event.toolName === "project_file") {
+			if (workspaceExpansionState.sidebar === "files" && event.toolName === "project_file") {
 				refreshCurrentProjectFilesPanel();
 			}
 			break;
@@ -806,8 +890,8 @@ const handleAgentEvent = async (event: AgentEvent) => {
 				renderApp();
 			}
 			if (event.type === "agent_end") {
-				if (activeSidebarPanel === "apps") refreshGeneratedAppsPanel({ force: true });
-				if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+				if (workspaceExpansionState.sidebar === "apps") refreshGeneratedAppsPanel({ force: true });
+				if (workspaceExpansionState.sidebar === "files") refreshCurrentProjectFilesPanel();
 			}
 			break;
 		}
@@ -895,14 +979,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function toggleCurrentProjectFilesPanel(): void {
-	activeSidebarPanel = activeSidebarPanel === "files" ? null : "files";
-	if (activeSidebarPanel !== "files") currentProjectFilePreviewFilename = "";
+	if (workspaceExpansionState.sidebar === "files") {
+		updateWorkspaceExpansion({ type: "close_sidebar" });
+		updateWorkspaceExpansion({ type: "close_file_preview" });
+	} else {
+		updateWorkspaceExpansion({ type: "open_sidebar", sidebar: "files" });
+	}
 	renderApp();
 }
 
 function toggleGeneratedAppsPanel(): void {
-	activeSidebarPanel = activeSidebarPanel === "apps" ? null : "apps";
-	if (activeSidebarPanel === "apps") currentProjectFilePreviewFilename = "";
+	if (workspaceExpansionState.sidebar === "apps") {
+		updateWorkspaceExpansion({ type: "close_sidebar" });
+	} else {
+		updateWorkspaceExpansion({ type: "open_sidebar", sidebar: "apps" });
+	}
 	renderApp();
 }
 
@@ -921,7 +1012,7 @@ function refreshGeneratedAppsPanel(options: { force?: boolean } = {}): void {
 }
 
 function startCurrentProjectFilesPanelResize(event: PointerEvent): void {
-	if (activeSidebarPanel !== "files") return;
+	if (workspaceExpansionState.sidebar !== "files") return;
 	event.preventDefault();
 	const startX = event.clientX;
 	const startWidth = currentProjectFilesPanelWidth;
@@ -949,7 +1040,7 @@ function startCurrentProjectFilesPanelResize(event: PointerEvent): void {
 }
 
 function startGeneratedAppsPanelResize(event: PointerEvent): void {
-	if (activeSidebarPanel !== "apps") return;
+	if (workspaceExpansionState.sidebar !== "apps") return;
 	event.preventDefault();
 	const startX = event.clientX;
 	const startWidth = generatedAppsPanelWidth;
@@ -977,7 +1068,7 @@ function startGeneratedAppsPanelResize(event: PointerEvent): void {
 }
 
 function startCurrentProjectFilePreviewDrawerResize(event: PointerEvent): void {
-	if (!currentProjectFilePreviewFilename) return;
+	if (!workspaceExpansionState.filePreviewPath) return;
 	event.preventDefault();
 	const startX = event.clientX;
 	const startWidth = currentProjectFilePreviewDrawerWidth;
@@ -1009,12 +1100,12 @@ function startCurrentProjectFilePreviewDrawerResize(event: PointerEvent): void {
 function openCurrentProjectFilePreview(event: CustomEvent<{ filename?: string }>): void {
 	const filename = String(event.detail?.filename || "");
 	if (!filename) return;
-	currentProjectFilePreviewFilename = filename;
+	updateWorkspaceExpansion({ type: "open_file_preview", path: filename });
 	renderApp();
 }
 
 function closeCurrentProjectFilePreview(): void {
-	currentProjectFilePreviewFilename = "";
+	updateWorkspaceExpansion({ type: "close_file_preview" });
 	renderApp();
 }
 
@@ -1124,274 +1215,6 @@ function preparePromptAttachmentSeeds(message: AgentMessage): AgentMessage {
 	} as unknown as AgentMessage;
 }
 
-type AgentV2BrowserMutableState = {
-	isStreaming: boolean;
-	streamingMessage?: AgentMessage;
-	pendingToolCalls: ReadonlySet<string>;
-	errorMessage?: string;
-};
-
-function createAgentV2BrowserRunSink(browserAgent: Agent): AgentV2BrowserRunSink {
-	let activeRunId: string | undefined;
-	let deliveryReported = false;
-	let lastPhase = "intake";
-	const taskProgress = new Map<string, { kind: string; status: string }>();
-	const artifactProgress = new Map<string, { path: string; action: "created" | "updated" }>();
-	const appliedSkills = new Set<string>();
-	const diagnosticMessages: string[] = [];
-	const validationFailures: string[] = [];
-	const mutableState = (): AgentV2BrowserMutableState => browserAgent.state as unknown as AgentV2BrowserMutableState;
-	const appendActivity = (event: AgentV2ActivityEvent): void => {
-		const message = createAgentV2ActivityMessage(event, activeRunId);
-		browserAgent.state.messages = appendAgentV2ActivityMessage(browserAgent.state.messages, message);
-	};
-	return {
-		beginRun(runId) {
-			activeRunId = runId;
-			deliveryReported = false;
-			lastPhase = "intake";
-			taskProgress.clear();
-			artifactProgress.clear();
-			appliedSkills.clear();
-			diagnosticMessages.length = 0;
-			validationFailures.length = 0;
-			const state = mutableState();
-			state.isStreaming = true;
-			state.streamingMessage = undefined;
-			state.pendingToolCalls = new Set<string>();
-			state.errorMessage = undefined;
-		},
-		setPhase(phase, status) {
-			lastPhase = phase;
-			currentRunStatus = status;
-			writeDiagnosticEvent({
-				level: "info",
-				category: "agent",
-				eventType: "agent_v2.browser_phase_projected",
-				data: { runId: activeRunId, phase, status },
-			});
-		},
-		setTask(event) {
-			taskProgress.set(event.taskId, { kind: event.kind, status: event.status });
-			appendActivity(event);
-			writeDiagnosticEvent({
-				level: "info",
-				category: "agent",
-				eventType: event.type,
-				data: {
-					runId: activeRunId,
-					taskId: event.taskId,
-					kind: event.kind,
-					status: event.status,
-					phase: event.phase,
-				},
-			});
-		},
-		setArtifact(event) {
-			artifactProgress.set(event.artifactId, { path: event.path, action: event.action });
-			appendActivity(event);
-			writeDiagnosticEvent({
-				level: "info",
-				category: "agent",
-				eventType: event.type,
-				data: {
-					runId: activeRunId,
-					artifactId: event.artifactId,
-					path: event.path,
-					validationStatus: event.validationStatus,
-					revision: event.revision,
-				},
-			});
-			refreshGeneratedAppsPanel();
-			if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
-		},
-		setValidation(event) {
-			if (event.status !== "passed")
-				validationFailures.push(`${event.validationId}: ${event.status} — ${event.summary}`);
-			appendActivity(event);
-			writeDiagnosticEvent({
-				level: event.status === "failed" || event.status === "blocked" ? "warn" : "info",
-				category: "agent",
-				eventType: event.type,
-				data: {
-					runId: activeRunId,
-					validationId: event.validationId,
-					taskId: event.taskId,
-					attempt: event.attempt,
-					status: event.status,
-					summary: event.summary,
-				},
-			});
-		},
-		appendOutput(event) {
-			appendActivity(event);
-			appendAgentV2BrowserOutput(browserAgent, event);
-		},
-		appendDiagnostic(event) {
-			diagnosticMessages.push(`${event.code}: ${event.message}`);
-			appendActivity(event);
-			writeAgentV2BrowserDiagnostic(activeRunId, event);
-		},
-		setSkill(event) {
-			appliedSkills.add(event.name);
-			appendActivity(event);
-			writeDiagnosticEvent({
-				level: "info",
-				category: "agent",
-				eventType: event.type,
-				data: { runId: activeRunId, name: event.name, location: event.location },
-			});
-		},
-		setSkillResource(event) {
-			appendActivity(event);
-			writeDiagnosticEvent({
-				level: "info",
-				category: "agent",
-				eventType: event.type,
-				data: { runId: activeRunId, name: event.name, path: event.path, checksum: event.checksum },
-			});
-		},
-		setDeliveryReport(event) {
-			deliveryReported = true;
-			appendActivity(event);
-			appendAgentV2BrowserReport(browserAgent, formatAgentV2DeliveryReport(event, getCurrentLanguage()), {
-				model: "delivery-report",
-				timestamp: Date.parse(event.at),
-			});
-			writeDiagnosticEvent({
-				level: "info",
-				category: "agent",
-				eventType: event.type,
-				data: {
-					runId: activeRunId,
-					taskId: event.taskId,
-					projectId: event.projectId,
-					previewUrl: event.previewUrl,
-				},
-			});
-		},
-		settle(status, error) {
-			const state = mutableState();
-			state.isStreaming = false;
-			state.streamingMessage = undefined;
-			state.pendingToolCalls = new Set<string>();
-			state.errorMessage = error?.message;
-			if ((status === "failed" || status === "interrupted") && !deliveryReported) {
-				const completedItems = [...taskProgress.values()].map((task) => `${task.kind}: ${task.status}`);
-				const remainingItems = [...taskProgress.values()]
-					.filter((task) => task.status !== "succeeded" && task.status !== "cancelled")
-					.map((task) => task.kind);
-				if (!remainingItems.includes("delivery")) remainingItems.push("delivery");
-				const artifacts = [...artifactProgress.values()];
-				const failureCause = error?.message ?? diagnosticMessages.at(-1) ?? "Agent v2 run did not complete.";
-				const failedTask = [...taskProgress.entries()].find(
-					([, task]) => task.status === "failed" || task.status === "blocked",
-				);
-				const report = formatAgentV2FailureReport(
-					{
-						failureStage: lastPhase,
-						failureTask: failedTask?.[0] ?? "run",
-						completedItems,
-						failureCause,
-						repairAttempts: [...taskProgress.values()].filter((task) => task.kind === "repair").length,
-						diagnostics: diagnosticMessages,
-						unpassedValidations: validationFailures,
-						safeToRetry: error?.retryable === true,
-						remainingItems,
-						nextSuggestions: [agentV2FailureSuggestion(getCurrentLanguage(), error?.retryable === true)],
-						appliedSkills: [...appliedSkills],
-						createdFiles: artifacts
-							.filter((artifact) => artifact.action === "created")
-							.map((artifact) => artifact.path),
-						updatedFiles: artifacts
-							.filter((artifact) => artifact.action === "updated")
-							.map((artifact) => artifact.path),
-					},
-					getCurrentLanguage(),
-				);
-				appendAgentV2BrowserReport(browserAgent, report, {
-					model: "failure-report",
-					timestamp: Date.now(),
-					errorMessage: failureCause,
-				});
-			}
-			activeRunId = undefined;
-		},
-	};
-}
-
-function appendAgentV2BrowserOutput(browserAgent: Agent, event: AgentV2OutputRecordedPayload): void {
-	const timestamp = Date.parse(event.at);
-	const alreadyProjected = browserAgent.state.messages.some((message) => {
-		if (message.role !== "assistant") return false;
-		return (
-			message.provider === event.provider &&
-			message.model === event.model &&
-			message.timestamp === timestamp &&
-			message.content.length === 1 &&
-			message.content[0]?.type === "text" &&
-			message.content[0].text === event.summary
-		);
-	});
-	if (alreadyProjected) return;
-	const message = agentV2OutputToAssistantMessage(event);
-	browserAgent.state.messages = [...browserAgent.state.messages, message];
-}
-
-function appendAgentV2BrowserReport(
-	browserAgent: Agent,
-	text: string,
-	options: { model: "delivery-report" | "failure-report"; timestamp: number; errorMessage?: string },
-): void {
-	if (
-		browserAgent.state.messages.some(
-			(message) =>
-				message.role === "assistant" &&
-				message.content.length === 1 &&
-				message.content[0]?.type === "text" &&
-				message.content[0].text === text,
-		)
-	) {
-		return;
-	}
-	const message: AssistantMessage = {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		api: "agent-v2",
-		provider: "agent-v2",
-		model: options.model,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: options.errorMessage ? "error" : "stop",
-		...(options.errorMessage ? { errorMessage: options.errorMessage } : {}),
-		timestamp: options.timestamp,
-	};
-	browserAgent.state.messages = [...browserAgent.state.messages, message];
-}
-
-function agentV2FailureSuggestion(language: string, retryable: boolean): string {
-	const code = language.toLowerCase().split(/[-_]/u)[0];
-	if (code === "zh")
-		return retryable ? "修复上述问题后重试本次运行。" : "检查诊断信息并调整需求或项目文件后重新运行。";
-	if (code === "de")
-		return retryable
-			? "Beheben Sie das gemeldete Problem und starten Sie den Lauf erneut."
-			: "Prüfen Sie die Diagnose und passen Sie die Anforderung oder Projektdateien vor einem neuen Lauf an.";
-	if (code === "ms")
-		return retryable
-			? "Baiki masalah yang dilaporkan dan cuba semula larian ini."
-			: "Semak diagnostik dan laraskan keperluan atau fail projek sebelum menjalankan semula.";
-	return retryable
-		? "Fix the reported issue and retry this run."
-		: "Review the diagnostics and adjust the request or project files before running again.";
-}
-
 function writeAgentV2BrowserDiagnostic(runId: string | undefined, event: AgentV2DiagnosticRecordedPayload): void {
 	writeDiagnosticEvent({
 		level: event.severity === "debug" ? "info" : event.severity,
@@ -1403,6 +1226,100 @@ function writeAgentV2BrowserDiagnostic(runId: string | undefined, event: AgentV2
 			message: event.message,
 			at: event.at,
 		},
+	});
+}
+
+function recordAgentV2BrowserProjection(runId: string, event: AgentV2BrowserProjectedEvent): void {
+	switch (event.type) {
+		case "agent_v2.task_updated":
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: { runId, taskId: event.taskId, kind: event.kind, status: event.status, phase: event.phase },
+			});
+			return;
+		case "agent_v2.artifact_indexed":
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: {
+					runId,
+					artifactId: event.artifactId,
+					path: event.path,
+					validationStatus: event.validationStatus,
+					revision: event.revision,
+				},
+			});
+			refreshGeneratedAppsPanel();
+			if (workspaceExpansionState.sidebar === "files") refreshCurrentProjectFilesPanel();
+			return;
+		case "agent_v2.validation_recorded":
+			writeDiagnosticEvent({
+				level: event.status === "failed" || event.status === "blocked" ? "warn" : "info",
+				category: "agent",
+				eventType: event.type,
+				data: {
+					runId,
+					validationId: event.validationId,
+					taskId: event.taskId,
+					attempt: event.attempt,
+					status: event.status,
+					summary: event.summary,
+				},
+			});
+			return;
+		case "agent_v2.diagnostic_recorded":
+			writeAgentV2BrowserDiagnostic(runId, event);
+			return;
+		case "agent_v2.skill_applied":
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: { runId, name: event.name, location: event.location },
+			});
+			return;
+		case "agent_v2.skill_resource_loaded":
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: { runId, name: event.name, path: event.path, checksum: event.checksum },
+			});
+			return;
+		case "agent_v2.delivery_reported":
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: event.type,
+				data: { runId, taskId: event.taskId, projectId: event.projectId, previewUrl: event.previewUrl },
+			});
+			return;
+		case "agent_v2.output_recorded":
+			return;
+	}
+}
+
+function createBrowserRunProjectionSink(browserAgent: Agent) {
+	return createAgentV2BrowserRunSink({
+		browserAgent,
+		locale: getCurrentLanguage,
+		onPresentationChange: (presentation) => {
+			activeAgentV2Presentation = presentation;
+			requestChatPanelUpdate();
+		},
+		onPhaseProjected: (runId, phase, status, at) => {
+			currentRunStatus = status;
+			writeDiagnosticEvent({
+				level: "info",
+				category: "agent",
+				eventType: "agent_v2.browser_phase_projected",
+				data: { runId, phase, status, at },
+			});
+		},
+		onEventProjected: recordAgentV2BrowserProjection,
 	});
 }
 
@@ -1439,6 +1356,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 			controller: agentV2BrowserController,
 			runId: run.runId,
 			status: run.status,
+			at: run.updatedAt,
 			...(run.error ? { error: run.error } : {}),
 			drain: () => drainCurrentRemoteRunEvents(run.runId),
 			onSettled: () => {
@@ -1467,7 +1385,7 @@ const syncCurrentRunStatusFromServer = async (runId: string, attempts = 10, inte
 		renderApp();
 		requestChatPanelUpdate();
 		refreshGeneratedAppsPanel({ force: true });
-		if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+		if (workspaceExpansionState.sidebar === "files") refreshCurrentProjectFilesPanel();
 		return true;
 	}
 	return false;
@@ -1577,7 +1495,7 @@ const applyConnectedRunEvent = async (event: AgentV2RunEventRecord): Promise<voi
 	scheduleRemoteRunRender();
 	requestChatPanelUpdate();
 	refreshGeneratedAppsPanel();
-	if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+	if (workspaceExpansionState.sidebar === "files") refreshCurrentProjectFilesPanel();
 	currentRunUpdatedAt = event.createdAt;
 
 	if (runStatus && isTerminalRunStatus(runStatus)) {
@@ -1703,7 +1621,7 @@ const startRemotePrompt = async (
 		throw error;
 	}
 
-	const controller = new AgentV2BrowserController(createAgentV2BrowserRunSink(agent));
+	const controller = new AgentV2BrowserController(createBrowserRunProjectionSink(agent));
 	controller.start(runResult);
 	clearRemoteRunTransientStatusTexts();
 	agentV2BrowserController = controller;
@@ -1799,8 +1717,8 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			await ensureSessionIdentity();
 			await modelController.persistSelectedModel(agent.state.model);
 			if (agent.state.messages.length > 0 || currentActiveRunId) await saveSession();
-			if (activeSidebarPanel === "apps") refreshGeneratedAppsPanel();
-			if (activeSidebarPanel === "files") refreshCurrentProjectFilesPanel();
+			if (workspaceExpansionState.sidebar === "apps") refreshGeneratedAppsPanel();
+			if (workspaceExpansionState.sidebar === "files") refreshCurrentProjectFilesPanel();
 		},
 		onModelSelect: handleModelSelect,
 		onThinkingChange: async () => {
@@ -1875,7 +1793,7 @@ const restoreActiveRemoteRunFromMetadata = async (
 			createdAt: sessionData.lastModified,
 			updatedAt: sessionMetadata?.runUpdatedAt ?? sessionData.lastModified,
 		} satisfies AgentV2RunSnapshot);
-	const controller = new AgentV2BrowserController(createAgentV2BrowserRunSink(agent));
+	const controller = new AgentV2BrowserController(createBrowserRunProjectionSink(agent));
 	controller.start(runSnapshot);
 	if (replayedEvents.length > 0) {
 		controller.hydrate(replayedEvents, replayedEvents.at(-1)?.seq ?? 0);
@@ -2092,6 +2010,7 @@ const newSession = async () => {
 const renderApp = () => {
 	const app = document.getElementById("app");
 	if (!app) return;
+	syncAgentV2ActiveRunContent();
 	const currentProjectTitle = agent ? sessionTitle(currentTitle, agent.state.messages) : currentTitle;
 
 	const appHtml = html`
@@ -2211,18 +2130,19 @@ const renderApp = () => {
 					size: "sm",
 					children: icon(Settings, "sm"),
 					onClick: () => {
+						updateWorkspaceExpansion({ type: "open_settings" });
 						const providersTab = new ProvidersModelsTab();
 						providersTab.showKnownProviders = false;
 						const skillStatusTab = new SkillStatusTab();
 						skillStatusTab.skills = piRuntimeConfig.skills;
 						skillStatusTab.diagnostics = piRuntimeConfig.skillDiagnostics;
-						SettingsDialog.open([
-							new LanguageTab(),
-							providersTab,
-							new ProxyTab(),
-							new DiagnosticLogsTab(),
-							skillStatusTab,
-						]);
+						void SettingsDialog.open(
+							[new LanguageTab(), providersTab, new ProxyTab(), new DiagnosticLogsTab(), skillStatusTab],
+							() => {
+								updateWorkspaceExpansion({ type: "close_settings" });
+								renderApp();
+							},
+						);
 					},
 					title: i18n("Settings"),
 				})}
@@ -2230,27 +2150,27 @@ const renderApp = () => {
       </div>
 
       <main
-        class=${`example-content app-workspace flex-1 min-h-0 overflow-hidden ${activeSidebarPanel ? "app-workspace--panel-open" : ""}`}
+		class=${`example-content app-workspace flex-1 min-h-0 overflow-hidden ${workspaceExpansionState.sidebar ? "app-workspace--panel-open" : ""}`}
       >
         <nav class="app-side-rail" aria-label="Workspace tools">
           <button
             type="button"
-            class=${`app-side-rail__item ${activeSidebarPanel === "files" ? "app-side-rail__item--active" : ""}`}
+			class=${`app-side-rail__item ${workspaceExpansionState.sidebar === "files" ? "app-side-rail__item--active" : ""}`}
             @click=${toggleCurrentProjectFilesPanel}
             title="Files"
             aria-label="Files"
-            aria-pressed=${activeSidebarPanel === "files" ? "true" : "false"}
+			aria-pressed=${workspaceExpansionState.sidebar === "files" ? "true" : "false"}
           >
             <span class="app-side-rail__icon">${icon(Folder, "md")}</span>
             <span class="app-side-rail__label">Files</span>
           </button>
           <button
             type="button"
-            class=${`app-side-rail__item ${activeSidebarPanel === "apps" ? "app-side-rail__item--active" : ""}`}
+			class=${`app-side-rail__item ${workspaceExpansionState.sidebar === "apps" ? "app-side-rail__item--active" : ""}`}
             @click=${toggleGeneratedAppsPanel}
             title="Generated Apps"
             aria-label="Generated Apps"
-            aria-pressed=${activeSidebarPanel === "apps" ? "true" : "false"}
+			aria-pressed=${workspaceExpansionState.sidebar === "apps" ? "true" : "false"}
           >
             <span class="app-side-rail__icon"
               >${icon(PanelsTopLeft, "md")}</span
@@ -2259,7 +2179,7 @@ const renderApp = () => {
           </button>
         </nav>
         ${
-				activeSidebarPanel === "files"
+				workspaceExpansionState.sidebar === "files"
 					? html`
                 <aside
                   class="current-project-files-sidebar"
@@ -2268,7 +2188,7 @@ const renderApp = () => {
                   <pi-current-project-files-panel
                     .sessionId=${currentSessionId || ""}
                     .title=${currentProjectTitle}
-                    .selectedFilename=${currentProjectFilePreviewFilename}
+					.selectedFilename=${workspaceExpansionState.filePreviewPath ?? ""}
                     @pi-open-current-project-file-preview=${openCurrentProjectFilePreview}
                   ></pi-current-project-files-panel>
                 </aside>
@@ -2283,7 +2203,7 @@ const renderApp = () => {
 					: ""
 			}
         ${
-				activeSidebarPanel === "apps"
+				workspaceExpansionState.sidebar === "apps"
 					? html`
                 <aside
                   class="generated-apps-sidebar"
@@ -2311,7 +2231,7 @@ const renderApp = () => {
 			}
         <section class="app-chat-workspace">${chatPanel}</section>
         ${
-				currentProjectFilePreviewFilename
+				workspaceExpansionState.filePreviewPath
 					? html`
                 <div
                   class="current-project-file-preview-resizer"
@@ -2323,7 +2243,7 @@ const renderApp = () => {
                 <pi-current-project-file-preview-drawer
                   .sessionId=${currentSessionId || ""}
                   .title=${currentProjectTitle}
-                  .filename=${currentProjectFilePreviewFilename}
+				  .filename=${workspaceExpansionState.filePreviewPath}
                   style=${`width: ${currentProjectFilePreviewDrawerWidth}px; flex-basis: ${currentProjectFilePreviewDrawerWidth}px;`}
                   @pi-close-current-project-file-preview=${closeCurrentProjectFilePreview}
                 ></pi-current-project-file-preview-drawer>
@@ -2347,6 +2267,14 @@ window.addEventListener(LANGUAGE_CHANGE_EVENT, () => {
 		} | null
 	)?.requestUpdate?.();
 	renderApp();
+});
+
+window.addEventListener("resize", () => {
+	const viewport = currentWorkspaceViewport();
+	if (viewport === workspaceExpansionState.viewport) return;
+	updateWorkspaceExpansion({ type: "set_viewport", viewport });
+	renderApp();
+	requestChatPanelUpdate();
 });
 
 window.addEventListener("offline", () => {

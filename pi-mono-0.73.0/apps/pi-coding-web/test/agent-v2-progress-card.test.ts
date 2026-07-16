@@ -77,6 +77,9 @@ function successPresentation(): SerializedAgentV2TerminalRunPresentation {
 		phase: "delivery",
 		stage: "delivery",
 		active: false,
+		startedAt: "2026-07-16T00:00:00.000Z",
+		updatedAt: "2026-07-16T00:02:00.000Z",
+		endedAt: "2026-07-16T00:02:00.000Z",
 		tasks: [
 			{
 				type: "agent_v2.task_updated",

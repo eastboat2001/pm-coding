@@ -42,6 +42,7 @@ describe("Agent v2 run presentation", () => {
 			runId: "run-1",
 			phase: "implementation",
 			status: "running",
+			at: NOW,
 		});
 		store = reduceAgentV2RunPresentation(store, {
 			type: "task",
@@ -139,11 +140,13 @@ describe("Agent v2 run presentation", () => {
 				runId: `run-${status}`,
 				phase: "delivery",
 				status: "running",
+				at: NOW,
 			});
 			store = reduceAgentV2RunPresentation(store, {
 				type: "settle",
 				runId: `run-${status}`,
 				status,
+				at: NOW,
 			});
 
 			const terminal = serializeAgentV2TerminalRunPresentation(store, `run-${status}`);

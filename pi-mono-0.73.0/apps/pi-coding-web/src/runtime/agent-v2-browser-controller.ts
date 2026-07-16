@@ -99,8 +99,8 @@ export interface AgentV2DeliveryReportPayload {
 }
 
 export interface AgentV2BrowserRunSink {
-	beginRun(runId: string): void;
-	setPhase(phase: AgentV2Phase, status: AgentV2RunStatus): void;
+	beginRun(runId: string, at: string): void;
+	setPhase(phase: AgentV2Phase, status: AgentV2RunStatus, at: string): void;
 	setTask(event: AgentV2TaskUpdatedPayload): void;
 	setArtifact(event: AgentV2ArtifactIndexedPayload): void;
 	setValidation(event: AgentV2ValidationRecordedPayload): void;
@@ -109,7 +109,7 @@ export interface AgentV2BrowserRunSink {
 	setSkill(event: AgentV2SkillAppliedPayload): void;
 	setSkillResource(event: AgentV2SkillResourceLoadedPayload): void;
 	setDeliveryReport(event: AgentV2DeliveryReportPayload): void;
-	settle(status: AgentV2RunStatus, error?: AgentV2Error): void;
+	settle(status: AgentV2RunStatus, at: string, error?: AgentV2Error): void;
 }
 
 export type AgentV2BrowserRunEventDrainResult =
@@ -125,18 +125,19 @@ export async function settleAgentV2BrowserTerminalSnapshot(options: {
 	controller?: AgentV2BrowserController;
 	runId: string;
 	status: AgentV2RunStatus;
+	at: string;
 	error?: AgentV2Error;
 	drain: () => Promise<AgentV2BrowserRunEventDrainResult | undefined>;
 	onSettled: () => void;
 }): Promise<AgentV2BrowserTerminalSettlementResult> {
-	const { controller, runId, status, error, drain, onSettled } = options;
+	const { controller, runId, status, at, error, drain, onSettled } = options;
 	if (!controller || controller.activeRunId !== runId) return { status: "inactive" };
 
 	const drainResult = await drain();
 	if (!drainResult?.ok) return { status: "retry", ...(drainResult ? { drainResult } : {}) };
 	if (controller.activeRunId !== runId) return { status: "inactive" };
 
-	controller.settle(status, error);
+	controller.settle(status, at, error);
 	onSettled();
 	return { status: "settled", drainResult };
 }
@@ -220,9 +221,11 @@ export class AgentV2BrowserController {
 		if (this._activeRunId) throw new Error(`Agent v2 browser run ${this._activeRunId} is already active.`);
 		const phase = requirePhase(run.phase, "run.phase");
 		const status = requireRunStatus(run.status, "run.status");
+		const createdAt = requireTimestamp(run.createdAt, "run.createdAt");
+		const updatedAt = requireTimestamp(run.updatedAt, "run.updatedAt");
 
-		this.sink.beginRun(runId);
-		this.sink.setPhase(phase, status);
+		this.sink.beginRun(runId, createdAt);
+		this.sink.setPhase(phase, status, updatedAt);
 		this._activeRunId = runId;
 		this._lastSeq = 0;
 		this.phase = phase;
@@ -255,13 +258,14 @@ export class AgentV2BrowserController {
 		this._lastSeq = Math.max(this._lastSeq, checkpoint);
 	}
 
-	settle(status: AgentV2RunStatus, error?: AgentV2Error): void {
+	settle(status: AgentV2RunStatus, at: string, error?: AgentV2Error): void {
 		this.requireActiveRun("settle()");
 		const terminalStatus = requireRunStatus(status, "status");
 		if (!TERMINAL_RUN_STATUSES.has(terminalStatus)) {
 			throw new Error(`Agent v2 browser run status ${terminalStatus} is not terminal.`);
 		}
-		this.sink.settle(terminalStatus, error);
+		const settledAt = requireTimestamp(at, "at");
+		this.sink.settle(terminalStatus, settledAt, error);
 		this._activeRunId = undefined;
 		this.status = terminalStatus;
 	}
@@ -281,8 +285,8 @@ export class AgentV2BrowserController {
 				const status = requireRunStatus(payload.status, `${type}.status`);
 				const phase = requirePhase(payload.phase, `${type}.phase`);
 				requireNonNegativeSafeInteger(payload.attempt, `${type}.attempt`);
-				requireTimestamp(payload.at, `${type}.at`);
-				this.sink.setPhase(phase, status);
+				const at = requireTimestamp(payload.at, `${type}.at`);
+				this.sink.setPhase(phase, status, at);
 				this.status = status;
 				this.phase = phase;
 				return;
@@ -290,8 +294,8 @@ export class AgentV2BrowserController {
 			case "agent_v2.planning_ready": {
 				assertOnlyPayloadFields(payload, type, ["type", "phase", "at"]);
 				const phase = requirePhase(payload.phase, `${type}.phase`);
-				requireTimestamp(payload.at, `${type}.at`);
-				this.sink.setPhase(phase, this.requireStatus(type));
+				const at = requireTimestamp(payload.at, `${type}.at`);
+				this.sink.setPhase(phase, this.requireStatus(type), at);
 				this.phase = phase;
 				return;
 			}
@@ -308,7 +312,7 @@ export class AgentV2BrowserController {
 				const phase = requirePhase(payload.phase, `${type}.phase`);
 				const status = requireRunStatus(payload.status, `${type}.status`);
 				if (payload.attempt !== undefined) requireNonNegativeSafeInteger(payload.attempt, `${type}.attempt`);
-				requireTimestamp(payload.at, `${type}.at`);
+				const at = requireTimestamp(payload.at, `${type}.at`);
 				if (payload.reason !== undefined || payload.cancelFingerprint !== undefined) {
 					if (phase !== "cancelled" || status !== "cancelled") {
 						throw new Error(`Invalid ${type} cancellation metadata.`);
@@ -321,7 +325,7 @@ export class AgentV2BrowserController {
 						throw new Error(`Invalid ${type}.cancelFingerprint.`);
 					}
 				}
-				this.sink.setPhase(phase, status);
+				this.sink.setPhase(phase, status, at);
 				this.phase = phase;
 				this.status = status;
 				return;

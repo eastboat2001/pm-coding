@@ -144,6 +144,25 @@ describe("Agent v2 durable run results", () => {
 		expect(rendered.values).toContain(true);
 	});
 
+	it("routes historical detail expansion through renderer coordination callbacks", async () => {
+		const { createAgentV2RunResultMessage, renderAgentV2RunResultMessage } = await import(
+			"../src/runtime/agent-v2-run-result-message.js"
+		);
+		const message = createAgentV2RunResultMessage(terminalPresentation("succeeded"));
+		const onSectionChange = vi.fn();
+		const rendered = renderAgentV2RunResultMessage(message, {
+			expandedSectionForRun: (runId) => (runId === "run-1" ? "technical" : null),
+			onSectionChange,
+		}) as unknown as { values: unknown[] };
+
+		expect(rendered.values).toContain("technical");
+		const callback = rendered.values.find((value) => typeof value === "function") as
+			| ((section: string | null) => void)
+			| undefined;
+		callback?.("files");
+		expect(onSectionChange).toHaveBeenCalledWith("run-1", "files");
+	});
+
 	it("keeps an explicitly named legacy read-only activity renderer registration", async () => {
 		const { registerLegacyAgentV2ActivityMessageRenderer } = await import(
 			"../src/runtime/agent-v2-activity-renderer.js"
@@ -161,6 +180,9 @@ function terminalPresentation(
 		phase: status === "failed" ? "failed" : "delivery",
 		stage: "delivery",
 		active: false,
+		startedAt: NOW,
+		updatedAt: NOW,
+		endedAt: NOW,
 		tasks: [],
 		artifacts: [],
 		validations: [],

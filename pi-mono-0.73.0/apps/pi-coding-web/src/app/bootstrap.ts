@@ -100,15 +100,12 @@ import {
 	selectRunTransientStatusText,
 } from "../runtime/run-transient-status.js";
 import { loadServerSkillList } from "../skill-tools/client.js";
-import { enqueueDefaultSkillLoadMessages } from "../skill-tools/default-skill-message.js";
+import { createChatSkillRuntime, type ChatSkillRuntimeSnapshot } from "../skill-tools/chat-skill-runtime.js";
+import { createChatSystemPrompt } from "../skill-tools/chat-system-prompt.js";
+import { registerLegacyDefaultSkillLoadMessageRenderer } from "../skill-tools/legacy-default-skill-message.js";
 import { SkillStatusTab } from "../skill-tools/SkillStatusTab.js";
 import type { SkillListDetails, SkillSummary } from "../skill-tools/schemas.js";
-import {
-	expandSkillCommandsInMessages,
-	getLatestExplicitSkillNames,
-	parseSkillCommandPrefix,
-} from "../skill-tools/skill-command.js";
-import { createServerSkillTools } from "../skill-tools/tools.js";
+import { getLatestExplicitSkillNames, parseSkillCommandPrefix } from "../skill-tools/skill-command.js";
 import { setBrowserAppStorage } from "../storage/browser-app-storage.js";
 import { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
 import type { MergedSessionEntry } from "../storage/merged-session-index.js";
@@ -173,8 +170,7 @@ const EMPTY_USAGE: SessionMetadata["usage"] = {
 
 const piRuntimeConfig = {
 	handoffDefaultThinkingLevel: "high" as ThinkingLevel,
-	selectableSkills: [] as SkillSummary[],
-	defaultSkills: [] as SkillSummary[],
+	skills: [] as SkillSummary[],
 	skillDiagnostics: [] as SkillDiagnostic[],
 	skillSlashSuggestions: [] as SkillSlashSuggestion[],
 	diagnosticLogging: {
@@ -260,6 +256,7 @@ type SlashSuggestionHost = {
 
 document.documentElement.lang = getCurrentLanguage();
 registerAgentV2ActivityMessageRenderer();
+registerLegacyDefaultSkillLoadMessageRenderer();
 
 const configuredStorage = new ConfiguredServerStorage();
 const settings = new SettingsStore();
@@ -311,12 +308,10 @@ const getProxyUrl = async (): Promise<string | undefined> => {
 
 const loadPiRuntimeConfig = async () => {
 	const [status, skillList] = await Promise.all([configuredStorage.getStatus(), loadServerSkillList()]);
-	const selectableSkills = Array.isArray(skillList.skills) ? skillList.skills : [];
-	const defaultSkills = Array.isArray(skillList.defaultSkills) ? skillList.defaultSkills : [];
+	const skills = Array.isArray(skillList.skills) ? skillList.skills : [];
 	const diagnostics = Array.isArray(skillList.diagnostics) ? skillList.diagnostics : [];
 	piRuntimeConfig.handoffDefaultThinkingLevel = normalizeThinkingLevel(status?.handoffDefaultThinkingLevel);
-	piRuntimeConfig.selectableSkills = selectableSkills;
-	piRuntimeConfig.defaultSkills = defaultSkills;
+	piRuntimeConfig.skills = skills;
 	piRuntimeConfig.skillDiagnostics = diagnostics;
 	piRuntimeConfig.diagnosticLogging = {
 		rawProviderLoggingEnabled: status?.rawProviderLoggingEnabled === true,
@@ -330,7 +325,7 @@ const loadPiRuntimeConfig = async () => {
 	};
 	piRuntimeConfig.skillSlashSuggestions = [
 		createSkillSlashCommand(skillApiErrorDetail(diagnostics)),
-		...selectableSkills.map(skillToSlashSuggestion),
+		...skills.map(skillToSlashSuggestion),
 	];
 };
 
@@ -377,6 +372,7 @@ let isEditingTitle = false;
 let agent: Agent;
 let chatPanel: ChatPanel;
 let agentUnsubscribe: (() => void) | undefined;
+let activeChatSkillRuntime: ChatSkillRuntimeSnapshot | undefined;
 let agentV2BrowserController: AgentV2BrowserController | undefined;
 let remoteRunConnection: RunEventConnection | undefined;
 let remoteRunStatusPollId: ReturnType<typeof setTimeout> | undefined;
@@ -642,7 +638,7 @@ const applySkillSlashSuggestions = () => {
 };
 
 const createInitialAgentState = (model?: Model<any>): Partial<AgentState> => ({
-	systemPrompt: "",
+	systemPrompt: createChatSystemPrompt(piRuntimeConfig.skills, model?.contextWindow ?? 128_000),
 	...(model ? { model } : {}),
 	thinkingLevel: "off",
 	messages: [],
@@ -712,7 +708,12 @@ const sessionModeSwitchEnabled = (): boolean =>
 
 const syncSessionModeTools = (): void => {
 	if (!agent) return;
-	agent.state.tools = sessionModeTools(currentSessionMode, createServerSkillTools());
+	activeChatSkillRuntime = undefined;
+	agent.state.tools = [];
+	agent.state.systemPrompt = createChatSystemPrompt(
+		piRuntimeConfig.skills,
+		agent.state.model?.contextWindow ?? 128_000,
+	);
 };
 
 const changeSessionMode = async (mode: SessionMode): Promise<void> => {
@@ -1710,19 +1711,19 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		agentUnsubscribe();
 	}
 	resetRemoteRunState();
+	activeChatSkillRuntime = undefined;
 
 	const defaultModel = await modelController.getDefaultModel();
 	const resolvedInitialState = initialState || createInitialAgentState(defaultModel);
+	const initialModel = resolvedInitialState.model ?? defaultModel;
 	agent = new Agent({
 		initialState: {
 			...resolvedInitialState,
-			systemPrompt: "",
+			systemPrompt: createChatSystemPrompt(piRuntimeConfig.skills, initialModel?.contextWindow ?? 128_000),
 		},
 		convertToLlm: defaultConvertToLlm,
 		transformContext: async (messages) =>
-			await expandSkillCommandsInMessages(messages, {
-				defaultSkillNames: piRuntimeConfig.defaultSkills.map((skill) => skill.name),
-			}),
+			activeChatSkillRuntime ? await activeChatSkillRuntime.transformMessages(messages) : messages,
 		streamFn: createLoggedStreamFn(
 			createStreamFn(getProxyUrl),
 			diagnosticClient,
@@ -1735,6 +1736,16 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		getApiKey: getProviderApiKey,
 	});
 	const chatPrompt = agent.prompt.bind(agent);
+	const invokeChatPrompt = async (
+		chatInput: string | AgentMessage | AgentMessage[],
+		chatImages?: ImageContent[],
+	): Promise<void> => {
+		if (typeof chatInput === "string") {
+			await chatPrompt(chatInput, chatImages);
+			return;
+		}
+		await chatPrompt(chatInput);
+	};
 	(agent as Agent & { repairToolCalls: boolean }).repairToolCalls = true;
 	const abortAgentLocally = agent.abort.bind(agent);
 	agent.abort = () => {
@@ -1747,7 +1758,17 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		await dispatchSessionPrompt(
 			currentSessionMode,
 			{
-				chat: chatPrompt,
+				chat: async (chatInput, chatImages) => {
+					const runtime = await createChatSkillRuntime({
+						skills: piRuntimeConfig.skills,
+						input: chatInput,
+						contextWindowTokens: agent.state.model?.contextWindow ?? 128_000,
+					});
+					activeChatSkillRuntime = runtime;
+					agent.state.systemPrompt = runtime.systemPrompt;
+					agent.state.tools = [...runtime.tools];
+					await invokeChatPrompt(chatInput, chatImages);
+				},
 				appGeneration: startRemotePrompt,
 			},
 			input,
@@ -1767,9 +1788,6 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 		},
 		onBeforeSend: async () => {
 			await ensureSessionIdentity();
-			if (currentSessionMode === "chat") {
-				await enqueueDefaultSkillLoadMessages(agent, piRuntimeConfig.defaultSkills);
-			}
 			await modelController.persistSelectedModel(agent.state.model);
 			if (agent.state.messages.length > 0 || currentActiveRunId) await saveSession();
 			if (activeSidebarPanel === "apps") refreshGeneratedAppsPanel();
@@ -1781,7 +1799,7 @@ const createAgent = async (initialState?: Partial<AgentState>) => {
 			await saveSession();
 		},
 		enableArtifacts: false,
-		toolsFactory: () => sessionModeTools(currentSessionMode, createServerSkillTools()),
+		toolsFactory: () => sessionModeTools(currentSessionMode, []),
 	});
 	applySkillSlashSuggestions();
 };
@@ -2187,8 +2205,7 @@ const renderApp = () => {
 						const providersTab = new ProvidersModelsTab();
 						providersTab.showKnownProviders = false;
 						const skillStatusTab = new SkillStatusTab();
-						skillStatusTab.skills = piRuntimeConfig.selectableSkills;
-						skillStatusTab.defaultSkills = piRuntimeConfig.defaultSkills;
+						skillStatusTab.skills = piRuntimeConfig.skills;
 						skillStatusTab.diagnostics = piRuntimeConfig.skillDiagnostics;
 						SettingsDialog.open([
 							new LanguageTab(),

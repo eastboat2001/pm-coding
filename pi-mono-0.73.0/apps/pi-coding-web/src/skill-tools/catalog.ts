@@ -8,7 +8,7 @@ const MAX_DISCLOSED_DESCRIPTION_CHARS = 240;
 export function implicitSkills(skills: readonly SkillSummary[]): SkillSummary[] {
 	return skills
 		.filter((skill) => skill.allowImplicitInvocation)
-		.toSorted((left, right) => left.name.localeCompare(right.name));
+		.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function skillCatalogBudgetChars(contextWindowTokens: number): number {

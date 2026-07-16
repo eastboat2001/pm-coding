@@ -1,7 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { implicitSkills } from "./catalog.js";
 import { requestSkillApi } from "./client.js";
-import { registerDefaultSkillLoadMessageRenderer } from "./default-skill-message.js";
 import { registerSkillToolRenderers } from "./renderers.js";
 import {
 	formatSkillLoadResult,
@@ -42,7 +41,6 @@ export function createServerSkillTools(options: ServerSkillToolsOptions = { skil
 	if (implicitNames.size === 0 && activated.size === 0) return [];
 
 	registerSkillToolRenderers();
-	registerDefaultSkillLoadMessageRenderer();
 	const request = options.request ?? defaultSkillToolRequest;
 	const activationRequests = new Map<string, Promise<SkillLoadDetails>>();
 	const resourceCache = new Map<string, SkillResourceDetails>();

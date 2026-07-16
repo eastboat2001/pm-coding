@@ -3,9 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { SkillLoadDetails, SkillResourceDetails, SkillSummary } from "../src/skill-tools/schemas.js";
 import { createServerSkillTools, type SkillToolRequest } from "../src/skill-tools/tools.js";
 
-vi.mock("../src/skill-tools/default-skill-message.js", () => ({
-	registerDefaultSkillLoadMessageRenderer: vi.fn(),
-}));
 vi.mock("../src/skill-tools/renderers.js", () => ({ registerSkillToolRenderers: vi.fn() }));
 
 function summary(name: string, allowImplicitInvocation = true): SkillSummary {

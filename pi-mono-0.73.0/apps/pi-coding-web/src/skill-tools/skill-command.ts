@@ -9,7 +9,7 @@ type ParsedSkillCommandPrefix = {
 export type SkillLoader = (name: string, signal?: AbortSignal) => Promise<SkillLoadDetails> | SkillLoadDetails;
 
 export type ExpandSkillCommandOptions = {
-	defaultSkillNames?: string[];
+	availableSkillNames?: readonly string[];
 	loadSkill?: SkillLoader;
 	signal?: AbortSignal;
 };
@@ -23,20 +23,15 @@ export async function expandSkillCommandsInMessages(
 	let changed = false;
 	const expandedMessages: AgentMessage[] = [];
 	const latestExpandableMessageIndex = findLatestExpandableMessageIndex(messages);
-	const defaultSkillNames = uniqueNames(options.defaultSkillNames ?? []);
 	for (let index = 0; index < messages.length; index++) {
 		throwIfAborted(options.signal);
 		const message = messages[index];
 		const content = readExpandableTextContent(message);
-		if (content === undefined) {
+		if (content === undefined || index !== latestExpandableMessageIndex) {
 			expandedMessages.push(message);
 			continue;
 		}
-		const expanded = await expandSkillCommandText(
-			content,
-			index === latestExpandableMessageIndex ? defaultSkillNames : [],
-			options,
-		);
+		const expanded = await expandSkillCommandText(content, options);
 		if (expanded === content) {
 			expandedMessages.push(message);
 		} else {
@@ -45,10 +40,6 @@ export async function expandSkillCommandsInMessages(
 		}
 	}
 	return changed ? expandedMessages : messages;
-}
-
-export function getLatestRequiredSkillNames(messages: AgentMessage[], defaultSkillNames: string[] = []): string[] {
-	return uniqueNames([...defaultSkillNames, ...getLatestExplicitSkillNames(messages)]);
 }
 
 export function getLatestExplicitSkillNames(messages: AgentMessage[]): string[] {
@@ -62,25 +53,19 @@ export function getLatestExplicitSkillNames(messages: AgentMessage[]): string[] 
 
 async function expandSkillCommandText(
 	text: string,
-	defaultSkillNames: string[] = [],
 	options: ExpandSkillCommandOptions = {},
 ): Promise<string> {
 	const parsed = parseSkillCommandPrefix(text);
-	if (!parsed && defaultSkillNames.length === 0) return text;
+	if (!parsed) return text;
+	if (options.availableSkillNames) {
+		const availableNames = new Set(options.availableSkillNames);
+		const unknownName = parsed.skillNames.find((name) => !availableNames.has(name));
+		if (unknownName) throw new Error(`Unknown selected skill: ${unknownName}`);
+	}
 
 	const loadSkill = options.loadSkill ?? defaultLoadSkill;
-	const defaultSkills = await loadSkills(defaultSkillNames, new Set(), loadSkill, options.signal);
-	const explicitSkills = await loadSkills(
-		parsed?.skillNames ?? [],
-		new Set(defaultSkills.map((skill) => skill.name)),
-		loadSkill,
-		options.signal,
-	);
-
-	if (defaultSkills.length > 0) {
-		return formatRequiredSkillSelection(defaultSkills, explicitSkills, parsed?.args ?? text);
-	}
-	return formatExplicitSkillSelection(explicitSkills, parsed?.args ?? text);
+	const explicitSkills = await loadSkills(parsed.skillNames, new Set(), loadSkill, options.signal);
+	return formatExplicitSkillSelection(explicitSkills, parsed.args);
 }
 
 async function loadSkills(
@@ -200,55 +185,6 @@ function formatExplicitSkillSelection(skills: SkillLoadDetails[], userRequest: s
 		"",
 		...skills.map(formatSkillBlock),
 		"</explicitly_selected_skills>",
-		"",
-		"<active_skill_checklist>",
-		"Before acting, ensure:",
-		...skillNames.map((name) => `- ${name}: identify and apply the relevant instructions from this skill.`),
-		"</active_skill_checklist>",
-	];
-	if (!userRequest) return lines.join("\n");
-	return `${lines.join("\n")}\n\n${formatUserRequestSection(userRequest)}`;
-}
-
-function formatRequiredSkillSelection(
-	defaultSkills: SkillLoadDetails[],
-	explicitSkills: SkillLoadDetails[],
-	userRequest: string,
-): string {
-	const defaultSkillNames = defaultSkills.map((skill) => skill.name);
-	const explicitSkillNames = explicitSkills.map((skill) => skill.name);
-	const skillNames = uniqueNames([...defaultSkillNames, ...explicitSkillNames]);
-	const defaultSkillLines =
-		defaultSkillNames.length > 0
-			? [
-					"Server default skills:",
-					...defaultSkillNames.map((name) => `- ${name}`),
-					"These default skills are configured by the PI server and are not user-selectable.",
-					"",
-				]
-			: [];
-	const explicitSkillLines =
-		explicitSkillNames.length > 0
-			? [
-					"User-selected skills:",
-					...explicitSkillNames.map((name) => `- ${name}`),
-					"The user explicitly selected these PI global skills.",
-					"",
-				]
-			: [];
-	const lines = [
-		"<required_skills>",
-		"These PI skills are mandatory implementation instructions, not optional suggestions.",
-		"You must apply every required skill before creating, editing, validating, or previewing project files.",
-		"When multiple skills are required, merge their non-conflicting requirements into one implementation plan. Do not ignore one required skill because another required skill seems more relevant.",
-		"If required skill instructions conflict, preserve the user or PM product requirements first, then follow the more specific skill instruction.",
-		"Skill files and resources may be written in a different language from the user request. Follow their technical/style instructions without switching the assistant response language or generated user-facing app text away from the user request language.",
-		"",
-		...defaultSkillLines,
-		...explicitSkillLines,
-		...defaultSkills.map(formatSkillBlock),
-		...explicitSkills.map(formatSkillBlock),
-		"</required_skills>",
 		"",
 		"<active_skill_checklist>",
 		"Before acting, ensure:",

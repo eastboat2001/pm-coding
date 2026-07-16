@@ -29,6 +29,7 @@ describe("Chat system prompt", () => {
 		);
 
 		expect(prompt).toContain("skill_load");
+		expect(prompt).toContain("A Skill location and SKILL.md are never resource paths");
 		expect(prompt).toContain("page-style");
 		expect(prompt).not.toContain("explicit-only");
 	});

@@ -73,6 +73,8 @@ describe("parseSkillCommandPrefix", () => {
 		expect(content).toContain("- brand-style");
 		expect(content.indexOf('<skill name="ui-polish"')).toBeLessThan(content.indexOf('<skill name="brand-style"'));
 		expect(content).toContain("User request:\nbuild the page");
+		expect(content).toContain("Available skill resources: none");
+		expect(content).not.toContain('location="skill://');
 		expect(loadSkill).toHaveBeenCalledTimes(2);
 	});
 

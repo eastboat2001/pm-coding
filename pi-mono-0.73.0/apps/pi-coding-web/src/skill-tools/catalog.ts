@@ -47,7 +47,6 @@ function formatSkillEntry(skill: SkillSummary): string {
 		"<skill>",
 		`<name>${escapeXml(skill.name)}</name>`,
 		`<description>${escapeXml(description)}</description>`,
-		`<location>${escapeXml(skill.location)}</location>`,
 		"</skill>",
 		"",
 	].join("\n");

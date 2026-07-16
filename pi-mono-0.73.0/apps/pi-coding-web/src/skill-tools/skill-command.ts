@@ -208,13 +208,15 @@ function formatSkillBlock(skill: SkillLoadDetails): string {
 					"Available skill resources:",
 					...skill.resources.map((resource) => `- ${resource.path} (${resource.size} bytes)`),
 				]
-			: [];
+			: ["", "Available skill resources: none.", "Do not call skill_resource for this Skill."];
 	return [
-		`<skill name="${escapeXml(skill.name)}" location="${escapeXml(skill.location)}">`,
+		`<skill name="${escapeXml(skill.name)}">`,
 		skill.interface?.displayName ? `Display name: ${skill.interface.displayName}` : "",
 		skill.interface?.shortDescription ? `Short description: ${skill.interface.shortDescription}` : "",
 		skill.interface?.defaultPrompt ? `Default prompt: ${skill.interface.defaultPrompt}` : "",
-		"References are relative to this skill. Use skill_resource to read listed relative resources when needed.",
+		skill.resources.length > 0
+			? "Use skill_resource only for the exact listed relative paths when needed."
+			: "The complete Skill instructions are already present below.",
 		"",
 		skill.content,
 		...resources,

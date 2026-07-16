@@ -30,7 +30,7 @@ describe("Chat skill catalog", () => {
 		);
 
 		expect(output).toContain("safe-skill");
-		expect(output).toContain("skill://safe-skill/SKILL.md");
+		expect(output).not.toContain("skill://safe-skill/SKILL.md");
 		expect(output).toContain("A &lt; B &amp; the task matches");
 		expect(output).not.toContain("resources");
 		expect(output).not.toContain("SKILL.md content");

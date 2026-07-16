@@ -17,7 +17,7 @@ export const skillResourceSchema = Type.Object(
 		}),
 		path: Type.String({
 			description:
-				"Must exactly match one of the resource paths returned by skill_load for this skill. Do not invent, infer, or guess unlisted paths.",
+				"Must exactly match one of the resource paths returned by skill_load for this skill. Do not call when resources are none. A Skill location and SKILL.md are not resource paths. Do not invent, infer, or guess unlisted paths.",
 		}),
 	},
 	{ additionalProperties: false },
@@ -49,16 +49,15 @@ export function formatSkillLoadResult(result: SkillLoadResult): string {
 			? `\n\nAvailable skill resources:\n${result.resources
 					.map((resource) => `- ${resource.path} (${resource.size} bytes)`)
 					.join("\n")}`
-			: "";
+			: "\n\nAvailable skill resources: none.\nDo not call skill_resource for this Skill.";
 	return [
 		`Skill: ${result.name}`,
 		result.interface?.displayName ? `Display name: ${result.interface.displayName}` : "",
 		result.interface?.shortDescription ? `Short description: ${result.interface.shortDescription}` : "",
-		`Location: ${result.location}`,
 		result.interface?.defaultPrompt ? `Default prompt: ${result.interface.defaultPrompt}` : "",
-		"Use skill_resource only for exact paths listed under Available skill resources below. Do not infer or invent unlisted references paths.",
+		"Use skill_resource only for exact paths listed under Available skill resources below. The Skill location and SKILL.md are not resource paths.",
 		"",
-		`<skill name="${escapeXml(result.name)}" location="${escapeXml(result.location)}">`,
+		`<skill name="${escapeXml(result.name)}">`,
 		result.content,
 		"</skill>",
 		resources,

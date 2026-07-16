@@ -70,10 +70,9 @@ describe("skill tool contract", () => {
 				'Skill: ui<&"polish',
 				"Display name: UI Polish",
 				"Short description: Make the interface production ready.",
-				'Location: C:\\Skills\\ui<&"polish',
 				"Default prompt: Audit visible screens.",
-				"Use skill_resource only for exact paths listed under Available skill resources below. Do not infer or invent unlisted references paths.",
-				'<skill name="ui&lt;&amp;&quot;polish" location="C:\\Skills\\ui&lt;&amp;&quot;polish">',
+				"Use skill_resource only for exact paths listed under Available skill resources below. The Skill location and SKILL.md are not resource paths.",
+				'<skill name="ui&lt;&amp;&quot;polish">',
 				"# Skill\nUse careful spacing.",
 				"</skill>",
 				"",
@@ -82,6 +81,23 @@ describe("skill tool contract", () => {
 				"- references/rules.md (42 bytes)",
 			].join("\n"),
 		);
+	});
+
+	it("explicitly forbids resource calls when a loaded skill lists no resources", () => {
+		const result: SkillLoadResult = {
+			name: "no-resources",
+			description: "No resources",
+			location: "skill://no-resources/SKILL.md",
+			allowImplicitInvocation: true,
+			content: "# Skill\nFollow these instructions.",
+			resources: [],
+		};
+
+		const formatted = formatSkillLoadResult(result);
+
+		expect(formatted).toContain("Available skill resources: none");
+		expect(formatted).toContain("Do not call skill_resource for this Skill");
+		expect(formatted).not.toContain("skill://no-resources/SKILL.md");
 	});
 });
 

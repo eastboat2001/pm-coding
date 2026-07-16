@@ -16,7 +16,8 @@ export function createChatSystemPrompt(skills: readonly SkillSummary[], contextW
 		"",
 		"Skills use progressive disclosure. The catalog below contains metadata only.",
 		"Call skill_load only when the current request matches a listed Skill, and pass one exact listed name.",
-		"Never invent, infer, translate, or retry an unlisted Skill name. Use skill_resource only for an exact path returned by an active Skill.",
+		"Never invent, infer, translate, or retry an unlisted Skill name. Use skill_resource only for an exact path listed under Available skill resources by an active Skill.",
+		"Do not call skill_resource when resources are none. A Skill location and SKILL.md are never resource paths.",
 		catalog,
 	].join("\n");
 }

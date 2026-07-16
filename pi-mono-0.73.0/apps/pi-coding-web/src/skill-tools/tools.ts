@@ -38,7 +38,8 @@ export function createServerSkillTools(options: ServerSkillToolsOptions = { skil
 	for (const skill of options.preloadedSkills ?? []) {
 		if (completeNames.has(skill.name) && explicitNames.has(skill.name)) activated.set(skill.name, skill);
 	}
-	if (implicitNames.size === 0 && activated.size === 0) return [];
+	const preloadedResourcesAvailable = [...activated.values()].some((skill) => skill.resources.length > 0);
+	if (implicitNames.size === 0 && !preloadedResourcesAvailable) return [];
 
 	registerSkillToolRenderers();
 	const request = options.request ?? defaultSkillToolRequest;
@@ -49,7 +50,9 @@ export function createServerSkillTools(options: ServerSkillToolsOptions = { skil
 	if (implicitNames.size > 0) {
 		tools.push(createSkillLoadTool({ implicitNames, activated, activationRequests, request }));
 	}
-	tools.push(createSkillResourceTool({ activated, resourceCache, resourceRequests, request }));
+	if (implicitNames.size > 0 || preloadedResourcesAvailable) {
+		tools.push(createSkillResourceTool({ activated, resourceCache, resourceRequests, request }));
+	}
 	return tools;
 }
 
@@ -97,7 +100,7 @@ function createSkillResourceTool(input: {
 		label: "Skill Resource",
 		name: "skill_resource",
 		description:
-			"Read a text resource only after its skill is active. The name and relative path must exactly match the active skill and one of the paths returned with its instructions.",
+			"Read a text resource only after its skill is active. The name and relative path must exactly match one path listed under Available skill resources. Do not call this tool when resources are none; a Skill location is not a resource path and SKILL.md is already loaded.",
 		parameters: skillResourceSchema,
 		prepareArguments: prepareSkillResourceArguments,
 		execute: async (_toolCallId, args, signal) => {

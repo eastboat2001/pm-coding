@@ -46,6 +46,8 @@ describe("server skill tools", () => {
 		expect(tools.map((tool) => tool.name)).toEqual(["skill_load", "skill_resource"]);
 		expect(toolNamed(tools, "skill_load").description).toContain("implicit-skill");
 		expect(toolNamed(tools, "skill_load").description).not.toContain("explicit-only");
+		expect(toolNamed(tools, "skill_resource").description).toContain("Do not call this tool when resources are none");
+		expect(toolNamed(tools, "skill_resource").description).toContain("location is not a resource path");
 	});
 
 	it("rejects unknown skill names locally without a request", async () => {
@@ -116,5 +118,15 @@ describe("server skill tools", () => {
 			path: "references/guide.md",
 		});
 		expect(request).toHaveBeenCalledTimes(1);
+	});
+
+	it("exposes no resource tool for a preloaded explicit skill without resources", () => {
+		const tools = createServerSkillTools({
+			skills: [summary("explicit-only", false)],
+			explicitSkillNames: ["explicit-only"],
+			preloadedSkills: [loaded("explicit-only")],
+		});
+
+		expect(tools).toEqual([]);
 	});
 });

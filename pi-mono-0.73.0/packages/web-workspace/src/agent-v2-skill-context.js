@@ -20,14 +20,11 @@ export class AgentV2SkillContextError extends Error {
 }
 export function loadAgentV2SkillContext(input) {
     const catalog = input.skills.list();
-    const authorizedNames = new Set(catalog.promptSkills.map((skill) => skill.name));
+    const authorizedNames = new Set(catalog.skills.map((skill) => skill.name));
     if (input.selectedSkillNames.some((name) => !authorizedNames.has(name))) {
         throw new AgentV2SkillContextError("skill_not_authorized");
     }
-    const names = uniqueNames([
-        ...catalog.defaultSkills.filter((skill) => !skill.disableModelInvocation).map((skill) => skill.name),
-        ...input.selectedSkillNames,
-    ]);
+    const names = uniqueNames(input.selectedSkillNames);
     if (names.length > MAX_SKILLS)
         throw new AgentV2SkillContextError("skill_limit_exceeded");
     let instructionChars = 0;

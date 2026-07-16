@@ -6,21 +6,19 @@ function skill(name: string, content: string, resources: Array<{ path: string; s
 		name,
 		description: `${name} description`,
 		location: `skill://${name}/SKILL.md`,
-		disableModelInvocation: false,
+		allowImplicitInvocation: false,
 		content,
 		resources,
 	};
 }
 
 describe("agent v2 skill context", () => {
-	it("revalidates names against server config and loads defaults, instructions, and only referenced resources", () => {
-		const load = vi.fn((body: { name: string }) =>
-			body.name === "default-ui"
-				? skill("default-ui", "Always use accessible labels.")
-				: skill("ui-polish", "Use the palette in references/colors.md", [
-						{ path: "references/colors.md", size: 20 },
-						{ path: "references/unused.md", size: 20 },
-					]),
+	it("loads only explicitly selected skills including explicit-only entries", () => {
+		const load = vi.fn(() =>
+			skill("ui-polish", "Use the palette in references/colors.md", [
+				{ path: "references/colors.md", size: 20 },
+				{ path: "references/unused.md", size: 20 },
+			]),
 		);
 		const readResource = vi.fn(({ name, path }: { name: string; path: string }) => ({
 			name,
@@ -29,12 +27,13 @@ describe("agent v2 skill context", () => {
 			size: 22,
 		}));
 		const context = loadAgentV2SkillContext({
-			selectedSkillNames: ["ui-polish"],
+			selectedSkillNames: ["ui-polish", "ui-polish"],
 			skills: {
 				list: () => ({
-					skills: [{ ...skill("ui-polish", ""), content: undefined }],
-					defaultSkills: [{ ...skill("default-ui", ""), content: undefined }],
-					promptSkills: [{ ...skill("ui-polish", ""), content: undefined }],
+					skills: [
+						{ ...skill("ui-polish", ""), content: undefined },
+						{ ...skill("unselected-skill", ""), content: undefined },
+					],
 					diagnostics: [],
 				}),
 				load,
@@ -42,7 +41,9 @@ describe("agent v2 skill context", () => {
 			},
 		});
 
-		expect(context.skills.map((item) => item.name)).toEqual(["default-ui", "ui-polish"]);
+		expect(context.skills.map((item) => item.name)).toEqual(["ui-polish"]);
+		expect(load).toHaveBeenCalledTimes(1);
+		expect(load).toHaveBeenCalledWith({ name: "ui-polish" });
 		expect(context.resources).toEqual([
 			expect.objectContaining({
 				skillName: "ui-polish",
@@ -59,7 +60,7 @@ describe("agent v2 skill context", () => {
 			loadAgentV2SkillContext({
 				selectedSkillNames: ["attacker-skill"],
 				skills: {
-					list: () => ({ skills: [], defaultSkills: [], promptSkills: [], diagnostics: [] }),
+					list: () => ({ skills: [], diagnostics: [] }),
 					load: vi.fn(),
 					readResource: vi.fn(),
 				},
@@ -67,9 +68,9 @@ describe("agent v2 skill context", () => {
 		).toThrow(AgentV2SkillContextError);
 		try {
 			loadAgentV2SkillContext({
-				selectedSkillNames: ["attacker-skill"],
-				skills: {
-					list: () => ({ skills: [], defaultSkills: [], promptSkills: [], diagnostics: [] }),
+			selectedSkillNames: ["attacker-skill"],
+			skills: {
+				list: () => ({ skills: [], diagnostics: [] }),
 					load: vi.fn(),
 					readResource: vi.fn(),
 				},

@@ -644,13 +644,14 @@ describe("AgentV2PiModelExecution", () => {
 		for (const forbidden of ["legacy prompt", "preview goal continuation", SECRET_KEY, "https://client.invalid"]) {
 			expect(serializedContext).not.toContain(forbidden);
 		}
-		expect(options).toEqual({
+		expect(options).toMatchObject({
 			apiKey: SECRET_KEY,
-			signal: input.signal,
 			maxTokens: 4_000,
 			sessionId: "agent-v2:run-a:task-1",
 			maxRetries: 0,
 		});
+		expect(options?.signal).toBeInstanceOf(AbortSignal);
+		expect(options?.onChunk).toEqual(expect.any(Function));
 		expect(envelope).toEqual({
 			result: { version: 1, taskId: "task-1", summary: "implemented", files: [{ path: "index.html", content: "ok" }] },
 			provider: "trusted-provider",
@@ -658,6 +659,206 @@ describe("AgentV2PiModelExecution", () => {
 			usage: { input: 11, output: 7, totalTokens: 18, costTotal: 0.125 },
 		});
 		expect(JSON.stringify(envelope)).not.toContain(SECRET_KEY);
+	});
+
+	it("aborts an idle provider attempt and retries it only once before returning a safe timeout", async () => {
+		const complete = vi.fn(
+			async (_model: Model<Api>, _context: unknown, options: { signal?: AbortSignal } | undefined) =>
+				await new Promise<AssistantMessage>((resolve) => {
+					options?.signal?.addEventListener(
+						"abort",
+						() =>
+							resolve(
+								assistantMessage("", {
+									content: [],
+									stopReason: "aborted",
+									errorMessage: `request aborted ${RAW_PROVIDER_SECRET}`,
+								}),
+							),
+						{ once: true },
+					);
+				}),
+		);
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete: complete as never,
+			streamIdleTimeoutMs: 5,
+		});
+
+		const error = await caught(execution.generateImplementation(executionInput()));
+
+		expect(complete).toHaveBeenCalledTimes(2);
+		expect(error).toMatchObject({
+			code: "provider_timeout",
+			attempts: 2,
+			retryable: true,
+			hadObservableOutput: false,
+		});
+		expect(String(error)).toContain("timed out");
+		expect(observable(error)).not.toContain(RAW_PROVIDER_SECRET);
+		expect(observable(error)).not.toContain(SECRET_KEY);
+	});
+
+	it("retries one transient no-output provider error and succeeds", async () => {
+		const complete = vi
+			.fn()
+			.mockResolvedValueOnce(
+				assistantMessage("", {
+					content: [],
+					stopReason: "error",
+					errorMessage: `fetch failed ${RAW_PROVIDER_SECRET}`,
+				}),
+			)
+			.mockResolvedValueOnce(assistantMessage(implementationJson()));
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete,
+			streamIdleTimeoutMs: 1_000,
+		});
+
+		await expect(execution.generateImplementation(executionInput())).resolves.toMatchObject({
+			result: { taskId: "task-1" },
+		});
+		expect(complete).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		["429 too many requests", "provider_rate_limit"],
+		["503 service unavailable", "provider_server_error"],
+	] as const)("retries a safe no-output %s failure only once", async (providerMessage, code) => {
+		const complete = vi.fn(async () =>
+			assistantMessage("", {
+				content: [],
+				stopReason: "error",
+				errorMessage: `${providerMessage} ${RAW_PROVIDER_SECRET}`,
+			}),
+		);
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete,
+		});
+
+		const error = await caught(execution.generateImplementation(executionInput()));
+
+		expect(complete).toHaveBeenCalledTimes(2);
+		expect(error).toMatchObject({ code, attempts: 2, hadObservableOutput: false });
+		expect(observable(error)).not.toContain(RAW_PROVIDER_SECRET);
+	});
+
+	it.each(["401 unauthorized", "content_filter policy refusal"])(
+		"does not retry a non-retryable provider failure: %s",
+		async (providerMessage) => {
+			const complete = vi.fn(async () =>
+				assistantMessage("", {
+					content: [],
+					stopReason: "error",
+					errorMessage: `${providerMessage} ${RAW_PROVIDER_SECRET}`,
+				}),
+			);
+			const execution = new AgentV2PiModelExecution({
+				modelRegistry: registry(trustedModel()),
+				resolveApiKey: () => SECRET_KEY,
+				complete,
+			});
+
+			const error = await caught(execution.generateImplementation(executionInput()));
+
+			expect(complete).toHaveBeenCalledTimes(1);
+			expect(error).toMatchObject({ code: "provider_error" });
+			expect(observable(error)).not.toContain(RAW_PROVIDER_SECRET);
+		},
+	);
+
+	it("resets the idle watchdog on a chunk and never retries after that observable output", async () => {
+		const complete = vi.fn(
+			async (
+				_model: Model<Api>,
+				_context: unknown,
+				options: { signal?: AbortSignal; onChunk?: () => void } | undefined,
+			) => {
+				options?.onChunk?.();
+				return await new Promise<AssistantMessage>((resolve) => {
+					options?.signal?.addEventListener(
+						"abort",
+						() => resolve(assistantMessage("", { content: [], stopReason: "aborted" })),
+						{ once: true },
+					);
+				});
+			},
+		);
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete: complete as never,
+			streamIdleTimeoutMs: 5,
+		});
+
+		const error = await caught(execution.generateImplementation(executionInput()));
+
+		expect(complete).toHaveBeenCalledTimes(1);
+		expect(error).toMatchObject({
+			code: "provider_timeout",
+			attempts: 1,
+			retryable: false,
+			hadObservableOutput: true,
+		});
+	});
+
+	it("does not retry a transient provider error after observable output", async () => {
+		const complete = vi.fn(async () =>
+			assistantMessage("", {
+				content: [{ type: "text", text: "partial output" }],
+				stopReason: "error",
+				errorMessage: `network error ${RAW_PROVIDER_SECRET}`,
+			}),
+		);
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete,
+			streamIdleTimeoutMs: 1_000,
+		});
+
+		const error = await caught(execution.generateImplementation(executionInput()));
+
+		expect(complete).toHaveBeenCalledTimes(1);
+		expect(error).toMatchObject({
+			code: "provider_network",
+			attempts: 1,
+			retryable: false,
+			hadObservableOutput: true,
+		});
+		expect(observable(error)).not.toContain(RAW_PROVIDER_SECRET);
+	});
+
+	it("preserves user cancellation ahead of the idle watchdog without retrying", async () => {
+		const controller = new AbortController();
+		const complete = vi.fn(
+			async (_model: Model<Api>, _context: unknown, options: { signal?: AbortSignal } | undefined) =>
+				await new Promise<AssistantMessage>((resolve) => {
+					options?.signal?.addEventListener(
+						"abort",
+						() => resolve(assistantMessage("", { content: [], stopReason: "aborted" })),
+						{ once: true },
+					);
+				}),
+		);
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete: complete as never,
+			streamIdleTimeoutMs: 1_000,
+		});
+		const promise = execution.generateImplementation(executionInput(undefined, controller.signal));
+
+		controller.abort();
+		const error = await caught(promise);
+
+		expect(error).toMatchObject({ name: "AbortError" });
+		expect(complete).toHaveBeenCalledTimes(1);
 	});
 
 	it("fails closed for unknown or client-shaped model references before key and completion", async () => {

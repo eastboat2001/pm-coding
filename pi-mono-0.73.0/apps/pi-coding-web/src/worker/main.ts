@@ -128,6 +128,7 @@ export function createAgentV2WorkerExecution(
 		resolveApiKey: createGlobalProviderApiKeyResolver(settingsSnapshot),
 		complete: dependencies.complete,
 		maxOutputTokens: config.modelMaxOutputTokens,
+		streamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,
 	});
 	const materializer = new DurableAgentV2InputMaterializer(store);
 	const skills = new WorkspaceSkillService(config);

@@ -7,6 +7,7 @@ import type {
 	Model,
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
+	SimpleStreamOptions,
 	Usage,
 } from "@mariozechner/pi-ai/types";
 import {
@@ -37,6 +38,7 @@ export interface AgentV2PiModelExecutionOptions {
 	resolveApiKey(provider: string): string | undefined;
 	complete?: typeof completeSimple;
 	maxOutputTokens?: number;
+	streamIdleTimeoutMs?: number;
 }
 
 type AgentV2RepairExecutionInput = Parameters<AgentV2ModelExecution["generateRepair"]>[0];
@@ -50,7 +52,11 @@ export type AgentV2PiModelExecutionErrorCode =
 	| "invalid_provider_content"
 	| "provider_length"
 	| "provider_tool_use"
-	| "provider_error";
+	| "provider_error"
+	| "provider_timeout"
+	| "provider_network"
+	| "provider_rate_limit"
+	| "provider_server_error";
 
 const ERROR_MESSAGES: Readonly<Record<AgentV2PiModelExecutionErrorCode, string>> = Object.freeze({
 	invalid_model_reference: "Agent v2 model reference is invalid.",
@@ -62,15 +68,36 @@ const ERROR_MESSAGES: Readonly<Record<AgentV2PiModelExecutionErrorCode, string>>
 	provider_length: "Agent v2 model provider stopped because the output limit was reached.",
 	provider_tool_use: "Agent v2 model provider attempted unsupported tool use.",
 	provider_error: "Agent v2 model provider returned an error result.",
+	provider_timeout: "Agent v2 model provider timed out before producing a complete result.",
+	provider_network: "Agent v2 model provider network request failed.",
+	provider_rate_limit: "Agent v2 model provider rate limit was reached.",
+	provider_server_error: "Agent v2 model provider is temporarily unavailable.",
 });
+
+export interface AgentV2PiModelExecutionFailureDetails {
+	attempts: number;
+	retryable: boolean;
+	hadObservableOutput: boolean;
+	idleTimeoutMs?: number;
+}
 
 export class AgentV2PiModelExecutionError extends Error {
 	readonly code: AgentV2PiModelExecutionErrorCode;
+	readonly attempts?: number;
+	readonly retryable?: boolean;
+	readonly hadObservableOutput?: boolean;
+	readonly idleTimeoutMs?: number;
 
-	constructor(code: AgentV2PiModelExecutionErrorCode) {
-		super(ERROR_MESSAGES[code]);
+	constructor(code: AgentV2PiModelExecutionErrorCode, details?: AgentV2PiModelExecutionFailureDetails) {
+		super(providerFailureMessage(code, details));
 		this.name = "AgentV2PiModelExecutionError";
 		this.code = code;
+		if (details) {
+			this.attempts = details.attempts;
+			this.retryable = details.retryable;
+			this.hadObservableOutput = details.hadObservableOutput;
+			this.idleTimeoutMs = details.idleTimeoutMs;
+		}
 	}
 }
 
@@ -177,33 +204,9 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 			throw new AgentV2PiModelExecutionError("missing_api_key");
 		}
 
-		let message: AssistantMessage;
-		try {
-			message = await this.complete(
-				trustedModel.model,
-				{
-					systemPrompt: prompt.systemPrompt,
-					messages: [
-						{ role: "user", content: prompt.userPrompt, timestamp: stableTimestamp(input.run.updatedAt) },
-					],
-				},
-				{
-					apiKey,
-					signal: input.signal,
-					maxTokens: trustedModel.maxTokens,
-					sessionId: `agent-v2:${input.run.runId}:${input.task.taskId}`,
-					maxRetries: 0,
-				},
-			);
-		} catch {
-			if (input.signal.aborted) throw createAbortError();
-			throw new AgentV2PiModelExecutionError("provider_failed");
-		}
+		const { message, content } = await this.completeProviderRequest(input, prompt, trustedModel, apiKey);
 		try {
 			throwIfAborted(input.signal);
-			const content = validateProviderMessage(message);
-			validateMessageIdentity(message, trustedModel);
-			validateStopReason(message);
 			const text = collectText(content);
 			const result = parse(text);
 			const usage = normalizeUsage(message.usage);
@@ -224,6 +227,224 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 			throw new AgentV2PiModelExecutionError("provider_failed");
 		}
 	}
+
+	private async completeProviderRequest(
+		input: AgentV2ModelExecutionInput,
+		prompt: { systemPrompt: string; userPrompt: string },
+		trustedModel: { model: Model<Api>; api: Api; provider: string; id: string; maxTokens: number },
+		apiKey: string | undefined,
+	): Promise<{ message: AssistantMessage; content: readonly unknown[] }> {
+		const idleTimeoutMs = positiveInteger(this.options.streamIdleTimeoutMs);
+		for (let attempt = 1; attempt <= 2; attempt += 1) {
+			throwIfAborted(input.signal);
+			const result = await this.completeProviderAttempt(input, prompt, trustedModel, apiKey, idleTimeoutMs);
+			if ("error" in result) {
+				if (input.signal.aborted) throw createAbortError();
+				const failure = providerFailureFromThrownError(
+					result.error,
+					attempt,
+					idleTimeoutMs,
+					result.hadObservableOutput,
+					result.idleTimedOut,
+				);
+				if (attempt === 1 && failure.retryable) continue;
+				throw failure;
+			}
+			if (input.signal.aborted) throw createAbortError();
+			const content = validateProviderMessage(result.message);
+			validateMessageIdentity(result.message, trustedModel);
+			const failure = providerFailureFromMessage(result, content, attempt, idleTimeoutMs);
+			if (!failure) return { message: result.message, content };
+			if (attempt === 1 && failure.retryable) continue;
+			throw failure;
+		}
+		throw new AgentV2PiModelExecutionError("provider_failed");
+	}
+
+	private async completeProviderAttempt(
+		input: AgentV2ModelExecutionInput,
+		prompt: { systemPrompt: string; userPrompt: string },
+		trustedModel: { model: Model<Api>; api: Api; provider: string; id: string; maxTokens: number },
+		apiKey: string | undefined,
+		idleTimeoutMs: number | undefined,
+	): Promise<ProviderAttemptResult> {
+		const controller = new AbortController();
+		let idleTimedOut = false;
+		let hadObservableOutput = false;
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		const abortForUser = (): void => controller.abort();
+		const resetIdleWatchdog = (): void => {
+			if (timeout !== undefined) clearTimeout(timeout);
+			if (idleTimeoutMs === undefined) return;
+			timeout = setTimeout(() => {
+				idleTimedOut = true;
+				controller.abort();
+			}, idleTimeoutMs);
+		};
+		input.signal.addEventListener("abort", abortForUser, { once: true });
+		if (input.signal.aborted) controller.abort();
+		resetIdleWatchdog();
+		try {
+			const options: SimpleStreamOptions = {
+				apiKey,
+				signal: controller.signal,
+				maxTokens: trustedModel.maxTokens,
+				sessionId: `agent-v2:${input.run.runId}:${input.task.taskId}`,
+				maxRetries: 0,
+				onChunk: () => {
+					hadObservableOutput = true;
+					resetIdleWatchdog();
+				},
+			};
+			const message = await this.complete(
+				trustedModel.model,
+				{
+					systemPrompt: prompt.systemPrompt,
+					messages: [
+						{ role: "user", content: prompt.userPrompt, timestamp: stableTimestamp(input.run.updatedAt) },
+					],
+				},
+				options,
+			);
+			return { message, idleTimedOut, hadObservableOutput };
+		} catch (error) {
+			return { error, idleTimedOut, hadObservableOutput };
+		} finally {
+			if (timeout !== undefined) clearTimeout(timeout);
+			input.signal.removeEventListener("abort", abortForUser);
+		}
+	}
+}
+
+interface ProviderAttemptSuccess {
+	message: AssistantMessage;
+	idleTimedOut: boolean;
+	hadObservableOutput: boolean;
+}
+
+interface ProviderAttemptFailure {
+	error: unknown;
+	idleTimedOut: boolean;
+	hadObservableOutput: boolean;
+}
+
+type ProviderAttemptResult = ProviderAttemptSuccess | ProviderAttemptFailure;
+
+type TransientProviderFailureCode =
+	| "provider_timeout"
+	| "provider_network"
+	| "provider_rate_limit"
+	| "provider_server_error";
+
+function providerFailureMessage(
+	code: AgentV2PiModelExecutionErrorCode,
+	details: AgentV2PiModelExecutionFailureDetails | undefined,
+): string {
+	const base = ERROR_MESSAGES[code];
+	if (!details || !isTransientProviderFailureCode(code)) return base;
+	const attemptSummary = `${details.attempts} provider attempt${details.attempts === 1 ? "" : "s"}`;
+	if (details.hadObservableOutput) {
+		return `${base} Output had already started, so the request was not retried (${attemptSummary}).`;
+	}
+	if (code === "provider_timeout" && details.idleTimeoutMs !== undefined) {
+		return `${base} No provider chunks were received within ${details.idleTimeoutMs}ms (${attemptSummary}).`;
+	}
+	return `${base} No provider output was received (${attemptSummary}).`;
+}
+
+function providerFailureFromMessage(
+	result: ProviderAttemptSuccess,
+	content: readonly unknown[],
+	attempts: number,
+	idleTimeoutMs: number | undefined,
+): AgentV2PiModelExecutionError | undefined {
+	const { message } = result;
+	if (message.stopReason === "stop") return undefined;
+	if (message.stopReason === "aborted") {
+		if (!result.idleTimedOut) throw createAbortError();
+		return transientProviderFailure(
+			"provider_timeout",
+			attempts,
+			result.hadObservableOutput || content.length > 0,
+			idleTimeoutMs,
+		);
+	}
+	if (message.stopReason === "length") return new AgentV2PiModelExecutionError("provider_length");
+	if (message.stopReason === "toolUse") return new AgentV2PiModelExecutionError("provider_tool_use");
+	const code = classifyProviderFailureMessage(message.errorMessage);
+	if (!code) return new AgentV2PiModelExecutionError("provider_error");
+	return transientProviderFailure(code, attempts, result.hadObservableOutput || content.length > 0, idleTimeoutMs);
+}
+
+function providerFailureFromThrownError(
+	error: unknown,
+	attempts: number,
+	idleTimeoutMs: number | undefined,
+	hadObservableOutput: boolean,
+	idleTimedOut: boolean,
+): AgentV2PiModelExecutionError {
+	if (idleTimedOut) {
+		return transientProviderFailure("provider_timeout", attempts, hadObservableOutput, idleTimeoutMs);
+	}
+	const code = classifyProviderFailureMessage(safeErrorMessage(error));
+	return code
+		? transientProviderFailure(code, attempts, hadObservableOutput, idleTimeoutMs)
+		: new AgentV2PiModelExecutionError("provider_failed");
+}
+
+function transientProviderFailure(
+	code: TransientProviderFailureCode,
+	attempts: number,
+	hadObservableOutput: boolean,
+	idleTimeoutMs: number | undefined,
+): AgentV2PiModelExecutionError {
+	return new AgentV2PiModelExecutionError(code, {
+		attempts,
+		retryable: !hadObservableOutput,
+		hadObservableOutput,
+		...(code === "provider_timeout" && idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
+	});
+}
+
+function classifyProviderFailureMessage(value: string | undefined): TransientProviderFailureCode | undefined {
+	if (!value) return undefined;
+	if (
+		/content.?filter|unauthori[sz]ed|forbidden|authentication|invalid.?api.?key|(?:^|\D)(?:400|401|402|403|404|405|409|410|422)(?:\D|$)/iu.test(
+			value,
+		)
+	) {
+		return undefined;
+	}
+	if (/rate.?limit|too many requests|(?:^|\D)429(?:\D|$)/iu.test(value)) return "provider_rate_limit";
+	if (/(?:^|\D)(?:500|502|503|504)(?:\D|$)|service.?unavailable|server.?error|internal.?error/iu.test(value)) {
+		return "provider_server_error";
+	}
+	if (/timed? out|timeout|stream stalled|ended without sending chunks/iu.test(value)) return "provider_timeout";
+	if (
+		/network.?error|connection.?error|connection.?refused|connection.?lost|fetch failed|upstream.?connect|reset before headers|socket hang up|http2 request did not get a response|terminated/iu.test(
+			value,
+		)
+	) {
+		return "provider_network";
+	}
+	return undefined;
+}
+
+function safeErrorMessage(error: unknown): string | undefined {
+	try {
+		return error instanceof Error && typeof error.message === "string" ? error.message : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isTransientProviderFailureCode(code: AgentV2PiModelExecutionErrorCode): code is TransientProviderFailureCode {
+	return (
+		code === "provider_timeout" ||
+		code === "provider_network" ||
+		code === "provider_rate_limit" ||
+		code === "provider_server_error"
+	);
 }
 
 function parseModelReference(value: unknown): { provider: string; id: string } {
@@ -466,14 +687,6 @@ function isExactPlainDataRecord(
 	const allowed = new Set([...required, ...optional]);
 	if (keys.some((key) => !allowed.has(key)) || required.some((key) => !keys.includes(key))) return false;
 	return keys.every((key) => isDataDescriptor(Object.getOwnPropertyDescriptor(value, key)));
-}
-
-function validateStopReason(message: AssistantMessage): void {
-	if (message.stopReason === "stop") return;
-	if (message.stopReason === "aborted") throw createAbortError();
-	if (message.stopReason === "length") throw new AgentV2PiModelExecutionError("provider_length");
-	if (message.stopReason === "toolUse") throw new AgentV2PiModelExecutionError("provider_tool_use");
-	throw new AgentV2PiModelExecutionError("provider_error");
 }
 
 function collectText(content: readonly unknown[]): string {
@@ -899,7 +1112,17 @@ function cloneCompat(
 		if (typeof value.customProviderProfile !== "string" || value.customProviderProfile.length > 64) return undefined;
 		const profiles =
 			api === "openai-completions"
-				? ["standard", "local-basic", "deepseek-mimo", "mimo", "openrouter", "qwen", "qwen-chat-template", "zai", "custom"]
+				? [
+						"standard",
+						"local-basic",
+						"deepseek-mimo",
+						"mimo",
+						"openrouter",
+						"qwen",
+						"qwen-chat-template",
+						"zai",
+						"custom",
+					]
 				: api === "openai-responses"
 					? ["standard", "generic-gateway", "custom"]
 					: ["standard", "mimo-deepseek", "legacy-compatible", "custom"];

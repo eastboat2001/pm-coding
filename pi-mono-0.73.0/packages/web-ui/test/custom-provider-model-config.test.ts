@@ -66,6 +66,29 @@ describe("custom provider manual model config", () => {
 		});
 	});
 
+	it("creates and restores the Xiaomi MiMo compatibility profile", () => {
+		const config = {
+			...defaultConfig("mimo-v2.5"),
+			reasoning: true,
+			openAICompletionsProfile: "mimo",
+			thinkingFormat: "deepseek",
+			requiresReasoningContentOnAssistantMessages: true,
+			supportsReasoningEffort: true,
+			maxTokensField: "max_completion_tokens",
+		} satisfies ManualModelConfig;
+
+		const [model] = createManualModelsFromConfigs(provider, [config]);
+
+		expect(model.compat).toMatchObject({
+			customProviderProfile: "mimo",
+			thinkingFormat: "deepseek",
+			requiresReasoningContentOnAssistantMessages: true,
+			supportsReasoningEffort: true,
+			maxTokensField: "max_completion_tokens",
+		});
+		expect(manualModelConfigFromModel(model).openAICompletionsProfile).toBe("mimo");
+	});
+
 	it("restores model capability fields into editable config", () => {
 		const model: Model<"openai-completions"> = {
 			id: "qwen3",
@@ -179,6 +202,7 @@ describe("custom provider manual model config", () => {
 			"standard",
 			"local-basic",
 			"deepseek-mimo",
+			"mimo",
 			"openrouter",
 			"qwen",
 			"qwen-chat-template",
@@ -190,7 +214,12 @@ describe("custom provider manual model config", () => {
 				...defaultConfig(`chat-${profile}`),
 				reasoning: true,
 				openAICompletionsProfile: profile,
-				thinkingFormat: profile === "custom" ? "openai" : profile === "deepseek-mimo" ? "deepseek" : "openai",
+				thinkingFormat:
+					profile === "custom"
+						? "openai"
+						: profile === "deepseek-mimo" || profile === "mimo"
+							? "deepseek"
+							: "openai",
 				supportsReasoningEffort: profile !== "custom",
 				maxTokensField: profile === "custom" ? "max_tokens" : "max_completion_tokens",
 			} satisfies ManualModelConfig;

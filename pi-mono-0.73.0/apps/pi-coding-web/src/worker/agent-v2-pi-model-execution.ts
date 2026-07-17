@@ -899,11 +899,12 @@ function cloneCompat(
 		if (typeof value.customProviderProfile !== "string" || value.customProviderProfile.length > 64) return undefined;
 		const profiles =
 			api === "openai-completions"
-				? ["standard", "local-basic", "deepseek-mimo", "openrouter", "qwen", "qwen-chat-template", "zai", "custom"]
+				? ["standard", "local-basic", "deepseek-mimo", "mimo", "openrouter", "qwen", "qwen-chat-template", "zai", "custom"]
 				: api === "openai-responses"
 					? ["standard", "generic-gateway", "custom"]
 					: ["standard", "mimo-deepseek", "legacy-compatible", "custom"];
 		if (!profiles.includes(value.customProviderProfile)) return undefined;
+		result.customProviderProfile = value.customProviderProfile;
 	}
 	return Object.freeze(result) as OpenAICompletionsCompat | OpenAIResponsesCompat | AnthropicMessagesCompat;
 }

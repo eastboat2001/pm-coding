@@ -25,6 +25,7 @@ export type OpenAICompletionsProfile =
 	| "standard"
 	| "local-basic"
 	| "deepseek-mimo"
+	| "mimo"
 	| "openrouter"
 	| "qwen"
 	| "qwen-chat-template"
@@ -178,6 +179,11 @@ function createOpenAICompletionsCompat(config: ManualModelConfig): OpenAIComplet
 			compat.requiresReasoningContentOnAssistantMessages = true;
 			compat.maxTokensField = "max_tokens";
 			break;
+		case "mimo":
+			compat.thinkingFormat = "deepseek";
+			compat.requiresReasoningContentOnAssistantMessages = true;
+			compat.maxTokensField = "max_completion_tokens";
+			break;
 		case "openrouter":
 			compat.thinkingFormat = "openrouter";
 			break;
@@ -323,6 +329,7 @@ function isOpenAICompletionsProfile(value: unknown): value is OpenAICompletionsP
 		value === "standard" ||
 		value === "local-basic" ||
 		value === "deepseek-mimo" ||
+		value === "mimo" ||
 		value === "openrouter" ||
 		value === "qwen" ||
 		value === "qwen-chat-template" ||

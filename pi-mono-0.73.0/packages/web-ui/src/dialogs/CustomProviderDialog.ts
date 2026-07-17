@@ -436,6 +436,13 @@ export class CustomProviderDialog extends DialogBase {
 				supportsReasoningEffort: true,
 				maxTokensField: "max_tokens",
 			});
+		} else if (profile === "mimo") {
+			Object.assign(patch, {
+				thinkingFormat: "deepseek",
+				requiresReasoningContentOnAssistantMessages: true,
+				supportsReasoningEffort: true,
+				maxTokensField: "max_completion_tokens",
+			});
 		} else if (profile === "openrouter") {
 			Object.assign(patch, {
 				thinkingFormat: "openrouter",
@@ -498,6 +505,8 @@ export class CustomProviderDialog extends DialogBase {
 			case "local-basic":
 				return i18n("Use for local or simple OpenAI-compatible servers that reject advanced OpenAI fields.");
 			case "deepseek-mimo":
+				return i18n("Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.");
+			case "mimo":
 				return i18n("Use for DeepSeek or MiMo Chat Completions endpoints that require reasoning_content replay.");
 			case "openrouter":
 				return i18n("Use for OpenRouter endpoints that configure thinking with the nested reasoning field.");
@@ -609,7 +618,8 @@ export class CustomProviderDialog extends DialogBase {
 										options: [
 											{ value: "standard", label: "Standard OpenAI-compatible" },
 											{ value: "local-basic", label: "Local/basic compatible" },
-											{ value: "deepseek-mimo", label: "DeepSeek / MiMo reasoning_content" },
+											{ value: "deepseek-mimo", label: "DeepSeek reasoning_content" },
+											{ value: "mimo", label: "MiMo reasoning_content" },
 											{ value: "openrouter", label: "OpenRouter reasoning" },
 											{ value: "qwen", label: "Qwen enable_thinking" },
 											{ value: "qwen-chat-template", label: "Qwen chat_template" },

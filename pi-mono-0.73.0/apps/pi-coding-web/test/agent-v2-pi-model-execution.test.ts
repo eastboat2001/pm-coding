@@ -201,6 +201,38 @@ describe("AgentV2PiModelExecution", () => {
 		} finally { rmSync(dir, { recursive: true, force: true }); }
 	});
 
+	it("accepts the persisted Xiaomi MiMo compatibility profile", () => {
+		const settings = customSettings("https://token-plan-cn.xiaomimimo.com/v1", "key");
+		(settings.customProviders[0].models[0] as Record<string, unknown>).compat = {
+			customProviderProfile: "mimo",
+			thinkingFormat: "deepseek",
+			requiresReasoningContentOnAssistantMessages: true,
+			supportsReasoningEffort: true,
+			maxTokensField: "max_completion_tokens",
+		};
+		const snapshot = loadAgentV2ServerSettingsSnapshot(
+			{ settingsFile: "unused" },
+			{
+				readSettingsFile: () => JSON.stringify(settings),
+				getBuiltinProviders: () => [],
+				getEnvApiKey: () => undefined,
+			},
+		);
+
+		expect(
+			new ConfiguredAgentV2ServerModelRegistry(snapshot).resolve({
+				provider: "custom-provider:provider-a",
+				id: "custom-model",
+			})?.compat,
+		).toMatchObject({
+			customProviderProfile: "mimo",
+			thinkingFormat: "deepseek",
+			requiresReasoningContentOnAssistantMessages: true,
+			supportsReasoningEffort: true,
+			maxTokensField: "max_completion_tokens",
+		});
+	});
+
 	it("supports ambient auth and exact loopback keyless policy while remote custom remains fail-closed", async () => {
 		for (const provider of ["google-vertex", "amazon-bedrock"]) {
 			const model = { ...trustedModel(), provider };

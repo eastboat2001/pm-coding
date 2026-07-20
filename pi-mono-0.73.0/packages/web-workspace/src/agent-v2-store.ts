@@ -609,7 +609,13 @@ function parseAgentV2DocumentContent(value: unknown, fallbackKind: AgentV2Docume
 }
 
 function isAgentV2DocumentKind(value: unknown): value is AgentV2DocumentKind {
-	return value === "capability_decision" || value === "spec" || value === "plan" || value === "tasks";
+	return (
+		value === "capability_decision" ||
+		value === "product_blueprint" ||
+		value === "spec" ||
+		value === "plan" ||
+		value === "tasks"
+	);
 }
 
 function toNumber(value: number | string): number {

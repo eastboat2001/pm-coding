@@ -35,6 +35,10 @@ import type {
 	AgentV2RunSnapshot,
 	AgentV2RunStatus,
 } from "@mariozechner/pi-web-workspace";
+import {
+	type AgentV2ResponseLanguage,
+	inferAgentV2ResponseLanguage,
+} from "@mariozechner/pi-web-workspace/agent-v2-response-language";
 import { html, render } from "lit";
 import { Folder, PanelsTopLeft, Plus, Settings } from "lucide";
 import "../app.css";
@@ -84,7 +88,7 @@ import {
 	type ConversationSnapshotState,
 	normalizeConversationSnapshotState,
 } from "../runtime/conversation-snapshot.js";
-import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
+import { collectAgentV2ProjectFilesForRun, prepareAttachmentProjectFileSeeds } from "../runtime/project-file-seed.js";
 import { runConnectionStatusText } from "../runtime/run-connection-status.js";
 import { createQueuedRunTimeoutDiagnostic } from "../runtime/run-health.js";
 import {
@@ -93,8 +97,8 @@ import {
 	shouldClearRetryStatusForRunEvent,
 } from "../runtime/run-retry-status.js";
 import {
-	providerStallStatusDelayMs,
-	providerStallStatusText,
+	AGENT_V2_RUN_ACTIVITY_TICK_MS,
+	agentV2RunActivityStatusText,
 	type RunTransientStatusSource,
 	type RunTransientStatusTexts,
 	selectRunTransientStatusText,
@@ -137,7 +141,12 @@ import {
 	readGeneratedAppsPanelWidth,
 	writeGeneratedAppsPanelWidth,
 } from "./generated-apps-state.js";
-import { ModelController, SELECTED_MODEL_KEY } from "./model-controller.js";
+import {
+	AGENT_V2_MIN_MODEL_OUTPUT_TOKENS,
+	ModelController,
+	SELECTED_MODEL_KEY,
+	supportsApplicationGeneration,
+} from "./model-controller.js";
 import { createCoalescedRenderScheduler } from "./render-scheduler.js";
 import { CURRENT_SESSION_ID_KEY, generateTitle, isDefaultNewSessionTitle, sessionTitle } from "./session-controller.js";
 import {
@@ -337,7 +346,7 @@ const loadPiRuntimeConfig = async () => {
 		promptSnapshotMaxChars: normalizePositiveInteger(status?.promptSnapshotMaxChars, 20000),
 		modelOutputSnapshotLoggingEnabled: status?.modelOutputSnapshotLoggingEnabled === true,
 		modelOutputSnapshotMaxChars: normalizePositiveInteger(status?.modelOutputSnapshotMaxChars, 20000),
-		streamIdleTimeoutMs: normalizePositiveInteger(status?.modelStreamIdleTimeoutMs, 60000),
+		streamIdleTimeoutMs: normalizePositiveInteger(status?.modelStreamIdleTimeoutMs, 180000),
 		maxOutputTokens: normalizeNonNegativeInteger(status?.modelMaxOutputTokens, 12_000),
 	};
 	piRuntimeConfig.skillSlashSuggestions = [
@@ -401,6 +410,7 @@ let currentRunUpdatedAt: string | undefined;
 const remoteRunTransientStatusTexts: RunTransientStatusTexts = {};
 const reportedQueuedRunTimeouts = new Set<string>();
 let activeAgentV2Presentation: AgentV2RunPresentation | undefined;
+let activeAgentV2ResponseLanguage: AgentV2ResponseLanguage = "en";
 let workspaceExpansionState: WorkspaceExpansionState = createWorkspaceExpansionState(currentWorkspaceViewport());
 let currentProjectFilesPanelWidth = safeReadCurrentProjectFilesPanelWidth();
 let generatedAppsPanelWidth = safeReadGeneratedAppsPanelWidth();
@@ -443,7 +453,7 @@ const closeRemoteRunConnection = (): void => {
 
 const clearProviderStallStatusTimer = (): void => {
 	if (remoteRunProviderStallStatusTimerId !== undefined) {
-		clearTimeout(remoteRunProviderStallStatusTimerId);
+		clearInterval(remoteRunProviderStallStatusTimerId);
 		remoteRunProviderStallStatusTimerId = undefined;
 	}
 };
@@ -473,14 +483,23 @@ const clearRemoteRunTransientStatusTexts = (): void => {
 
 const scheduleProviderStallStatus = (runId: string): void => {
 	clearProviderStallStatusTimer();
-	setRemoteRunTransientStatusText("providerStalled");
-	remoteRunProviderStallStatusTimerId = setTimeout(() => {
-		remoteRunProviderStallStatusTimerId = undefined;
+	const phaseStartedAt = Date.parse(activeAgentV2Presentation?.updatedAt ?? currentRunUpdatedAt ?? "");
+	const startedAt = Number.isFinite(phaseStartedAt) ? phaseStartedAt : Date.now();
+	const updateActivityStatus = (): void => {
 		if (runId !== currentActiveRunId || agentV2BrowserController?.activeRunId !== runId) return;
 		if (currentRunStatus && currentRunStatus !== "running") return;
-		setRemoteRunTransientStatusText("providerStalled", providerStallStatusText(i18nText));
+		setRemoteRunTransientStatusText(
+			"providerStalled",
+			agentV2RunActivityStatusText(
+				activeAgentV2Presentation?.phase,
+				Date.now() - startedAt,
+				activeAgentV2ResponseLanguage,
+			),
+		);
 		requestChatPanelUpdate();
-	}, providerStallStatusDelayMs(piRuntimeConfig.diagnosticLogging.streamIdleTimeoutMs));
+	};
+	updateActivityStatus();
+	remoteRunProviderStallStatusTimerId = setInterval(updateActivityStatus, AGENT_V2_RUN_ACTIVITY_TICK_MS);
 };
 
 const hasObservableRunInProgress = (): boolean => {
@@ -500,6 +519,7 @@ const resetRemoteRunState = (): void => {
 	clearProviderStallStatusTimer();
 	agentV2BrowserController = undefined;
 	activeAgentV2Presentation = undefined;
+	activeAgentV2ResponseLanguage = "en";
 	reportedQueuedRunTimeouts.clear();
 	updateWorkspaceExpansion({ type: "reset_active_run_expansion" });
 	clearRemoteRunTransientStatusTexts();
@@ -582,6 +602,7 @@ const syncAgentV2ActiveRunContent = (): void => {
 	agentInterface.activeRunContent = selectedPresentation
 		? html`<agent-v2-progress-card
 					.presentation=${selectedPresentation}
+					.responseLanguage=${activeAgentV2ResponseLanguage}
 					.terminal=${false}
 					.detailsExpanded=${workspaceExpansionState.activeRunDetailOpen}
 					.expandedSection=${activeRunExpandedSection()}
@@ -1319,14 +1340,17 @@ function recordAgentV2BrowserProjection(runId: string, event: AgentV2BrowserProj
 	}
 }
 
-function createBrowserRunProjectionSink(browserAgent: Agent) {
+function createBrowserRunProjectionSink(browserAgent: Agent, responseLanguage: AgentV2ResponseLanguage) {
+	activeAgentV2ResponseLanguage = responseLanguage;
 	return createAgentV2BrowserRunSink({
 		browserAgent,
-		locale: getCurrentLanguage,
+		responseLanguage,
+		narrationTypingIntervalMs: 14,
 		onPresentationChange: (presentation) => {
 			activeAgentV2Presentation = presentation;
 			requestChatPanelUpdate();
 		},
+		onNarrationChange: requestChatPanelUpdate,
 		onPhaseProjected: (runId, phase, status, at) => {
 			currentRunStatus = status;
 			writeDiagnosticEvent({
@@ -1579,6 +1603,15 @@ const startRemotePrompt = async (
 	images?: ImageContent[],
 ): Promise<void> => {
 	await ensureSessionIdentity();
+	if (!supportsApplicationGeneration(agent.state.model)) {
+		const minimumTokens = AGENT_V2_MIN_MODEL_OUTPUT_TOKENS.toLocaleString();
+		const language = getCurrentLanguage().toLocaleLowerCase().split(/[-_]/u)[0];
+		const message =
+			language === "zh"
+				? `当前模型的最大输出容量不足，无法可靠生成完整应用。请点击下方模型选择器，手动切换到至少支持 ${minimumTokens} 输出 tokens 的模型后重试。系统不会自动切换模型。`
+				: `The current model cannot reliably generate a complete application because its maximum output is too small. Use the model selector below to manually switch to a model that supports at least ${minimumTokens} output tokens, then retry. The system will not switch models automatically.`;
+		throw new Error(message);
+	}
 	const messages = normalizeRemotePromptInput(input, images);
 	const message = messages[0];
 	if (!isRecord(message)) {
@@ -1597,7 +1630,7 @@ const startRemotePrompt = async (
 
 	let runResult: Awaited<ReturnType<typeof runClient.startRun>>;
 	try {
-		const projectFiles = collectProjectFilesFromMessages(messages);
+		const projectFiles = collectAgentV2ProjectFilesForRun(previousMessages, messages);
 		const attachments = Array.isArray((message as { attachments?: unknown }).attachments)
 			? ((message as { attachments?: unknown[] }).attachments ?? [])
 			: undefined;
@@ -1611,11 +1644,16 @@ const startRemotePrompt = async (
 			contextWindowTokens: selectedModel?.contextWindow ?? 128_000,
 			...(conversationSnapshotState ? { previousState: conversationSnapshotState } : {}),
 		});
+		const responseLanguage = inferAgentV2ResponseLanguage(
+			{ objective: conversation.snapshot.currentObjective, conversationSnapshot: conversation.snapshot },
+			getCurrentLanguage(),
+		);
 		runResult = await runClient.startRun({
 			sessionId: currentSessionId!,
 			title,
 			objective: conversation.snapshot.currentObjective,
 			conversationSnapshot: conversation.snapshot,
+			responseLanguage,
 			...(selectedSkillNames.length > 0 ? { selectedSkillNames } : {}),
 			...(attachments ? { attachments } : {}),
 			model: selectedModel ? { provider: selectedModel.provider, id: selectedModel.id } : undefined,
@@ -1638,7 +1676,8 @@ const startRemotePrompt = async (
 		throw error;
 	}
 
-	const controller = new AgentV2BrowserController(createBrowserRunProjectionSink(agent));
+	const responseLanguage = inferAgentV2ResponseLanguage(runResult.input, getCurrentLanguage());
+	const controller = new AgentV2BrowserController(createBrowserRunProjectionSink(agent, responseLanguage));
 	updateWorkspaceExpansion({ type: "reset_active_run_expansion" });
 	controller.start(runResult);
 	clearRemoteRunTransientStatusTexts();
@@ -1808,7 +1847,10 @@ const restoreActiveRemoteRunFromMetadata = async (
 	const restored = restoreAgentV2BrowserRunProjection({
 		snapshot: runSnapshot,
 		events: replayedEvents,
-		sink: createBrowserRunProjectionSink(agent),
+		sink: createBrowserRunProjectionSink(
+			agent,
+			inferAgentV2ResponseLanguage(runSnapshot.input, getCurrentLanguage()),
+		),
 		...(isTerminalRunStatus(restoredStatus)
 			? {
 					terminalStatus: restoredStatus,

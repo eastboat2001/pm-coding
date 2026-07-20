@@ -162,7 +162,7 @@ export function loadStorageConfig(rootDir: string, envFile = CONFIG_ENV_FILE): S
 		),
 		modelStreamIdleTimeoutMs: positiveIntegerValue(
 			env("PI_MODEL_STREAM_IDLE_TIMEOUT_MS"),
-			60000,
+			180000,
 			"PI_MODEL_STREAM_IDLE_TIMEOUT_MS",
 		),
 		modelMaxOutputTokens: nonNegativeIntegerValue(

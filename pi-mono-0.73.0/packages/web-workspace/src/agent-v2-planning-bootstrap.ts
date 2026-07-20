@@ -7,6 +7,9 @@ import {
 	buildAgentV2TaskGraph,
 	renderAgentV2DocumentMarkdown,
 } from "./agent-v2-documents.js";
+import type { AgentV2InputBlobRecord } from "./agent-v2-durable-store.js";
+import { buildAgentV2ProductBlueprint } from "./agent-v2-product-blueprint.js";
+import { inferAgentV2ResponseLanguage } from "./agent-v2-response-language.js";
 import type { AgentV2PlanningStore } from "./agent-v2-runtime-store.js";
 import type {
 	AgentV2ArtifactRecord,
@@ -19,6 +22,7 @@ import type {
 	AgentV2CapabilityDecision,
 	AgentV2PlanDocument,
 	AgentV2PlatformContract,
+	AgentV2ProductBlueprint,
 	AgentV2RunSnapshot,
 	AgentV2SpecDocument,
 	AgentV2TaskGraph,
@@ -31,7 +35,12 @@ type BootstrapDocumentDescriptor = {
 	kind: UpsertAgentV2DocumentInput["kind"];
 	sourceTaskId: string;
 	path: string;
-	contentJson: AgentV2CapabilityDecision | AgentV2SpecDocument | AgentV2PlanDocument | AgentV2TaskGraph;
+	contentJson:
+		| AgentV2CapabilityDecision
+		| AgentV2ProductBlueprint
+		| AgentV2SpecDocument
+		| AgentV2PlanDocument
+		| AgentV2TaskGraph;
 	contentMarkdown: string;
 	mediaType: string;
 };
@@ -40,6 +49,7 @@ export interface AgentV2PlanningBootstrap {
 	run: AgentV2RunSnapshot;
 	objective: string;
 	decision: AgentV2CapabilityDecision;
+	blueprint: AgentV2ProductBlueprint;
 	spec: AgentV2SpecDocument;
 	plan: AgentV2PlanDocument;
 	taskGraph: AgentV2TaskGraph;
@@ -50,7 +60,7 @@ export interface AgentV2PlanningBootstrap {
 }
 
 export interface AgentV2PlanningCommitInput {
-	bootstrapVersion: "agent-v2-planning-v1";
+	bootstrapVersion: "agent-v2-planning-v2";
 	bootstrapChecksum: string;
 	documents: readonly UpsertAgentV2DocumentInput[];
 	tasks: readonly UpsertAgentV2TaskInput[];
@@ -62,21 +72,37 @@ export function buildAgentV2PlanningBootstrap(input: {
 	run: AgentV2RunSnapshot;
 	objective?: string;
 	platform?: AgentV2PlatformContract;
+	inputBlobs?: readonly AgentV2InputBlobRecord[];
 	now?: TimestampFactory;
 }): AgentV2PlanningBootstrap {
 	const baseTimestamp = (input.now ?? defaultNow)();
 	const nextTimestamp = createTimestampSequence(baseTimestamp);
 	const objective = resolveObjective(input.run, input.objective);
-	const decision = routeAgentV2Capabilities({ objective, platform: input.platform });
-	const spec = buildAgentV2SpecDocument({
+	const blueprint = buildAgentV2ProductBlueprint({
 		runId: input.run.runId,
 		objective,
+		responseLanguage: inferAgentV2ResponseLanguage(input.run.input),
+		inputBlobs: input.inputBlobs ?? [],
+		now: nextTimestamp,
+	});
+	const capabilityObjective = [
+		objective,
+		...blueprint.items
+			.filter((item) => item.categories.includes("requirement") || item.categories.includes("permission"))
+			.slice(0, 32)
+			.map((item) => item.text),
+	].join("\n");
+	const decision = routeAgentV2Capabilities({ objective: capabilityObjective, platform: input.platform });
+	const spec = buildAgentV2SpecDocument({
+		runId: input.run.runId,
+		blueprint,
 		decision,
 		now: nextTimestamp,
 	});
 	const plan = buildAgentV2PlanDocument({
 		runId: input.run.runId,
 		spec,
+		blueprint,
 		decision,
 		now: nextTimestamp,
 	});
@@ -84,6 +110,7 @@ export function buildAgentV2PlanningBootstrap(input: {
 		runId: input.run.runId,
 		spec,
 		plan,
+		blueprint,
 		decision,
 		now: nextTimestamp,
 	});
@@ -97,6 +124,15 @@ export function buildAgentV2PlanningBootstrap(input: {
 			contentJson: decision,
 			contentMarkdown: renderAgentV2DocumentMarkdown(decision),
 			mediaType: "application/json",
+		},
+		{
+			documentId: "product_blueprint",
+			kind: "product_blueprint",
+			sourceTaskId: "spec",
+			path: "agent-v2/product-blueprint.md",
+			contentJson: blueprint,
+			contentMarkdown: renderAgentV2DocumentMarkdown(blueprint),
+			mediaType: "text/markdown",
 		},
 		{
 			documentId: "spec",
@@ -206,6 +242,7 @@ export function buildAgentV2PlanningBootstrap(input: {
 		run: input.run,
 		objective,
 		decision,
+		blueprint,
 		spec,
 		plan,
 		taskGraph,
@@ -217,7 +254,7 @@ export function buildAgentV2PlanningBootstrap(input: {
 }
 
 export function toAgentV2PlanningCommit(bootstrap: AgentV2PlanningBootstrap): AgentV2PlanningCommitInput {
-	const bootstrapVersion = "agent-v2-planning-v1" as const;
+	const bootstrapVersion = "agent-v2-planning-v2" as const;
 	return {
 		bootstrapVersion,
 		bootstrapChecksum: checksumFor({

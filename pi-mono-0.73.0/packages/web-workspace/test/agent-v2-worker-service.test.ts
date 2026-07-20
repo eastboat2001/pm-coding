@@ -3,6 +3,8 @@ import type { AgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import type {
 	AgentV2DiagnosticCommitInput,
 	AgentV2DiagnosticCommitResult,
+	AgentV2RunRetryCommitInput,
+	AgentV2RunRetryCommitResult,
 	AgentV2RunTransitionCommitInput,
 	AgentV2RunTransitionCommitResult,
 } from "../src/agent-v2-durable-store.js";
@@ -19,7 +21,11 @@ import {
 	type CreateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
 import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
-import { type AgentV2WorkerExecution, AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
+import {
+	type AgentV2WorkerExecution,
+	AgentV2WorkerExecutionFailure,
+	AgentV2WorkerService,
+} from "../src/agent-v2-worker-service.js";
 
 describe("AgentV2WorkerService", () => {
 	afterEach(() => {
@@ -76,7 +82,7 @@ describe("AgentV2WorkerService", () => {
 		]);
 	});
 
-	it("includes the blocking task root cause in the durable terminal error", async () => {
+	it("includes the blocking task root cause and retryability in the durable terminal error", async () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-blocked");
 		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-blocked" }]);
@@ -87,7 +93,7 @@ describe("AgentV2WorkerService", () => {
 				blockingError: {
 					code: "agent_v2.validation_failed",
 					message: "canvas.getContext is not a function",
-					retryable: false,
+					retryable: true,
 				},
 			},
 		]);
@@ -103,7 +109,7 @@ describe("AgentV2WorkerService", () => {
 		expect(store.getRunSnapshot("client-a", "run-blocked")?.error).toEqual({
 			code: "agent_v2.worker_task_blocked",
 			message: "Agent v2 task graph is blocked: canvas.getContext is not a function",
-			retryable: false,
+			retryable: true,
 		});
 	});
 
@@ -590,7 +596,73 @@ describe("AgentV2WorkerService", () => {
 		);
 	});
 
-	it("stops after one unchanged execution CAS conflict instead of hot-looping or reporting success", async () => {
+	it("durably requeues a classified retryable execution failure and releases the old claim", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-classified-failure");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-classified-failure" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new ThrowingExecution(
+				new AgentV2WorkerExecutionFailure(
+					"agent_v2.provider_timeout",
+					"The provider timed out after bounded request retries.",
+					true,
+				),
+			),
+			workerId: "worker-a",
+			queueName: "agent-v2",
+			now: timestampSequence("2026-07-08T09:02:00.000Z", "2026-07-08T09:02:01.000Z"),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(store.getRunSnapshot("client-a", "run-classified-failure")).toMatchObject({
+			status: "queued",
+			attempt: 2,
+			error: {
+				code: "agent_v2.provider_timeout",
+				message: "The provider timed out after bounded request retries.",
+				retryable: true,
+				data: expect.objectContaining({ autoRetryScheduled: true, attempt: 2, maxAttempts: 4 }),
+			},
+		});
+		expect(store.diagnostics).toEqual([
+			expect.objectContaining({
+				code: "agent_v2.run_retry_scheduled",
+				data: expect.objectContaining({ failureCode: "agent_v2.provider_timeout", attempt: 2 }),
+			}),
+		]);
+		expect(queue.completedClaims).toHaveLength(1);
+		expect(store.retryCommitCalls).toHaveLength(1);
+	});
+
+	it("records a terminal failure after the automatic run retry budget is exhausted", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-retry-exhausted");
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-retry-exhausted" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new ThrowingExecution(
+				new AgentV2WorkerExecutionFailure("agent_v2.provider_timeout", "Provider timed out.", true),
+			),
+			workerId: "worker-a",
+			maxRunAttempts: 1,
+			now: timestampSequence("2026-07-08T09:02:10.000Z", "2026-07-08T09:02:11.000Z"),
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+		expect(store.getRunSnapshot("client-a", "run-retry-exhausted")).toMatchObject({
+			status: "failed",
+			attempt: 1,
+			error: { code: "agent_v2.provider_timeout", retryable: true },
+		});
+		expect(store.retryCommitCalls).toEqual([]);
+	});
+
+	it("durably retries one unchanged execution CAS conflict without hot-looping", async () => {
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-task-conflict");
 		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-task-conflict" }]);
@@ -611,13 +683,14 @@ describe("AgentV2WorkerService", () => {
 		await expect(worker.processOne()).resolves.toBe(true);
 		expect(executeNextTask).toHaveBeenCalledTimes(1);
 		expect(store.getRunSnapshot("client-a", "run-task-conflict")).toMatchObject({
-			status: "failed",
-			phase: "failed",
+			status: "queued",
+			attempt: 2,
 			error: {
 				code: "agent_v2.worker_task_conflict",
 				retryable: true,
 			},
 		});
+		expect(queue.completedClaims).toHaveLength(1);
 	});
 
 	it("leaves runs cancelled when cancellation already happened before claim processing", async () => {
@@ -1011,6 +1084,29 @@ describe("AgentV2WorkerService", () => {
 		expect(queue.requeueActiveCalls).toEqual(["worker-a"]);
 		expect(store.getRunSnapshot("client-a", "run-recover-running")).toMatchObject({ status: "interrupted" });
 		expect(store.getRunSnapshot("client-a", "run-recover-cancelling")).toMatchObject({ status: "interrupted" });
+	});
+
+	it("recoverOwnedRuns durably schedules a recent crashed run for its next attempt", async () => {
+		const store = new MemoryWorkerStore();
+		store.createOwnedActiveRun("client-a", "run-recover-retry", "running", "worker-a");
+		const queue = new RecordingQueue();
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([]),
+			workerId: "worker-a",
+			now: () => "2026-07-08T00:00:03.000Z",
+		});
+
+		await worker.recoverOwnedRuns();
+
+		expect(store.getRunSnapshot("client-a", "run-recover-retry")).toMatchObject({
+			status: "queued",
+			attempt: 2,
+			error: { data: expect.objectContaining({ autoRetryScheduled: true }) },
+		});
+		expect(queue.requeueActiveCalls).toEqual(["worker-a"]);
 	});
 
 	it("recoverOwnedRuns reclaims expired claims from other workers and does not overwrite terminal runs", async () => {
@@ -1505,6 +1601,7 @@ class MemoryWorkerStore {
 	readonly commitCalls: AgentV2RunTransitionCommitInput[] = [];
 	readonly committedEvents: AgentV2RunEventRecord[] = [];
 	readonly outboxIntentIds: string[] = [];
+	readonly retryCommitCalls: AgentV2RunRetryCommitInput[] = [];
 	rejectNextCommit: Error | undefined;
 	simulateStaleTerminalOverwriteWithoutGuard = false;
 	private readonly beforeUpdateCallbacks: Array<(input: Parameters<MemoryWorkerStore["update"]>[0]) => void> = [];
@@ -1706,6 +1803,58 @@ class MemoryWorkerStore {
 		this.outboxIntentIds.push(outboxIntentId);
 		if (input.diagnostic) this.diagnostics.push(input.diagnostic);
 		return { update, event, outboxIntentIds: [outboxIntentId] };
+	}
+
+	async commitAgentV2RunRetry(input: AgentV2RunRetryCommitInput): Promise<AgentV2RunRetryCommitResult> {
+		this.retryCommitCalls.push(input);
+		const current = this.getRunSnapshot(input.clientId, input.runId);
+		if (!current) throw new Error(`Missing run ${input.clientId}/${input.runId}`);
+		const expected = input.expectedRun;
+		if (
+			current.status !== expected.status ||
+			current.phase !== expected.phase ||
+			current.attempt !== expected.attempt ||
+			(current.workerId ?? null) !== expected.workerId ||
+			current.updatedAt !== expected.updatedAt ||
+			input.expectedTasks.length > 0 ||
+			input.tasks.length > 0
+		) {
+			return { update: { run: current, applied: false }, outboxIntentIds: [] };
+		}
+		const update = this.updateWithResult({
+			clientId: input.clientId,
+			runId: input.runId,
+			status: "queued",
+			expectedStatuses: ["running"],
+			phase: input.phase,
+			attempt: input.nextAttempt,
+			updatedAt: input.scheduledAt,
+			error: input.error,
+		});
+		if (!update.applied) return { update, outboxIntentIds: [] };
+		this.diagnostics.push(input.diagnostic);
+		const event: AgentV2RunEventRecord = {
+			clientId: input.clientId,
+			runId: input.runId,
+			seq: this.committedEvents.length + 1,
+			type: "agent_v2.phase_changed",
+			payload: {
+				type: "agent_v2.phase_changed",
+				phase: input.phase,
+				status: "queued",
+				attempt: input.nextAttempt,
+				at: input.scheduledAt,
+			},
+			createdAt: input.scheduledAt,
+		};
+		this.committedEvents.push(event);
+		const outboxIntentIds = [
+			`live:${input.runId}:${event.seq}`,
+			`diagnostic:${input.diagnostic.diagnosticId}`,
+			`enqueue:${input.runId}:${input.nextAttempt}`,
+		];
+		this.outboxIntentIds.push(...outboxIntentIds);
+		return { update, event, outboxIntentIds };
 	}
 
 	async commitAgentV2Diagnostic(input: AgentV2DiagnosticCommitInput): Promise<AgentV2DiagnosticCommitResult> {

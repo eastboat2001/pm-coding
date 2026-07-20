@@ -1296,6 +1296,9 @@ export class PostgresRuntimeStore {
         });
     }
     async commitAgentV2RunTransition(input) {
+        if (input.update.status === "queued") {
+            throw new Error("Agent v2 retry transitions must use commitAgentV2RunRetry");
+        }
         if (input.diagnostic &&
             (input.diagnostic.clientId !== input.update.clientId || input.diagnostic.runId !== input.update.runId)) {
             throw new Error("Agent v2 run transition child identity mismatch");
@@ -1323,6 +1326,82 @@ export class PostgresRuntimeStore {
                 await this.appendAgentV2DiagnosticWithQueryable(tx, input.diagnostic);
                 outboxIntentIds.push(...(await this.insertDiagnosticOutboxWithQueryable(tx, input.diagnostic)));
             }
+            return { update: { run: next, applied: true }, event, outboxIntentIds };
+        });
+    }
+    async commitAgentV2RunRetry(input) {
+        if (input.diagnostic.clientId !== input.clientId ||
+            input.diagnostic.runId !== input.runId ||
+            input.nextAttempt !== input.expectedRun.attempt + 1 ||
+            input.nextAttempt > input.maxAttempts ||
+            !Number.isSafeInteger(input.retryWindowMs) ||
+            input.retryWindowMs <= 0) {
+            throw new Error("Agent v2 run retry input is invalid");
+        }
+        assertAgentV2Timestamp(input.retryAt, "retryAt");
+        assertAgentV2Timestamp(input.scheduledAt, "scheduledAt");
+        if (!isCanonicalAgentV2Revision(input.retryAt) || !isCanonicalAgentV2Revision(input.scheduledAt)) {
+            throw new Error("Agent v2 run retry timestamps must be canonical");
+        }
+        return this.withTransaction(async (tx) => {
+            const current = requiredRecord(await this.getAgentV2RunWithQueryable(tx, input.clientId, input.runId, true), "agent v2 run");
+            const currentTasks = await this.listAgentV2TasksWithQueryable(tx, input.clientId, input.runId);
+            const expectations = new Map(input.expectedTasks.map((task) => [task.taskId, task]));
+            const taskIds = new Set(input.tasks.map((task) => task.taskId));
+            const invalidTasks = expectations.size !== input.expectedTasks.length ||
+                taskIds.size !== input.tasks.length ||
+                expectations.size !== taskIds.size ||
+                input.tasks.some((task) => task.clientId !== input.clientId ||
+                    task.runId !== input.runId ||
+                    task.status !== "ready" ||
+                    task.updatedAt !== input.scheduledAt ||
+                    !expectations.has(task.taskId)) ||
+                input.expectedTasks.some((expected) => {
+                    if ("absent" in expected)
+                        return true;
+                    const task = currentTasks.find((candidate) => candidate.taskId === expected.taskId);
+                    return !task || task.status !== expected.status || task.updatedAt !== expected.updatedAt;
+                });
+            if (current.status !== "running" ||
+                Date.parse(input.retryAt) > Date.parse(current.startedAt ?? current.createdAt) + input.retryWindowMs ||
+                invalidTasks ||
+                !matchesAgentV2ExpectedRun(current, input.expectedRun) ||
+                !isCanonicalAgentV2Revision(input.expectedRun.updatedAt) ||
+                !isStrictlyNewerAgentV2Revision(input.scheduledAt, current.updatedAt)) {
+                return { update: { run: current, applied: false }, outboxIntentIds: [] };
+            }
+            const next = applyAgentV2RunUpdate(current, {
+                clientId: input.clientId,
+                runId: input.runId,
+                status: "queued",
+                expectedStatuses: ["running"],
+                phase: input.phase,
+                attempt: input.nextAttempt,
+                updatedAt: input.scheduledAt,
+                error: input.error,
+            });
+            await this.updateAgentV2RunWithQueryable(tx, next);
+            for (const task of input.tasks)
+                await this.upsertAgentV2TaskWithQueryable(tx, task);
+            await this.appendAgentV2DiagnosticWithQueryable(tx, input.diagnostic);
+            const event = await this.appendAgentV2RunEventWithQueryable(tx, {
+                clientId: input.clientId,
+                runId: input.runId,
+                type: "agent_v2.phase_changed",
+                payload: {
+                    type: "agent_v2.phase_changed",
+                    phase: input.phase,
+                    status: "queued",
+                    attempt: input.nextAttempt,
+                    at: input.scheduledAt,
+                },
+                createdAt: input.scheduledAt,
+            });
+            const outboxIntentIds = [
+                await this.insertAgentV2OutboxWithQueryable(tx, input.clientId, input.runId, { kind: "live_event", eventSeq: event.seq }, input.scheduledAt),
+                ...(await this.insertDiagnosticOutboxWithQueryable(tx, input.diagnostic)),
+                await this.insertAgentV2OutboxWithQueryable(tx, input.clientId, input.runId, { kind: "run_enqueue", queueName: input.queueName, attempt: input.nextAttempt }, input.scheduledAt, input.retryAt),
+            ];
             return { update: { run: next, applied: true }, event, outboxIntentIds };
         });
     }
@@ -1829,16 +1908,18 @@ export class PostgresRuntimeStore {
             await this.insertAgentV2OutboxWithQueryable(queryable, diagnostic.clientId, diagnostic.runId, { kind: "langfuse_diagnostic", diagnosticId: diagnostic.diagnosticId }, diagnostic.createdAt),
         ];
     }
-    async insertAgentV2OutboxWithQueryable(queryable, clientId, runId, reference, createdAt) {
+    async insertAgentV2OutboxWithQueryable(queryable, clientId, runId, reference, createdAt, availableAt = createdAt) {
         const dedupeKey = postgresOutboxDedupeKey(clientId, runId, reference);
         const intentId = agentV2OutboxIntentId(dedupeKey);
-        const existing = await this.queryOne(queryable, "SELECT intent_id, reference_json FROM agent_v2_outbox WHERE dedupe_key=$1", [dedupeKey]);
+        const existing = await this.queryOne(queryable, "SELECT intent_id, reference_json, available_at FROM agent_v2_outbox WHERE dedupe_key=$1", [dedupeKey]);
         if (existing) {
-            if (existing.intent_id !== intentId || !equalAgentV2ProtocolValues(existing.reference_json, reference))
+            if (existing.intent_id !== intentId ||
+                !equalAgentV2ProtocolValues(existing.reference_json, reference) ||
+                toTimestamp(existing.available_at) !== availableAt)
                 throw new Error("Agent v2 outbox dedupe conflict");
             return existing.intent_id;
         }
-        await this.query(queryable, "INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$6,$6,$7,0)", [intentId, dedupeKey, clientId, runId, reference.kind, createdAt, stringifyAgentV2Json(reference)]);
+        await this.query(queryable, "INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$7,$8,0)", [intentId, dedupeKey, clientId, runId, reference.kind, availableAt, createdAt, stringifyAgentV2Json(reference)]);
         return intentId;
     }
     async withTransaction(callback) {
@@ -2060,7 +2141,9 @@ function compareOutboxRecords(a, b) {
 function postgresOutboxDedupeKey(clientId, runId, reference) {
     switch (reference.kind) {
         case "run_enqueue":
-            return `run_enqueue:${clientId}:${runId}:${reference.queueName}`;
+            return reference.attempt === undefined
+                ? `run_enqueue:${clientId}:${runId}:${reference.queueName}`
+                : `run_enqueue:${clientId}:${runId}:${reference.queueName}:attempt:${reference.attempt}`;
         case "run_cancel":
             return `run_cancel:${clientId}:${runId}:${reference.queueName}:${reference.cancelToken}`;
         case "live_event":

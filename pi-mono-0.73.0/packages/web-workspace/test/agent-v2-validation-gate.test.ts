@@ -36,14 +36,21 @@ describe("agent v2 validation gate", () => {
 		});
 
 		expect(result.status).toBe("failed");
-		expect(result.failures).toEqual([
+		expect(result.failures).toEqual(expect.arrayContaining([
 			expect.objectContaining({
 				code: "static.loading_visible",
 				retryable: true,
 				path: "index.html",
 				source: "static_quality",
+				severity: "warning",
+				blocking: false,
+				confidence: 0.55,
+				fingerprint: expect.stringMatching(/^sha256:/),
 			}),
-		]);
+		]));
+		expect(result.failures).toEqual(
+			expect.arrayContaining([expect.objectContaining({ code: "static.loading_visible", source: "static_smoke" })]),
+		);
 		expect(result.validation).toMatchObject({
 			validationId: "static:validate",
 			attempt: 1,
@@ -77,6 +84,155 @@ describe("agent v2 validation gate", () => {
 		expect(result.status).toBe("passed");
 		expect(result.failures).toEqual([]);
 		expect(result.validation).toMatchObject({ status: "passed", summary: "Static validation passed" });
+	});
+
+	it("preserves advisory findings without failing delivery", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const files = createAgentV2FileAdapter({ config, context });
+		files.writeFile({
+			path: "index.html",
+			content: '<!doctype html><main><h1>Ready</h1></main><script src="https://cdn.example.test/chart.js"></script>',
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result.status).toBe("passed");
+		expect(result.rawResult.warnings).toEqual([
+			"Static preview quality gate: External script https://cdn.example.test/chart.js should have a local fallback.",
+			"Static preview smoke gate: Runtime smoke gate skipped external script https://cdn.example.test/chart.js.",
+		]);
+		expect(result.validation.details).toMatchObject({
+			warningCount: 2,
+			warnings: expect.arrayContaining([expect.stringContaining("External script")]),
+		});
+	});
+
+	it("keeps heuristic Chart.js layout findings advisory", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const files = createAgentV2FileAdapter({ config, context });
+		files.writeFile({
+			path: "index.html",
+			content: '<!doctype html><div class="chart"><canvas id="trend"></canvas></div><script src="app.js"></script>',
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+		files.writeFile({
+			path: "app.js",
+			content: "new Chart(document.getElementById('trend'), {options:{maintainAspectRatio:false}});",
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:01.000Z",
+		});
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result.status).toBe("passed");
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "static.canvas_layout_unbounded",
+				severity: "warning",
+				blocking: false,
+				path: "index.html",
+				data: expect.objectContaining({ canvasIds: ["trend"] }),
+			}),
+		]);
+	});
+
+	it("reports unwired filters and nondeterministic rendered data without blocking delivery", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const files = createAgentV2FileAdapter({ config, context });
+		files.writeFile({
+			path: "index.html",
+			content: `<!doctype html><select id="plant"><option>Fab A</option></select>
+<canvas id="trend" height="240"></canvas><script>
+new Chart(document.getElementById('trend'), {data:{datasets:[{data:[Math.random()]}]}});
+</script>`,
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result.status).toBe("passed");
+		expect(result.failures).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: "static.control_unwired",
+					severity: "warning",
+					blocking: false,
+					data: expect.objectContaining({ selector: "#plant" }),
+				}),
+				expect.objectContaining({ code: "static.nondeterministic_data", blocking: false }),
+			]),
+		);
+	});
+
+	it("reports a synthetic no-effect filter without blocking delivery", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const files = createAgentV2FileAdapter({ config, context });
+		files.writeFile({
+			path: "index.html",
+			content: `<!doctype html><select id="dateType"><option value="day">Day</option><option value="week">Week</option></select>
+<output id="lastUpdated">Jul 20, 2026, 01:00 PM</output><script>
+document.getElementById('dateType').addEventListener('change', () => {
+  document.getElementById('lastUpdated').textContent = 'Jul 20, 2026, 01:00 PM';
+});
+</script>`,
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-20T05:00:00.000Z",
+		});
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-20T05:01:00.000Z",
+		});
+
+		expect(result.status).toBe("passed");
+		expect(result.failures).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: "static.control_no_effect",
+					source: "static_smoke",
+					severity: "warning",
+					blocking: false,
+				}),
+			]),
+		);
 	});
 
 	it("preserves structured BuildRunner failures in v2 validation", async () => {
@@ -158,9 +314,12 @@ describe("agent v2 validation gate", () => {
 		expect(failure?.data).toMatchObject({ sourceMessage: "Container build timed out." });
 		expect(result.validation.details).toEqual({
 			failureCount: 1,
+			blockingFailureCount: 1,
 			failureCodes: ["build.timeout"],
 			retryableFailureCount: 1,
 			usedBuildStep: true,
+			warningCount: 0,
+			warnings: [],
 		});
 	});
 
@@ -347,9 +506,12 @@ describe("agent v2 validation gate", () => {
 		expect(result.rawResult.task).toBe("validate");
 		expect(result.validation.details).toEqual({
 			failureCount: 0,
+			blockingFailureCount: 0,
 			failureCodes: [],
 			retryableFailureCount: 0,
 			usedBuildStep: true,
+			warningCount: 0,
+			warnings: [],
 		});
 	});
 
@@ -483,9 +645,12 @@ describe("agent v2 validation gate", () => {
 		});
 		expect(result.validation.details).toEqual({
 			failureCount: 1,
+			blockingFailureCount: 1,
 			failureCodes: ["static.validation_failed"],
 			retryableFailureCount: 1,
 			usedBuildStep: false,
+			warningCount: 0,
+			warnings: [],
 		});
 		expect(JSON.stringify(result.validation)).not.toContain(sourceMessage);
 	});

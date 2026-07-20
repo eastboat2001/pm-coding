@@ -104,7 +104,7 @@ export interface AgentV2DeliveryReportPayload {
 }
 
 export interface AgentV2BrowserRunSink {
-	beginRun(runId: string, at: string): void;
+	beginRun(runId: string, at: string, objective?: string): void;
 	setPhase(phase: AgentV2Phase, status: AgentV2RunStatus, at: string): void;
 	setTask(event: AgentV2TaskUpdatedPayload): void;
 	setArtifact(event: AgentV2ArtifactIndexedPayload): void;
@@ -229,7 +229,9 @@ export class AgentV2BrowserController {
 		const createdAt = requireTimestamp(run.createdAt, "run.createdAt");
 		const updatedAt = requireTimestamp(run.updatedAt, "run.updatedAt");
 
-		this.sink.beginRun(runId, createdAt);
+		const objective = typeof run.input.objective === "string" ? run.input.objective.trim() : "";
+		if (objective) this.sink.beginRun(runId, createdAt, objective);
+		else this.sink.beginRun(runId, createdAt);
 		this.sink.setPhase(phase, status, updatedAt);
 		this._activeRunId = runId;
 		this._lastSeq = 0;

@@ -13,15 +13,60 @@ describe("development dependency resolution", () => {
 		expect(viteConfig.resolve?.alias).toEqual(
 			expect.arrayContaining([
 				{
+					find: "@mariozechner/pi-web-workspace/agent-v2-response-language",
+					replacement: resolve(repoRoot, "packages/web-workspace/src/agent-v2-response-language.ts"),
+				},
+				{
+					find: "@mariozechner/pi-web-workspace/agent-v2-runtime",
+					replacement: resolve(repoRoot, "packages/web-workspace/src/agent-v2-runtime.ts"),
+				},
+				{
+					find: "@mariozechner/pi-web-workspace/runtime-infra",
+					replacement: resolve(repoRoot, "packages/web-workspace/src/runtime-infra.ts"),
+				},
+				{
 					find: "@mariozechner/pi-web-workspace/skill-tool-contract",
 					replacement: resolve(repoRoot, "packages/web-workspace/src/skill-tool-contract.ts"),
 				},
 				{
-					find: "@mariozechner/pi-web-workspace",
+					find: /^@mariozechner\/pi-web-workspace$/u,
 					replacement: resolve(repoRoot, "packages/web-workspace/src/index.ts"),
 				},
 			]),
 		);
+		const aliases = viteConfig.resolve?.alias;
+		expect(Array.isArray(aliases)).toBe(true);
+		if (!Array.isArray(aliases)) return;
+		const rootAliasIndex = aliases.findIndex(
+			(alias) => alias.find instanceof RegExp && alias.find.source === "^@mariozechner\\/pi-web-workspace$",
+		);
+		expect(
+			aliases.findIndex((alias) => alias.find === "@mariozechner/pi-web-workspace/agent-v2-response-language"),
+		).toBeLessThan(rootAliasIndex);
+		const languageSource = readFileSync(
+			resolve(repoRoot, "packages/web-workspace/src/agent-v2-response-language.ts"),
+			"utf8",
+		);
+		expect(languageSource).not.toMatch(/from ["']node:/u);
+	});
+
+	it("aliases the exact web-ui package root to source so active run progress is rendered", () => {
+		const aliases = viteConfig.resolve?.alias;
+		expect(Array.isArray(aliases)).toBe(true);
+		if (!Array.isArray(aliases)) return;
+		const webUiAlias = aliases.find(
+			(alias) => alias.find instanceof RegExp && alias.find.source === "^@mariozechner\\/pi-web-ui$",
+		);
+		expect(webUiAlias).toEqual({
+			find: /^@mariozechner\/pi-web-ui$/u,
+			replacement: resolve(repoRoot, "packages/web-ui/src/index.ts"),
+		});
+		const agentInterfaceSource = readFileSync(
+			resolve(repoRoot, "packages/web-ui/src/components/AgentInterface.ts"),
+			"utf8",
+		);
+		expect(agentInterfaceSource).toContain("renderActiveRunSlot");
+		expect(agentInterfaceSource).toContain("activeRunContent");
 	});
 
 	it("loads the Vite storage plugin from web-workspace source", () => {

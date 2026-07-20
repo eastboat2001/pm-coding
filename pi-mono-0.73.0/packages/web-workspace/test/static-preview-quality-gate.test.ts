@@ -93,6 +93,180 @@ document.querySelector('#btn-export').addEventListener('click', () => {});
 		expect(result.errors).toEqual([]);
 	});
 
+	it("rejects unbounded Chart.js canvases when aspect-ratio preservation is disabled", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><head><style>.chart-panel{padding:16px}</style></head><body>
+<div class="chart-panel"><canvas id="trendChart"></canvas></div><script src="./app.js"></script></body></html>`,
+			"app.js": `new Chart(document.getElementById('trendChart'), {type:'bar',data:{labels:[],datasets:[]},options:{responsive:true,maintainAspectRatio:false}});`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("bounded chart or canvas height");
+	});
+
+	it("also inspects inline Chart.js setup instead of only linked scripts", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><head><style>.chart-panel{height:320px}</style></head><body>
+<div class="chart-panel"><canvas id="trendChart"></canvas></div><script>
+new Chart(document.getElementById('trendChart'), {options:{maintainAspectRatio:false}});
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("bounded chart or canvas height");
+	});
+
+	it("accepts Chart.js canvases inside explicitly bounded responsive containers", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><head><style>.chart-container{position:relative;height:clamp(240px,32vh,360px)}</style></head><body>
+<div class="chart-container"><canvas id="trendChart"></canvas></div><script src="./app.js"></script></body></html>`,
+			"app.js": `new Chart(document.getElementById('trendChart'), {type:'bar',data:{labels:[],datasets:[]},options:{responsive:true,maintainAspectRatio:false}});`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+	});
+
+	it("accepts a canvas inside a bounded inline relative wrapper", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<div style="position:relative;height:300px"><canvas id="trend"></canvas></div><script>
+new Chart(document.getElementById('trend'), {options:{maintainAspectRatio:false}});
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+	});
+
+	it("rejects visible select controls that are never read by application JavaScript", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<select id="customer"><option>全部</option><option>Alpha</option></select>
+<select id="plant"><option>全部</option><option>Fab A</option></select>
+<div id="result">Ready</div><script>
+document.getElementById('customer').addEventListener('change', () => {
+  document.getElementById('result').textContent = document.getElementById('customer').value;
+});
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors).toContain(
+			"Select control #plant is never referenced by local JavaScript and cannot affect rendered data.",
+		);
+		expect(result.errors.join("\n")).not.toContain("#customer is never referenced");
+	});
+
+	it("accepts select controls wired through an explicit dynamic id map", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<div id="loading" class="loading">加载中</div>
+<select id="filterCustomer"></select><select id="filterPlant"></select><script>
+const filterOptions = { filterCustomer: ['全部', 'Alpha'], filterPlant: ['全部', 'Fab A'] };
+Object.entries(filterOptions).forEach(([id, values]) => {
+  const element = document.getElementById(id);
+  element.addEventListener('change', (event) => updateData(id, event.target.value));
+});
+document.getElementById('loading').style.display = 'none';
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+	});
+
+	it("rejects random values used as rendered chart data", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body><canvas id="trend"></canvas><script>
+new Chart(document.getElementById('trend'), { data: { datasets: [{ data: [Math.random()] }] } });
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors).toContain(
+			"Rendered chart or application data uses Math.random(); interactive results must be deterministic.",
+		);
+	});
+
+	it("rejects an effectively invisible control label caused by CSS cascade", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><head><style>
+button { background:#2563eb; color:#fff }
+.filter-btn { background:#fff; border:1px solid #ddd }
+.filter-btn.active { background:#2563eb; color:#fff }
+</style></head><body>
+<button class="filter-btn active">全部</button><button class="filter-btn">待完成</button>
+</body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("待完成");
+		expect(result.errors.join("\n")).toContain("effectively unreadable");
+	});
+
+	it("accepts explicitly contrasting inactive and active control states", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><head><style>
+button { background:#2563eb; color:#fff }
+.filter-btn { background:#fff; color:#1f2937; border:1px solid #ddd }
+.filter-btn.active { background:#2563eb; color:#fff }
+</style></head><body>
+<button class="filter-btn active">全部</button><button class="filter-btn">待完成</button>
+</body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+	});
+
+	it("rejects a Chart instance stored on window under the same name as a canvas id", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body><canvas id="yieldTrendChart" height="300"></canvas><script>
+function renderChart() {
+  const ctx = document.getElementById('yieldTrendChart').getContext('2d');
+  if (window.yieldTrendChart) window.yieldTrendChart.destroy();
+  window.yieldTrendChart = new Chart(ctx, { data: { datasets: [] } });
+}
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("collides with HTML id #yieldTrendChart");
+	});
+
+	it("accepts a Chart destroy guarded against browser named properties", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body><canvas id="yieldTrendChart" height="300"></canvas><script>
+function renderChart() {
+  const ctx = document.getElementById('yieldTrendChart').getContext('2d');
+  if (window.yieldTrendChart instanceof Chart) window.yieldTrendChart.destroy();
+  window.yieldTrendChart = new Chart(ctx, { data: { datasets: [] } });
+}
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+	});
+
 	it("authorizes nested native paths after stripping URL query and hash", () => {
 		const root = writeProject({
 			"index.html":

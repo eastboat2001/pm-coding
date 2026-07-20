@@ -1,4 +1,8 @@
 import type { AgentV2RunEventRecord, AgentV2RunSnapshot } from "@mariozechner/pi-web-workspace";
+import {
+	type AgentV2ResponseLanguage,
+	inferAgentV2ResponseLanguage,
+} from "@mariozechner/pi-web-workspace/agent-v2-response-language";
 import { piClientHeaders } from "./client-id.js";
 import { CONVERSATION_SNAPSHOT_MESSAGE_MAX_CHARS } from "./conversation-snapshot.js";
 
@@ -19,6 +23,7 @@ export interface AgentV2BrowserStartRunRequest {
 	sessionId: string;
 	title: string;
 	objective: string;
+	responseLanguage?: AgentV2ResponseLanguage;
 	conversationSnapshot?: AgentV2BrowserConversationSnapshot;
 	selectedSkillNames?: string[];
 	attachments?: unknown[];
@@ -63,11 +68,16 @@ export async function startAgentV2Run(request: AgentV2BrowserStartRunRequest): P
 	const attachments = validateAttachmentDescriptors(request.attachments ?? [], projectFiles);
 	const objective = requireNonEmptyString(request.objective, "objective");
 	const conversationSnapshot = validateConversationSnapshot(request.conversationSnapshot, objective);
+	const responseLanguage = inferAgentV2ResponseLanguage(
+		{ objective, conversationSnapshot, responseLanguage: request.responseLanguage },
+		request.responseLanguage,
+	);
 	const selectedSkillNames = validateSelectedSkillNames(request.selectedSkillNames ?? []);
 	const input = {
 		sessionId: requireNonEmptyString(request.sessionId, "sessionId"),
 		title: requireNonEmptyString(request.title, "title"),
 		objective,
+		responseLanguage,
 		...(conversationSnapshot ? { conversationSnapshot } : {}),
 		...(selectedSkillNames.length > 0 ? { selectedSkillNames } : {}),
 		...(attachments.length > 0 ? { attachments } : {}),

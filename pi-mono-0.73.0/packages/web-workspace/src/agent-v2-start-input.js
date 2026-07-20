@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { inferAgentV2ResponseLanguage, normalizeAgentV2ResponseLanguage, } from "./agent-v2-response-language.js";
 export const AGENT_V2_INPUT_LIMITS = {
     maxEntries: 64,
     maxTextBytes: 1_048_576,
@@ -23,6 +24,7 @@ const INPUT_FIELDS = new Set([
     "sessionId",
     "title",
     "objective",
+    "responseLanguage",
     "conversationSnapshot",
     "selectedSkillNames",
     "projectFiles",
@@ -53,6 +55,10 @@ export function normalizeAgentV2StartPayload(value, runId) {
     const title = requireNonEmptyString(input.title, "Agent v2 start input title");
     const objective = requireNonEmptyString(input.objective, "Agent v2 start input objective");
     const conversationSnapshot = normalizeConversationSnapshot(input.conversationSnapshot, objective);
+    const responseLanguage = normalizeRequestedResponseLanguage(input.responseLanguage, {
+        objective,
+        conversationSnapshot,
+    });
     const selectedSkillNames = normalizeSelectedSkillNames(input.selectedSkillNames);
     const model = normalizeAgentV2ModelReference(request.model);
     const projectFiles = optionalArray(input.projectFiles, "Agent v2 projectFiles");
@@ -155,6 +161,7 @@ export function normalizeAgentV2StartPayload(value, runId) {
         sessionId,
         title,
         objective,
+        responseLanguage,
         ...(conversationSnapshot ? { conversationSnapshot } : {}),
         selectedSkillNames,
         model,
@@ -184,6 +191,7 @@ export function bindAgentV2StartPayload(payload, identity) {
             sessionId: payload.sessionId,
             title: payload.title,
             objective: payload.objective,
+            responseLanguage: payload.responseLanguage,
             ...(payload.conversationSnapshot
                 ? {
                     conversationSnapshot: {
@@ -199,6 +207,15 @@ export function bindAgentV2StartPayload(payload, identity) {
         inputBlobs,
         inputReferences,
     };
+}
+function normalizeRequestedResponseLanguage(value, input) {
+    if (value !== undefined) {
+        const language = normalizeAgentV2ResponseLanguage(value);
+        if (!language)
+            throw new AgentV2StartInputError("Agent v2 responseLanguage is invalid");
+        return language;
+    }
+    return inferAgentV2ResponseLanguage(input);
 }
 function normalizeSelectedSkillNames(value) {
     const candidates = optionalArray(value, "Agent v2 selected skill names");

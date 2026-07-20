@@ -128,7 +128,7 @@ await test("loadStorageConfig reads .env from the app root and strips preview tr
 	assert.equal(config.promptSnapshotMaxChars, 20000);
 	assert.equal(config.modelOutputSnapshotLoggingEnabled, false);
 	assert.equal(config.modelOutputSnapshotMaxChars, 20000);
-	assert.equal(config.modelStreamIdleTimeoutMs, 60000);
+	assert.equal(config.modelStreamIdleTimeoutMs, 180000);
 	assert.deepEqual(config.agentV2, {
 		queueName: "pi:agent-v2:runs",
 		eventStreamMaxLen: 5000,

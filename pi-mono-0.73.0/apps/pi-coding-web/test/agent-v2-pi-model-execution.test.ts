@@ -76,6 +76,52 @@ describe("AgentV2PiModelExecution", () => {
 		}
 	});
 
+	it("recovers from two malformed model results with an escalated strict instruction", async () => {
+		const complete = vi
+			.fn()
+			.mockResolvedValueOnce(assistantMessage("I created the application, but omitted the required JSON envelope."))
+			.mockResolvedValueOnce(assistantMessage("still not valid JSON"))
+			.mockResolvedValueOnce(assistantMessage(implementationJson()));
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete,
+		});
+
+		await expect(execution.generateImplementation(executionInput())).resolves.toMatchObject({
+			result: { taskId: "task-1", files: [{ path: "index.html" }] },
+			usage: { input: 33, output: 21, totalTokens: 54, costTotal: 0.375 },
+		});
+		expect(complete).toHaveBeenCalledTimes(3);
+		const recoveryContext = complete.mock.calls[1]?.[1];
+		expect(recoveryContext?.systemPrompt).toContain("PROTOCOL RECOVERY");
+		expect(recoveryContext?.systemPrompt).toContain("invalid_protocol");
+		expect(recoveryContext?.messages[0]?.content).toBe(complete.mock.calls[0]?.[1]?.messages[0]?.content);
+		expect(complete.mock.calls[2]?.[1]?.systemPrompt).toContain("second protocol recovery");
+	});
+
+	it("regenerates a compact complete result after the provider reaches its output limit", async () => {
+		const complete = vi
+			.fn()
+			.mockResolvedValueOnce(assistantMessage("truncated", { stopReason: "length" }))
+			.mockResolvedValueOnce(assistantMessage(implementationJson()));
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete,
+		});
+
+		await expect(execution.generateImplementation(executionInput())).resolves.toMatchObject({
+			result: { taskId: "task-1", files: [{ path: "index.html" }] },
+		});
+		expect(complete).toHaveBeenCalledTimes(2);
+		const recoveryContext = complete.mock.calls[1]?.[1];
+		expect(recoveryContext?.systemPrompt).toContain("OUTPUT-LENGTH RECOVERY");
+		expect(recoveryContext?.systemPrompt).toContain("prefer one root index.html");
+		expect(recoveryContext?.systemPrompt).toContain("one complete bare JSON object");
+		expect(recoveryContext?.messages[0]?.content).toBe(complete.mock.calls[0]?.[1]?.messages[0]?.content);
+	});
+
 	it("pins endpoint, key and capabilities to one immutable startup snapshot across settings replacement", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "agent-v2-model-snapshot-"));
 		const settingsFile = join(dir, "settings.json");
@@ -661,7 +707,7 @@ describe("AgentV2PiModelExecution", () => {
 		expect(JSON.stringify(envelope)).not.toContain(SECRET_KEY);
 	});
 
-	it("aborts an idle provider attempt and retries it only once before returning a safe timeout", async () => {
+	it("aborts idle provider attempts and retries them within the bounded provider budget", async () => {
 		const complete = vi.fn(
 			async (_model: Model<Api>, _context: unknown, options: { signal?: AbortSignal } | undefined) =>
 				await new Promise<AssistantMessage>((resolve) => {
@@ -688,10 +734,10 @@ describe("AgentV2PiModelExecution", () => {
 
 		const error = await caught(execution.generateImplementation(executionInput()));
 
-		expect(complete).toHaveBeenCalledTimes(2);
+		expect(complete).toHaveBeenCalledTimes(3);
 		expect(error).toMatchObject({
 			code: "provider_timeout",
-			attempts: 2,
+			attempts: 3,
 			retryable: true,
 			hadObservableOutput: false,
 		});
@@ -727,7 +773,7 @@ describe("AgentV2PiModelExecution", () => {
 	it.each([
 		["429 too many requests", "provider_rate_limit"],
 		["503 service unavailable", "provider_server_error"],
-	] as const)("retries a safe no-output %s failure only once", async (providerMessage, code) => {
+	] as const)("retries a safe no-output %s failure within the bounded budget", async (providerMessage, code) => {
 		const complete = vi.fn(async () =>
 			assistantMessage("", {
 				content: [],
@@ -743,8 +789,8 @@ describe("AgentV2PiModelExecution", () => {
 
 		const error = await caught(execution.generateImplementation(executionInput()));
 
-		expect(complete).toHaveBeenCalledTimes(2);
-		expect(error).toMatchObject({ code, attempts: 2, hadObservableOutput: false });
+		expect(complete).toHaveBeenCalledTimes(3);
+		expect(error).toMatchObject({ code, attempts: 3, hadObservableOutput: false });
 		expect(observable(error)).not.toContain(RAW_PROVIDER_SECRET);
 	});
 
@@ -772,7 +818,7 @@ describe("AgentV2PiModelExecution", () => {
 		},
 	);
 
-	it("resets the idle watchdog on a chunk and never retries after that observable output", async () => {
+	it("discards incomplete observable output and safely retries an idle request", async () => {
 		const complete = vi.fn(
 			async (
 				_model: Model<Api>,
@@ -798,16 +844,16 @@ describe("AgentV2PiModelExecution", () => {
 
 		const error = await caught(execution.generateImplementation(executionInput()));
 
-		expect(complete).toHaveBeenCalledTimes(1);
+		expect(complete).toHaveBeenCalledTimes(3);
 		expect(error).toMatchObject({
 			code: "provider_timeout",
-			attempts: 1,
-			retryable: false,
+			attempts: 3,
+			retryable: true,
 			hadObservableOutput: true,
 		});
 	});
 
-	it("does not retry a transient provider error after observable output", async () => {
+	it("discards partial output and retries a transient provider error", async () => {
 		const complete = vi.fn(async () =>
 			assistantMessage("", {
 				content: [{ type: "text", text: "partial output" }],
@@ -824,11 +870,11 @@ describe("AgentV2PiModelExecution", () => {
 
 		const error = await caught(execution.generateImplementation(executionInput()));
 
-		expect(complete).toHaveBeenCalledTimes(1);
+		expect(complete).toHaveBeenCalledTimes(3);
 		expect(error).toMatchObject({
 			code: "provider_network",
-			attempts: 1,
-			retryable: false,
+			attempts: 3,
+			retryable: true,
 			hadObservableOutput: true,
 		});
 		expect(observable(error)).not.toContain(RAW_PROVIDER_SECRET);
@@ -930,6 +976,32 @@ describe("AgentV2PiModelExecution", () => {
 		expect(error).toMatchObject({ name: "AgentV2ModelContractError" });
 		expect(observable(error)).not.toContain(SECRET_KEY);
 		expect(observable(error)).not.toContain(RAW_PROVIDER_SECRET);
+	});
+
+	it("recovers when a repair response makes no effective file change", async () => {
+		const input = repairExecutionInput();
+		const unchanged = JSON.stringify({
+			version: 1,
+			taskId: "repair:validate:1",
+			summary: "unchanged",
+			files: [{ path: "index.html", content: input.workspaceFiles[0]?.content }],
+			addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+		});
+		const complete = vi
+			.fn()
+			.mockResolvedValueOnce(assistantMessage(unchanged))
+			.mockResolvedValueOnce(assistantMessage(repairJson()));
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete,
+		});
+
+		await expect(execution.generateRepair(input)).resolves.toMatchObject({
+			result: { files: [{ path: "index.html", content: "fixed" }] },
+		});
+		expect(complete).toHaveBeenCalledTimes(2);
+		expect(complete.mock.calls[1]?.[1]?.systemPrompt).toContain("PROTOCOL RECOVERY");
 	});
 
 	it("rejects tool-only, mixed tool, missing-text, response identity and non-stop results", async () => {

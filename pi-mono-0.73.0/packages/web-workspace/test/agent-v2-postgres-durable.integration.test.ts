@@ -175,9 +175,9 @@ describe("agent v2 PostgreSQL durable store", () => {
 			runs: 1,
 			blobs: 1,
 			references: 2,
-			documents: 4,
+			documents: 5,
 			tasks: 6,
-			artifacts: 4,
+			artifacts: 5,
 			diagnostics: 1,
 			events: 2,
 		});

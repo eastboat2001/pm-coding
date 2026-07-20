@@ -63,7 +63,9 @@ describe("agent v2 production repair loop", () => {
 		});
 		const projectRoot = join(config.clientsRootDir, "client-a", "sessions", "session-a", "project");
 		mkdirSync(projectRoot, { recursive: true });
-		const initialContent = '<!doctype html><div id="loading">Loading...</div>';
+		const brokenMarkup = '<!doctype html><div id="loading">Loading...</div>';
+		const initialContent = `${brokenMarkup}${" ".repeat(24_513 - Buffer.byteLength(brokenMarkup, "utf8"))}`;
+		expect(Buffer.byteLength(initialContent, "utf8")).toBe(24_513);
 		writeFileSync(join(projectRoot, "index.html"), initialContent);
 		store.upsertAgentV2Artifact({
 			clientId: "client-a",
@@ -217,6 +219,56 @@ describe("agent v2 production repair loop", () => {
 		expect(renderedPrompt).not.toContain("prompt raw validator secret");
 	});
 
+	it("repairs a large source file through a checksum-bound excerpt patch instead of rejecting its byte size", async () => {
+		const brokenMarkup = '<!doctype html><div id="loading">Loading...</div>';
+		const initialContent = `${brokenMarkup}${" ".repeat(120_000)}`;
+		const fixture = directRepairFixture(initialContent);
+		let observedMode: string | undefined;
+		let observedContextBytes = 0;
+
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async (input) => {
+						const workspace = input.workspaceFiles[0];
+						if (!workspace) throw new Error("missing repair workspace");
+						observedMode = workspace.contentMode;
+						observedContextBytes = Buffer.byteLength(workspace.content, "utf8");
+						return {
+							result: {
+								version: 1 as const,
+								taskId: input.task.taskId,
+								summary: "ignored",
+								files: [],
+								patches: [
+									{
+										path: "index.html",
+										expectedChecksum: workspace.checksum,
+										oldText: brokenMarkup,
+										newText: "<!doctype html><main>Ready</main>",
+									},
+								],
+								addressedDiagnosticIds: input.diagnostics.map((item) => item.diagnosticId),
+							},
+							provider: "test",
+							model: "v2-test-model",
+						};
+					},
+				},
+			}),
+		).resolves.toMatchObject({ status: "task_succeeded", taskId: "repair:validate:1" });
+
+		expect(observedMode).toBe("excerpt");
+		expect(observedContextBytes).toBeLessThanOrEqual(65_536);
+		const repaired = readFileSync(join(fixture.projectRoot, "index.html"), "utf8");
+		expect(repaired.startsWith("<!doctype html><main>Ready</main>")).toBe(true);
+		expect(Buffer.byteLength(repaired, "utf8")).toBeGreaterThan(100_000);
+	});
+
 	it("fails a no-change repair atomically and never enables revalidation", async () => {
 		const fixture = directRepairFixture("<!doctype html><main>unchanged</main>");
 		const generateRepair = vi.fn(async () => ({
@@ -263,7 +315,7 @@ describe("agent v2 production repair loop", () => {
 		).not.toContain("RAW_NO_CHANGE_SUMMARY");
 	});
 
-	it("fails an empty repair result atomically and never enables revalidation", async () => {
+	it("continues with bounded revalidation when a repair result violates the model contract", async () => {
 		const fixture = directRepairFixture("<!doctype html><main>unchanged</main>");
 		await expect(
 			executeAgentV2NextTask({
@@ -285,11 +337,30 @@ describe("agent v2 production repair loop", () => {
 					}),
 				},
 			}),
-		).resolves.toMatchObject({ status: "task_failed", taskId: "repair:validate:1" });
+		).resolves.toEqual({
+			status: "task_succeeded",
+			taskId: "repair:validate:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
+		});
 		expect(fixture.store.listAgentV2Tasks("client-a", "run-direct-repair")).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ taskId: "repair:validate:1", status: "failed" }),
-				expect.objectContaining({ taskId: "revalidate:validate:2", status: "pending" }),
+				expect.objectContaining({
+					taskId: "repair:validate:1",
+					status: "succeeded",
+					output: expect.objectContaining({
+						recoveryMode: "model_contract_revalidation",
+						modelContractCode: "invalid_schema",
+					}),
+				}),
+			]),
+		);
+		expect(fixture.store.listAgentV2Diagnostics("client-a", "run-direct-repair")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: "agent_v2.repair_model_contract_recovery",
+					severity: "warn",
+					data: { modelContractCode: "invalid_schema" },
+				}),
 			]),
 		);
 		expect(JSON.stringify(fixture.store.listAgentV2Tasks("client-a", "run-direct-repair"))).not.toContain(
@@ -297,7 +368,7 @@ describe("agent v2 production repair loop", () => {
 		);
 	});
 
-	it("rejects provider identity mismatch before repair writes or durable success", async () => {
+	it("revalidates unchanged files after a repair provider identity mismatch", async () => {
 		const fixture = directRepairFixture("<!doctype html><main>before</main>");
 		const beforeEvents = fixture.store.listAgentV2RunEvents("client-a", "run-direct-repair", 0);
 
@@ -321,10 +392,20 @@ describe("agent v2 production repair loop", () => {
 					}),
 				},
 			}),
-		).rejects.toThrow("does not match the required result schema");
+		).resolves.toMatchObject({
+			status: "task_succeeded",
+			taskId: "repair:validate:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
+		});
 		expect(readFileSync(join(fixture.projectRoot, "index.html"), "utf8")).toBe("<!doctype html><main>before</main>");
-		expect(fixture.store.listAgentV2Tasks("client-a", "run-direct-repair")[0]?.status).toBe("ready");
-		expect(fixture.store.listAgentV2RunEvents("client-a", "run-direct-repair", 0)).toEqual(beforeEvents);
+		expect(
+			fixture.store
+				.listAgentV2Tasks("client-a", "run-direct-repair")
+				.find((task) => task.taskId === "repair:validate:1"),
+		).toMatchObject({ status: "succeeded", output: { modelContractCode: "invalid_schema" } });
+		expect(fixture.store.listAgentV2RunEvents("client-a", "run-direct-repair", 0)).toHaveLength(
+			beforeEvents.length + 2,
+		);
 	});
 
 	it("keeps the base validation identity across repeated failure and stops with zero new tasks at max attempt", async () => {

@@ -38,10 +38,12 @@ const CLASS_ATTRIBUTE_PATTERN = /\bclass\s*=\s*(['"])([^'"]*)\1/i;
 const STYLE_ATTRIBUTE_PATTERN = /\bstyle\s*=\s*(['"])([^'"]*)\1/i;
 const WIDTH_ATTRIBUTE_PATTERN = /\bwidth\s*=\s*(['"]?)(\d+)\1/i;
 const HEIGHT_ATTRIBUTE_PATTERN = /\bheight\s*=\s*(['"]?)(\d+)\1/i;
+const VALUE_ATTRIBUTE_PATTERN = /\bvalue\s*=\s*(['"])([^'"]*)\1/i;
 const OPEN_TAG_PATTERN = /<([a-z][\w:-]*)\b([^>]*)>/gi;
 const DATA_ATTRIBUTE_PATTERN = /\bdata-([a-z0-9_.:-]+)\s*=\s*(['"])([^'"]*)\2/gi;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 500;
 const MAX_TIMER_FLUSH = 50;
+const MAX_CHART_INTERACTION_SAMPLES = 32;
 
 export async function runStaticPreviewSmokeGate(
 	input: StaticPreviewSmokeGateInput,
@@ -90,8 +92,11 @@ export async function runStaticPreviewSmokeGate(
 	runtime.flushTimers(errors, warnings);
 	runtime.dispatchWindowEvent("load", errors, warnings);
 	runtime.flushTimers(errors, warnings);
+	runtime.exerciseInteractions(errors, warnings);
+	runtime.flushTimers(errors, warnings);
 
 	errors.push(...runtime.validationErrors());
+	warnings.push(...runtime.validationWarnings());
 
 	return {
 		valid: errors.length === 0,
@@ -193,6 +198,7 @@ class SmokeRuntime {
 	private readonly timers: SmokeTimer[] = [];
 	private readonly cancelledTimerIds = new Set<number>();
 	private readonly consoleErrors: string[] = [];
+	private readonly charts: SmokeChart[] = [];
 	private readonly missingSelectors = new Set<string>();
 	private timerId = 0;
 
@@ -205,8 +211,23 @@ class SmokeRuntime {
 	}
 
 	context(): Context {
+		const charts = this.charts;
+		class RuntimeSmokeChart extends SmokeChart {
+			constructor(context: unknown, config: unknown) {
+				super(context, config);
+				charts.push(this);
+			}
+		}
 		const windowObject: Record<string, unknown> = {
 			document: this.document,
+			// Dialog APIs are synchronous browser primitives. Treating them as missing
+			// turns otherwise valid interaction handlers into VM-only ReferenceErrors.
+			// They have no observable page effect in the smoke runtime, so deterministic
+			// no-op/default implementations are sufficient for startup validation.
+			alert: (_message?: unknown) => undefined,
+			confirm: (_message?: unknown) => true,
+			prompt: (_message?: unknown, defaultValue?: unknown) =>
+				defaultValue === undefined || defaultValue === null ? "" : String(defaultValue),
 			console: {
 				log: () => undefined,
 				info: () => undefined,
@@ -237,7 +258,7 @@ class SmokeRuntime {
 					},
 				},
 			},
-			Chart: SmokeChart,
+			Chart: RuntimeSmokeChart,
 			Event: SmokeEvent,
 		};
 		windowObject.window = windowObject;
@@ -245,6 +266,95 @@ class SmokeRuntime {
 		windowObject.globalThis = windowObject;
 		Object.assign(this.contextValues, windowObject);
 		return createContext(this.contextValues);
+	}
+
+	exerciseInteractions(errors: string[], warnings: string[]): void {
+		for (const element of this.document.elementsByTagName("select")) {
+			const originalValue = element.value;
+			const testValues = element.interactionCandidates();
+			if (testValues.length === 0) continue;
+			const before = this.observableDataFingerprint();
+			let changedObservableData = false;
+			let interactionFailed = false;
+			for (const testValue of testValues) {
+				element.value = testValue;
+				try {
+					element.dispatchEvent(new SmokeEvent("change"), (listener, event) =>
+						this.invokeCallback(listener, [event], element),
+					);
+					this.flushTimers(errors, warnings);
+					changedObservableData = before !== this.observableDataFingerprint();
+				} catch (error) {
+					interactionFailed = true;
+					recordRuntimeIssue(
+						error,
+						`Runtime smoke gate: select change handler failed${element.id ? ` for #${element.id}` : ""}: ${describeRuntimeError(error, this.sources)}`,
+						errors,
+						warnings,
+					);
+				}
+
+				// Every control is evaluated from the page's default filter state. Leaving a
+				// previous select mutated can create an empty combination and falsely make
+				// otherwise functional controls look inert.
+				element.value = originalValue;
+				try {
+					element.dispatchEvent(new SmokeEvent("change"), (listener, event) =>
+						this.invokeCallback(listener, [event], element),
+					);
+					this.flushTimers(errors, warnings);
+				} catch (error) {
+					interactionFailed = true;
+					recordRuntimeIssue(
+						error,
+						`Runtime smoke gate: select reset handler failed${element.id ? ` for #${element.id}` : ""}: ${describeRuntimeError(error, this.sources)}`,
+						errors,
+						warnings,
+					);
+				}
+
+				if (changedObservableData || interactionFailed) break;
+			}
+			if (!changedObservableData && !interactionFailed) {
+				errors.push(
+					`Runtime smoke gate: select${element.id ? ` #${element.id}` : ""} changed value but did not change rendered metrics, chart data, results, or empty state.`,
+				);
+			}
+		}
+		// Chart callbacks commonly re-render the page and create replacement Chart
+		// instances. Iterate a bounded snapshot: walking the live array would also
+		// visit every replacement appended by the callback and can grow forever.
+		const chartsAtInteractionStart = this.charts
+			.filter((chart) => !chart.isDestroyed())
+			.slice(0, MAX_CHART_INTERACTION_SAMPLES);
+		if (this.charts.filter((chart) => !chart.isDestroyed()).length > MAX_CHART_INTERACTION_SAMPLES) {
+			warnings.push(
+				`Runtime smoke gate sampled the first ${MAX_CHART_INTERACTION_SAMPLES} active charts for interaction checks.`,
+			);
+		}
+		for (const chart of chartsAtInteractionStart) {
+			const onClick = chart.clickHandler();
+			if (!onClick) continue;
+			try {
+				this.invokeCallback(onClick, [new SmokeEvent("click"), [{ index: 0 }], chart]);
+			} catch (error) {
+				recordRuntimeIssue(
+					error,
+					`Runtime smoke gate: chart click handler failed: ${describeRuntimeError(error, this.sources)}`,
+					errors,
+					warnings,
+				);
+			}
+		}
+	}
+
+	private observableDataFingerprint(): string {
+		const activeCharts = this.charts.filter((chart) => !chart.isDestroyed()).map((chart) => chart.dataSnapshot());
+		return JSON.stringify({
+			document: this.document.observableDataSnapshot(),
+			charts: activeCharts,
+			location: this.contextValues.location,
+		});
 	}
 
 	dispatchDocumentEvent(type: string, errors: string[], warnings: string[]): void {
@@ -319,6 +429,20 @@ class SmokeRuntime {
 		return errors;
 	}
 
+	validationWarnings(): string[] {
+		const metrics = this.document.visibleMetricElements();
+		if (
+			metrics.length >= 2 &&
+			this.document.elementsByTagName("canvas").some((canvas) => canvas.isVisible()) &&
+			metrics.every((metric) => metric.hasOnlyZeroMetricValues())
+		) {
+			return [
+				`Runtime smoke gate: all ${metrics.length} visible KPI metrics remain zero after startup while chart content is present; verify the default view renders representative data or an explicit empty state.`,
+			];
+		}
+		return [];
+	}
+
 	private enqueueTimer(kind: SmokeTimerKind, callback: () => void): number {
 		this.timerId += 1;
 		this.timers.push({ id: this.timerId, kind, callback });
@@ -329,16 +453,21 @@ class SmokeRuntime {
 		this.cancelledTimerIds.add(timerId);
 	}
 
-	private invokeCallback(callback: unknown, args: unknown[]): void {
+	private invokeCallback(callback: unknown, args: unknown[], thisArg?: unknown): void {
 		this.contextValues.__piSmokeCallback = callback;
 		this.contextValues.__piSmokeCallbackArgs = args;
+		this.contextValues.__piSmokeCallbackThis = thisArg;
 		try {
-			new Script("__piSmokeCallback(...__piSmokeCallbackArgs)").runInContext(this.contextValues, {
-				timeout: this.scriptTimeoutMs,
-			});
+			new Script("__piSmokeCallback.call(__piSmokeCallbackThis, ...__piSmokeCallbackArgs)").runInContext(
+				this.contextValues,
+				{
+					timeout: this.scriptTimeoutMs,
+				},
+			);
 		} finally {
 			delete this.contextValues.__piSmokeCallback;
 			delete this.contextValues.__piSmokeCallbackArgs;
+			delete this.contextValues.__piSmokeCallbackThis;
 		}
 	}
 }
@@ -459,6 +588,18 @@ class SmokeDocument extends SmokeEventTarget {
 		return this.elements.filter((element) => element.id && element.isVisible() && element.hasMetricPlaceholder());
 	}
 
+	visibleMetricElements(): SmokeElement[] {
+		return this.elements.filter((element) => element.isVisible() && element.hasMetricSignal());
+	}
+
+	observableDataSnapshot(): unknown[] {
+		return this.elements.flatMap((element) => element.observableDataSnapshot());
+	}
+
+	elementsByTagName(tagName: string): SmokeElement[] {
+		return this.elements.filter((element) => element.tagName.toLowerCase() === tagName.toLowerCase());
+	}
+
 	private parse(html: string): void {
 		for (const match of html.matchAll(OPEN_TAG_PATTERN)) {
 			const tagName = match[1] ?? "";
@@ -473,6 +614,7 @@ class SmokeDocument extends SmokeEventTarget {
 				element.height = numericAttributeMatch(attrs, HEIGHT_ATTRIBUTE_PATTERN, element.height);
 			}
 			element.textContent = elementText(html, tagName, match);
+			if (tagName.toLowerCase() === "select") element.setInteractionValues(selectOptionValues(html, match));
 			for (const [name, value] of dataAttributes(attrs)) element.dataset[name] = value;
 			if (element.id) this.byId.set(element.id, element);
 		}
@@ -487,6 +629,8 @@ class SmokeDocument extends SmokeEventTarget {
 class SmokeElement extends SmokeEventTarget {
 	id = "";
 	className = "";
+	clientWidth = 1024;
+	clientHeight = 768;
 	private text = "";
 	innerHTML = "";
 	value = "";
@@ -494,6 +638,7 @@ class SmokeElement extends SmokeEventTarget {
 	readonly children: SmokeElement[] = [];
 	readonly dataset: Record<string, string> = {};
 	readonly style = new SmokeStyle();
+	private interactionValues: string[] = [];
 
 	constructor(
 		readonly tagName: string,
@@ -506,11 +651,25 @@ class SmokeElement extends SmokeEventTarget {
 		return new SmokeClassList(this);
 	}
 
+	get parentElement(): SmokeElement | null {
+		if (this.tagName.toLowerCase() === "html") return null;
+		if (this.tagName.toLowerCase() === "body") return this.ownerDocument.documentElement ?? null;
+		return this.ownerDocument.body ?? null;
+	}
+
 	get textContent(): string {
 		return this.text;
 	}
 
 	set textContent(value: unknown) {
+		this.text = value === null ? "" : String(value);
+	}
+
+	get innerText(): string {
+		return this.text;
+	}
+
+	set innerText(value: unknown) {
 		this.text = value === null ? "" : String(value);
 	}
 
@@ -531,7 +690,37 @@ class SmokeElement extends SmokeEventTarget {
 
 	appendChild(child: SmokeElement): SmokeElement {
 		this.children.push(child);
+		if (this.tagName.toLowerCase() === "select" && child.tagName.toLowerCase() === "option") {
+			const optionValue = child.value || child.textContent;
+			if (optionValue && !this.interactionValues.includes(optionValue)) this.interactionValues.push(optionValue);
+			if (!this.value) this.value = optionValue;
+		}
 		return child;
+	}
+
+	setInteractionValues(values: string[]): void {
+		this.interactionValues = [...new Set(values.filter(Boolean))];
+		if (!this.value && this.interactionValues[0]) this.value = this.interactionValues[0];
+	}
+
+	interactionCandidates(): string[] {
+		return this.interactionValues.filter((value) => value !== this.value);
+	}
+
+	observableDataSnapshot(): unknown[] {
+		const signal = `${this.id} ${this.className}`;
+		const content = `${this.textContent} ${this.innerHTML}`.trim();
+		const metric =
+			/\b(?:kpi|metric)-?value\b/i.test(this.className) ||
+			/(?:kpi|metric).*(?:value|yield|count|output|loss)$/i.test(this.id) ||
+			/(?:kpi|metric).*(?:row|grid|list)$/i.test(this.id);
+		if (metric) {
+			return [[this.id, "metric", content.match(/--|-?\d[\d,.]*(?:%|\s*Lots?)?/gi) ?? [], this.style.display]];
+		}
+		if (/\b(?:result|table|tbody|detail|empty|error)\b/i.test(signal) || /^(?:table|tbody)$/i.test(this.tagName)) {
+			return [[this.id, "result", content, this.style.display]];
+		}
+		return [];
 	}
 
 	remove(): void {
@@ -564,6 +753,17 @@ class SmokeElement extends SmokeEventTarget {
 		const signal = `${this.id} ${this.className}`;
 		return /(kpi|metric|value|yield|count|output|loss|updated)/i.test(signal);
 	}
+
+	hasMetricSignal(): boolean {
+		const signal = `${this.id} ${this.className}`;
+		return /\b(?:kpi|metric)-?value\b/i.test(this.className) || /(?:kpi|metric).*(?:value|yield|count|output|loss)$/i.test(signal);
+	}
+
+	hasOnlyZeroMetricValues(): boolean {
+		const values = this.textContent.match(/-?\d[\d,.]*/g);
+		if (!values?.length) return false;
+		return values.every((value) => Number(value.replace(/,/g, "")) === 0);
+	}
 }
 
 class SmokeCanvasElement extends SmokeElement {
@@ -594,6 +794,16 @@ class SmokeCanvasRenderingContext2D {
 	closePath(): void {}
 	moveTo(_x: number, _y: number): void {}
 	lineTo(_x: number, _y: number): void {}
+	quadraticCurveTo(_controlX: number, _controlY: number, _x: number, _y: number): void {}
+	bezierCurveTo(
+		_controlX1: number,
+		_controlY1: number,
+		_controlX2: number,
+		_controlY2: number,
+		_x: number,
+		_y: number,
+	): void {}
+	arcTo(_x1: number, _y1: number, _x2: number, _y2: number, _radius: number): void {}
 	rect(_x: number, _y: number, _width: number, _height: number): void {}
 	arc(_x: number, _y: number, _radius: number, _startAngle: number, _endAngle: number): void {}
 	fill(): void {}
@@ -708,7 +918,41 @@ class UnsupportedSmokeCapabilityError extends Error {
 }
 
 class SmokeChart {
-	destroy(): void {}
+	readonly data: Record<string, unknown>;
+	readonly options: Record<string, unknown>;
+	private destroyed = false;
+
+	constructor(_context: unknown, config: unknown = {}) {
+		const candidate = config && typeof config === "object" ? (config as Record<string, unknown>) : {};
+		this.data =
+			candidate.data && typeof candidate.data === "object" ? (candidate.data as Record<string, unknown>) : {};
+		this.options =
+			candidate.options && typeof candidate.options === "object"
+				? (candidate.options as Record<string, unknown>)
+				: {};
+	}
+
+	clickHandler(): ((...args: unknown[]) => unknown) | undefined {
+		return typeof this.options.onClick === "function"
+			? (this.options.onClick as (...args: unknown[]) => unknown)
+			: undefined;
+	}
+
+	isDestroyed(): boolean {
+		return this.destroyed;
+	}
+
+	dataSnapshot(): string {
+		try {
+			return JSON.stringify(this.data, (_key, value) => (typeof value === "function" ? undefined : value));
+		} catch {
+			return "[unserializable chart data]";
+		}
+	}
+
+	destroy(): void {
+		this.destroyed = true;
+	}
 	update(): void {}
 }
 
@@ -737,6 +981,19 @@ function elementText(html: string, tagName: string, match: RegExpMatchArray): st
 	const closeIndex = html.toLowerCase().indexOf(`</${tagName.toLowerCase()}>`, contentStart);
 	const inner = closeIndex >= 0 ? html.slice(contentStart, closeIndex) : "";
 	return stripTags(inner).trim();
+}
+
+function selectOptionValues(html: string, match: RegExpMatchArray): string[] {
+	const contentStart = (match.index ?? 0) + match[0].length;
+	const closeIndex = html.toLowerCase().indexOf("</select>", contentStart);
+	if (closeIndex < 0) return [];
+	const inner = html.slice(contentStart, closeIndex);
+	const values: string[] = [];
+	for (const option of inner.matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi)) {
+		const value = attributeMatch(option[1] ?? "", VALUE_ATTRIBUTE_PATTERN) || stripTags(option[2] ?? "").trim();
+		if (value) values.push(value);
+	}
+	return [...new Set(values)];
 }
 
 function selectorMatches(element: SmokeElement, selector: string): boolean {

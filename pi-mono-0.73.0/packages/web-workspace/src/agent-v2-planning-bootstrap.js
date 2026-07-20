@@ -2,20 +2,37 @@ import { createHash } from "node:crypto";
 import { routeAgentV2Capabilities } from "./agent-v2-capability-router.js";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { buildAgentV2PlanDocument, buildAgentV2SpecDocument, buildAgentV2TaskGraph, renderAgentV2DocumentMarkdown, } from "./agent-v2-documents.js";
+import { buildAgentV2ProductBlueprint } from "./agent-v2-product-blueprint.js";
+import { inferAgentV2ResponseLanguage } from "./agent-v2-response-language.js";
 export function buildAgentV2PlanningBootstrap(input) {
     const baseTimestamp = (input.now ?? defaultNow)();
     const nextTimestamp = createTimestampSequence(baseTimestamp);
     const objective = resolveObjective(input.run, input.objective);
-    const decision = routeAgentV2Capabilities({ objective, platform: input.platform });
-    const spec = buildAgentV2SpecDocument({
+    const blueprint = buildAgentV2ProductBlueprint({
         runId: input.run.runId,
         objective,
+        responseLanguage: inferAgentV2ResponseLanguage(input.run.input),
+        inputBlobs: input.inputBlobs ?? [],
+        now: nextTimestamp,
+    });
+    const capabilityObjective = [
+        objective,
+        ...blueprint.items
+            .filter((item) => item.categories.includes("requirement") || item.categories.includes("permission"))
+            .slice(0, 32)
+            .map((item) => item.text),
+    ].join("\n");
+    const decision = routeAgentV2Capabilities({ objective: capabilityObjective, platform: input.platform });
+    const spec = buildAgentV2SpecDocument({
+        runId: input.run.runId,
+        blueprint,
         decision,
         now: nextTimestamp,
     });
     const plan = buildAgentV2PlanDocument({
         runId: input.run.runId,
         spec,
+        blueprint,
         decision,
         now: nextTimestamp,
     });
@@ -23,6 +40,7 @@ export function buildAgentV2PlanningBootstrap(input) {
         runId: input.run.runId,
         spec,
         plan,
+        blueprint,
         decision,
         now: nextTimestamp,
     });
@@ -35,6 +53,15 @@ export function buildAgentV2PlanningBootstrap(input) {
             contentJson: decision,
             contentMarkdown: renderAgentV2DocumentMarkdown(decision),
             mediaType: "application/json",
+        },
+        {
+            documentId: "product_blueprint",
+            kind: "product_blueprint",
+            sourceTaskId: "spec",
+            path: "agent-v2/product-blueprint.md",
+            contentJson: blueprint,
+            contentMarkdown: renderAgentV2DocumentMarkdown(blueprint),
+            mediaType: "text/markdown",
         },
         {
             documentId: "spec",
@@ -142,6 +169,7 @@ export function buildAgentV2PlanningBootstrap(input) {
         run: input.run,
         objective,
         decision,
+        blueprint,
         spec,
         plan,
         taskGraph,
@@ -152,7 +180,7 @@ export function buildAgentV2PlanningBootstrap(input) {
     };
 }
 export function toAgentV2PlanningCommit(bootstrap) {
-    const bootstrapVersion = "agent-v2-planning-v1";
+    const bootstrapVersion = "agent-v2-planning-v2";
     return {
         bootstrapVersion,
         bootstrapChecksum: checksumFor({

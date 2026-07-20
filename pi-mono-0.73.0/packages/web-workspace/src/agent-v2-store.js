@@ -293,7 +293,11 @@ function parseAgentV2DocumentContent(value, fallbackKind) {
     return { ...parsed, kind: fallbackKind };
 }
 function isAgentV2DocumentKind(value) {
-    return value === "capability_decision" || value === "spec" || value === "plan" || value === "tasks";
+    return (value === "capability_decision" ||
+        value === "product_blueprint" ||
+        value === "spec" ||
+        value === "plan" ||
+        value === "tasks");
 }
 function toNumber(value) {
     return typeof value === "number" ? value : Number(value);

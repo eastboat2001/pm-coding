@@ -91,6 +91,42 @@ document.addEventListener('DOMContentLoaded', () => {
 		expect(result.checkedFiles).toEqual(["index.html", "inline script 1"]);
 	});
 
+	it("warns without blocking when every visible KPI stays zero beside a chart", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<div id="kpiOutput" class="kpi-value">0</div>
+<div id="kpiYield" class="kpi-value">0%</div>
+<canvas id="trendChart"></canvas>
+</body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
+		expect(result.warnings.join("\n")).toContain("all 2 visible KPI metrics remain zero");
+	});
+
+	it("supports standard browser dialog APIs without VM-only ReferenceErrors", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<select id="mode"><option value="a">A</option><option value="b">B</option></select>
+<output id="result">a</output><script>
+document.getElementById('mode').addEventListener('change', (event) => {
+  alert('changed');
+  const accepted = confirm('continue?');
+  const suffix = prompt('suffix', '!');
+  document.getElementById('result').textContent = accepted ? event.target.value + suffix : 'cancelled';
+});
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+		expect(result.errors).toEqual([]);
+	});
+
 	it("coerces numeric textContent assignments like the browser DOM", async () => {
 		const root = writeProject({
 			"index.html": `<!doctype html>
@@ -124,6 +160,12 @@ document.addEventListener('DOMContentLoaded', () => {
   if (canvas.width !== 400 || canvas.height !== 300) {
     throw new Error('canvas dimensions unavailable: ' + canvas.width + 'x' + canvas.height);
   }
+  if (!canvas.parentElement || canvas.parentElement.clientWidth <= 0) {
+    throw new Error('canvas parent layout metrics unavailable');
+  }
+  if (document.body.clientWidth <= 0 || document.body.clientHeight <= 0) {
+    throw new Error('document layout metrics unavailable');
+  }
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('2d context unavailable');
   ctx.fillStyle = '#000';
@@ -136,6 +178,9 @@ document.addEventListener('DOMContentLoaded', () => {
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(20, 20);
+  ctx.quadraticCurveTo(25, 25, 30, 20);
+  ctx.bezierCurveTo(30, 20, 35, 15, 40, 20);
+  ctx.arcTo(40, 20, 40, 30, 5);
   ctx.rect(1, 1, 10, 10);
   ctx.arc(10, 10, 5, 0, Math.PI * 2);
   ctx.fill();
@@ -160,6 +205,116 @@ document.addEventListener('DOMContentLoaded', () => {
 const canvas = document.createElement('canvas');
 if (canvas.width !== 300 || canvas.height !== 150) throw new Error('unexpected canvas defaults');
 if (!canvas.getContext('2d')) throw new Error('2d context unavailable');
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+	});
+
+	it("executes select changes and chart drill-down callbacks before delivery", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body><select id="customer"><option value="all">All</option></select>
+<canvas id="pareto"></canvas><script>
+window.chart = new Chart(document.getElementById('pareto'), {
+  data: { datasets: [{ backgroundColor: 'rgba(37,99,235,.7)' }] },
+  options: { onClick: () => { window.chart.data.datasets[0].backgroundColor.map(() => 'blue'); } }
+});
+document.getElementById('customer').addEventListener('change', (event) => { document.body.dataset.customer = event.target.value; });
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("chart click handler failed");
+		expect(result.errors.join("\n")).toContain("backgroundColor.map is not a function");
+	});
+
+	it("bounds chart interaction sampling when a click re-renders replacement charts", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body><canvas id="trend"></canvas><script>
+let current;
+function render() {
+  if (current) current.destroy();
+  current = new Chart(document.getElementById('trend'), {
+    data: { labels: ['W1'], datasets: [{ data: [94.2] }] },
+    options: { onClick: () => render() }
+  });
+}
+render();
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+		expect(result.errors).toEqual([]);
+	});
+
+	it("rejects a select handler that redraws without changing observable data", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<select id="plant"><option value="a">Fab A</option><option value="b">Fab B</option></select>
+<div id="kpiOutput" class="kpi-value">120</div><script>
+document.getElementById('plant').addEventListener('change', () => {
+  document.getElementById('kpiOutput').textContent = '120';
+});
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("select #plant changed value but did not change rendered metrics");
+	});
+
+	it("accepts a select that changes rendered metric values", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<select id="plant"><option value="a">Fab A</option><option value="b">Fab B</option></select>
+<div id="kpiOutput" class="kpi-value">120</div><script>
+document.getElementById('plant').addEventListener('change', (event) => {
+  document.getElementById('kpiOutput').textContent = event.target.value === 'b' ? '85' : '120';
+});
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+	});
+
+	it("observes innerText updates and evaluates each select from the default filter state", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<select id="dateType"><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+<select id="lotType"><option value="hvm">HVM</option><option value="lvm">LVM</option></select>
+<div id="kpiOutput" class="kpi-value">120</div><script>
+const values = { 'weekly:hvm': '120', 'weekly:lvm': '85' };
+function render() {
+  const key = document.getElementById('dateType').value + ':' + document.getElementById('lotType').value;
+  document.getElementById('kpiOutput').innerText = values[key] || '-';
+}
+document.getElementById('dateType').addEventListener('change', render);
+document.getElementById('lotType').addEventListener('change', render);
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+	});
+
+	it("binds this to the select element inside classic event listeners", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<select id="plant"><option value="a">Fab A</option><option value="b">Fab B</option></select>
+<div id="kpiOutput" class="kpi-value">120</div><script>
+document.getElementById('plant').addEventListener('change', function() {
+  document.getElementById('kpiOutput').textContent = this.value === 'b' ? '85' : '120';
+});
 </script></body></html>`,
 		});
 

@@ -28,7 +28,7 @@ describe("Agent v2 browser run sink", () => {
 		const presentations: Array<AgentV2RunPresentation | undefined> = [];
 		const sink = createAgentV2BrowserRunSink({
 			browserAgent,
-			locale: () => "en-US",
+			responseLanguage: "en",
 			onPresentationChange: (presentation) => presentations.push(presentation),
 		});
 
@@ -40,37 +40,47 @@ describe("Agent v2 browser run sink", () => {
 		);
 		expect(outputMessages).toHaveLength(1);
 		expect(outputMessages[0]).toMatchObject({
-			content: [{ type: "text", text: "Dashboard implementation complete." }],
 			usage: { input: 12, output: 34, totalTokens: 46, cost: { total: 0.25 } },
 			timestamp: Date.parse(OUTPUT),
 		});
-		expect(assistants.map(assistantText)).toEqual([
-			"I’m implementing the plan.",
-			"I’m checking the result and fixing issues.",
-			"Dashboard implementation complete.",
-			"I’m preparing the result for delivery.",
-		]);
+		expect(assistantText(outputMessages[0] as AgentMessage)).toContain("Dashboard implementation complete.");
+		expect(assistantText(outputMessages[0] as AgentMessage)).toContain("1 file was created or updated: index.html.");
+		expect(assistants.map(assistantText)).toHaveLength(6);
+		expect(assistants.map(assistantText)).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining("Here is how I understand the task"),
+				expect.stringContaining("Implementation is now underway"),
+				expect.stringContaining("The code is now being checked"),
+				expect.stringContaining("Validation passed"),
+				expect.stringContaining("The checks are complete"),
+			]),
+		);
 		expect(browserAgent.state.messages.filter((message) => message.role === "agent-v2-run-result")).toHaveLength(1);
 		expect(browserAgent.state.messages.some((message) => message.role === "agent-v2-activity")).toBe(false);
 		expect(presentations.at(-1)).toBeUndefined();
 		expect(browserAgent.state).toMatchObject({ isStreaming: false, errorMessage: undefined });
 	});
 
-	it("does not narrate the initial snapshot before a validated phase event arrives", () => {
+	it("narrates the initial validated snapshot with the run objective", () => {
 		const browserAgent = createBrowserAgent();
 		const sink = createAgentV2BrowserRunSink({
 			browserAgent,
-			locale: () => "en",
+			responseLanguage: "en",
 			onPresentationChange: vi.fn(),
 		});
 
-		sink.beginRun("run-snapshot", START);
+		sink.beginRun("run-snapshot", START, "Build an inventory dashboard");
 		sink.setPhase("validation", "running", VALIDATE);
-		expect(browserAgent.state.messages).toEqual([]);
-		sink.setPhase("implementation", "running", REPAIR);
 		expect(browserAgent.state.messages.filter((message) => message.role === "assistant").map(assistantText)).toEqual([
-			"I’m implementing the plan.",
+			expect.stringContaining("Goal: Build an inventory dashboard"),
 		]);
+		sink.setPhase("implementation", "running", REPAIR);
+		expect(browserAgent.state.messages.filter((message) => message.role === "assistant").map(assistantText)).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining("Goal: Build an inventory dashboard"),
+				expect.stringContaining("Implementation is now underway"),
+			]),
+		);
 	});
 
 	it("reconciles validation failure, repair, and pass without duplicating indexed state", () => {
@@ -78,7 +88,7 @@ describe("Agent v2 browser run sink", () => {
 		let active: AgentV2RunPresentation | undefined;
 		const sink = createAgentV2BrowserRunSink({
 			browserAgent,
-			locale: () => "en",
+			responseLanguage: "en",
 			onPresentationChange: (presentation) => {
 				active = presentation;
 			},
@@ -97,18 +107,23 @@ describe("Agent v2 browser run sink", () => {
 			{ attempt: 1, status: "failed" },
 			{ attempt: 2, status: "passed" },
 		]);
-		expect(browserAgent.state.messages.filter((message) => message.role === "assistant").map(assistantText)).toEqual([
-			"I’m checking the result and fixing issues.",
-			"I found a validation issue and I’m repairing it.",
-			"I’m checking the result and fixing issues.",
-		]);
+		const narration = browserAgent.state.messages.filter((message) => message.role === "assistant").map(assistantText);
+		expect(narration).toHaveLength(5);
+		expect(narration).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining("Here is how I understand the task"),
+				expect.stringContaining("This validation attempt found an issue"),
+				expect.stringContaining("repairable issue"),
+				expect.stringContaining("Validation passed"),
+			]),
+		);
 	});
 
 	it("uses a specific terminal error before diagnostic fallback", () => {
 		const browserAgent = createBrowserAgent();
 		const sink = createAgentV2BrowserRunSink({
 			browserAgent,
-			locale: () => "en",
+			responseLanguage: "en",
 			onPresentationChange: vi.fn(),
 		});
 		sink.beginRun("run-failure", START);
@@ -141,7 +156,7 @@ describe("Agent v2 browser run sink", () => {
 		const browserAgent = createBrowserAgent();
 		const sink = createAgentV2BrowserRunSink({
 			browserAgent,
-			locale: () => "en",
+			responseLanguage: "en",
 			onPresentationChange: vi.fn(),
 		});
 		sink.beginRun("run-diagnostic-failure", START);
@@ -170,7 +185,7 @@ describe("Agent v2 browser run sink", () => {
 		for (let replay = 0; replay < 2; replay += 1) {
 			const sink = createAgentV2BrowserRunSink({
 				browserAgent,
-				locale: () => "en",
+				responseLanguage: "en",
 				onPresentationChange: vi.fn(),
 			});
 			projectSuccessfulRun(sink);
@@ -183,6 +198,59 @@ describe("Agent v2 browser run sink", () => {
 		).toHaveLength(1);
 		expect(browserAgent.state.messages.filter((message) => message.role === "agent-v2-run-result")).toHaveLength(1);
 		expect(browserAgent.state.messages.some((message) => message.role === "agent-v2-activity")).toBe(false);
+	});
+
+	it("keeps Chinese narration and the durable result language fixed for the whole run", () => {
+		const browserAgent = createBrowserAgent();
+		const sink = createAgentV2BrowserRunSink({
+			browserAgent,
+			responseLanguage: "zh",
+			onPresentationChange: vi.fn(),
+		});
+
+		projectSuccessfulRun(sink);
+
+		const narration = browserAgent.state.messages.filter((message) => message.role === "assistant").map(assistantText);
+		expect(narration).toHaveLength(6);
+		expect(narration.join("\n")).toContain("我正在按以下方式理解这次任务");
+		expect(narration.join("\n")).toContain("现在开始实现");
+		expect(narration.join("\n")).toContain("校验已经通过");
+		expect(narration.join("\n")).toContain("已生成或更新 1 个文件：index.html");
+		expect(narration.join("\n")).not.toContain("Dashboard implementation complete");
+		expect(browserAgent.state.messages.find((message) => message.role === "agent-v2-run-result")).toMatchObject({
+			responseLanguage: "zh",
+		});
+	});
+
+	it("types curated narration through streamingMessage and flushes it before settlement", () => {
+		vi.useFakeTimers();
+		try {
+			const browserAgent = createBrowserAgent();
+			const onNarrationChange = vi.fn();
+			const sink = createAgentV2BrowserRunSink({
+				browserAgent,
+				responseLanguage: "zh",
+				narrationTypingIntervalMs: 10,
+				onNarrationChange,
+				onPresentationChange: vi.fn(),
+			});
+
+			sink.beginRun("run-streaming", START, "生成一个中文仪表盘");
+			sink.setPhase("intake", "running", START);
+			expect(browserAgent.state.streamingMessage?.role).toBe("assistant");
+			expect(assistantText(browserAgent.state.streamingMessage as AgentMessage).length).toBeGreaterThan(0);
+			expect(browserAgent.state.messages).toEqual([]);
+
+			vi.advanceTimersByTime(10_000);
+			expect(browserAgent.state.streamingMessage).toBeUndefined();
+			expect(browserAgent.state.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+			expect(onNarrationChange).toHaveBeenCalled();
+
+			sink.settle("cancelled", END);
+			expect(browserAgent.state.isStreaming).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 
@@ -205,7 +273,7 @@ function createBrowserAgent(): { state: BrowserAgentState } {
 }
 
 function projectSuccessfulRun(sink: ReturnType<typeof createAgentV2BrowserRunSink>): void {
-	sink.beginRun("run-success", START);
+	sink.beginRun("run-success", START, "Build a dashboard");
 	sink.setPhase("intake", "queued", START);
 	sink.setPhase("implementation", "running", START);
 	sink.setTask({
@@ -217,6 +285,18 @@ function projectSuccessfulRun(sink: ReturnType<typeof createAgentV2BrowserRunSin
 		at: VALIDATE,
 	});
 	sink.setPhase("validation", "running", VALIDATE);
+	sink.setValidation(validation(1, "passed", VALIDATE));
+	sink.setArtifact({
+		type: "agent_v2.artifact_indexed",
+		artifactId: "artifact-index",
+		path: "index.html",
+		validationStatus: "passed",
+		revision: "1",
+		checksum: `sha256:${"a".repeat(64)}`,
+		action: "created",
+		sourceTaskId: "implement",
+		at: VALIDATE,
+	});
 	sink.appendOutput({
 		type: "agent_v2.output_recorded",
 		taskId: "implement",

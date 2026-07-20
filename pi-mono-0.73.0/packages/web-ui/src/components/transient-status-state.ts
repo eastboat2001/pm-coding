@@ -6,18 +6,19 @@ export interface ParsedTransientStatus {
 	progress?: string;
 }
 
-const RETRY_PROGRESS_PATTERN = /^(.*?)\s*\((\d+\s*\/\s*\d+)\)\s*$/;
+const STATUS_PROGRESS_PATTERN = /^(.*?)\s*\((\d+\s*\/\s*\d+|\d+s)\)\s*$/;
 
 export function parseTransientStatusText(statusText: string): ParsedTransientStatus | undefined {
 	const text = statusText.trim();
 	if (!text) return undefined;
 
-	const retryProgress = RETRY_PROGRESS_PATTERN.exec(text);
-	if (retryProgress) {
+	const progress = STATUS_PROGRESS_PATTERN.exec(text);
+	if (progress) {
+		const label = progress[1].trim();
 		return {
-			kind: "retry",
-			label: retryProgress[1].trim(),
-			progress: retryProgress[2].replace(/\s+/g, ""),
+			kind: classifyTransientStatus(label),
+			label,
+			progress: progress[2].replace(/\s+/g, ""),
 		};
 	}
 

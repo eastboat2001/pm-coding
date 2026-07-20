@@ -14,12 +14,14 @@ describe("Agent v2 narration", () => {
 		const understanding = projectAgentV2Narration(state, {
 			runId: "run-1",
 			locale: "en-US",
+			objective: "Build a sales dashboard",
 			event: phase("intake"),
 		});
 		state = understanding.state;
 		const sameStage = projectAgentV2Narration(state, {
 			runId: "run-1",
 			locale: "en-US",
+			objective: "Build a sales dashboard",
 			event: phase("capability_routing"),
 		});
 		state = sameStage.state;
@@ -35,9 +37,10 @@ describe("Agent v2 narration", () => {
 			event: phase("implementation"),
 		});
 
-		expect(understanding.candidate?.text).toBe("I’m understanding what you need.");
+		expect(understanding.candidate?.text).toContain("Goal: Build a sales dashboard");
+		expect(understanding.candidate?.text).toContain("runs directly in the browser");
 		expect(sameStage.candidate).toBeUndefined();
-		expect(implementation.candidate?.text).toBe("I’m implementing the plan.");
+		expect(implementation.candidate?.text).toContain("Implementation is now underway");
 		expect(replay.candidate).toBeUndefined();
 	});
 
@@ -46,12 +49,14 @@ describe("Agent v2 narration", () => {
 		const output = projectAgentV2Narration(state, {
 			runId: "run-1",
 			locale: "en",
+			artifactPaths: ["index.html", "src/main.js", "src/main.js"],
 			event: outputEvent("The dashboard is implemented."),
 		});
 		state = output.state;
 		const sameTextOnAnotherTask = projectAgentV2Narration(state, {
 			runId: "run-1",
 			locale: "en",
+			artifactPaths: ["index.html", "src/main.js", "src/main.js"],
 			event: { ...outputEvent("The dashboard is implemented."), taskId: "task-2" },
 		});
 		state = sameTextOnAnotherTask.state;
@@ -79,7 +84,10 @@ describe("Agent v2 narration", () => {
 			},
 		];
 
-		expect(output.candidate).toMatchObject({ source: "output", text: "The dashboard is implemented." });
+		expect(output.candidate).toMatchObject({ source: "output" });
+		expect(output.candidate?.text).toContain("The dashboard is implemented.");
+		expect(output.candidate?.text).toContain("2 files were created or updated: index.html, src/main.js.");
+		expect(output.candidate?.text).toContain("static startup and preview checks");
 		expect(sameTextOnAnotherTask.candidate).toBeUndefined();
 		for (const event of hiddenEvents) {
 			expect(projectAgentV2Narration(state, { runId: "run-1", locale: "en", event }).candidate).toBeUndefined();
@@ -88,11 +96,11 @@ describe("Agent v2 narration", () => {
 	});
 
 	it.each([
-		["zh-CN", "正在检查结果并修复问题。"],
-		["en-GB", "I’m checking the result and fixing issues."],
-		["de-DE", "Ich prüfe das Ergebnis und behebe Probleme."],
-		["ms-MY", "Saya sedang menyemak hasil dan membaiki masalah."],
-		["fr-FR", "I’m checking the result and fixing issues."],
+		["zh-CN", "代码已经进入检查阶段"],
+		["en-GB", "The code is now being checked"],
+		["de-DE", "Der Code wird jetzt geprüft"],
+		["ms-MY", "Kod kini dalam peringkat semakan"],
+		["fr-FR", "The code is now being checked"],
 	])("uses localized stage copy for %s with English fallback", (locale, expected) => {
 		const result = projectAgentV2Narration(createAgentV2NarrationState(), {
 			runId: "run-1",
@@ -100,7 +108,7 @@ describe("Agent v2 narration", () => {
 			event: phase("validation"),
 		});
 
-		expect(result.candidate?.text).toBe(expected);
+		expect(result.candidate?.text).toContain(expected);
 	});
 
 	it("uses a distinct repair narration instead of regressing to implementation", () => {
@@ -113,8 +121,38 @@ describe("Agent v2 narration", () => {
 		expect(result.candidate).toMatchObject({
 			stage: "validation",
 			phase: "repair",
-			text: "I found a validation issue and I’m repairing it.",
 		});
+		expect(result.candidate?.text).toContain("repairable issue");
+	});
+
+	it("narrates validation outcomes without exposing raw diagnostics", () => {
+		const failed = projectAgentV2Narration(createAgentV2NarrationState(), {
+			runId: "run-1",
+			locale: "zh-CN",
+			event: validationEvent("failed", 1),
+		});
+		const passed = projectAgentV2Narration(failed.state, {
+			runId: "run-1",
+			locale: "zh-CN",
+			event: validationEvent("passed", 2),
+		});
+
+		expect(failed.candidate?.text).toContain("本轮校验发现问题");
+		expect(passed.candidate?.text).toContain("校验已经通过");
+		expect(JSON.stringify([failed.candidate, passed.candidate])).not.toContain("secret diagnostic");
+	});
+
+	it("keeps Chinese narration Chinese when the provider summary is unexpectedly English", () => {
+		const output = projectAgentV2Narration(createAgentV2NarrationState(), {
+			runId: "run-1",
+			locale: "zh-CN",
+			artifactPaths: ["index.html"],
+			event: outputEvent("Dashboard implementation complete."),
+		});
+
+		expect(output.candidate?.text).toBe(
+			"已生成或更新 1 个文件：index.html。\n\n下一步将运行静态启动检查和预览验证。",
+		);
 	});
 
 	it("converts event text with zero usage and preserves provider-backed output identity", () => {
@@ -167,6 +205,18 @@ function outputEvent(summary: string) {
 		provider: "openai",
 		model: "gpt-test",
 		usage: { input: 12, output: 34, totalTokens: 46, costTotal: 0.25 },
+		at: NOW,
+	};
+}
+
+function validationEvent(status: "failed" | "passed", attempt: number) {
+	return {
+		type: "agent_v2.validation_recorded" as const,
+		validationId: "validation-1",
+		taskId: "validate",
+		attempt,
+		status,
+		summary: "secret diagnostic",
 		at: NOW,
 	};
 }

@@ -18,7 +18,8 @@ describe("Agent v2 run restoration", () => {
 		"rebuilds and idempotently settles a run saved active but restored %s",
 		(status) => {
 			const browserAgent = { state: { messages: [] as AgentMessage[], isStreaming: false, pendingToolCalls: new Set<string>() } };
-			const makeSink = () => createAgentV2BrowserRunSink({ browserAgent, locale: () => "en", onPresentationChange: vi.fn() });
+			const makeSink = () =>
+				createAgentV2BrowserRunSink({ browserAgent, responseLanguage: "en", onPresentationChange: vi.fn() });
 			for (let replay = 0; replay < 2; replay += 1) {
 				const result = restoreAgentV2BrowserRunProjection({
 					snapshot: snapshot(status),

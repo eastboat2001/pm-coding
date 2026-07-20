@@ -56,6 +56,7 @@ describe("Agent v2 state machine", () => {
 		expect(() => assertAgentV2RunTransition("queued", "running")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("queued", "cancelled")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("running", "cancelling")).not.toThrow();
+		expect(() => assertAgentV2RunTransition("running", "queued")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("running", "interrupted")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("running", "succeeded")).not.toThrow();
 		expect(() => assertAgentV2RunTransition("running", "failed")).not.toThrow();
@@ -70,7 +71,6 @@ describe("Agent v2 state machine", () => {
 
 	it.each([
 		["queued", "succeeded"],
-		["running", "queued"],
 		["cancelling", "running"],
 		["cancelling", "failed"],
 		["cancelling", "succeeded"],
@@ -78,6 +78,43 @@ describe("Agent v2 state machine", () => {
 		["interrupted", "running"],
 	] as const)("rejects illegal run transition %s -> %s", (from, to) => {
 		expect(() => assertAgentV2RunTransition(from, to)).toThrow(`Invalid Agent v2 run transition: ${from} -> ${to}`);
+	});
+
+	it("releases worker ownership while queued for retry and clears the retry error on the next attempt", () => {
+		const initial = createAgentV2RunSnapshot({
+			clientId: "client-a",
+			runId: "run-retry",
+			input: { prompt: "Build" },
+			model: { provider: "test" },
+			createdAt,
+		});
+		const running = transitionAgentV2RunSnapshot(initial, "running", {
+			workerId: "worker-a",
+			startedAt: "2026-07-07T00:00:01.000Z",
+			updatedAt: "2026-07-07T00:00:01.000Z",
+		});
+		const retryQueued = transitionAgentV2RunSnapshot(running, "queued", {
+			attempt: 2,
+			updatedAt: "2026-07-07T00:00:02.000Z",
+			error: {
+				code: "provider_timeout",
+				message: "Provider timed out",
+				retryable: true,
+			},
+		});
+
+		expect(retryQueued).toMatchObject({ status: "queued", attempt: 2, startedAt: "2026-07-07T00:00:01.000Z" });
+		expect(retryQueued.workerId).toBeUndefined();
+		expect(retryQueued.endedAt).toBeUndefined();
+		expect(retryQueued.error?.code).toBe("provider_timeout");
+
+		const retried = transitionAgentV2RunSnapshot(retryQueued, "running", {
+			workerId: "worker-b",
+			updatedAt: "2026-07-07T00:00:03.000Z",
+		});
+		expect(retried.error).toBeUndefined();
+		expect(retried.workerId).toBe("worker-b");
+		expect(retried.attempt).toBe(2);
 	});
 
 	it("advances through the expanded v2 planning phases before implementation", () => {

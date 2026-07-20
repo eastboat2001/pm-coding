@@ -526,6 +526,7 @@ export interface ProjectTaskResult extends JsonObject {
 	hasPackageJson?: boolean;
 	valid?: boolean;
 	errors?: string[];
+	warnings?: string[];
 	mode?: "static";
 	previewUrl?: string;
 	serveRoot?: string;

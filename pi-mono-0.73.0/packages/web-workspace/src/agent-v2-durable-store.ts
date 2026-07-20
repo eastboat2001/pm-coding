@@ -16,6 +16,7 @@ import type {
 } from "./agent-v2-store.js";
 import { buildAgentV2Run } from "./agent-v2-store.js";
 import type {
+	AgentV2Error,
 	AgentV2Phase,
 	AgentV2RunSnapshot,
 	AgentV2RunStatus,
@@ -129,6 +130,7 @@ export type AgentV2ExpectedTaskState =
 export function isAgentV2DeterministicExecutionTaskId(taskId: string): boolean {
 	return (
 		/^repair:[A-Za-z0-9][A-Za-z0-9._:~-]*:[1-9][0-9]*$/u.test(taskId) ||
+		/^regenerate:[A-Za-z0-9][A-Za-z0-9._:~-]*:[1-9][0-9]*$/u.test(taskId) ||
 		/^revalidate:[A-Za-z0-9][A-Za-z0-9._:~-]*:[2-9][0-9]*$/u.test(taskId)
 	);
 }
@@ -139,6 +141,27 @@ export interface AgentV2RunTransitionCommitInput {
 	diagnostic?: AgentV2DiagnosticEvent;
 }
 export interface AgentV2RunTransitionCommitResult {
+	update: AgentV2RunUpdateResult;
+	event?: AgentV2RunEventRecord;
+	outboxIntentIds: readonly string[];
+}
+export interface AgentV2RunRetryCommitInput {
+	clientId: string;
+	runId: string;
+	expectedRun: AgentV2ExpectedRunState;
+	expectedTasks: readonly AgentV2ExpectedTaskState[];
+	tasks: readonly UpsertAgentV2TaskInput[];
+	phase: AgentV2Phase;
+	nextAttempt: number;
+	maxAttempts: number;
+	retryWindowMs: number;
+	queueName: string;
+	retryAt: string;
+	scheduledAt: string;
+	error: AgentV2Error;
+	diagnostic: AgentV2DiagnosticEvent;
+}
+export interface AgentV2RunRetryCommitResult {
 	update: AgentV2RunUpdateResult;
 	event?: AgentV2RunEventRecord;
 	outboxIntentIds: readonly string[];
@@ -196,6 +219,7 @@ export interface AgentV2DurableCommitStore {
 	commitAgentV2RunTransition(
 		input: AgentV2RunTransitionCommitInput,
 	): AgentV2StoreResult<AgentV2RunTransitionCommitResult>;
+	commitAgentV2RunRetry(input: AgentV2RunRetryCommitInput): AgentV2StoreResult<AgentV2RunRetryCommitResult>;
 	commitAgentV2ExecutionMutation(
 		input: AgentV2ExecutionMutationInput,
 	): AgentV2StoreResult<AgentV2ExecutionMutationResult>;

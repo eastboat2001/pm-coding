@@ -92,6 +92,9 @@ describe("agent v2 worker production composition", () => {
 				getBuiltinProviders: () => [],
 			},
 			complete,
+			previewReadinessChecker: {
+				check: async () => ({ ready: true, reasonCode: "ready" as const }),
+			},
 		});
 		const worker = new AgentV2WorkerService({
 			store,
@@ -119,14 +122,13 @@ describe("agent v2 worker production composition", () => {
 
 		const implementationPrompt = promptText(complete.mock.calls[0]?.[1]);
 		const repairPrompt = promptText(complete.mock.calls[1]?.[1]);
-		for (const expected of [
-			"Build the production composition fixture",
-			"src/brief.txt",
-			"committed composition input",
-		]) {
+		for (const expected of ["Build the production composition fixture", "src/brief.txt"]) {
 			expect(implementationPrompt).toContain(expected);
 			expect(repairPrompt).toContain(expected);
 		}
+		expect(implementationPrompt).toContain("contentProjection\":\"product_blueprint");
+		expect(implementationPrompt).not.toContain("committed composition input");
+		expect(repairPrompt).not.toContain("committed composition input");
 		for (const expected of ["index.html", "Loading...", "static.loading_visible"]) {
 			expect(repairPrompt).toContain(expected);
 		}

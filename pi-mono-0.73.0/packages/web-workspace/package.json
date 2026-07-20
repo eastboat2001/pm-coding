@@ -16,6 +16,11 @@
       "import": "./dist/agent-v2-runtime.js",
       "default": "./dist/agent-v2-runtime.js"
     },
+    "./agent-v2-response-language": {
+      "types": "./dist/agent-v2-response-language.d.ts",
+      "import": "./dist/agent-v2-response-language.js",
+      "default": "./dist/agent-v2-response-language.js"
+    },
     "./runtime-infra": {
       "types": "./dist/runtime-infra.d.ts",
       "import": "./dist/runtime-infra.js",

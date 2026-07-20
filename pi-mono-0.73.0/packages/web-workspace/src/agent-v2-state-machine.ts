@@ -11,7 +11,7 @@ import {
 
 const RUN_TRANSITIONS: Record<AgentV2RunStatus, readonly AgentV2RunStatus[]> = {
 	queued: ["running", "cancelled"],
-	running: ["cancelling", "succeeded", "failed", "cancelled", "interrupted"],
+	running: ["queued", "cancelling", "succeeded", "failed", "cancelled", "interrupted"],
 	cancelling: ["cancelled", "interrupted"],
 	succeeded: [],
 	failed: [],
@@ -111,8 +111,8 @@ export function transitionAgentV2RunSnapshot(
 
 	const updatedAt = patch.updatedAt ?? new Date().toISOString();
 	const startedAt = to === "running" ? (patch.startedAt ?? snapshot.startedAt ?? updatedAt) : snapshot.startedAt;
-	const endedAt = TERMINAL_RUN_STATUSES.has(to) ? (patch.endedAt ?? updatedAt) : snapshot.endedAt;
-	const error = TERMINAL_RUN_STATUSES.has(to) ? (patch.error ?? snapshot.error) : snapshot.error;
+	const endedAt = TERMINAL_RUN_STATUSES.has(to) ? (patch.endedAt ?? updatedAt) : to === "queued" ? undefined : snapshot.endedAt;
+	const error = to === "running" ? patch.error : (patch.error ?? snapshot.error);
 
 	const next: AgentV2RunSnapshot = {
 		...snapshot,
@@ -129,15 +129,21 @@ export function transitionAgentV2RunSnapshot(
 		if (startedAt !== undefined) {
 			next.startedAt = startedAt;
 		}
-	} else if (snapshot.workerId !== undefined) {
+	} else if (to !== "queued" && snapshot.workerId !== undefined) {
 		next.workerId = snapshot.workerId;
+	} else if (to === "queued") {
+		delete next.workerId;
 	}
 
 	if (endedAt !== undefined) {
 		next.endedAt = endedAt;
+	} else if (to === "queued") {
+		delete next.endedAt;
 	}
 	if (error !== undefined) {
 		next.error = error;
+	} else if (to === "running") {
+		delete next.error;
 	}
 
 	return next;

@@ -49,9 +49,9 @@ describe("AgentV2RunApiService", () => {
 			[1, "agent_v2.run_created"],
 			[2, "agent_v2.planning_ready"],
 		]);
-		expect(store.listAgentV2Documents("client-a", "run-start")).toHaveLength(4);
+		expect(store.listAgentV2Documents("client-a", "run-start")).toHaveLength(5);
 		expect(store.listAgentV2Tasks("client-a", "run-start")).toHaveLength(6);
-		expect(store.listAgentV2Artifacts("client-a", "run-start")).toHaveLength(4);
+		expect(store.listAgentV2Artifacts("client-a", "run-start")).toHaveLength(5);
 		expect(store.listAgentV2Diagnostics("client-a", "run-start")).toHaveLength(1);
 		expect(
 			store
@@ -59,7 +59,7 @@ describe("AgentV2RunApiService", () => {
 				.map((reference) => reference.kind)
 				.sort(),
 		).toEqual(["attachment", "project_file"]);
-		expect(wakeSnapshots).toEqual([{ runs: 1, documents: 4, tasks: 6, artifacts: 4, references: 2, events: 2 }]);
+		expect(wakeSnapshots).toEqual([{ runs: 1, documents: 5, tasks: 6, artifacts: 5, references: 2, events: 2 }]);
 
 		const intents = store.leaseAgentV2Outbox({
 			ownerId: "test",
@@ -93,6 +93,40 @@ describe("AgentV2RunApiService", () => {
 		expect(store.listAgentV2RunEvents("client-a", "run-wake-fail", 0)).toHaveLength(2);
 	});
 
+	it("builds and commits the product blueprint from normalized PM document bytes", async () => {
+		const store = createStore();
+		const service = createService(store);
+		const request = startRequest("run-blueprint-source");
+		request.input.projectFiles = [
+			{
+				filename: "docs/requirements.md",
+				content:
+					"# Quality Dashboard\n## Interaction\n- Customer filter must update KPI and charts.\n## Acceptance\n- Loading, empty, and error states are visible when applicable.",
+			},
+		];
+		request.input.attachments = [
+			{
+				type: "file",
+				fileName: "requirements.md",
+				mimeType: "text/markdown",
+				projectFilePath: "docs/requirements.md",
+			},
+		];
+
+		await service.startRun("client-a", request);
+
+		const document = store
+			.listAgentV2Documents("client-a", "run-blueprint-source")
+			.find((candidate) => candidate.kind === "product_blueprint");
+		expect(document?.contentJson).toMatchObject({
+			kind: "product_blueprint",
+			version: 1,
+			sourceDocuments: [expect.objectContaining({ path: "docs/requirements.md" })],
+			metadata: expect.objectContaining({ sourceDocumentCount: 1 }),
+		});
+		expect(JSON.stringify(document?.contentJson)).toContain("Customer filter must update KPI and charts.");
+	});
+
 	it("replays an identical runId without duplicates and conflicts on changed immutable bytes with zero writes", async () => {
 		const store = createStore();
 		const wakeDispatcher = vi.fn();
@@ -107,7 +141,7 @@ describe("AgentV2RunApiService", () => {
 		expect(replay).toEqual(first);
 		expect(store.listAgentV2Runs("client-a")).toHaveLength(1);
 		expect(store.listAgentV2RunEvents("client-a", "run-replay", 0)).toHaveLength(2);
-		expect(store.listAgentV2Documents("client-a", "run-replay")).toHaveLength(4);
+		expect(store.listAgentV2Documents("client-a", "run-replay")).toHaveLength(5);
 		expect(wakeDispatcher).toHaveBeenCalledTimes(2);
 
 		const before = snapshotCounts(store, "run-replay");
@@ -173,9 +207,9 @@ describe("AgentV2RunApiService", () => {
 		expect(snapshotCounts(store, "run-concurrent")).toMatchObject({
 			runs: 1,
 			references: 2,
-			documents: 4,
+			documents: 5,
 			tasks: 6,
-			artifacts: 4,
+			artifacts: 5,
 			diagnostics: 1,
 			events: 2,
 		});
@@ -221,9 +255,9 @@ describe("AgentV2RunApiService", () => {
 		expect(snapshotCounts(store, "run-concurrent-conflict")).toMatchObject({
 			runs: 1,
 			references: 2,
-			documents: 4,
+			documents: 5,
 			tasks: 6,
-			artifacts: 4,
+			artifacts: 5,
 			diagnostics: 1,
 			events: 2,
 		});

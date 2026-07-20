@@ -1,0 +1,59 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e5]:
+    - generic [ref=f1e6]:
+      - generic [ref=f1e7]:
+        - generic "AITC 平台标识" [ref=f1e8]:
+          - generic [ref=f1e9]: AT&S
+          - generic [ref=f1e10]: AITC
+        - generic [ref=f1e11]:
+          - button "新建会话" [ref=f1e12] [cursor=pointer]
+          - button "新建会话" [ref=f1e13]
+      - generic [ref=f1e14]:
+        - generic [ref=f1e15]:
+          - generic [ref=f1e16]: 对话
+          - combobox "Session mode" [ref=f1e17]:
+            - option "对话" [selected]
+            - option "应用生成"
+        - button [ref=f1e19] [cursor=pointer]
+        - button "设置" [ref=f1e20] [cursor=pointer]
+    - main [ref=f1e21]:
+      - navigation "Workspace tools" [ref=f1e22]:
+        - button "Files" [ref=f1e23] [cursor=pointer]
+        - button "Generated Apps" [ref=f1e28] [cursor=pointer]:
+          - generic [ref=f1e32]: APP
+      - generic [ref=f1e45]:
+        - textbox "输入消息..." [ref=f1e46]
+        - generic [ref=f1e47]:
+          - generic [ref=f1e48]:
+            - button [ref=f1e49] [cursor=pointer]
+            - combobox [ref=f1e50]:
+              - generic [ref=f1e51]: 关闭
+            - button "扩展" [ref=f1e63] [cursor=pointer]
+          - generic [ref=f1e65]:
+            - button "mimo-v2.5" [ref=f1e66] [cursor=pointer]
+            - button [disabled]
+  - generic [ref=f1e70]:
+    - generic [ref=f1e71]:
+      - heading "选择模型" [level=2] [ref=f1e73]
+      - textbox "搜索模型..." [active] [ref=f1e75]
+      - generic [ref=f1e76]:
+        - button [ref=f1e77] [cursor=pointer]
+        - button [ref=f1e79] [cursor=pointer]
+    - generic [ref=f1e81]:
+      - generic [ref=f1e82] [cursor=pointer]:
+        - generic [ref=f1e83]:
+          - generic [ref=f1e84]:
+            - generic [ref=f1e85]: mimo-v2.5
+            - generic [ref=f1e86]: ✓
+          - generic [ref=f1e87]: Test
+        - generic [ref=f1e88]:
+          - generic [ref=f1e89]: 128K/200
+          - generic [ref=f1e105]: 免费
+      - generic [ref=f1e106] [cursor=pointer]:
+        - generic [ref=f1e107]:
+          - generic [ref=f1e108]: mimo-v2.5
+          - generic [ref=f1e110]: mimo
+        - generic [ref=f1e111]:
+          - generic [ref=f1e112]: 1M/33K
+          - generic [ref=f1e128]: 免费
+    - button "关闭" [ref=f1e129] [cursor=pointer]

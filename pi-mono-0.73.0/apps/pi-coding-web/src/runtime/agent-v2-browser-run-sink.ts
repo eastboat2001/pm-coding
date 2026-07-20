@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type {
 	AgentV2Error,
 	AgentV2Phase,
+	AgentV2ResponseLanguage,
 	AgentV2RunStatus,
 	AgentV2RunTransportEvent,
 } from "@mariozechner/pi-web-workspace";
@@ -58,19 +59,27 @@ export interface AgentV2BrowserAgent {
 
 export interface AgentV2BrowserRunSinkOptions {
 	browserAgent: AgentV2BrowserAgent;
-	locale: () => string;
+	responseLanguage: AgentV2ResponseLanguage;
 	onPresentationChange: (presentation: AgentV2RunPresentation | undefined) => void;
+	onNarrationChange?: () => void;
+	narrationTypingIntervalMs?: number;
 	onPhaseProjected?: (runId: string, phase: AgentV2Phase, status: AgentV2RunStatus, at: string) => void;
 	onEventProjected?: (runId: string, event: AgentV2BrowserProjectedEvent) => void;
 }
 
 const TERMINAL_STATUSES = new Set<AgentV2RunStatus>(["succeeded", "failed", "cancelled", "interrupted"]);
+type NarrationMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 export function createAgentV2BrowserRunSink(options: AgentV2BrowserRunSinkOptions): AgentV2BrowserRunSink {
 	let activeRunId: string | undefined;
 	let startedAt: string | undefined;
+	let objective: string | undefined;
 	let presentationStore = createAgentV2RunPresentationStore();
 	let narrationState = createAgentV2NarrationState();
+	let narrationTimer: ReturnType<typeof setTimeout> | undefined;
+	let activeNarration: { message: NarrationMessage; length: number } | undefined;
+	let narrationQueue: NarrationMessage[] = [];
+	const narrationTypingIntervalMs = Math.max(0, options.narrationTypingIntervalMs ?? 0);
 
 	const publish = (action: AgentV2RunPresentationAction): AgentV2RunPresentation => {
 		presentationStore = reduceAgentV2RunPresentation(presentationStore, action);
@@ -93,28 +102,96 @@ export function createAgentV2BrowserRunSink(options: AgentV2BrowserRunSinkOption
 		return runId;
 	};
 
-	const narrate = (runId: string, event: AgentV2RunTransportEvent): void => {
-		const projection = projectAgentV2Narration(narrationState, { runId, locale: options.locale(), event });
+	const notifyNarrationChange = (): void => {
+		options.onNarrationChange?.();
+	};
+
+	const clearNarrationTimer = (): void => {
+		if (narrationTimer !== undefined) clearTimeout(narrationTimer);
+		narrationTimer = undefined;
+	};
+
+	const finishPendingNarration = (): void => {
+		clearNarrationTimer();
+		const state = options.browserAgent.state;
+		if (activeNarration) appendAssistantMessageOnce(state, activeNarration.message);
+		for (const message of narrationQueue) appendAssistantMessageOnce(state, message);
+		activeNarration = undefined;
+		narrationQueue = [];
+		state.streamingMessage = undefined;
+		notifyNarrationChange();
+	};
+
+	const typeNextNarrationFrame = (): void => {
+		narrationTimer = undefined;
+		if (!activeRunId) return;
+		if (!activeNarration) {
+			const message = narrationQueue.shift();
+			if (!message) return;
+			activeNarration = { message, length: 0 };
+		}
+		const current = activeNarration;
+		const text = assistantMessageText(current.message);
+		current.length = Math.min(text.length, current.length + 1);
+		options.browserAgent.state.streamingMessage = withAssistantText(current.message, text.slice(0, current.length));
+		notifyNarrationChange();
+		if (current.length >= text.length) {
+			appendAssistantMessageOnce(options.browserAgent.state, current.message);
+			activeNarration = undefined;
+			options.browserAgent.state.streamingMessage = undefined;
+			notifyNarrationChange();
+			if (narrationQueue.length > 0) narrationTimer = setTimeout(typeNextNarrationFrame, narrationTypingIntervalMs);
+			return;
+		}
+		narrationTimer = setTimeout(typeNextNarrationFrame, narrationTypingIntervalMs);
+	};
+
+	const enqueueNarration = (message: NarrationMessage): void => {
+		if (hasAssistantMessage(options.browserAgent.state.messages, message)) return;
+		if (narrationTypingIntervalMs === 0) {
+			appendAssistantMessageOnce(options.browserAgent.state, message);
+			notifyNarrationChange();
+			return;
+		}
+		narrationQueue.push(message);
+		if (!activeNarration && narrationTimer === undefined) typeNextNarrationFrame();
+	};
+
+	const narrate = (runId: string, event: AgentV2RunTransportEvent, artifactPaths: readonly string[] = []): void => {
+		const projection = projectAgentV2Narration(narrationState, {
+			runId,
+			locale: options.responseLanguage,
+			event,
+			...(objective ? { objective } : {}),
+			artifactPaths,
+		});
 		narrationState = projection.state;
 		if (!projection.candidate) return;
-		appendAssistantMessageOnce(
-			options.browserAgent.state,
-			narrationCandidateToAssistantMessage(projection.candidate),
-		);
+		enqueueNarration(narrationCandidateToAssistantMessage(projection.candidate));
 	};
 
 	const projectEvent = (action: AgentV2RunPresentationAction, event: AgentV2BrowserProjectedEvent): void => {
 		const runId = requireActiveRunId();
-		publish(action);
-		if (event.type === "agent_v2.output_recorded") narrate(runId, event);
+		const presentation = publish(action);
+		if (event.type === "agent_v2.output_recorded") {
+			narrate(
+				runId,
+				event,
+				Array.from(presentation.artifacts.values(), (artifact) => artifact.path),
+			);
+		} else if (event.type === "agent_v2.validation_recorded") {
+			narrate(runId, event);
+		}
 		options.onEventProjected?.(runId, event);
 	};
 
 	return {
-		beginRun(runId, at) {
+		beginRun(runId, at, runObjective) {
 			if (activeRunId) throw new Error(`Agent v2 browser run ${activeRunId} is already active in the sink.`);
+			finishPendingNarration();
 			activeRunId = runId;
 			startedAt = at;
+			objective = runObjective?.trim() || undefined;
 			presentationStore = createAgentV2RunPresentationStore();
 			narrationState = createAgentV2NarrationState();
 			const state = options.browserAgent.state;
@@ -122,6 +199,7 @@ export function createAgentV2BrowserRunSink(options: AgentV2BrowserRunSinkOption
 			state.streamingMessage = undefined;
 			state.pendingToolCalls = new Set<string>();
 			state.errorMessage = undefined;
+			narrate(runId, { type: "agent_v2.phase_changed", phase: "intake", status: "running", at });
 		},
 		setPhase(phase, status, at) {
 			const hadPresentation = activeRunId ? presentationStore.runs.has(activeRunId) : false;
@@ -177,9 +255,10 @@ export function createAgentV2BrowserRunSink(options: AgentV2BrowserRunSinkOption
 			});
 			const terminal = serializeAgentV2TerminalRunPresentation(presentationStore, runId);
 			const state = options.browserAgent.state;
+			finishPendingNarration();
 			state.messages = appendOrReplaceAgentV2RunResultMessage(
 				state.messages,
-				createAgentV2RunResultMessage(terminal),
+				createAgentV2RunResultMessage(terminal, options.responseLanguage),
 			);
 			state.isStreaming = false;
 			state.streamingMessage = undefined;
@@ -187,18 +266,19 @@ export function createAgentV2BrowserRunSink(options: AgentV2BrowserRunSinkOption
 			state.errorMessage = resolvedError?.message;
 			activeRunId = undefined;
 			startedAt = undefined;
+			objective = undefined;
 			options.onPresentationChange(undefined);
 		},
 	};
 }
 
-function appendAssistantMessageOnce(
-	state: AgentV2BrowserAgentState,
-	message: Extract<AgentMessage, { role: "assistant" }>,
-): void {
-	const text =
-		message.content.length === 1 && message.content[0]?.type === "text" ? message.content[0].text : undefined;
-	const duplicate = state.messages.some((candidate) => {
+function appendAssistantMessageOnce(state: AgentV2BrowserAgentState, message: NarrationMessage): void {
+	if (!hasAssistantMessage(state.messages, message)) state.messages = [...state.messages, message];
+}
+
+function hasAssistantMessage(messages: readonly AgentMessage[], message: NarrationMessage): boolean {
+	const text = assistantMessageText(message);
+	return messages.some((candidate) => {
 		if (candidate.role !== "assistant" || candidate.content.length !== 1 || candidate.content[0]?.type !== "text") {
 			return false;
 		}
@@ -210,7 +290,15 @@ function appendAssistantMessageOnce(
 			candidate.content[0].text === text
 		);
 	});
-	if (!duplicate) state.messages = [...state.messages, message];
+}
+
+function assistantMessageText(message: NarrationMessage): string {
+	const content = message.content[0];
+	return content?.type === "text" ? content.text : "";
+}
+
+function withAssistantText(message: NarrationMessage, text: string): NarrationMessage {
+	return { ...message, content: [{ type: "text", text }] };
 }
 
 function resolveTerminalError(

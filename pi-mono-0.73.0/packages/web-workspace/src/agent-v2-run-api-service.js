@@ -133,7 +133,11 @@ function buildStartCommitInput(payload, identity, queueName) {
         createdAt: identity.createdAt,
         updatedAt: identity.createdAt,
     };
-    const bootstrap = buildAgentV2PlanningBootstrap({ run: initialRun, now: () => identity.createdAt });
+    const bootstrap = buildAgentV2PlanningBootstrap({
+        run: initialRun,
+        inputBlobs: normalized.inputBlobs,
+        now: () => identity.createdAt,
+    });
     const planning = toAgentV2PlanningCommit(bootstrap);
     return {
         run: {

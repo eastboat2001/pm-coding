@@ -312,7 +312,7 @@ export interface AgentV2DeliveryReportPayload {
 	at: string;
 }
 
-export type AgentV2DocumentKind = "capability_decision" | "spec" | "plan" | "tasks";
+export type AgentV2DocumentKind = "capability_decision" | "product_blueprint" | "spec" | "plan" | "tasks";
 export type AgentV2CapabilityDeliveryMode =
 	| "static_app"
 	| "build_static_frontend"
@@ -393,6 +393,42 @@ export interface AgentV2CapabilityDecision {
 	metadata?: AgentV2DocumentMetadata;
 }
 
+export type AgentV2BlueprintCategory =
+	| "requirement"
+	| "page"
+	| "interaction"
+	| "state"
+	| "permission"
+	| "visual"
+	| "acceptance";
+
+export interface AgentV2ProductBlueprintItem {
+	id: string;
+	text: string;
+	sourceInputId: string;
+	sourcePath: string;
+	sourceChecksum: string;
+	line: number;
+	categories: AgentV2BlueprintCategory[];
+}
+
+export interface AgentV2ProductBlueprint {
+	kind: "product_blueprint";
+	version: 1;
+	title: string;
+	summary: string;
+	responseLanguage: string;
+	sourceDocuments: Array<{
+		inputId: string;
+		path: string;
+		checksum: string;
+		lineCount: number;
+	}>;
+	items: AgentV2ProductBlueprintItem[];
+	categoryItemIds: Record<AgentV2BlueprintCategory, string[]>;
+	metadata?: AgentV2DocumentMetadata;
+}
+
 export interface AgentV2PlatformContract {
 	runtime: string;
 	framework: string;
@@ -454,6 +490,7 @@ export interface AgentV2TaskGraph {
 
 export type AgentV2DocumentContent =
 	| AgentV2CapabilityDecision
+	| AgentV2ProductBlueprint
 	| AgentV2SpecDocument
 	| AgentV2PlanDocument
 	| AgentV2TaskGraph;

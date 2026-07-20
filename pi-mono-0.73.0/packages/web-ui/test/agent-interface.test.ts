@@ -52,6 +52,7 @@ describe("AgentInterface", () => {
 		const promptError = new Error("startRun failed");
 		const element = Object.create(AgentInterface.prototype) as InstanceType<typeof AgentInterface> & {
 			_messageEditor: typeof editor;
+			_promptErrorText: string;
 			requestUpdate: () => void;
 		};
 		Object.defineProperty(element, "session", {
@@ -73,6 +74,7 @@ describe("AgentInterface", () => {
 
 		expect(editor.value).toBe("resume work");
 		expect(editor.attachments).toEqual([attachment]);
+		expect(element._promptErrorText).toBe("startRun failed");
 	});
 
 	it("renders transient streaming status text before a message is available", async () => {
@@ -118,6 +120,42 @@ describe("AgentInterface", () => {
 		const template = element.render() as unknown as { values?: unknown[] };
 
 		expect(templateValues(template)).toContain("Retrying request... (2/5)");
+	});
+
+	it("renders an externally projected app-generation streaming message", async () => {
+		const { StreamingMessageContainer } = await import("../src/components/StreamingMessageContainer.js");
+		const externalMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "正在逐字说明实现过程" }],
+			api: "agent-v2",
+			provider: "agent-v2",
+			model: "event",
+		};
+		const element = Object.create(StreamingMessageContainer.prototype) as InstanceType<
+			typeof StreamingMessageContainer
+		> & {
+			_message: null;
+			externalMessage: typeof externalMessage;
+			isStreaming: boolean;
+			statusText: string;
+			tools: unknown[];
+			pendingToolCalls: Set<string>;
+			toolResultsById: Map<string, unknown>;
+		};
+		Object.defineProperties(element, {
+			_message: { configurable: true, value: null },
+			externalMessage: { configurable: true, value: externalMessage },
+			isStreaming: { configurable: true, value: true },
+			statusText: { configurable: true, value: "模型正在处理应用生成请求…" },
+			tools: { configurable: true, value: [] },
+			pendingToolCalls: { configurable: true, value: new Set<string>() },
+			toolResultsById: { configurable: true, value: new Map<string, unknown>() },
+		});
+
+		const template = element.render() as unknown as { values?: unknown[] };
+
+		expect(templateValues(template)).toContain(externalMessage);
+		expect(templateValues(template)).toContain("模型正在处理应用生成请求…");
 	});
 
 	it("renders app preview goal status separately from transient streaming status", async () => {

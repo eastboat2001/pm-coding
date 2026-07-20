@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { createAgentV2DiagnosticEvent } from "../src/agent-v2-diagnostics.js";
 import {
 	type AgentV2DurableCommitStore,
 	type AgentV2StartRunCommitInput,
@@ -185,6 +186,141 @@ describe("agent v2 durable commit and outbox store", () => {
 		expect(() =>
 			store.commitAgentV2RunStart({ ...startReplayInput(createdAt), queueName: "different-queue" }),
 		).toThrow("replay conflict");
+	});
+
+	it("atomically schedules an attempt-keyed durable retry that is unavailable before retryAt", () => {
+		const store = createStore();
+		const createdAt = "2026-07-13T10:50:00.000Z";
+		store.commitAgentV2RunStart(startReplayInput(createdAt));
+		const initialEnqueue = store.leaseAgentV2Outbox({
+			ownerId: "dispatcher-a",
+			kinds: ["run_enqueue"],
+			limit: 1,
+			now: createdAt,
+			leaseTtlMs: 30_000,
+		})[0]!;
+		store.markAgentV2OutboxDelivered({
+			intentId: initialEnqueue.intentId,
+			ownerId: "dispatcher-a",
+			leaseAttempt: initialEnqueue.attemptCount,
+			deliveredAt: "2026-07-13T10:50:00.100Z",
+		});
+		const queued = store.getAgentV2Run("client-a", "run-a")!;
+		const startedAt = "2026-07-13T10:50:01.000Z";
+		const started = store.commitAgentV2RunTransition({
+			expectedRun: expectedRunState(queued),
+			update: {
+				clientId: "client-a",
+				runId: "run-a",
+				expectedStatuses: ["queued"],
+				status: "running",
+				phase: "implementation",
+				workerId: "worker-a",
+				startedAt,
+				updatedAt: startedAt,
+			},
+			event: { type: "run_started", payload: {}, createdAt: startedAt },
+		}).update.run;
+		expect(() =>
+			store.commitAgentV2RunTransition({
+				expectedRun: expectedRunState(started),
+				update: {
+					clientId: "client-a",
+					runId: "run-a",
+					expectedStatuses: ["running"],
+					status: "queued",
+					updatedAt: "2026-07-13T10:50:01.250Z",
+				},
+				event: { type: "invalid_retry", payload: {}, createdAt: "2026-07-13T10:50:01.250Z" },
+			}),
+		).toThrow("commitAgentV2RunRetry");
+		const failedTask = store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-a",
+			taskId: "implementation",
+			kind: "implementation",
+			title: "Build app",
+			status: "failed",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			error: { code: "provider_timeout", message: "Provider timed out", retryable: true },
+			createdAt: startedAt,
+			updatedAt: "2026-07-13T10:50:01.500Z",
+		});
+		expect(store.getAgentV2Run("client-a", "run-a")).toEqual(started);
+		expect(store.listAgentV2Tasks("client-a", "run-a")).toEqual([failedTask]);
+		const scheduledAt = "2026-07-13T10:50:02.000Z";
+		const retryAt = "2026-07-13T10:50:12.000Z";
+		const diagnostic = createAgentV2DiagnosticEvent({
+			diagnosticId: "retry:run-a:2",
+			clientId: "client-a",
+			runId: "run-a",
+			severity: "warn",
+			category: "worker",
+			code: "agent_v2.run_retry_scheduled",
+			phase: "implementation",
+			message: "Retry scheduled",
+			data: { retryAt },
+			createdAt: scheduledAt,
+		});
+		const retry = store.commitAgentV2RunRetry({
+			clientId: "client-a",
+			runId: "run-a",
+			expectedRun: expectedRunState(started),
+			expectedTasks: [
+				{ taskId: failedTask.taskId, status: failedTask.status, updatedAt: failedTask.updatedAt },
+			],
+			tasks: [
+				{
+					...failedTask,
+					clientId: "client-a",
+					runId: "run-a",
+					status: "ready",
+					error: undefined,
+					updatedAt: scheduledAt,
+				},
+			],
+			phase: "implementation",
+			nextAttempt: 2,
+			maxAttempts: 4,
+			retryWindowMs: 15 * 60 * 1_000,
+			queueName: "agent-v2",
+			retryAt,
+			scheduledAt,
+			error: { code: "provider_timeout", message: "Provider timed out", retryable: true, data: { retryAt } },
+			diagnostic,
+		});
+
+		expect(retry.update).toMatchObject({ applied: true, run: { status: "queued", attempt: 2 } });
+		expect(retry.update.run.workerId).toBeUndefined();
+		expect(store.listAgentV2Tasks("client-a", "run-a")[0]).toMatchObject({
+			taskId: "implementation",
+			status: "ready",
+		});
+		expect(store.listAgentV2Tasks("client-a", "run-a")[0]?.error).toBeUndefined();
+		expect(retry.outboxIntentIds).toContain(
+			agentV2OutboxIntentId("run_enqueue:client-a:run-a:agent-v2:attempt:2"),
+		);
+		expect(
+			store.leaseAgentV2Outbox({
+				ownerId: "dispatcher-a",
+				kinds: ["run_enqueue"],
+				limit: 1,
+				now: "2026-07-13T10:50:11.999Z",
+				leaseTtlMs: 30_000,
+			}),
+		).toEqual([]);
+		expect(
+			store.leaseAgentV2Outbox({
+				ownerId: "dispatcher-a",
+				kinds: ["run_enqueue"],
+				limit: 1,
+				now: retryAt,
+				leaseTtlMs: 30_000,
+			})[0]?.reference,
+		).toEqual({ kind: "run_enqueue", queueName: "agent-v2", attempt: 2 });
 	});
 
 	it("compares every rich immutable start child and returns its exact intent set", () => {

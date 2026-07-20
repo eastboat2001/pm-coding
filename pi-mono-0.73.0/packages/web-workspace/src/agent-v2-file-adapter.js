@@ -52,11 +52,17 @@ export function createAgentV2FileAdapter(input) {
         },
         readFile(path) {
             try {
-                const result = files.handle({ ...context, command: "get", filename: path });
+                const result = files.readProjectFilePreview({
+                    ...context,
+                    filename: path,
+                    maxBytes: Number.MAX_SAFE_INTEGER,
+                });
                 return {
                     path: publicPath(typeof result.filename === "string" ? result.filename : path),
                     content: typeof result.content === "string" ? result.content : "",
                     truncated: Boolean(result.truncated),
+                    byteLength: result.size,
+                    checksum: `sha256:${result.hash}`,
                 };
             }
             catch (error) {

@@ -37,8 +37,12 @@ export const AGENT_V2_MODEL_RESULT_LIMITS = Object.freeze({
 
 export const AGENT_V2_REPAIR_WORKSPACE_LIMITS = Object.freeze({
 	maxFiles: 32,
-	maxFileBytes: 24_000,
-	maxTotalBytes: 96_000,
+	// These are context budgets, not source-file size limits. Larger source files
+	// are represented by bounded excerpts and repaired through checksum-bound
+	// patches instead of being rejected before the model is called.
+	maxContextBytesPerFile: 65_536,
+	maxTotalContextBytes: 96_000,
+	maxPatches: 64,
 } as const);
 
 export type AgentV2ModelContractErrorCode =
@@ -49,6 +53,7 @@ export type AgentV2ModelContractErrorCode =
 	| "unsafe_path"
 	| "duplicate_path"
 	| "limit_exceeded"
+	| "repair_workspace_limit_exceeded"
 	| "prompt_invalid"
 	| "prompt_limit_exceeded";
 
@@ -60,6 +65,7 @@ const ERROR_MESSAGES: Readonly<Record<AgentV2ModelContractErrorCode, string>> = 
 	unsafe_path: "Agent v2 model result contains an unsafe output path.",
 	duplicate_path: "Agent v2 model result contains colliding output paths.",
 	limit_exceeded: "Agent v2 model result exceeds a configured safety limit.",
+	repair_workspace_limit_exceeded: "Agent v2 repair workspace exceeds a configured safety limit.",
 	prompt_invalid: "Agent v2 model prompt input is invalid.",
 	prompt_limit_exceeded: "Agent v2 model prompt exceeds a configured safety limit.",
 });
@@ -100,7 +106,15 @@ export interface AgentV2RepairResult {
 	taskId: string;
 	summary: string;
 	files: AgentV2GeneratedFile[];
+	patches?: AgentV2RepairPatch[];
 	addressedDiagnosticIds: string[];
+}
+
+export interface AgentV2RepairPatch {
+	path: string;
+	expectedChecksum: string;
+	oldText: string;
+	newText: string;
 }
 
 export interface AgentV2ModelExecutionEnvelope<T> {
@@ -141,6 +155,8 @@ export interface AgentV2RepairWorkspaceFile {
 	checksum: string;
 	byteLength: number;
 	content: string;
+	contentMode?: "full" | "excerpt";
+	contentByteLength?: number;
 }
 
 export interface AgentV2RepairModelExecutionInput extends AgentV2ModelExecutionInput {
@@ -157,7 +173,9 @@ export interface AgentV2ModelExecution {
 
 const IMPLEMENTATION_FIELDS = new Set(["version", "taskId", "summary", "files"]);
 const REPAIR_FIELDS = new Set(["version", "taskId", "summary", "files", "addressedDiagnosticIds"]);
+const REPAIR_PATCH_FIELDS = new Set(["version", "taskId", "summary", "files", "patches", "addressedDiagnosticIds"]);
 const FILE_FIELDS = new Set(["path", "content"]);
+const PATCH_FIELDS = new Set(["path", "expectedChecksum", "oldText", "newText"]);
 const BLOCKED_PATH_SEGMENTS = new Set([".git", ".pi", ".codex", ".superpowers", "node_modules", "agent-v2"]);
 const INTERNAL_PROJECT_FILES = new Set([".pi-project.json", ".pi-project-files.json"]);
 const INVALID_PATH_COMPONENT_CHARACTERS = /[<>:"|?*\u0000-\u001f\u007f]/u;
@@ -173,7 +191,8 @@ export function parseAgentV2ImplementationResult(text: string, expectedTaskId: s
 export function parseAgentV2RepairResult(text: string, expectedTaskId: string): AgentV2RepairResult {
 	const taskId = requireStableIdentifier(expectedTaskId);
 	const value = parseResponseObject(text);
-	assertExactFields(value, REPAIR_FIELDS);
+	const hasPatches = Object.hasOwn(value, "patches");
+	assertExactFields(value, hasPatches ? REPAIR_PATCH_FIELDS : REPAIR_FIELDS);
 	const addressedDiagnosticIds = requireArray(value.addressedDiagnosticIds);
 	if (
 		addressedDiagnosticIds.length === 0 ||
@@ -182,6 +201,16 @@ export function parseAgentV2RepairResult(text: string, expectedTaskId: string): 
 		throw new AgentV2ModelContractError("limit_exceeded");
 	}
 	const common = parseCommonResult(value, taskId, true);
+	const patches = hasPatches ? parseRepairPatches(value.patches) : [];
+	if (common.files.length === 0 && patches.length === 0) {
+		throw new AgentV2ModelContractError("invalid_schema");
+	}
+	const changedPathKeys = new Set(common.files.map((file) => file.path.toLocaleLowerCase("en-US")));
+	for (const patch of patches) {
+		const key = patch.path.toLocaleLowerCase("en-US");
+		if (changedPathKeys.has(key)) throw new AgentV2ModelContractError("duplicate_path");
+		changedPathKeys.add(key);
+	}
 	const seen = new Set<string>();
 	const parsedIds = addressedDiagnosticIds.map((candidate) => {
 		const diagnosticId = requireStableIdentifier(candidate);
@@ -189,7 +218,35 @@ export function parseAgentV2RepairResult(text: string, expectedTaskId: string): 
 		seen.add(diagnosticId);
 		return diagnosticId;
 	});
-	return { ...common, addressedDiagnosticIds: parsedIds };
+	return { ...common, ...(hasPatches ? { patches } : {}), addressedDiagnosticIds: parsedIds };
+}
+
+function parseRepairPatches(value: unknown): AgentV2RepairPatch[] {
+	const rawPatches = requireArray(value);
+	if (rawPatches.length > AGENT_V2_REPAIR_WORKSPACE_LIMITS.maxPatches) {
+		throw new AgentV2ModelContractError("limit_exceeded");
+	}
+	return rawPatches.map((candidate) => {
+		const patch = requireRecord(candidate);
+		assertExactFields(patch, PATCH_FIELDS);
+		const path = normalizeGeneratedPath(patch.path);
+		const expectedChecksum = inspectBoundedScalarText(patch.expectedChecksum, 80, "invalid_identifier").text;
+		if (!/^sha256:[a-f0-9]{64}$/u.test(expectedChecksum)) {
+			throw new AgentV2ModelContractError("invalid_identifier");
+		}
+		const oldText = inspectBoundedScalarText(
+			patch.oldText,
+			AGENT_V2_REPAIR_WORKSPACE_LIMITS.maxContextBytesPerFile,
+			"limit_exceeded",
+		).text;
+		if (oldText.length === 0) throw new AgentV2ModelContractError("invalid_schema");
+		const newText = inspectBoundedScalarText(
+			patch.newText,
+			AGENT_V2_MODEL_RESULT_LIMITS.maxFileContentChars,
+			"limit_exceeded",
+		).text;
+		return { path, expectedChecksum, oldText, newText };
+	});
 }
 
 function parseResponseObject(text: string): Record<string, unknown> {
@@ -198,20 +255,62 @@ function parseResponseObject(text: string): Record<string, unknown> {
 	}
 	const trimmed = text.trim();
 	if (!trimmed) throw new AgentV2ModelContractError("invalid_protocol");
-	let jsonSource = trimmed;
-	if (trimmed.startsWith("```")) {
-		const match = /^```json\r?\n([\s\S]*)\r?\n```$/u.exec(trimmed);
-		if (!match) throw new AgentV2ModelContractError("invalid_protocol");
-		jsonSource = match[1] ?? "";
+	for (const jsonSource of responseJsonCandidates(trimmed)) {
+		try {
+			const parsed: unknown = JSON.parse(jsonSource);
+			if (isRecord(parsed) && Object.getPrototypeOf(parsed) === Object.prototype) return parsed;
+		} catch {
+			// Continue to the next safely bounded object candidate.
+		}
 	}
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(jsonSource);
-	} catch {
-		throw new AgentV2ModelContractError("invalid_protocol");
+	throw new AgentV2ModelContractError("invalid_protocol");
+}
+
+function responseJsonCandidates(source: string): string[] {
+	const candidates = [source];
+	const fenced = /^```json\s*\r?\n([\s\S]*?)\r?\n```$/iu.exec(source);
+	if (fenced?.[1]) candidates.push(fenced[1].trim());
+	const object = singleBalancedJsonObjectCandidate(source);
+	if (object && !candidates.includes(object)) candidates.push(object);
+	return candidates;
+}
+
+function singleBalancedJsonObjectCandidate(source: string): string | undefined {
+	let start = -1;
+	let candidateStart = -1;
+	let candidateEnd = -1;
+	let candidateCount = 0;
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = 0; index < source.length; index += 1) {
+		const character = source[index];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (character === "\\") escaped = true;
+			else if (character === '"') inString = false;
+			continue;
+		}
+		if (character === '"') {
+			inString = true;
+			continue;
+		}
+		if (character === "{") {
+			if (depth === 0) start = index;
+			depth += 1;
+			continue;
+		}
+		if (character !== "}" || depth === 0) continue;
+		depth -= 1;
+		if (depth === 0 && start >= 0) {
+			candidateCount += 1;
+			if (candidateCount > 1) return undefined;
+			candidateStart = start;
+			candidateEnd = index + 1;
+			start = -1;
+		}
 	}
-	const record = requireRecord(parsed);
-	return record;
+	return candidateCount === 1 ? source.slice(candidateStart, candidateEnd) : undefined;
 }
 
 function parseCommonResult(

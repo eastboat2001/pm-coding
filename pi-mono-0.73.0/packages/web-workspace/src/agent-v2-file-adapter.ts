@@ -39,7 +39,13 @@ export interface AgentV2FileWriteResult {
 
 export interface AgentV2FileAdapter {
 	listFiles(): { files: string[] };
-	readFile(path: string): { path: string; content: string; truncated: boolean };
+	readFile(path: string): {
+		path: string;
+		content: string;
+		truncated: boolean;
+		byteLength: number;
+		checksum: string;
+	};
 	validateWritePath(path: string): string;
 	writeFile(input: {
 		path: string;
@@ -117,11 +123,17 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 		},
 		readFile(path) {
 			try {
-				const result = files.handle({ ...context, command: "get", filename: path });
+				const result = files.readProjectFilePreview({
+					...context,
+					filename: path,
+					maxBytes: Number.MAX_SAFE_INTEGER,
+				});
 				return {
 					path: publicPath(typeof result.filename === "string" ? result.filename : path),
 					content: typeof result.content === "string" ? result.content : "",
 					truncated: Boolean(result.truncated),
+					byteLength: result.size,
+					checksum: `sha256:${result.hash}`,
 				};
 			} catch (error) {
 				return mapError(error, path);

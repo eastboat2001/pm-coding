@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createAgentV2DiagnosticEvent } from "./agent-v2-diagnostics.js";
 import { runAgentV2ShutdownSteps, } from "./agent-v2-lifecycle.js";
+import { phaseForAgentV2Task } from "./agent-v2-state-machine.js";
+import { transitionAgentV2Task } from "./agent-v2-task-engine.js";
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
 const DEFAULT_CANCEL_POLL_INTERVAL_MS = 50;
 const DEFAULT_CONTROL_OPERATION_TIMEOUT_MS = 1_000;
@@ -9,8 +11,22 @@ const DEFAULT_IDLE_SLEEP_MS = 25;
 const DEFAULT_MAX_IDLE_SLEEP_MS = 1_000;
 const DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_STEPS_PER_RUN = 256;
+const DEFAULT_MAX_RUN_ATTEMPTS = 4;
+const DEFAULT_RUN_RETRY_WINDOW_MS = 15 * 60 * 1_000;
+const DEFAULT_RUN_RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
+const DEFAULT_QUEUE_NAME = "agent-v2-runs";
 const MAX_OWNERSHIP_CONFIRMATION_ATTEMPTS = 3;
 const OWNERSHIP_CONTROL_ABORT_REASON = Symbol("agent-v2-ownership-control");
+export class AgentV2WorkerExecutionFailure extends Error {
+    code;
+    retryable;
+    constructor(code, message, retryable) {
+        super(message);
+        this.code = code;
+        this.retryable = retryable;
+        this.name = "AgentV2WorkerExecutionFailure";
+    }
+}
 export class AgentV2WorkerService {
     activeAbortControllers = new Map();
     activeClaims = new Map();
@@ -27,9 +43,13 @@ export class AgentV2WorkerService {
     maintenanceAbortController;
     maintenanceLoop;
     maxStepsPerRun;
+    maxRunAttempts;
     maxIdleSleepMs;
     now;
     queue;
+    queueName;
+    runRetryDelaysMs;
+    runRetryWindowMs;
     running = false;
     store;
     stopping = false;
@@ -50,6 +70,22 @@ export class AgentV2WorkerService {
         this.maxIdleSleepMs = Math.max(this.idleSleepMs, options.maxIdleSleepMs ?? DEFAULT_MAX_IDLE_SLEEP_MS);
         this.leaseHeartbeatIntervalMs = Math.max(1, options.leaseHeartbeatIntervalMs ?? DEFAULT_LEASE_HEARTBEAT_INTERVAL_MS);
         this.maxStepsPerRun = options.maxStepsPerRun ?? DEFAULT_MAX_STEPS_PER_RUN;
+        this.maxRunAttempts = options.maxRunAttempts ?? DEFAULT_MAX_RUN_ATTEMPTS;
+        this.runRetryWindowMs = options.runRetryWindowMs ?? DEFAULT_RUN_RETRY_WINDOW_MS;
+        this.runRetryDelaysMs = options.runRetryDelaysMs ?? DEFAULT_RUN_RETRY_DELAYS_MS;
+        this.queueName = options.queueName ?? DEFAULT_QUEUE_NAME;
+        if (!Number.isSafeInteger(this.maxRunAttempts) || this.maxRunAttempts < 1) {
+            throw new Error("Agent v2 maxRunAttempts must be a positive integer");
+        }
+        if (!Number.isSafeInteger(this.runRetryWindowMs) || this.runRetryWindowMs <= 0) {
+            throw new Error("Agent v2 runRetryWindowMs must be a positive integer");
+        }
+        if (!this.queueName.trim())
+            throw new Error("Agent v2 queueName is required");
+        if (this.runRetryDelaysMs.length === 0 ||
+            this.runRetryDelaysMs.some((delay) => !Number.isSafeInteger(delay) || delay < 0)) {
+            throw new Error("Agent v2 runRetryDelaysMs must contain non-negative integers");
+        }
     }
     async start() {
         if (this.running)
@@ -141,6 +177,10 @@ export class AgentV2WorkerService {
             }
             if (run.status !== "queued")
                 return true;
+            if (run.error?.data?.autoRetryScheduled === true && isRetryWaiting(run, this.now())) {
+                safelyCompleteClaim = true;
+                return true;
+            }
             const running = await this.transitionRun(run, {
                 status: "running",
                 workerId: this.workerId,
@@ -153,7 +193,7 @@ export class AgentV2WorkerService {
             }
             await this.executeClaimedRun(running.run, claimed);
             const durable = await this.store.getAgentV2Run(claimed.clientId, claimed.runId);
-            safelyCompleteClaim = durable !== undefined && isTerminalRun(durable.status);
+            safelyCompleteClaim = durable !== undefined && (isTerminalRun(durable.status) || durable.status === "queued");
             return true;
         }
         finally {
@@ -168,8 +208,8 @@ export class AgentV2WorkerService {
         }
     }
     async recoverOwnedRuns() {
+        await this.recoverOwnedDurableRuns();
         await this.queue.requeueActive(this.workerId);
-        await this.markOwnedRunsInterrupted();
         await this.recoverExpiredClaims();
     }
     async appendDiagnostic(run, code, message, retryable) {
@@ -340,7 +380,7 @@ export class AgentV2WorkerService {
                     const message = rootCause
                         ? `Agent v2 task graph is blocked: ${rootCause}`
                         : "Agent v2 task graph is blocked.";
-                    await this.failRun(terminal, "agent_v2.worker_task_blocked", message);
+                    await this.failRun(terminal, "agent_v2.worker_task_blocked", message, step.blockingError?.retryable ?? false);
                     return;
                 }
                 if (step.status === "no_task") {
@@ -379,8 +419,14 @@ export class AgentV2WorkerService {
             }
             else {
                 const terminal = await this.prepareOwnedTerminal(control, latest);
-                if (terminal)
-                    await this.failRun(terminal, "agent_v2.worker_execution_failed", errorMessage(error));
+                if (terminal) {
+                    if (error instanceof AgentV2WorkerExecutionFailure) {
+                        await this.failRun(terminal, error.code, error.message, error.retryable);
+                    }
+                    else {
+                        await this.failRun(terminal, "agent_v2.worker_execution_failed", errorMessage(error));
+                    }
+                }
             }
         }
         finally {
@@ -606,7 +652,86 @@ export class AgentV2WorkerService {
             return;
         control.pendingDiagnostics.push({ code, message, retryable });
     }
+    async scheduleRunRetry(run, code, message) {
+        if (run.status !== "running" || run.attempt >= this.maxRunAttempts || !this.store.commitAgentV2RunRetry) {
+            return false;
+        }
+        const scheduledAt = monotonicRevision(this.now(), run.updatedAt);
+        const retryDelayIndex = Math.min(run.attempt - 1, this.runRetryDelaysMs.length - 1);
+        const retryAt = new Date(Date.parse(scheduledAt) + this.runRetryDelaysMs[retryDelayIndex]).toISOString();
+        const retryDeadline = Date.parse(run.startedAt ?? run.createdAt) + this.runRetryWindowMs;
+        if (Date.parse(retryAt) > retryDeadline)
+            return false;
+        const allTasks = this.store.listAgentV2Tasks
+            ? await this.store.listAgentV2Tasks(run.clientId, run.runId)
+            : [];
+        const retryableFailedTasks = allTasks.filter((task) => task.status === "failed" && task.error?.retryable === true);
+        if ((run.phase === "failed" || code === "agent_v2.worker_task_blocked") && retryableFailedTasks.length === 0) {
+            return false;
+        }
+        const resetTasks = retryableFailedTasks.map((task) => transitionAgentV2Task({ task, status: "ready", now: scheduledAt, output: task.output }));
+        const phase = resetTasks[0] ? phaseForAgentV2Task(resetTasks[0], "ready") : run.phase;
+        const nextAttempt = run.attempt + 1;
+        const diagnostic = createAgentV2DiagnosticEvent({
+            diagnosticId: `agent_v2.run_retry_scheduled:${run.runId}:${nextAttempt}`,
+            clientId: run.clientId,
+            runId: run.runId,
+            severity: "warn",
+            category: "worker",
+            code: "agent_v2.run_retry_scheduled",
+            phase,
+            message: "Agent v2 scheduled a durable automatic retry.",
+            data: {
+                failureCode: code,
+                failureMessage: message,
+                retryAt,
+                attempt: nextAttempt,
+                maxAttempts: this.maxRunAttempts,
+            },
+            createdAt: scheduledAt,
+        });
+        const committed = await this.store.commitAgentV2RunRetry({
+            clientId: run.clientId,
+            runId: run.runId,
+            expectedRun: {
+                status: run.status,
+                phase: run.phase,
+                attempt: run.attempt,
+                workerId: run.workerId ?? null,
+                updatedAt: run.updatedAt,
+            },
+            expectedTasks: retryableFailedTasks.map((task) => ({
+                taskId: task.taskId,
+                status: task.status,
+                updatedAt: task.updatedAt,
+            })),
+            tasks: resetTasks.map((task) => retryTaskInput(run, task)),
+            phase,
+            nextAttempt,
+            maxAttempts: this.maxRunAttempts,
+            retryWindowMs: this.runRetryWindowMs,
+            queueName: this.queueName,
+            retryAt,
+            scheduledAt,
+            error: {
+                code,
+                message,
+                retryable: true,
+                data: {
+                    autoRetryScheduled: true,
+                    retryAt,
+                    attempt: nextAttempt,
+                    maxAttempts: this.maxRunAttempts,
+                },
+            },
+            diagnostic,
+        });
+        return committed.update.applied ||
+            (committed.update.run.status === "queued" && committed.update.run.attempt >= nextAttempt);
+    }
     async failRun(run, code, message, retryable = false) {
+        if (retryable && (await this.scheduleRunRetry(run, code, message)))
+            return;
         const failed = await this.transitionRun(run, {
             status: "failed",
             phase: "failed",
@@ -645,6 +770,18 @@ export class AgentV2WorkerService {
             await this.interruptRun(run);
         }
     }
+    async recoverOwnedDurableRuns() {
+        for (const run of await this.store.listAgentV2RunsByWorker(this.workerId)) {
+            if (run.status === "cancelling") {
+                await this.interruptRun(run);
+                continue;
+            }
+            if (await this.scheduleRunRetry(run, "agent_v2.worker_restarted", "Agent v2 worker restarted before the run completed.")) {
+                continue;
+            }
+            await this.interruptRun(run);
+        }
+    }
     async recoverExpiredClaims(signal) {
         for (const claim of await this.queue.requeueExpiredClaims()) {
             if (signal?.aborted)
@@ -658,6 +795,10 @@ export class AgentV2WorkerService {
             if (run.status === "queued")
                 continue;
             if (run.status === "running" || run.status === "cancelling") {
+                if (run.status === "running" &&
+                    (await this.scheduleRunRetry(run, "agent_v2.worker_claim_expired", "Agent v2 worker claim expired before the run completed."))) {
+                    continue;
+                }
                 await this.interruptRun(run);
             }
         }
@@ -812,6 +953,29 @@ function monotonicRevision(candidate, current) {
 }
 function isTerminalRun(status) {
     return status === "succeeded" || status === "failed" || status === "cancelled" || status === "interrupted";
+}
+function isRetryWaiting(run, now) {
+    if (run.status !== "queued" || run.error?.data?.autoRetryScheduled !== true)
+        return false;
+    const retryAt = run.error.data.retryAt;
+    return typeof retryAt === "string" && Date.parse(retryAt) > Date.parse(now);
+}
+function retryTaskInput(run, task) {
+    return {
+        clientId: run.clientId,
+        runId: run.runId,
+        taskId: task.taskId,
+        ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
+        kind: task.kind,
+        title: task.title,
+        status: task.status,
+        dependsOn: task.dependsOn,
+        acceptanceCriteria: task.acceptanceCriteria,
+        input: task.input,
+        output: task.output,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+    };
 }
 function isControlUnsafe(control) {
     return control.unsafe || control.ownership === "lost";

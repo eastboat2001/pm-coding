@@ -37,6 +37,7 @@ describe("agent v2 planning bootstrap", () => {
 
 		expect(store.listAgentV2Documents("client-a", "run-v2-plan").map((doc) => doc.documentId)).toEqual([
 			"capability_decision",
+			"product_blueprint",
 			"spec",
 			"plan",
 			"tasks",
@@ -51,6 +52,7 @@ describe("agent v2 planning bootstrap", () => {
 		]);
 		expect(store.listAgentV2Artifacts("client-a", "run-v2-plan").map((artifact) => artifact.path)).toEqual([
 			"agent-v2/capability-decision.json",
+			"agent-v2/product-blueprint.md",
 			"agent-v2/spec.md",
 			"agent-v2/plan.md",
 			"agent-v2/tasks.json",
@@ -85,12 +87,14 @@ describe("agent v2 planning bootstrap", () => {
 		await expect(persistAgentV2PlanningBootstrap(store, bootstrap)).resolves.toMatchObject({
 			documents: expect.arrayContaining([
 				expect.objectContaining({ documentId: "capability_decision" }),
+				expect.objectContaining({ documentId: "product_blueprint" }),
 				expect.objectContaining({ documentId: "spec" }),
 				expect.objectContaining({ documentId: "plan" }),
 				expect.objectContaining({ documentId: "tasks" }),
 			]),
 			artifacts: expect.arrayContaining([
 				expect.objectContaining({ artifactId: "capability_decision" }),
+				expect.objectContaining({ artifactId: "product_blueprint", sourceTaskId: "spec" }),
 				expect.objectContaining({ artifactId: "spec" }),
 				expect.objectContaining({ artifactId: "plan" }),
 				expect.objectContaining({ artifactId: "tasks", sourceTaskId: "plan" }),
@@ -120,7 +124,7 @@ describe("agent v2 planning bootstrap", () => {
 		);
 
 		expect(first).toMatchObject({
-			bootstrapVersion: "agent-v2-planning-v1",
+			bootstrapVersion: "agent-v2-planning-v2",
 			documents: bootstrap.documents,
 			tasks: bootstrap.tasks,
 			artifacts: bootstrap.artifacts,

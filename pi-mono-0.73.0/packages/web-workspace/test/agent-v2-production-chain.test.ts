@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import { executeAgentV2NextTask } from "../src/agent-v2-execution-core.js";
+import { createAgentV2FileAdapter } from "../src/agent-v2-file-adapter.js";
 import {
 	AgentV2InputMaterializationError,
 	type AgentV2InputMaterializer,
@@ -101,7 +102,10 @@ describe("agent v2 production chain rehearsal", () => {
 		await deliverPendingRunEnqueue(runtimeDb, queue, "2026-07-09T00:00:01.500Z");
 
 		await expect(worker.processOne()).resolves.toBe(true);
-		expect(await api.getRun(CLIENT_ID, "run-production-chain")).toMatchObject({
+		const completedRun = await api.getRun(CLIENT_ID, "run-production-chain");
+		if (!completedRun) throw new Error("Expected the production chain run to exist.");
+		expect(completedRun.error).toBeUndefined();
+		expect(completedRun).toMatchObject({
 			status: "succeeded",
 			phase: "delivery",
 			workerId: "worker-production-chain",
@@ -232,6 +236,83 @@ describe("agent v2 production chain rehearsal", () => {
 		expect(reset.runsDeleted).toBe(1);
 		expect(await api.listRuns(CLIENT_ID)).toEqual([]);
 		expect(await eventLog.list(CLIENT_ID, "run-production-chain", 0)).toEqual([]);
+	});
+
+	it.each([
+		{
+			id: "interactive-demo",
+			title: "Interactive Demo",
+			objective: "Build a small interactive counter demo",
+			marker: "demo-counter",
+			html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Counter Demo</title></head><body><main id="demo-counter"><h1>Counter Demo</h1><output id="value">0</output><button id="increment" type="button">Increment</button></main><script>const value=document.querySelector('#value');document.querySelector('#increment').addEventListener('click',()=>{value.textContent=String(Number(value.textContent)+1)});</script></body></html>`,
+		},
+		{
+			id: "visualization",
+			title: "Visualization",
+			objective: "Build a responsive sales visualization",
+			marker: "sales-chart",
+			html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sales Visualization</title><style>body{font-family:sans-serif;margin:2rem;background:#f6f8fb}svg{max-width:100%;background:white;border-radius:16px}rect{fill:#6366f1}</style></head><body><main id="sales-chart"><h1>Quarterly Sales</h1><svg viewBox="0 0 640 320" role="img" aria-label="Quarterly sales bar chart"><rect x="70" y="180" width="80" height="100"/><rect x="210" y="120" width="80" height="160"/><rect x="350" y="70" width="80" height="210"/><rect x="490" y="30" width="80" height="250"/></svg></main></body></html>`,
+		},
+		{
+			id: "dashboard",
+			title: "Operations Dashboard",
+			objective: "Build an operations dashboard with KPIs and a filterable table",
+			marker: "operations-dashboard",
+			html: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Operations Dashboard</title><style>body{font-family:sans-serif;margin:0;background:#f3f4f6;color:#111827}main{padding:24px}.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.card,table{background:white;border-radius:12px;padding:16px}table{width:100%;margin-top:20px}td,th{text-align:left;padding:10px}@media(max-width:640px){.cards{grid-template-columns:1fr}}</style></head><body><main id="operations-dashboard"><h1>Operations Dashboard</h1><label>Filter orders <input id="filter" type="search"></label><section class="cards"><article class="card"><strong>Revenue</strong><p>$84,200</p></article><article class="card"><strong>Orders</strong><p>1,284</p></article><article class="card"><strong>On-time</strong><p>96.8%</p></article></section><table><thead><tr><th>Order</th><th>Status</th></tr></thead><tbody><tr><td>Northwind</td><td>Ready</td></tr><tr><td>Contoso</td><td>Review</td></tr></tbody></table></main><script>const input=document.querySelector('#filter');const rows=[...document.querySelectorAll('tbody tr')];input.addEventListener('input',()=>{const query=input.value.toLowerCase();for(const row of rows)row.hidden=!row.textContent.toLowerCase().includes(query)});</script></body></html>`,
+		},
+		{
+			id: "canvas-game",
+			title: "Canvas Game",
+			objective: "Build a small Canvas snake game demo",
+			marker: "snake-game",
+			html: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>贪吃蛇</title><style>body{font-family:sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#0f172a;color:white}canvas{background:#111827;border:2px solid #34d399;border-radius:16px}</style></head><body><main id="snake-game"><h1>贪吃蛇</h1><canvas id="board" width="480" height="320"></canvas><p>使用方向键移动</p></main><script>const canvas=document.querySelector('#board');const ctx=canvas.getContext('2d');ctx.fillStyle='#34d399';ctx.beginPath();ctx.moveTo(48,40);ctx.arcTo(72,40,72,64,10);ctx.quadraticCurveTo(72,72,64,72);ctx.lineTo(48,72);ctx.closePath();ctx.fill();ctx.fillStyle='#f43f5e';ctx.beginPath();ctx.arc(320,160,9,0,Math.PI*2);ctx.fill();</script></body></html>`,
+		},
+	])("generates and delivers the $id project through the full worker chain", async (fixture) => {
+		const runId = `run-generation-${fixture.id}`;
+		const sessionId = `session-generation-${fixture.id}`;
+		const eventLog = new AgentV2RunEventLog({ store: runtimeDb });
+		const queue = new LocalAgentV2RunQueue();
+		const model = new MatrixModelExecution(fixture.html);
+		const api = new AgentV2RunApiService({
+			store: runtimeDb,
+			events: eventLog,
+			queueName: `agent-v2-generation-${fixture.id}`,
+			createRunId: () => runId,
+			now: timestampSequence("2026-07-09T01:00:00.000Z", "2026-07-09T01:00:01.000Z"),
+		});
+		const worker = new AgentV2WorkerService({
+			store: runtimeDb,
+			queue,
+			events: eventLog,
+			execution: new ProductionExecution(config, runtimeDb, new DurableAgentV2InputMaterializer(runtimeDb), model),
+			workerId: `worker-generation-${fixture.id}`,
+			now: timestampSequence("2026-07-09T01:00:02.000Z", "2026-07-09T01:00:03.000Z"),
+		});
+
+		await api.startRun(CLIENT_ID, {
+			input: { objective: fixture.objective, sessionId, title: fixture.title },
+			model: { provider: "test", id: "v2-test-model" },
+		});
+		await deliverPendingRunEnqueue(runtimeDb, queue, "2026-07-09T01:00:01.500Z");
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		const completedRun = await api.getRun(CLIENT_ID, runId);
+		if (!completedRun) throw new Error(`Expected ${runId} to exist.`);
+		expect(completedRun.error).toBeUndefined();
+		expect(completedRun).toMatchObject({ status: "succeeded", phase: "delivery" });
+		const generated = createAgentV2FileAdapter({
+			config,
+			context: { clientId: CLIENT_ID, sessionId, title: fixture.title },
+		}).readFile("index.html");
+		expect(generated.truncated).toBe(false);
+		expect(generated.content).toContain(fixture.marker);
+		expect(runtimeDb.listAgentV2Validations(CLIENT_ID, runId)).toEqual([
+			expect.objectContaining({ status: "passed", attempt: 1 }),
+		]);
+		expect((await eventLog.list(CLIENT_ID, runId, 0)).map((event) => event.type)).toContain(
+			"agent_v2.delivery_reported",
+		);
+		expect(model.repairCalls).toBe(0);
 	});
 
 	it("records a sanitized non-retryable worker diagnostic and never calls the model when materialization fails", async () => {
@@ -418,6 +499,30 @@ class RecordingModelExecution {
 	}
 }
 
+class MatrixModelExecution implements AgentV2ModelExecution {
+	repairCalls = 0;
+
+	constructor(private readonly html: string) {}
+
+	async generateImplementation(input: AgentV2ModelExecutionInput) {
+		return {
+			result: {
+				version: 1 as const,
+				taskId: input.task.taskId,
+				summary: "Generated a validated static application.",
+				files: [{ path: "index.html", content: this.html }],
+			},
+			provider: "test",
+			model: "v2-test-model",
+		};
+	}
+
+	async generateRepair(_input: AgentV2RepairModelExecutionInput): Promise<never> {
+		this.repairCalls += 1;
+		throw new Error("Generation matrix fixtures must pass validation without repair.");
+	}
+}
+
 class ProductionExecution {
 	constructor(
 		private readonly config: ReturnType<typeof loadStorageConfig>,
@@ -434,6 +539,9 @@ class ProductionExecution {
 			runId: input.run.runId,
 			materializer: this.materializer,
 			modelExecution: this.model,
+			previewReadinessChecker: {
+				check: async () => ({ verified: true, ready: true, reasonCode: "ready" as const }),
+			},
 			signal: input.signal,
 		});
 	}

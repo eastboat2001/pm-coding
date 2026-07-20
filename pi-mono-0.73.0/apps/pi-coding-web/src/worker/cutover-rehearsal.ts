@@ -83,7 +83,7 @@ export async function runAgentV2CutoverRehearsal(
 		headers,
 		body: JSON.stringify({
 			input: {
-				prompt: "Production cutover rehearsal. Do not create project files.",
+				objective: "Production cutover rehearsal. Do not create project files.",
 				sessionId: `cutover-rehearsal-${now()}`,
 				title: "Production cutover rehearsal",
 			},

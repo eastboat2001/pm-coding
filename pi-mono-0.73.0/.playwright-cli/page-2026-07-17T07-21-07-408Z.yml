@@ -1,0 +1,33 @@
+- generic [ref=e5]:
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - generic "AITC 平台标识" [ref=e8]:
+        - generic [ref=e9]: AT&S
+        - generic [ref=e10]: AITC
+      - generic [ref=e11]:
+        - button "新建会话" [ref=e12] [cursor=pointer]
+        - button "新建会话" [ref=e13]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - generic [ref=e16]: 应用生成
+        - combobox "Session mode" [ref=e17]:
+          - option "对话"
+          - option "应用生成" [selected]
+      - button [ref=e19] [cursor=pointer]
+      - button "设置" [ref=e20] [cursor=pointer]
+  - main [ref=e21]:
+    - navigation "Workspace tools" [ref=e22]:
+      - button "Files" [ref=e23] [cursor=pointer]
+      - button "Generated Apps" [ref=e28] [cursor=pointer]:
+        - generic [ref=e32]: APP
+    - generic [ref=e45]:
+      - textbox "输入消息..." [active] [ref=e46]
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - button [ref=e49] [cursor=pointer]
+          - combobox [ref=e50]:
+            - generic [ref=e51]: 关闭
+          - button "扩展" [ref=e63] [cursor=pointer]
+        - generic [ref=e65]:
+          - button "mimo-v2.5" [ref=e66] [cursor=pointer]
+          - button [disabled]

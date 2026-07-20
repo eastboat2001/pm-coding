@@ -57,7 +57,7 @@ describe("runAgentV2CutoverRehearsal", () => {
 		expect(requests.every((request) => request.clientId === clientId && request.signal !== undefined)).toBe(true);
 		expect(requests.every((request) => !request.abortedAtCall)).toBe(true);
 		expect(JSON.parse(requests[1].body ?? "{}")).toMatchObject({
-			input: { prompt: "Production cutover rehearsal. Do not create project files." },
+			input: { objective: "Production cutover rehearsal. Do not create project files." },
 			model: { provider: "test", id: "test-model" },
 		});
 		expect(requests.map((request) => request.url)).not.toContain("http://pi.test/api/pi-storage/reset");

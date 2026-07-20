@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import type { PreviewReadinessChecker } from "@mariozechner/pi-web-workspace";
 import {
 	type AgentV2InputMaterializer,
+	AgentV2ModelContractError,
 	type AgentV2ModelExecution,
 	AgentV2OutboxDispatcher,
 	AgentV2Readiness,
@@ -11,7 +13,9 @@ import {
 	type AgentV2RunQueue,
 	type AgentV2RunSnapshot,
 	type AgentV2WorkerExecution,
+	AgentV2WorkerExecutionFailure,
 	type AgentV2WorkerExecutionInput,
+	type AgentV2WorkerIdentityLease,
 	AgentV2WorkerService,
 	type AgentV2WorkerStopResult,
 	createAgentV2DiagnosticEvent,
@@ -21,6 +25,7 @@ import {
 	loadAgentV2SkillContext,
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
+	RedisAgentV2WorkerIdentityLease,
 	type RedisAgentV2RunEventBusOptions,
 	runAgentV2ShutdownSteps,
 	WorkspaceSkillService,
@@ -36,7 +41,11 @@ import {
 	type StorageConfig,
 	WorkspaceDiagnosticLogService,
 } from "@mariozechner/pi-web-workspace/runtime-infra";
-import { AgentV2PiModelExecution, ConfiguredAgentV2ServerModelRegistry } from "./agent-v2-pi-model-execution.js";
+import {
+	AgentV2PiModelExecution,
+	AgentV2PiModelExecutionError,
+	ConfiguredAgentV2ServerModelRegistry,
+} from "./agent-v2-pi-model-execution.js";
 import {
 	createGlobalProviderApiKeyResolver,
 	type GlobalProviderApiKeySources,
@@ -46,6 +55,8 @@ import { runWorkerShutdownDeadline } from "./shutdown-deadline.js";
 
 type WorkerProcessDiagnosticLevel = "info" | "warn" | "error";
 const WORKER_READINESS_REFRESH_INTERVAL_MS = 1_000;
+const WORKER_IDENTITY_LEASE_TTL_MS = 15_000;
+const WORKER_IDENTITY_REFRESH_INTERVAL_MS = 3_000;
 
 export async function ensureRuntimeSchemas(runtimeDb: AgentV2SchemaStore): Promise<void> {
 	await runtimeDb.ensureAgentV2Schema();
@@ -92,6 +103,30 @@ export async function runAgentV2WorkerReadinessRefresh(input: {
 	}
 }
 
+export async function runAgentV2WorkerIdentityLeaseRefresh(input: {
+	lease: Pick<AgentV2WorkerIdentityLease, "renew">;
+	signal: AbortSignal;
+	intervalMs?: number;
+	onLost: (reason: "superseded" | "unavailable") => void;
+}): Promise<void> {
+	const intervalMs = Math.max(1, input.intervalMs ?? WORKER_IDENTITY_REFRESH_INTERVAL_MS);
+	while (!input.signal.aborted) {
+		await waitForAbortOrDelay(input.signal, intervalMs);
+		if (input.signal.aborted) return;
+		let owned = false;
+		try {
+			owned = await input.lease.renew();
+		} catch {
+			input.onLost("unavailable");
+			return;
+		}
+		if (!owned) {
+			input.onLost("superseded");
+			return;
+		}
+	}
+}
+
 export function createAgentV2WorkerRunEventOptions(config: StorageConfig): {
 	queue: { redisUrl: string; queueName: string };
 	bus: RedisAgentV2RunEventBusOptions;
@@ -115,6 +150,7 @@ export function createAgentV2WorkerExecution(
 	dependencies: {
 		settingsSources?: GlobalProviderApiKeySources;
 		complete?: ConstructorParameters<typeof AgentV2PiModelExecution>[0]["complete"];
+		previewReadinessChecker?: Pick<PreviewReadinessChecker, "check">;
 	} = {},
 ): AgentV2WorkerExecution & {
 	readonly materializer: AgentV2InputMaterializer;
@@ -165,16 +201,35 @@ export function createAgentV2WorkerExecution(
 				});
 				throw new Error("Agent v2 server skill loading failed.");
 			}
-			return await executeAgentV2NextTask({
-				store,
-				config,
-				context: agentV2ContextFromRunInput(input.run),
-				runId: input.run.runId,
-				materializer,
-				modelExecution,
-				...(skillContext.skills.length > 0 || skillContext.resources.length > 0 ? { skillContext } : {}),
-				signal: input.signal,
-			});
+			try {
+				return await executeAgentV2NextTask({
+					store,
+					config,
+					context: agentV2ContextFromRunInput(input.run),
+					runId: input.run.runId,
+					materializer,
+					modelExecution,
+					previewReadinessChecker: dependencies.previewReadinessChecker,
+					...(skillContext.skills.length > 0 || skillContext.resources.length > 0 ? { skillContext } : {}),
+					signal: input.signal,
+				});
+			} catch (error) {
+				if (error instanceof AgentV2ModelContractError) {
+					throw new AgentV2WorkerExecutionFailure(
+						`agent_v2.model_contract.${error.code}`,
+						error.message,
+						!error.code.startsWith("prompt_"),
+					);
+				}
+				if (error instanceof AgentV2PiModelExecutionError) {
+					throw new AgentV2WorkerExecutionFailure(
+						`agent_v2.model.${error.code}`,
+						error.message,
+						error.retryable === true,
+					);
+				}
+				throw error;
+			}
 		},
 	};
 }
@@ -232,6 +287,9 @@ async function main(): Promise<void> {
 	let outboxDispatcherPromise: Promise<void> | undefined;
 	let readinessAbort: AbortController | undefined;
 	let readinessPromise: Promise<void> | undefined;
+	let identityLease: AgentV2WorkerIdentityLease | undefined;
+	let identityLeaseAbort: AbortController | undefined;
+	let identityLeasePromise: Promise<void> | undefined;
 	try {
 		runtimeDb = createAgentV2RuntimeStore(config);
 		await ensureRuntimeSchemas(runtimeDb);
@@ -294,8 +352,21 @@ async function main(): Promise<void> {
 			events,
 			execution: createAgentV2WorkerExecution(config, runtimeDb),
 			workerId: config.workerId,
+			queueName: config.agentV2.queueName,
 			concurrency: config.workerConcurrency,
 		});
+		identityLease = new RedisAgentV2WorkerIdentityLease({
+			redisUrl: config.redisUrl,
+			queueName: config.agentV2.queueName,
+			workerId: config.workerId,
+			leaseTtlMs: WORKER_IDENTITY_LEASE_TTL_MS,
+		});
+		const identityTakeover = await identityLease.acquire();
+		if (identityTakeover.replacedExistingOwner) {
+			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.identity_takeover", "warn", {
+				message: "A newer process replaced the previous owner of this queue and worker identity.",
+			});
+		}
 		readinessPromise = runAgentV2WorkerReadinessRefresh({
 			gate: readinessGate,
 			signal: readinessAbort.signal,
@@ -332,6 +403,9 @@ async function main(): Promise<void> {
 				outboxDispatcherPromise,
 				readinessAbort,
 				readinessPromise,
+				identityLease,
+				identityLeaseAbort,
+				identityLeasePromise,
 			});
 			const exitCode = stopResult.completed ? 0 : 1;
 			writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.stopped", exitCode === 0 ? "info" : "error", {
@@ -349,6 +423,21 @@ async function main(): Promise<void> {
 		});
 		process.once("SIGTERM", () => {
 			void shutdown("SIGTERM").then((exitCode) => process.exit(exitCode), exitAfterShutdownFailure);
+		});
+		identityLeaseAbort = new AbortController();
+		identityLeasePromise = runAgentV2WorkerIdentityLeaseRefresh({
+			lease: identityLease,
+			signal: identityLeaseAbort.signal,
+			onLost: (reason) => {
+				writeWorkerProcessDiagnostic(config, diagnostics, "system.worker.identity_lost", "warn", {
+					reason,
+					message:
+						reason === "superseded"
+							? "A newer process took over this worker identity; the old process is stopping."
+							: "Worker identity ownership could not be renewed; the process is stopping to avoid duplicate consumers.",
+				});
+				void shutdown("SIGTERM").then((exitCode) => process.exit(exitCode), exitAfterShutdownFailure);
+			},
 		});
 
 		await worker.start();
@@ -369,6 +458,9 @@ async function main(): Promise<void> {
 			outboxDispatcherPromise,
 			readinessAbort,
 			readinessPromise,
+			identityLease,
+			identityLeaseAbort,
+			identityLeasePromise,
 		});
 		removeProcessLifecycleDiagnostics();
 		removeFatalDiagnostics();
@@ -385,10 +477,14 @@ export async function stopWorkerRuntime(input: {
 	outboxDispatcherPromise?: Promise<void>;
 	readinessAbort?: AbortController;
 	readinessPromise?: Promise<void>;
+	identityLease?: AgentV2WorkerIdentityLease;
+	identityLeaseAbort?: AbortController;
+	identityLeasePromise?: Promise<void>;
 	shutdownTimeoutMs?: number;
 }): Promise<AgentV2WorkerStopResult> {
 	input.outboxDispatcherAbort?.abort();
 	input.readinessAbort?.abort();
+	input.identityLeaseAbort?.abort();
 	return await runWorkerShutdownDeadline({
 		timeoutMs: input.shutdownTimeoutMs,
 		run: async (options) => {
@@ -396,6 +492,7 @@ export async function stopWorkerRuntime(input: {
 				[
 					{ step: "readiness_monitor.stop", run: async () => await input.readinessPromise },
 					{ step: "outbox_dispatcher.stop", run: async () => await input.outboxDispatcherPromise },
+					{ step: "identity_monitor.stop", run: async () => await input.identityLeasePromise },
 				],
 				options,
 			);
@@ -426,6 +523,8 @@ export async function stopWorkerRuntime(input: {
 						run: async (closeOptions) => await input.diagnostics.flushLangfuse(closeOptions.signal),
 					},
 					{ step: "runtime_store.close", run: async () => await input.runtimeDb?.close() },
+					{ step: "identity_lease.release", run: async () => void (await input.identityLease?.release()) },
+					{ step: "identity_lease.close", run: async () => await input.identityLease?.close() },
 				],
 				options,
 			);

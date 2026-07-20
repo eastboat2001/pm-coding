@@ -64,6 +64,7 @@ export {
 	buildAgentV2PlanningBootstrap,
 	persistAgentV2PlanningBootstrap,
 } from "./agent-v2-planning-bootstrap.js";
+export { buildAgentV2ProductBlueprint } from "./agent-v2-product-blueprint.js";
 export * from "./agent-v2-readiness.js";
 export {
 	type AgentV2RepairAction,
@@ -79,6 +80,12 @@ export {
 	assertAgentV2ResetConfirmation,
 	resetAgentV2RuntimeData,
 } from "./agent-v2-reset.js";
+export {
+	AGENT_V2_RESPONSE_LANGUAGES,
+	type AgentV2ResponseLanguage,
+	inferAgentV2ResponseLanguage,
+	normalizeAgentV2ResponseLanguage,
+} from "./agent-v2-response-language.js";
 export { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest } from "./agent-v2-run-api-service.js";
 export {
 	type AgentV2RunEventBus,
@@ -206,6 +213,7 @@ export {
 	AGENT_V2_SCHEMA_VERSION,
 	AGENT_V2_TASK_STATUSES,
 	AGENT_V2_VALIDATION_STATUSES,
+	type AgentV2BlueprintCategory,
 	type AgentV2CapabilityDecision,
 	type AgentV2CapabilityDeliveryMode,
 	type AgentV2ConversationSnapshot,
@@ -215,6 +223,8 @@ export {
 	type AgentV2Phase,
 	type AgentV2PlanDocument,
 	type AgentV2PlatformContract,
+	type AgentV2ProductBlueprint,
+	type AgentV2ProductBlueprintItem,
 	type AgentV2RunEventType,
 	type AgentV2RunInput,
 	type AgentV2RunSnapshot,
@@ -237,7 +247,16 @@ export {
 	runAgentV2StaticValidationGate,
 } from "./agent-v2-validation-gate.js";
 export {
+	type AgentV2ValidationEvidence,
+	type AgentV2ValidationEvidenceKind,
+	type AgentV2ValidationPolicyMetadata,
+	type AgentV2ValidationRepairBudget,
+	type AgentV2ValidationSeverity,
+	classifyAgentV2ValidationPolicy,
+} from "./agent-v2-validation-policy.js";
+export {
 	type AgentV2WorkerExecution,
+	AgentV2WorkerExecutionFailure,
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
 	type AgentV2WorkerServiceOptions,

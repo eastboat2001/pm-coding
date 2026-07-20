@@ -6,7 +6,8 @@ import {
 	buildAgentV2TaskGraph,
 	renderAgentV2DocumentMarkdown,
 } from "../src/agent-v2-documents.js";
-import type { AgentV2PlatformContract } from "../src/agent-v2-types.js";
+import { buildAgentV2ProductBlueprint } from "../src/agent-v2-product-blueprint.js";
+import type { AgentV2PlatformContract, AgentV2ProductBlueprint } from "../src/agent-v2-types.js";
 
 const FIXED_NOW = () => "2026-07-07T00:00:00.000Z";
 const CUSTOM_PLATFORM: AgentV2PlatformContract = {
@@ -28,23 +29,25 @@ describe("Agent v2 document builders", () => {
 	it("builds a spec with objective, scope, non-goals, assumptions, and acceptance criteria", () => {
 		const objective = "Build a sales dashboard with charts and mock revenue data.";
 		const decision = routeAgentV2Capabilities({ objective });
+		const blueprint = blueprintFor(objective);
 
-		const spec = buildAgentV2SpecDocument({ runId: "run-1", objective, decision, now: FIXED_NOW });
+		const spec = buildAgentV2SpecDocument({ runId: "run-1", blueprint, decision, now: FIXED_NOW });
 
 		expect(spec.kind).toBe("spec");
 		expect(spec.objective).toContain("sales dashboard");
 		expect(spec.scope.length).toBeGreaterThan(1);
 		expect(spec.nonGoals.length).toBeGreaterThan(1);
 		expect(spec.assumptions.length).toBeGreaterThan(1);
-		expect(spec.acceptanceCriteria.length).toBeGreaterThan(3);
+		expect(spec.acceptanceCriteria.length).toBeGreaterThanOrEqual(3);
 		expect(spec.platformContract.deliveryMode).toBe("static_app");
 	});
 
 	it("builds a plan with technical approach, file structure, data model, interaction flow, and validation strategy", () => {
 		const objective = "Build a SaaS app with login auth and PostgreSQL database.";
 		const decision = routeAgentV2Capabilities({ objective });
-		const spec = buildAgentV2SpecDocument({ runId: "run-plan", objective, decision, now: FIXED_NOW });
-		const plan = buildAgentV2PlanDocument({ runId: "run-plan", spec, decision, now: FIXED_NOW });
+		const blueprint = blueprintFor(objective);
+		const spec = buildAgentV2SpecDocument({ runId: "run-plan", blueprint, decision, now: FIXED_NOW });
+		const plan = buildAgentV2PlanDocument({ runId: "run-plan", spec, blueprint, decision, now: FIXED_NOW });
 
 		expect(plan.technicalApproach).toEqual(
 			expect.arrayContaining([
@@ -75,8 +78,9 @@ describe("Agent v2 document builders", () => {
 	it("records static simulation limits directly in spec and plan", () => {
 		const objective = "Build a SaaS app with login auth and PostgreSQL database.";
 		const decision = routeAgentV2Capabilities({ objective });
-		const spec = buildAgentV2SpecDocument({ runId: "run-2", objective, decision, now: FIXED_NOW });
-		const plan = buildAgentV2PlanDocument({ runId: "run-2", spec, decision, now: FIXED_NOW });
+		const blueprint = blueprintFor(objective);
+		const spec = buildAgentV2SpecDocument({ runId: "run-2", blueprint, decision, now: FIXED_NOW });
+		const plan = buildAgentV2PlanDocument({ runId: "run-2", spec, blueprint, decision, now: FIXED_NOW });
 
 		expect(spec.capabilityBoundaries.join(" ")).toContain("static simulation");
 		expect(plan.risks.join(" ")).toContain("backend");
@@ -85,9 +89,10 @@ describe("Agent v2 document builders", () => {
 	it("creates a dependency ordered task graph consumed by later execution and repair flows", () => {
 		const objective = "Build a static analytics dashboard.";
 		const decision = routeAgentV2Capabilities({ objective });
-		const spec = buildAgentV2SpecDocument({ runId: "run-3", objective, decision, now: FIXED_NOW });
-		const plan = buildAgentV2PlanDocument({ runId: "run-3", spec, decision, now: FIXED_NOW });
-		const graph = buildAgentV2TaskGraph({ runId: "run-3", spec, plan, decision, now: FIXED_NOW });
+		const blueprint = blueprintFor(objective);
+		const spec = buildAgentV2SpecDocument({ runId: "run-3", blueprint, decision, now: FIXED_NOW });
+		const plan = buildAgentV2PlanDocument({ runId: "run-3", spec, blueprint, decision, now: FIXED_NOW });
+		const graph = buildAgentV2TaskGraph({ runId: "run-3", spec, plan, blueprint, decision, now: FIXED_NOW });
 
 		const implementTask = graph.tasks.find((task) => task.taskId === "implement");
 		const validateTask = graph.tasks.find((task) => task.taskId === "validate");
@@ -102,7 +107,10 @@ describe("Agent v2 document builders", () => {
 		]);
 		expect(implementTask?.dependsOn).toEqual(["plan"]);
 		expect(implementTask?.acceptanceCriteria).toEqual(
-			expect.arrayContaining([expect.stringContaining("objective"), expect.stringContaining("platform contract")]),
+			expect.arrayContaining([
+				expect.stringContaining("Product blueprint item"),
+				expect.stringContaining("platform contract"),
+			]),
 		);
 		expect(validateTask?.acceptanceCriteria).toEqual(expect.arrayContaining(spec.acceptanceCriteria));
 		expect(implementTask?.output).toEqual(
@@ -120,7 +128,12 @@ describe("Agent v2 document builders", () => {
 	it("preserves the routed platform contract instead of reconstructing it from metadata defaults", () => {
 		const objective = "Build a React analytics frontend with reusable charts.";
 		const decision = routeAgentV2Capabilities({ objective, platform: CUSTOM_PLATFORM });
-		const spec = buildAgentV2SpecDocument({ runId: "run-4", objective, decision, now: FIXED_NOW });
+		const spec = buildAgentV2SpecDocument({
+			runId: "run-4",
+			blueprint: blueprintFor(objective),
+			decision,
+			now: FIXED_NOW,
+		});
 
 		expect(decision.platformContract).toEqual({
 			...CUSTOM_PLATFORM,
@@ -138,9 +151,10 @@ describe("Agent v2 document builders", () => {
 	it("renders deterministic markdown for capability decisions, specs, plans, and task graphs", () => {
 		const objective = "Build a SaaS app with login auth and PostgreSQL database.";
 		const decision = routeAgentV2Capabilities({ objective });
-		const spec = buildAgentV2SpecDocument({ runId: "run-5", objective, decision, now: FIXED_NOW });
-		const plan = buildAgentV2PlanDocument({ runId: "run-5", spec, decision, now: FIXED_NOW });
-		const graph = buildAgentV2TaskGraph({ runId: "run-5", spec, plan, decision, now: FIXED_NOW });
+		const blueprint = blueprintFor(objective);
+		const spec = buildAgentV2SpecDocument({ runId: "run-5", blueprint, decision, now: FIXED_NOW });
+		const plan = buildAgentV2PlanDocument({ runId: "run-5", spec, blueprint, decision, now: FIXED_NOW });
+		const graph = buildAgentV2TaskGraph({ runId: "run-5", spec, plan, blueprint, decision, now: FIXED_NOW });
 		const capabilityMarkdown = renderAgentV2DocumentMarkdown(decision);
 		const specMarkdown = renderAgentV2DocumentMarkdown(spec);
 		const planMarkdown = renderAgentV2DocumentMarkdown(plan);
@@ -171,3 +185,13 @@ describe("Agent v2 document builders", () => {
 		expect(taskMarkdown).toContain("failureReason");
 	});
 });
+
+function blueprintFor(objective: string): AgentV2ProductBlueprint {
+	return buildAgentV2ProductBlueprint({
+		runId: "run-document",
+		objective,
+		responseLanguage: "en",
+		inputBlobs: [],
+		now: FIXED_NOW,
+	});
+}

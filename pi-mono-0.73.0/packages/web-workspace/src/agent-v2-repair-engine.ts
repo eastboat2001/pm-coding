@@ -1,6 +1,6 @@
 import type { AgentV2ValidationFailure } from "./agent-v2-validation-gate.js";
 
-export type AgentV2RepairActionType = "file_patch" | "rerun_validation" | "block_task";
+export type AgentV2RepairActionType = "file_patch" | "regenerate_app" | "rerun_validation" | "block_task";
 
 export interface AgentV2RepairAction {
 	actionId: string;
@@ -10,6 +10,7 @@ export interface AgentV2RepairAction {
 	reason: string;
 	targetPath?: string;
 	validationCode: string;
+	validationFingerprint: string;
 }
 
 export interface PlanAgentV2RepairActionsInput {
@@ -17,6 +18,7 @@ export interface PlanAgentV2RepairActionsInput {
 	failures: AgentV2ValidationFailure[];
 	attempt: number;
 	maxAttempts: number;
+	previousFingerprintAttempts?: Readonly<Record<string, number>>;
 }
 
 export function planAgentV2RepairActions(input: PlanAgentV2RepairActionsInput): AgentV2RepairAction[] {
@@ -29,37 +31,77 @@ export function planAgentV2RepairActions(input: PlanAgentV2RepairActionsInput): 
 				retryable: false,
 				reason: `Repair attempts exhausted (${input.attempt}/${input.maxAttempts}).`,
 				validationCode: "repair.max_attempts_exceeded",
+				validationFingerprint: "repair:max_attempts",
 			},
 		];
 	}
 
-	return input.failures.map((failure) => repairActionForFailure(input.taskId, failure));
+	const uniqueFailures = [
+		...new Map(
+			input.failures.filter((failure) => failure.blocking).map((failure) => [failure.fingerprint, failure]),
+		).values(),
+	];
+	return uniqueFailures.map((failure) =>
+		repairActionForFailure(
+			input.taskId,
+			failure,
+			input.attempt,
+			input.previousFingerprintAttempts?.[failure.fingerprint] ?? 0,
+		),
+	);
 }
 
-function repairActionForFailure(taskId: string, failure: AgentV2ValidationFailure): AgentV2RepairAction {
+function repairActionForFailure(
+	taskId: string,
+	failure: AgentV2ValidationFailure,
+	attempt: number,
+	previousFingerprintAttempts: number,
+): AgentV2RepairAction {
 	const targetPath = normalizeRepairTargetPath(failure.path);
+	const fingerprintAttempts = previousFingerprintAttempts + 1;
 
-	if (!failure.retryable) {
+	if (
+		!failure.retryable ||
+		attempt > failure.repairBudget.maxAttempts ||
+		fingerprintAttempts > failure.repairBudget.maxSameFingerprintAttempts
+	) {
 		return {
 			actionId: `repair:${taskId}:${failure.code}:block`,
 			taskId,
 			type: "block_task",
 			retryable: false,
-			reason: failure.message,
+			reason: !failure.retryable
+				? failure.message
+				: `Repair budget exhausted for ${failure.code} (${fingerprintAttempts} identical findings).`,
 			targetPath,
 			validationCode: failure.code,
+			validationFingerprint: failure.fingerprint,
 		};
 	}
 
+	const type = requiresFullRegeneration(failure.code)
+		? "regenerate_app"
+		: targetPath || !isTransientRevalidationFailure(failure.code)
+			? "file_patch"
+			: "rerun_validation";
 	return {
 		actionId: `repair:${taskId}:${failure.code}:${targetPath ?? "run"}`,
 		taskId,
-		type: targetPath ? "file_patch" : "rerun_validation",
+		type,
 		retryable: true,
 		reason: reasonForFailure(failure),
 		targetPath,
 		validationCode: failure.code,
+		validationFingerprint: failure.fingerprint,
 	};
+}
+
+function requiresFullRegeneration(code: string): boolean {
+	return code === "static.workspace_empty" || code === "static.preview_missing_entry";
+}
+
+function isTransientRevalidationFailure(code: string): boolean {
+	return /(?:^|\.)(?:timeout|network|rate_limit|server_error|temporarily_unavailable|unavailable)$/u.test(code);
 }
 
 function reasonForFailure(failure: AgentV2ValidationFailure): string {
@@ -71,6 +113,18 @@ function reasonForFailure(failure: AgentV2ValidationFailure): string {
 	}
 	if (failure.code === "static.script_error") {
 		return "Client script errors must be fixed before delivery.";
+	}
+	if (failure.code === "static.canvas_layout_unbounded") {
+		return "Responsive charts must use dedicated position:relative containers with bounded heights before delivery.";
+	}
+	if (failure.code === "static.control_unwired") {
+		return "Every visible select must read its selected value and use it to deterministically change KPIs, charts, tables, or an explicit empty state.";
+	}
+	if (failure.code === "static.control_no_effect") {
+		return "The select handler must use its selected value to change numeric metrics, chart datasets, result content, or an explicit empty state; redrawing identical data is not sufficient.";
+	}
+	if (failure.code === "static.nondeterministic_data") {
+		return "Replace Math.random() in rendered data with stable source-backed or seeded fixture data.";
 	}
 	return failure.message;
 }

@@ -1,4 +1,4 @@
-import { ModelController } from "../src/app/model-controller.js";
+import { ModelController, supportsApplicationGeneration } from "../src/app/model-controller.js";
 import { describe, expect, it } from "vitest";
 
 describe("ModelController", () => {
@@ -104,6 +104,21 @@ describe("ModelController", () => {
 
 		expect(refreshed?.provider).toBe("custom-provider:provider-a");
 		expect(refreshed?.baseUrl).toBe("https://new.example/v1");
+	});
+
+	it("requires sufficient output capacity without selecting another model", () => {
+		expect(
+			supportsApplicationGeneration({
+				...manualModel("custom-provider:mimo-small", "mimo-v2.5", "https://small.example/v1"),
+				maxTokens: 200,
+			}),
+		).toBe(false);
+		expect(
+			supportsApplicationGeneration({
+				...manualModel("custom-provider:mimo-app", "mimo-v2.5", "https://app.example/v1"),
+				maxTokens: 8_192,
+			}),
+		).toBe(true);
 	});
 });
 

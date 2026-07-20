@@ -102,7 +102,7 @@ export function loadStorageConfig(rootDir, envFile = CONFIG_ENV_FILE) {
         promptSnapshotMaxChars: positiveIntegerValue(env("PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS"), 20000, "PI_LOG_PROMPT_SNAPSHOT_MAX_CHARS"),
         modelOutputSnapshotLoggingEnabled: booleanValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED"), false, "PI_LOG_MODEL_OUTPUT_SNAPSHOT_ENABLED"),
         modelOutputSnapshotMaxChars: positiveIntegerValue(env("PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS"), 20000, "PI_LOG_MODEL_OUTPUT_SNAPSHOT_MAX_CHARS"),
-        modelStreamIdleTimeoutMs: positiveIntegerValue(env("PI_MODEL_STREAM_IDLE_TIMEOUT_MS"), 60000, "PI_MODEL_STREAM_IDLE_TIMEOUT_MS"),
+        modelStreamIdleTimeoutMs: positiveIntegerValue(env("PI_MODEL_STREAM_IDLE_TIMEOUT_MS"), 180000, "PI_MODEL_STREAM_IDLE_TIMEOUT_MS"),
         modelMaxOutputTokens: nonNegativeIntegerValue(env("PI_MODEL_MAX_OUTPUT_TOKENS"), 12000, "PI_MODEL_MAX_OUTPUT_TOKENS"),
         contextProviderPayloadBudgetChars: positiveIntegerValue(env("PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS"), 90000, "PI_CONTEXT_PROVIDER_PAYLOAD_BUDGET_CHARS"),
         logRetentionDays: nonNegativeIntegerValue(env("PI_LOG_RETENTION_DAYS"), 30, "PI_LOG_RETENTION_DAYS"),

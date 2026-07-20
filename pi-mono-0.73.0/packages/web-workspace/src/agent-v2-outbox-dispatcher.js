@@ -1,6 +1,13 @@
 const DEFAULT_LEASE_TTL_MS = 30_000;
 const DEFAULT_MAX_ATTEMPTS = 8;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
+const ACTIVE_RETRY_ENQUEUE_MAX_ATTEMPTS = 1_000_000;
+class AgentV2RetryEnqueueBlockedError extends Error {
+    constructor() {
+        super("Agent v2 retry enqueue is waiting for the previous claim to be released");
+        this.name = "AgentV2RetryEnqueueBlockedError";
+    }
+}
 export class AgentV2OutboxDispatcher {
     adapters = new Map();
     now;
@@ -83,7 +90,7 @@ export class AgentV2OutboxDispatcher {
                 else
                     result.leaseLost += 1;
             }
-            catch {
+            catch (error) {
                 if (signal.aborted) {
                     result.aborted = true;
                     break;
@@ -97,7 +104,9 @@ export class AgentV2OutboxDispatcher {
                     availableAt,
                     errorCode: "agent_v2.outbox_delivery_failed",
                     errorMessage: "Agent v2 outbox delivery failed",
-                    maxAttempts: input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+                    maxAttempts: error instanceof AgentV2RetryEnqueueBlockedError
+                        ? ACTIVE_RETRY_ENQUEUE_MAX_ATTEMPTS
+                        : (input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
                     updatedAt,
                 });
                 if (rescheduled === "pending")
@@ -151,7 +160,10 @@ function queueEnqueueAdapter(queue, queueName) {
         kind: "run_enqueue",
         async deliver(intent) {
             assertQueueName(intent.reference.queueName, queueName);
-            await queue.enqueue(identity(intent));
+            const result = await queue.enqueue(identity(intent));
+            if (intent.reference.attempt !== undefined && result === "already_active") {
+                throw new AgentV2RetryEnqueueBlockedError();
+            }
         },
     };
 }

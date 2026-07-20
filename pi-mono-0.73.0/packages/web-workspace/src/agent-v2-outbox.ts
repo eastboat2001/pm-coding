@@ -10,7 +10,7 @@ export type AgentV2OutboxKind =
 export type AgentV2OutboxStatus = "pending" | "leased" | "delivered" | "dead_letter";
 
 export type AgentV2OutboxReference =
-	| { kind: "run_enqueue"; queueName: string }
+	| { kind: "run_enqueue"; queueName: string; attempt?: number }
 	| { kind: "run_cancel"; queueName: string; cancelToken: string }
 	| { kind: "live_event"; eventSeq: number }
 	| { kind: "workspace_diagnostic"; diagnosticId: string }

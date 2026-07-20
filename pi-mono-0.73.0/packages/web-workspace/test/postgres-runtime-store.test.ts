@@ -1948,7 +1948,7 @@ describe("PostgresRuntimeStore", () => {
 					],
 				};
 			}
-			if (/^SELECT intent_id, reference_json FROM agent_v2_outbox/i.test(sql)) return { rows: [] };
+			if (/^SELECT intent_id, reference_json, available_at FROM agent_v2_outbox/i.test(sql)) return { rows: [] };
 			if (/^INSERT INTO agent_v2_(bootstraps|outbox)/i.test(sql)) return { rowCount: 1 };
 			return undefined;
 		});
@@ -2113,7 +2113,7 @@ describe("PostgresRuntimeStore", () => {
 										: /^INSERT INTO agent_v2_validation_attempts/i.test(sql)
 											? [8]
 											: /^INSERT INTO agent_v2_outbox/i.test(sql)
-												? [6]
+												? [7]
 												: [];
 			return indexes.map((index) => query.values[index]).filter((value) => value !== null);
 		});

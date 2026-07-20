@@ -26,9 +26,22 @@ describe("normalizeAgentV2StartInput", () => {
 			sessionId: "session-a",
 			title: "Example",
 			objective: "Build an example",
+			responseLanguage: "en",
 			selectedSkillNames: [],
 		});
 		expect(normalized.runInput.inputReferences).toEqual(normalized.inputReferences);
+	});
+
+	it("persists an explicit response language and infers Chinese for legacy callers", () => {
+		expect(normalizeAgentV2StartInput(request({ responseLanguage: "ms" }), identity).runInput).toMatchObject({
+			responseLanguage: "ms",
+		});
+		expect(
+			normalizeAgentV2StartInput(request({ objective: "把上面的游戏变成应用" }), identity).runInput,
+		).toMatchObject({ responseLanguage: "zh" });
+		expect(() => normalizeAgentV2StartInput(request({ responseLanguage: "fr" }), identity)).toThrow(
+			/responseLanguage/i,
+		);
 	});
 
 	it("accepts only unique canonical selected skill names", () => {

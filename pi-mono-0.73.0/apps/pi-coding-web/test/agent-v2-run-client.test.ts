@@ -74,6 +74,7 @@ describe("agent v2 run client", () => {
 					sessionId: "session-1",
 					title: "Build dashboard",
 					objective: "Ship a working dashboard",
+					responseLanguage: "en",
 					conversationSnapshot: {
 						compactedSummary: "Earlier decisions",
 						recentMessages: [
@@ -100,6 +101,26 @@ describe("agent v2 run client", () => {
 			"Content-Type": "application/json",
 			"X-PI-Client-ID": clientId,
 		});
+	});
+
+	it("keeps a Chinese objective on the same response language across the start boundary", async () => {
+		let body: string | undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+				body = String(init?.body);
+				return jsonResponse(createRunSnapshot());
+			}),
+		);
+
+		await startAgentV2Run({
+			sessionId: "session-zh",
+			title: "生成贪吃蛇游戏",
+			objective: "把上面的游戏变成可以直接访问的应用",
+			model: { provider: "mimo", id: "mimo-v2.5" },
+		});
+
+		expect(JSON.parse(body ?? "{}").input.responseLanguage).toBe("zh");
 	});
 
 	it("rejects malformed conversation snapshots before fetch", async () => {

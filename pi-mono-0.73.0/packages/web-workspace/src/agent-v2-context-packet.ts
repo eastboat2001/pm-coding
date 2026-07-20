@@ -18,6 +18,7 @@ export interface AgentV2ContextPacketInput {
 
 export interface AgentV2ContextDocuments {
 	capabilityDecision?: AgentV2DocumentRecord;
+	productBlueprint?: AgentV2DocumentRecord;
 	spec?: AgentV2DocumentRecord;
 	plan?: AgentV2DocumentRecord;
 	tasks?: AgentV2DocumentRecord;
@@ -119,6 +120,7 @@ function selectAgentV2ContextDocuments(documents: AgentV2DocumentRecord[]): Agen
 
 	return {
 		capabilityDecision: latestByKind.get("capability_decision"),
+		productBlueprint: latestByKind.get("product_blueprint"),
 		spec: latestByKind.get("spec"),
 		plan: latestByKind.get("plan"),
 		tasks: latestByKind.get("tasks"),
@@ -162,8 +164,7 @@ function collectRequiredRereads(
 	if (!activeTask) return [];
 
 	const rereads: AgentV2ContextReread[] = [];
-	const activeDocument = documentForTask(activeTask, documents);
-	if (activeDocument) {
+	for (const activeDocument of documentsForTask(activeTask, documents)) {
 		rereads.push({
 			kind: "document",
 			id: activeDocument.documentId,
@@ -181,29 +182,31 @@ function collectRequiredRereads(
 	return rereads;
 }
 
-function documentForTask(task: AgentV2TaskNode, documents: AgentV2ContextDocuments): AgentV2DocumentRecord | undefined {
+function documentsForTask(task: AgentV2TaskNode, documents: AgentV2ContextDocuments): AgentV2DocumentRecord[] {
+	const compact = (values: Array<AgentV2DocumentRecord | undefined>) =>
+		values.filter((value): value is AgentV2DocumentRecord => value !== undefined);
 	switch (task.taskId) {
 		case "capability":
-			return documents.capabilityDecision;
+			return compact([documents.capabilityDecision]);
 		case "spec":
-			return documents.spec;
+			return compact([documents.productBlueprint, documents.spec]);
 		case "plan":
-			return documents.plan;
+			return compact([documents.productBlueprint, documents.plan]);
 	}
 
 	switch (task.kind) {
 		case "capability":
-			return documents.capabilityDecision;
+			return compact([documents.capabilityDecision]);
 		case "spec":
-			return documents.spec;
+			return compact([documents.productBlueprint, documents.spec]);
 		case "plan":
-			return documents.plan;
+			return compact([documents.productBlueprint, documents.plan]);
 		case "artifact":
 		case "implementation":
 		case "validation":
 		case "repair":
 		case "delivery":
-			return documents.tasks ?? documents.plan ?? documents.spec;
+			return compact([documents.productBlueprint, documents.tasks ?? documents.plan ?? documents.spec]);
 	}
 }
 
@@ -227,6 +230,9 @@ function renderDocuments(documents: AgentV2ContextDocuments): string[] {
 	const lines: string[] = [];
 	if (documents.capabilityDecision) {
 		lines.push(`- capability decision: \`${documents.capabilityDecision.documentId}\``);
+	}
+	if (documents.productBlueprint) {
+		lines.push(`- product blueprint: \`${documents.productBlueprint.documentId}\``);
 	}
 	if (documents.spec) {
 		lines.push(`- spec: \`${documents.spec.documentId}\``);

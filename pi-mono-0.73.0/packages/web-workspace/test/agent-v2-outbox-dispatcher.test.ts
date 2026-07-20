@@ -108,6 +108,29 @@ describe("AgentV2OutboxDispatcher", () => {
 		expect(store.listEventCalls).toEqual([{ clientId: "client-a", runId: "run-a", afterSeq: 6 }]);
 	});
 
+	it("keeps an attempt retry pending while the previous queue claim is still active", async () => {
+		const store = new FakeOutboxStore([intent("retry-2", "run_enqueue", 1, 7, 2)]);
+		const enqueue = vi.fn(async () => "already_active" as const);
+		const dispatcher = AgentV2OutboxDispatcher.forQueueAndLive({
+			store,
+			queue: { enqueue, requestCancel: async () => "stale" as const },
+			queueName: "agent-v2",
+			bus: { project: async () => "projected" as const },
+			now: () => NOW,
+		});
+
+		await expect(dispatcher.dispatchAvailable({ ownerId: "owner-a", limit: 10, maxAttempts: 2 })).resolves.toMatchObject({
+			delivered: 0,
+			retried: 1,
+			deadLettered: 0,
+		});
+		expect(store.deliveredCalls).toEqual([]);
+		expect(store.rescheduleCalls[0]).toMatchObject({
+			intentId: "retry-2",
+			maxAttempts: 1_000_000,
+		});
+	});
+
 	it("delivers leased live events in durable sequence order for the same run", async () => {
 		const store = new FakeOutboxStore([intent("live-2", "live_event", 1, 2), intent("live-1", "live_event", 1, 1)]);
 		const delivered: number[] = [];
@@ -167,10 +190,11 @@ function intent(
 	kind: "run_enqueue" | "run_cancel" | "live_event",
 	attemptCount: number,
 	eventSeq = 7,
+	targetAttempt?: number,
 ): AgentV2OutboxRecord {
 	const reference =
 		kind === "run_enqueue"
-			? ({ kind, queueName: "agent-v2" } as const)
+			? ({ kind, queueName: "agent-v2", ...(targetAttempt === undefined ? {} : { attempt: targetAttempt }) } as const)
 			: kind === "run_cancel"
 				? ({ kind, queueName: "agent-v2", cancelToken: "cancel-a" } as const)
 				: ({ kind, eventSeq } as const);

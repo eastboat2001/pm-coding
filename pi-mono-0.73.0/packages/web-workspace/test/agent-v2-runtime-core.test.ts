@@ -50,12 +50,14 @@ describe("agent v2 runtime core", () => {
 		]);
 		expect(snapshot.documents.map((document) => document.documentId)).toEqual([
 			"capability_decision",
+			"product_blueprint",
 			"spec",
 			"plan",
 			"tasks",
 		]);
 		expect(snapshot.artifacts.map((artifact) => artifact.artifactId)).toEqual([
 			"capability_decision",
+			"product_blueprint",
 			"spec",
 			"plan",
 			"tasks",

@@ -18,7 +18,7 @@ describe("Agent v2 executable browser integration", () => {
 		let active: AgentV2RunPresentation | undefined;
 		const sink = createAgentV2BrowserRunSink({
 			browserAgent,
-			locale: () => "en",
+			responseLanguage: "en",
 			onPresentationChange: (presentation) => {
 				active = presentation;
 			},
@@ -99,7 +99,7 @@ describe("Agent v2 executable browser integration", () => {
 		};
 		const sink = createAgentV2BrowserRunSink({
 			browserAgent: { state },
-			locale: () => "en",
+			responseLanguage: "en",
 			onPresentationChange: syncSlot,
 		});
 		sink.beginRun("run-dom", "2026-07-16T00:00:00.000Z");

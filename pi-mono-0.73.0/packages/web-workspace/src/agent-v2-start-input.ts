@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import type { AgentV2InputBlobRecord, AgentV2InputReferenceRecord } from "./agent-v2-durable-store.js";
+import {
+	type AgentV2ResponseLanguage,
+	inferAgentV2ResponseLanguage,
+	normalizeAgentV2ResponseLanguage,
+} from "./agent-v2-response-language.js";
 import type { AgentV2ConversationSnapshot, AgentV2RunInput } from "./agent-v2-types.js";
 
 export interface AgentV2ModelReference {
@@ -28,7 +33,6 @@ export const AGENT_V2_CONVERSATION_SNAPSHOT_MAX_CHARS = 60_000;
 export const AGENT_V2_CONVERSATION_SUMMARY_MAX_CHARS = 32_768;
 export const AGENT_V2_CONVERSATION_MESSAGE_MAX_CHARS = 8_192;
 export const AGENT_V2_CONVERSATION_MESSAGE_MAX_ENTRIES = 64;
-
 export interface AgentV2NormalizedStartInput {
 	runInput: AgentV2RunInput;
 	model: AgentV2ModelReference;
@@ -44,6 +48,7 @@ export interface AgentV2NormalizedStartPayload {
 	sessionId: string;
 	title: string;
 	objective: string;
+	responseLanguage: AgentV2ResponseLanguage;
 	conversationSnapshot?: AgentV2ConversationSnapshot;
 	selectedSkillNames: string[];
 	model: AgentV2ModelReference;
@@ -72,6 +77,7 @@ const INPUT_FIELDS = new Set([
 	"sessionId",
 	"title",
 	"objective",
+	"responseLanguage",
 	"conversationSnapshot",
 	"selectedSkillNames",
 	"projectFiles",
@@ -107,6 +113,10 @@ export function normalizeAgentV2StartPayload(value: unknown, runId: string): Age
 	const title = requireNonEmptyString(input.title, "Agent v2 start input title");
 	const objective = requireNonEmptyString(input.objective, "Agent v2 start input objective");
 	const conversationSnapshot = normalizeConversationSnapshot(input.conversationSnapshot, objective);
+	const responseLanguage = normalizeRequestedResponseLanguage(input.responseLanguage, {
+		objective,
+		conversationSnapshot,
+	});
 	const selectedSkillNames = normalizeSelectedSkillNames(input.selectedSkillNames);
 	const model = normalizeAgentV2ModelReference(request.model);
 	const projectFiles = optionalArray(input.projectFiles, "Agent v2 projectFiles");
@@ -223,6 +233,7 @@ export function normalizeAgentV2StartPayload(value: unknown, runId: string): Age
 		sessionId,
 		title,
 		objective,
+		responseLanguage,
 		...(conversationSnapshot ? { conversationSnapshot } : {}),
 		selectedSkillNames,
 		model,
@@ -256,6 +267,7 @@ export function bindAgentV2StartPayload(
 			sessionId: payload.sessionId,
 			title: payload.title,
 			objective: payload.objective,
+			responseLanguage: payload.responseLanguage,
 			...(payload.conversationSnapshot
 				? {
 						conversationSnapshot: {
@@ -271,6 +283,18 @@ export function bindAgentV2StartPayload(
 		inputBlobs,
 		inputReferences,
 	};
+}
+
+function normalizeRequestedResponseLanguage(
+	value: unknown,
+	input: { objective: string; conversationSnapshot?: AgentV2ConversationSnapshot },
+): AgentV2ResponseLanguage {
+	if (value !== undefined) {
+		const language = normalizeAgentV2ResponseLanguage(value);
+		if (!language) throw new AgentV2StartInputError("Agent v2 responseLanguage is invalid");
+		return language;
+	}
+	return inferAgentV2ResponseLanguage(input);
 }
 
 function normalizeSelectedSkillNames(value: unknown): string[] {

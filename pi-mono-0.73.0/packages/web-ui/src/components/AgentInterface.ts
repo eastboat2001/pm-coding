@@ -1,6 +1,6 @@
 import { streamSimple, type ToolResultMessage, type Usage } from "@mariozechner/pi-ai";
 import { html, LitElement, type TemplateResult } from "lit";
-import { customElement, property, query } from "lit/decorators.js";
+import { customElement, property, query, state } from "lit/decorators.js";
 import { ModelSelector } from "../dialogs/ModelSelector.js";
 import type { MessageEditor, MessageEditorExtensionAction } from "./MessageEditor.js";
 import "./MessageEditor.js";
@@ -54,6 +54,7 @@ export class AgentInterface extends LitElement {
 	private _scrollContainer?: HTMLElement;
 	private _resizeObserver?: ResizeObserver;
 	private _unsubscribeSession?: () => void;
+	@state() private _promptErrorText = "";
 
 	public setInput(text: string, attachments?: Attachment[]) {
 		const update = () => {
@@ -271,6 +272,7 @@ export class AgentInterface extends LitElement {
 
 		const sentInput = input;
 		const sentAttachments = attachments ? [...attachments] : [];
+		this._promptErrorText = "";
 		// Only clear editor after we know we can send
 		this._messageEditor.value = "";
 		this._messageEditor.attachments = [];
@@ -293,6 +295,8 @@ export class AgentInterface extends LitElement {
 			this._messageEditor.value = sentInput;
 			this._messageEditor.attachments = sentAttachments;
 			this._messageEditor.requestUpdate();
+			this._promptErrorText = error instanceof Error ? error.message : String(error);
+			this.requestUpdate();
 			throw error;
 		}
 
@@ -327,6 +331,7 @@ export class AgentInterface extends LitElement {
 						class="${state.isStreaming ? "" : "hidden"}"
 						.tools=${state.tools}
 						.isStreaming=${state.isStreaming}
+						.externalMessage=${state.streamingMessage}
 						.pendingToolCalls=${state.pendingToolCalls}
 						.toolResultsById=${toolResultsById}
 						.statusText=${this.transientStatusText}
@@ -399,6 +404,15 @@ export class AgentInterface extends LitElement {
 		`;
 	}
 
+	private renderPromptError() {
+		if (!this._promptErrorText) return "";
+		return html`
+			<div role="alert" class="mb-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+				${this._promptErrorText}
+			</div>
+		`;
+	}
+
 	private renderActiveRunSlot(): TemplateResult | string {
 		if (!this.activeRunContent) return "";
 		return html`
@@ -437,6 +451,7 @@ export class AgentInterface extends LitElement {
 					<div class="max-w-3xl mx-auto px-2">
 						${this.renderAppPreviewGoalStatus()}
 						${this.renderActiveRunSlot()}
+						${this.renderPromptError()}
 						<message-editor
 							.isStreaming=${state.isStreaming}
 							.currentModel=${state.model}
@@ -447,10 +462,12 @@ export class AgentInterface extends LitElement {
 							.extensionActions=${this.extensionActions}
 							.slashSuggestions=${this.slashSuggestions}
 							.onSend=${(input: string, attachments: Attachment[]) => {
-								this.sendMessage(input, attachments);
+								void this.sendMessage(input, attachments).catch(() => {});
 							}}
 							.onAbort=${() => session.abort()}
 					.onModelSelect=${() => {
+						this._promptErrorText = "";
+						this.requestUpdate();
 						if (this.onModelSelect) {
 							this.onModelSelect();
 						} else {

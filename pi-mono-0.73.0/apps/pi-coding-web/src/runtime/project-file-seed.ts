@@ -39,6 +39,13 @@ export function collectProjectFilesFromMessages(messages: AgentMessage[]): Proje
 	return files;
 }
 
+export function collectAgentV2ProjectFilesForRun(
+	previousMessages: AgentMessage[],
+	currentMessages: AgentMessage[],
+): ProjectFileSeed[] {
+	return collectProjectFilesFromMessages([...previousMessages, ...currentMessages]);
+}
+
 export function prepareAttachmentProjectFileSeeds<T extends AttachmentProjectFileSeed>(attachments: T[]): T[] {
 	const used = new Set<string>();
 	return attachments.map((attachment, index) => {

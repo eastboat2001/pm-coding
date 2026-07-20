@@ -62,9 +62,8 @@ if (-not $SkipDocker) {
 	docker compose -f $composeFile ps postgres redis
 }
 
-if (-not $SkipWorkerBuild) {
-	Write-Host "Building worker from current source"
-	npm run build:worker --workspace=pi-coding-web
+if ($SkipWorkerBuild) {
+	Write-Warning "-SkipWorkerBuild is deprecated and ignored because a stale worker can execute obsolete generation limits."
 }
 
 Write-Host ""

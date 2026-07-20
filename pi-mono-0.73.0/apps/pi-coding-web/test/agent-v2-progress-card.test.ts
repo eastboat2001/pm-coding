@@ -49,6 +49,22 @@ describe("Agent v2 progress card", () => {
 		expect(templateValues(rendered)).toContain("Delivery · stage 5 of 5");
 	});
 
+	it("shows delivery as the terminal stage even when the final stored event still names implementation", async () => {
+		const { createAgentV2ProgressCardView } = await import("../src/runtime/agent-v2-progress-card.js");
+		const presentation = successPresentation();
+		presentation.phase = "implementation";
+		presentation.stage = "implementation";
+		presentation.deliveryReport = undefined;
+
+		const view = createAgentV2ProgressCardView(presentation, {
+			expandedSection: null,
+			now: Date.parse("2026-07-16T00:02:00.000Z"),
+		});
+
+		expect(view.currentStage).toBe("Delivery · stage 5 of 5");
+		expect(view.stages.every((stage) => stage.state === "complete")).toBe(true);
+	});
+
 	it("shows stages and grouped evidence only in detail mode", async () => {
 		const { AgentV2ProgressCard } = await import("../src/runtime/agent-v2-progress-card.js");
 		const card = Object.create(AgentV2ProgressCard.prototype) as AgentV2ProgressCard;
@@ -127,6 +143,68 @@ describe("Agent v2 progress card", () => {
 		});
 		expect(view.sections.find((section) => section.id === "technical")?.expanded).toBe(false);
 		expect(view.deliveryHref).toBeUndefined();
+	});
+
+	it("keeps Chinese runs Chinese in the terminal progress card", async () => {
+		const { AgentV2ProgressCard, createAgentV2ProgressCardView } = await import(
+			"../src/runtime/agent-v2-progress-card.js"
+		);
+		const view = createAgentV2ProgressCardView(failurePresentation(), {
+			expandedSection: null,
+			now: Date.parse("2026-07-16T00:02:00.000Z"),
+			responseLanguage: "zh",
+		});
+		expect(view.status.text).toBe("失败");
+		expect(view.currentStage).toBe("交付 · 第 5/5 阶段");
+		expect(view.failure).toMatchObject({
+			retrySafety: "可以安全重试",
+			completedWork: "已完成 1 个任务，创建或更新了 1 个文件",
+		});
+
+		const card = Object.create(AgentV2ProgressCard.prototype) as AgentV2ProgressCard;
+		Object.defineProperties(card, {
+			presentation: { configurable: true, value: failurePresentation() },
+			responseLanguage: { configurable: true, value: "zh" },
+			terminal: { configurable: true, value: true },
+			detailsExpanded: { configurable: true, value: false },
+			expandedSection: { configurable: true, value: null },
+			now: { configurable: true, value: Date.parse("2026-07-16T00:02:00.000Z") },
+		});
+		expect(templateValues(card.render())).toContain("查看详情");
+	});
+
+	it("localizes known provider and model protocol failures for Chinese runs", async () => {
+		const { createAgentV2ProgressCardView } = await import("../src/runtime/agent-v2-progress-card.js");
+		const timeout = failurePresentation();
+		timeout.error = {
+			code: "agent_v2.model.provider_timeout",
+			message:
+				"Agent v2 model provider timed out before producing a complete result. No provider chunks were received within 180000ms (2 provider attempts).",
+			retryable: true,
+		};
+		const timeoutView = createAgentV2ProgressCardView(timeout, {
+			expandedSection: null,
+			now: Date.parse("2026-07-16T00:02:00.000Z"),
+			responseLanguage: "zh",
+		});
+		expect(timeoutView.currentAction).toBe(
+			"模型服务在连续 2 次尝试中均未返回任何响应数据（每次等待 180 秒），因此本次生成已停止。",
+		);
+		expect(timeoutView.failure?.cause).toBe(timeoutView.currentAction);
+
+		const protocol = failurePresentation();
+		protocol.error = {
+			code: "agent_v2.model_contract.invalid_protocol",
+			message: "Agent v2 model response does not follow the required JSON protocol.",
+			retryable: true,
+		};
+		expect(
+			createAgentV2ProgressCardView(protocol, {
+				expandedSection: null,
+				now: Date.parse("2026-07-16T00:02:00.000Z"),
+				responseLanguage: "zh",
+			}).failure?.cause,
+		).toBe("模型回复未遵循应用生成所需的 JSON 协议，自动修复后仍未成功。");
 	});
 
 	it("shows terminal validation, build, file counts, and usage while gating delivery on readiness", async () => {

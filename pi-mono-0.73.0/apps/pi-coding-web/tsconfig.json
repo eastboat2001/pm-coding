@@ -12,6 +12,9 @@
 			"@mariozechner/pi-tui": ["../../packages/tui/src/index.ts"],
 			"@mariozechner/pi-web-ui": ["../../packages/web-ui/src/index.ts"],
 			"@mariozechner/pi-web-workspace": ["../../packages/web-workspace/src/index.ts"],
+			"@mariozechner/pi-web-workspace/agent-v2-response-language": [
+				"../../packages/web-workspace/src/agent-v2-response-language.ts"
+			],
 			"@mariozechner/pi-web-workspace/agent-v2-runtime": [
 				"../../packages/web-workspace/src/agent-v2-runtime.ts"
 			],

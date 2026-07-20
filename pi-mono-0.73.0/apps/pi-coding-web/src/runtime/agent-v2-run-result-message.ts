@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { type MessageRenderer, registerMessageRenderer } from "@mariozechner/pi-web-ui";
+import type { AgentV2ResponseLanguage } from "@mariozechner/pi-web-workspace";
 import { html, type TemplateResult } from "lit";
 import "./agent-v2-progress-card.js";
 import type { AgentV2ProgressSection } from "./agent-v2-progress-card.js";
@@ -9,6 +10,7 @@ export interface AgentV2RunResultMessage {
 	role: "agent-v2-run-result";
 	id: string;
 	runId: string;
+	responseLanguage: AgentV2ResponseLanguage;
 	presentation: SerializedAgentV2TerminalRunPresentation;
 	timestamp: number;
 }
@@ -30,11 +32,13 @@ export interface AgentV2RunResultRendererOptions {
 
 export function createAgentV2RunResultMessage(
 	presentation: SerializedAgentV2TerminalRunPresentation,
+	responseLanguage: AgentV2ResponseLanguage = "en",
 ): AgentV2RunResultMessage {
 	return {
 		role: "agent-v2-run-result",
 		id: `agent-v2-run-result:${presentation.runId}`,
 		runId: presentation.runId,
+		responseLanguage,
 		presentation,
 		timestamp: terminalTimestamp(presentation),
 	};
@@ -74,6 +78,7 @@ export function renderAgentV2RunResultMessage(
 	return html`
 		<agent-v2-progress-card
 			.presentation=${message.presentation}
+			.responseLanguage=${message.responseLanguage}
 			.terminal=${true}
 			.detailsExpanded=${options?.detailOpenForRun(message.runId) ?? false}
 			.expandedSection=${options?.expandedSectionForRun(message.runId) ?? null}

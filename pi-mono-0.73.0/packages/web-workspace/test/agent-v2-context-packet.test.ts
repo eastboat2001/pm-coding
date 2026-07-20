@@ -23,6 +23,11 @@ describe("agent v2 context packet", () => {
 				document({ documentId: "plan", kind: "plan", contentMarkdown: "# Plan\nBuild static app." }),
 				document({ documentId: "spec", kind: "spec", contentMarkdown: "# Spec\nStatic dashboard." }),
 				document({
+					documentId: "product_blueprint",
+					kind: "product_blueprint",
+					contentMarkdown: "# Product Blueprint\nSource-backed evidence.",
+				}),
+				document({
 					documentId: "capability_decision",
 					kind: "capability_decision",
 					contentMarkdown: "# Capability\nstatic_app",
@@ -45,17 +50,20 @@ describe("agent v2 context packet", () => {
 		});
 		expect(packet.documents).toEqual({
 			capabilityDecision: expect.objectContaining({ documentId: "capability_decision" }),
+			productBlueprint: expect.objectContaining({ documentId: "product_blueprint" }),
 			spec: expect.objectContaining({ documentId: "spec" }),
 			plan: expect.objectContaining({ documentId: "plan" }),
 			tasks: expect.objectContaining({ documentId: "tasks" }),
 		});
 		expect(packet.activeTaskArtifacts.map((item) => item.artifactId)).toEqual(["spec-md"]);
 		expect(packet.requiredRereads).toEqual([
+			{ kind: "document", id: "product_blueprint", reason: "active task context" },
 			{ kind: "document", id: "spec", reason: "active task context" },
 			{ kind: "artifact", id: "spec-md", path: "agent-v2/spec.md", reason: "active task artifact" },
 		]);
 		expect(packet.markdown).toContain("## Active Task\n- `spec` running");
-		expect(packet.markdown).toContain("## Required Rereads\n- document `spec`: active task context");
+		expect(packet.markdown).toContain("document `spec`: active task context");
+		expect(packet.markdown).toContain("document `product_blueprint`: active task context");
 	});
 
 	it("extracts open problems from failed tasks and warn/error diagnostics", () => {

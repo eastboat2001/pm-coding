@@ -74,6 +74,10 @@ const ERROR_MESSAGES: Readonly<Record<AgentV2PiModelExecutionErrorCode, string>>
 	provider_server_error: "Agent v2 model provider is temporarily unavailable.",
 });
 
+const MAX_MODEL_RECOVERY_ATTEMPTS = 4;
+const MAX_CONTRACT_RECOVERY_ATTEMPTS = 2;
+const MAX_PROVIDER_ATTEMPTS = 3;
+
 export interface AgentV2PiModelExecutionFailureDetails {
 	attempts: number;
 	retryable: boolean;
@@ -148,7 +152,12 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 	): Promise<AgentV2ModelExecutionEnvelope<AgentV2ImplementationResult>> {
 		throwIfAborted(input.signal);
 		const prompt = renderAgentV2ImplementationPrompt(input);
-		return await this.execute(input, prompt, (text) => parseAgentV2ImplementationResult(text, input.task.taskId));
+		return await this.execute(
+			input,
+			prompt,
+			(text) => parseAgentV2ImplementationResult(text, input.task.taskId),
+			"implementation",
+		);
 	}
 
 	async generateRepair(
@@ -156,13 +165,27 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 	): Promise<AgentV2ModelExecutionEnvelope<AgentV2RepairResult>> {
 		throwIfAborted(input.signal);
 		const prompt = renderAgentV2RepairPrompt(input);
-		return await this.execute(input, prompt, (text) => parseAgentV2RepairResult(text, input.task.taskId));
+		return await this.execute(
+			input,
+			prompt,
+			(text) => {
+				const result = parseAgentV2RepairResult(text, input.task.taskId);
+				const workspaceByPath = new Map(input.workspaceFiles.map((file) => [file.path, file.content]));
+				const changesContent =
+					result.files.some((file) => workspaceByPath.get(file.path) !== file.content) ||
+					(result.patches ?? []).some((patch) => patch.oldText !== patch.newText);
+				if (!changesContent) throw new AgentV2ModelContractError("invalid_schema");
+				return result;
+			},
+			"repair",
+		);
 	}
 
 	private async execute<T>(
 		input: AgentV2ModelExecutionInput,
 		prompt: { systemPrompt: string; userPrompt: string },
 		parse: (text: string) => T,
+		mode: "implementation" | "repair",
 	): Promise<AgentV2ModelExecutionEnvelope<T>> {
 		throwIfAborted(input.signal);
 		const reference = parseModelReference(input.run.model);
@@ -204,28 +227,58 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 			throw new AgentV2PiModelExecutionError("missing_api_key");
 		}
 
-		const { message, content } = await this.completeProviderRequest(input, prompt, trustedModel, apiKey);
-		try {
-			throwIfAborted(input.signal);
-			const text = collectText(content);
-			const result = parse(text);
-			const usage = normalizeUsage(message.usage);
-			return {
-				result,
-				provider: trustedModel.provider,
-				model: trustedModel.id,
-				usage,
-			};
-		} catch (error) {
-			if (
-				error instanceof AgentV2PiModelExecutionError ||
-				error instanceof AgentV2ModelContractError ||
-				isInternalAbortError(error)
-			) {
+		let activePrompt = prompt;
+		let cumulativeUsage: AgentV2ModelUsageSummary | undefined;
+		let contractRecoveryAttempts = 0;
+		let lengthRecoveryUsed = false;
+		for (let attempt = 1; attempt <= MAX_MODEL_RECOVERY_ATTEMPTS; attempt += 1) {
+			let response: { message: AssistantMessage; content: readonly unknown[] };
+			try {
+				response = await this.completeProviderRequest(input, activePrompt, trustedModel, apiKey);
+			} catch (error) {
+				if (
+					error instanceof AgentV2PiModelExecutionError &&
+					error.code === "provider_length" &&
+					!lengthRecoveryUsed
+				) {
+					lengthRecoveryUsed = true;
+					activePrompt = modelLengthRecoveryPrompt(prompt, mode);
+					continue;
+				}
 				throw error;
 			}
-			throw new AgentV2PiModelExecutionError("provider_failed");
+			const { message, content } = response;
+			try {
+				throwIfAborted(input.signal);
+				cumulativeUsage = addModelUsage(cumulativeUsage, normalizeUsage(message.usage));
+				const text = collectText(content);
+				const result = parse(text);
+				return {
+					result,
+					provider: trustedModel.provider,
+					model: trustedModel.id,
+					usage: cumulativeUsage,
+				};
+			} catch (error) {
+				if (
+					error instanceof AgentV2ModelContractError &&
+					contractRecoveryAttempts < MAX_CONTRACT_RECOVERY_ATTEMPTS
+				) {
+					contractRecoveryAttempts += 1;
+					activePrompt = modelContractRecoveryPrompt(prompt, error.code, contractRecoveryAttempts);
+					continue;
+				}
+				if (
+					error instanceof AgentV2PiModelExecutionError ||
+					error instanceof AgentV2ModelContractError ||
+					isInternalAbortError(error)
+				) {
+					throw error;
+				}
+				throw new AgentV2PiModelExecutionError("provider_failed");
+			}
 		}
+		throw new AgentV2PiModelExecutionError("provider_failed");
 	}
 
 	private async completeProviderRequest(
@@ -235,7 +288,7 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 		apiKey: string | undefined,
 	): Promise<{ message: AssistantMessage; content: readonly unknown[] }> {
 		const idleTimeoutMs = positiveInteger(this.options.streamIdleTimeoutMs);
-		for (let attempt = 1; attempt <= 2; attempt += 1) {
+		for (let attempt = 1; attempt <= MAX_PROVIDER_ATTEMPTS; attempt += 1) {
 			throwIfAborted(input.signal);
 			const result = await this.completeProviderAttempt(input, prompt, trustedModel, apiKey, idleTimeoutMs);
 			if ("error" in result) {
@@ -247,7 +300,7 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 					result.hadObservableOutput,
 					result.idleTimedOut,
 				);
-				if (attempt === 1 && failure.retryable) continue;
+				if (attempt < MAX_PROVIDER_ATTEMPTS && failure.retryable) continue;
 				throw failure;
 			}
 			if (input.signal.aborted) throw createAbortError();
@@ -255,7 +308,7 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 			validateMessageIdentity(result.message, trustedModel);
 			const failure = providerFailureFromMessage(result, content, attempt, idleTimeoutMs);
 			if (!failure) return { message: result.message, content };
-			if (attempt === 1 && failure.retryable) continue;
+			if (attempt < MAX_PROVIDER_ATTEMPTS && failure.retryable) continue;
 			throw failure;
 		}
 		throw new AgentV2PiModelExecutionError("provider_failed");
@@ -316,6 +369,50 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 	}
 }
 
+function modelLengthRecoveryPrompt(
+	prompt: { systemPrompt: string; userPrompt: string },
+	mode: "implementation" | "repair",
+): {
+	systemPrompt: string;
+	userPrompt: string;
+} {
+	return {
+		systemPrompt: `${prompt.systemPrompt}\n\nOUTPUT-LENGTH RECOVERY\nThe previous response reached the provider output limit. Regenerate the complete result in a substantially more compact form. ${
+			mode === "repair"
+				? "Prefer checksum-bound patches for existing files and replace only the smallest unique text disclosed in the repair workspace. Do not rewrite an excerpt-mode file."
+				: "Use the fewest files allowed by the delivery mode. For a static app, prefer one root index.html with concise inline CSS and JavaScript."
+		} Remove comments, repeated sample records, verbose labels, and unnecessary abstractions. Reuse small data arrays instead of repeating markup. Return one complete bare JSON object; never continue or quote the truncated response.`,
+		userPrompt: prompt.userPrompt,
+	};
+}
+
+function modelContractRecoveryPrompt(
+	prompt: { systemPrompt: string; userPrompt: string },
+	code: AgentV2ModelContractError["code"],
+	attempt: number,
+): { systemPrompt: string; userPrompt: string } {
+	const escalation =
+		attempt >= 2
+			? " This is the second protocol recovery. Minimize the result: use the fewest files or patches possible, omit all optional prose, and verify the JSON by parsing it before returning it."
+			: "";
+	return {
+		systemPrompt: `${prompt.systemPrompt}\n\nPROTOCOL RECOVERY\nThe previous response was rejected with ${code}. Regenerate the result and return exactly one JSON object matching the required schema. Do not include Markdown fences, commentary, analysis, XML tags, or trailing text. Preserve the exact taskId and field names. Encode every file body as a valid JSON string.${escalation}`,
+		userPrompt: prompt.userPrompt,
+	};
+}
+
+function addModelUsage(
+	current: AgentV2ModelUsageSummary | undefined,
+	next: AgentV2ModelUsageSummary,
+): AgentV2ModelUsageSummary {
+	return {
+		input: (current?.input ?? 0) + next.input,
+		output: (current?.output ?? 0) + next.output,
+		totalTokens: (current?.totalTokens ?? 0) + next.totalTokens,
+		costTotal: (current?.costTotal ?? 0) + next.costTotal,
+	};
+}
+
 interface ProviderAttemptSuccess {
 	message: AssistantMessage;
 	idleTimedOut: boolean;
@@ -343,9 +440,7 @@ function providerFailureMessage(
 	const base = ERROR_MESSAGES[code];
 	if (!details || !isTransientProviderFailureCode(code)) return base;
 	const attemptSummary = `${details.attempts} provider attempt${details.attempts === 1 ? "" : "s"}`;
-	if (details.hadObservableOutput) {
-		return `${base} Output had already started, so the request was not retried (${attemptSummary}).`;
-	}
+	if (details.hadObservableOutput) return `${base} The incomplete output was discarded (${attemptSummary}).`;
 	if (code === "provider_timeout" && details.idleTimeoutMs !== undefined) {
 		return `${base} No provider chunks were received within ${details.idleTimeoutMs}ms (${attemptSummary}).`;
 	}
@@ -400,7 +495,9 @@ function transientProviderFailure(
 ): AgentV2PiModelExecutionError {
 	return new AgentV2PiModelExecutionError(code, {
 		attempts,
-		retryable: !hadObservableOutput,
+		// Provider output is buffered and never committed before schema validation, so a
+		// partial stream is safe to discard and retry as a fresh request.
+		retryable: true,
 		hadObservableOutput,
 		...(code === "provider_timeout" && idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
 	});

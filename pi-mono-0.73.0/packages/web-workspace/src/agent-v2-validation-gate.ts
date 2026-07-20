@@ -6,6 +6,7 @@ import {
 	createAgentV2ToolFailure,
 	createAgentV2ToolRegistry,
 } from "./agent-v2-tool-governance.js";
+import { type AgentV2ValidationPolicyMetadata, classifyAgentV2ValidationPolicy } from "./agent-v2-validation-policy.js";
 import type { ProjectTaskResult, StorageConfig } from "./types.js";
 import { createWorkspaceTaskService } from "./workspace-task-factory.js";
 import type { WorkspaceTaskService } from "./workspace-task-service.js";
@@ -47,7 +48,7 @@ export interface RunAgentV2StaticValidationGateInput {
 
 export type AgentV2ValidationFailure = AgentV2ToolFailure & {
 	source: "static_validate" | "static_quality" | "static_smoke" | "preview";
-};
+} & AgentV2ValidationPolicyMetadata;
 
 export interface AgentV2ValidationGateResult {
 	status: "passed" | "failed";
@@ -124,7 +125,8 @@ export async function runAgentV2StaticValidationGate(
 		);
 	}
 
-	const status = failures.length === 0 ? "passed" : "failed";
+	const blockingFailures = failures.filter((failure) => failure.blocking);
+	const status = blockingFailures.length === 0 ? "passed" : "failed";
 	return {
 		status,
 		failures,
@@ -138,9 +140,14 @@ export async function runAgentV2StaticValidationGate(
 			summary: status === "passed" ? "Static validation passed" : "Static validation failed",
 			details: {
 				failureCount: failures.length,
+				blockingFailureCount: blockingFailures.length,
 				failureCodes: [...new Set(failures.map((failure) => failure.code))].sort(),
 				retryableFailureCount: failures.filter((failure) => failure.retryable).length,
 				usedBuildStep: buildResult !== undefined,
+				warningCount: rawWarningsFor(taskResult).length,
+				warnings: rawWarningsFor(taskResult)
+					.slice(0, 16)
+					.map((warning) => warning.slice(0, 1_000)),
 			},
 			createdAt: input.now,
 			updatedAt: input.now,
@@ -151,6 +158,10 @@ export async function runAgentV2StaticValidationGate(
 
 function rawErrorsFor(result: ProjectTaskResult): string[] {
 	return Array.isArray(result.errors) ? result.errors.map(String) : [];
+}
+
+function rawWarningsFor(result: ProjectTaskResult): string[] {
+	return Array.isArray(result.warnings) ? result.warnings.map(String) : [];
 }
 
 function isBuildRequiredMessage(message: string): boolean {
@@ -239,6 +250,25 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 }
 
 function classifyQualityFailure(sourceMessage: string, message: string, taskId: string): AgentV2ValidationFailure {
+	if (message.startsWith("Chart.js uses maintainAspectRatio:false without a bounded chart or canvas height.")) {
+		const affected = message.match(/Affected canvases: (.+)\.$/)?.[1] ?? "";
+		return createFailure({
+			code: "static.canvas_layout_unbounded",
+			message: "Static validation found a responsive Chart.js canvas without a bounded layout container.",
+			retryable: true,
+			source: "static_quality",
+			taskId,
+			path: "index.html",
+			data: {
+				canvasIds: affected
+					.split(",")
+					.map((value) => value.trim().replace(/^#/, ""))
+					.filter(Boolean),
+			},
+			sourceMessage,
+		});
+	}
+
 	const selectorMismatch = message.match(/^JavaScript selector (#\S+) in (.+) does not match any HTML id\.$/);
 	if (selectorMismatch) {
 		return createFailure({
@@ -283,6 +313,36 @@ function classifyQualityFailure(sourceMessage: string, message: string, taskId: 
 		});
 	}
 
+	const unwiredSelect = message.match(
+		/^Select control (#\S+) is never referenced by local JavaScript and cannot affect rendered data\.$/,
+	);
+	if (unwiredSelect) {
+		return createFailure({
+			code: "static.control_unwired",
+			message: `Static validation found a select control that cannot affect rendered data: ${unwiredSelect[1]}.`,
+			retryable: true,
+			source: "static_quality",
+			taskId,
+			path: "index.html",
+			data: { selector: unwiredSelect[1] },
+			sourceMessage,
+		});
+	}
+
+	if (
+		message === "Rendered chart or application data uses Math.random(); interactive results must be deterministic."
+	) {
+		return createFailure({
+			code: "static.nondeterministic_data",
+			message: "Static validation found Math.random() in rendered chart or application data.",
+			retryable: true,
+			source: "static_quality",
+			taskId,
+			path: "index.html",
+			sourceMessage,
+		});
+	}
+
 	const localScriptMissing = message.match(/^Local script (.+) could not be read by the static quality gate\.$/);
 	if (localScriptMissing?.[1]) {
 		return createFailure({
@@ -308,6 +368,22 @@ function classifyQualityFailure(sourceMessage: string, message: string, taskId: 
 }
 
 function classifySmokeFailure(sourceMessage: string, message: string, taskId: string): AgentV2ValidationFailure {
+	const controlNoEffect = message.match(
+		/^Runtime smoke gate: select (#\S+) changed value but did not change rendered metrics, chart data, results, or empty state\.$/,
+	);
+	if (controlNoEffect) {
+		return createFailure({
+			code: "static.control_no_effect",
+			message: `Static runtime validation found a select control with no observable data effect: ${controlNoEffect[1]}.`,
+			retryable: true,
+			source: "static_smoke",
+			taskId,
+			path: "index.html",
+			data: { selector: controlNoEffect[1] },
+			sourceMessage,
+		});
+	}
+
 	const loadingVisible = message.match(
 		/^Runtime smoke gate: loading element (#\S+) remained visible after startup\.$/,
 	);
@@ -405,6 +481,13 @@ function createFailure(input: {
 			},
 		}),
 		source: input.source,
+		...classifyAgentV2ValidationPolicy({
+			code: input.code,
+			source: input.source,
+			retryable: input.retryable,
+			path: input.path,
+			data: input.data,
+		}),
 	};
 }
 

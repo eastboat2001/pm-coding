@@ -3,6 +3,7 @@ import type { AppStorage } from "@mariozechner/pi-web-ui";
 import type { ConfiguredServerStorage } from "../storage/configured-server-storage.js";
 
 export const SELECTED_MODEL_KEY = "example.selectedModel";
+export const AGENT_V2_MIN_MODEL_OUTPUT_TOKENS = 8_192;
 type CustomProviderModelSource = {
 	id: string;
 	name: string;
@@ -95,6 +96,10 @@ function isCompleteModel(model: Partial<Model<any>>): boolean {
 		model.contextWindow &&
 		model.maxTokens
 	);
+}
+
+export function supportsApplicationGeneration(model: Model<any> | undefined): model is Model<any> {
+	return !!model && Number.isSafeInteger(model.maxTokens) && model.maxTokens >= AGENT_V2_MIN_MODEL_OUTPUT_TOKENS;
 }
 
 function createCustomProviderModel(provider: CustomProviderModelSource, modelId: string): Model<any> | undefined {

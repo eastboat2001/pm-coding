@@ -1,14 +1,14 @@
 const defaultNow = () => new Date().toISOString();
 export function buildAgentV2SpecDocument(input) {
     const now = input.now ?? defaultNow;
-    const objective = normalizeSentence(input.objective);
+    const objective = normalizeSentence(input.blueprint.summary);
     const platformContract = buildPlatformContract(input.decision);
-    const scope = buildScope(objective, input.decision);
+    const scope = buildScope(input.blueprint, input.decision);
     const nonGoals = buildNonGoals(input.decision);
     const assumptions = buildAssumptions(input.decision);
-    const requirements = buildRequirements(objective, input.decision);
+    const requirements = buildRequirements(input.blueprint, input.decision);
     const capabilityBoundaries = buildCapabilityBoundaries(input.decision);
-    const acceptanceCriteria = buildAcceptanceCriteria(objective, input.decision);
+    const acceptanceCriteria = buildAcceptanceCriteria(input.blueprint, input.decision);
     return {
         kind: "spec",
         title: `Spec: ${objective}`,
@@ -16,7 +16,8 @@ export function buildAgentV2SpecDocument(input) {
         summary: input.decision.summary,
         scope,
         goals: [
-            `Deliver the core objective: ${objective}`,
+            ...blueprintCategoryReferences(input.blueprint, "page", 8),
+            `Deliver the source-backed product blueprint: ${objective}`,
             `Respect the selected delivery mode: ${input.decision.deliveryMode}.`,
         ],
         nonGoals,
@@ -38,11 +39,11 @@ export function buildAgentV2PlanDocument(input) {
         kind: "plan",
         title: `Plan: ${input.spec.objective}`,
         summary: `Implement ${input.spec.objective} as a deterministic ${input.decision.deliveryMode} workflow.`,
-        technicalApproach: buildTechnicalApproach(input.spec, input.decision),
+        technicalApproach: buildTechnicalApproach(input.spec, input.blueprint, input.decision),
         fileStructure: buildFileStructure(input.spec, input.decision),
-        dataModel: buildDataModel(input.spec, input.decision),
-        interactionFlow: buildInteractionFlow(input.spec, input.decision),
-        validationStrategy: buildValidationStrategy(input.spec, input.decision),
+        dataModel: buildDataModel(input.spec, input.blueprint, input.decision),
+        interactionFlow: buildInteractionFlow(input.spec, input.blueprint, input.decision),
+        validationStrategy: buildValidationStrategy(input.spec, input.blueprint, input.decision),
         steps: [
             {
                 stepId: "capability",
@@ -87,7 +88,7 @@ export function buildAgentV2PlanDocument(input) {
                 deliverables: ["Preview-ready output", "Delivery notes"],
             },
         ],
-        risks: buildRisks(input.decision),
+        risks: buildRisks(input.blueprint, input.decision),
         metadata: {
             runId: input.runId,
             createdAt: now(),
@@ -102,8 +103,8 @@ export function buildAgentV2TaskGraph(input) {
         kind: toTaskKind(step.stepId),
         title: step.title,
         dependsOn: step.dependsOn,
-        acceptanceCriteria: buildTaskAcceptanceCriteria(step.stepId, input.spec, input.plan, input.decision),
-        input: buildTaskInput(step.stepId, input.spec, input.plan, input.decision),
+        acceptanceCriteria: buildTaskAcceptanceCriteria(step.stepId, input.spec, input.plan, input.blueprint, input.decision),
+        input: buildTaskInput(step.stepId, input.spec, input.plan, input.blueprint, input.decision),
         output: buildTaskOutputTemplate(step.stepId, input.decision),
         createdAt: now(),
     }));
@@ -144,6 +145,22 @@ export function renderAgentV2DocumentMarkdown(document) {
                 "",
                 "## Alternatives",
                 ...renderList(document.alternatives.map((entry) => `${entry.capability}: ${entry.reason}`)),
+            ].join("\n");
+        case "product_blueprint":
+            return [
+                `# ${document.title}`,
+                "",
+                `Summary: ${document.summary}`,
+                "",
+                "## Source Documents",
+                ...renderList(document.sourceDocuments.map((source) => `${source.path} (${source.checksum}, ${source.lineCount} lines)`)),
+                ...renderBlueprintSection("Requirements", blueprintItems(document, "requirement")),
+                ...renderBlueprintSection("Pages and Product Surfaces", blueprintItems(document, "page")),
+                ...renderBlueprintSection("Interactions", blueprintItems(document, "interaction")),
+                ...renderBlueprintSection("States", blueprintItems(document, "state")),
+                ...renderBlueprintSection("Permissions", blueprintItems(document, "permission")),
+                ...renderBlueprintSection("Visual Direction", blueprintItems(document, "visual")),
+                ...renderBlueprintSection("Acceptance Criteria", blueprintItems(document, "acceptance")),
             ].join("\n");
         case "spec":
             return [
@@ -250,9 +267,10 @@ function buildPlatformContract(decision) {
         metadata: decision.platformContract.metadata ? { ...decision.platformContract.metadata } : undefined,
     };
 }
-function buildScope(objective, decision) {
+function buildScope(blueprint, decision) {
     const scope = [
-        `Implement the requested experience described by: ${objective}`,
+        ...blueprintCategoryReferences(blueprint, "page", 12),
+        `Implement the source-backed product blueprint: ${blueprint.summary}`,
         `Deliver using the ${decision.deliveryMode} platform contract.`,
     ];
     if (decision.requiresSimulation) {
@@ -280,9 +298,9 @@ function buildAssumptions(decision) {
     }
     return assumptions;
 }
-function buildRequirements(objective, decision) {
+function buildRequirements(blueprint, decision) {
     return [
-        `Keep the delivered product aligned with the objective: ${objective}`,
+        ...blueprintCategoryReferences(blueprint, "requirement", 32),
         `Preserve the selected delivery mode: ${decision.deliveryMode}`,
         ...decision.constraints,
     ];
@@ -297,20 +315,26 @@ function buildCapabilityBoundaries(decision) {
     }
     return boundaries;
 }
-function buildAcceptanceCriteria(objective, decision) {
+function buildAcceptanceCriteria(blueprint, decision) {
     const criteria = [
-        `The delivered experience clearly satisfies the objective: ${objective}`,
+        ...blueprintCategoryReferences(blueprint, "acceptance", 24),
+        ...blueprintCategoryReferences(blueprint, "interaction", 16).map((item) => `Interaction is implemented and observable: ${item}`),
         `User-visible behavior matches the ${decision.deliveryMode} delivery contract.`,
-        "Generated artifacts are deterministic for identical inputs.",
-        "Scope, assumptions, and non-goals are explicitly documented.",
+        "Source citations remain traceable through the product blueprint.",
     ];
     if (decision.requiresSimulation) {
         criteria.push("Simulated backend behavior is called out directly in the spec and delivery notes.");
     }
     return criteria;
 }
-function buildRisks(decision) {
+function buildRisks(blueprint, decision) {
     const risks = ["Scope may drift if the implementation ignores the documented acceptance criteria."];
+    if (blueprint.categoryItemIds.state.length === 0) {
+        risks.push("Source documents do not define loading, empty, or error states explicitly.");
+    }
+    if (blueprint.categoryItemIds.permission.length === 0) {
+        risks.push("Source documents do not define role or permission behavior explicitly.");
+    }
     if (decision.requiresSimulation) {
         risks.push("Users may expect a live backend; delivery notes must restate that backend behavior is simulated.");
     }
@@ -319,10 +343,11 @@ function buildRisks(decision) {
     }
     return risks;
 }
-function buildTechnicalApproach(spec, decision) {
+function buildTechnicalApproach(spec, blueprint, decision) {
     return [
         `Use a deterministic ${decision.deliveryMode} builder flow rooted in the ${spec.platformContract.framework} platform contract.`,
-        "Keep spec, plan, and task graph generation pure so identical inputs always produce identical documents.",
+        ...blueprintCategoryReferences(blueprint, "visual", 12).map((item) => `Honor visual direction: ${item}`),
+        "Keep the product blueprint, spec, plan, and task graph deterministic for identical source bytes.",
         decision.requiresSimulation
             ? "Represent backend-only behavior as an explicit static simulation with user-visible notes."
             : "Keep the implementation inside the static frontend boundary without introducing hidden backend behavior.",
@@ -336,23 +361,27 @@ function buildFileStructure(spec, decision) {
         "public/assets",
     ];
 }
-function buildDataModel(spec, decision) {
+function buildDataModel(spec, blueprint, decision) {
     return [
+        ...blueprintCategoryReferences(blueprint, "requirement", 12).map((item) => `Source-backed requirement: ${item}`),
         `capability decision model: deliveryMode=${decision.deliveryMode}, unsupportedCapabilities=${decision.unsupportedCapabilities.join(", ") || "none"}.`,
         `spec document model: objective, scope, requirements, acceptanceCriteria, and platformContract for ${spec.objective}`,
         "plan document model: technicalApproach, fileStructure, dataModel, interactionFlow, validationStrategy, risks, and ordered steps.",
         "task node model: taskId, status, dependencies, acceptanceCriteria, artifactIds, changedFiles, validationIds, failureReason, and repairActions.",
     ];
 }
-function buildInteractionFlow(spec, decision) {
+function buildInteractionFlow(spec, blueprint, decision) {
     return [
-        `capability -> spec -> plan -> implement -> validate -> deliver for ${spec.objective}`,
+        ...blueprintCategoryReferences(blueprint, "interaction", 24),
+        ...blueprintCategoryReferences(blueprint, "state", 12).map((item) => `State behavior: ${item}`),
+        `capability -> product_blueprint -> spec -> plan -> implement -> validate -> deliver for ${spec.objective}`,
         `Implement uses delivery mode ${decision.deliveryMode} before validate checks each acceptance criterion.`,
         "Deliver packages artifacts and constraints after validate records structured evidence.",
     ];
 }
-function buildValidationStrategy(spec, decision) {
+function buildValidationStrategy(spec, blueprint, decision) {
     return [
+        ...blueprintCategoryReferences(blueprint, "acceptance", 24).map((item) => `Verify with source evidence: ${item}`),
         "Re-check every acceptance criteria item during validate and carry the evidence into task outputs.",
         `Verify the platform contract entrypoints remain aligned with ${decision.deliveryMode}.`,
         decision.requiresSimulation
@@ -361,7 +390,7 @@ function buildValidationStrategy(spec, decision) {
         `Use the spec acceptance criteria as the validation baseline for ${spec.objective}`,
     ];
 }
-function buildTaskAcceptanceCriteria(stepId, spec, plan, decision) {
+function buildTaskAcceptanceCriteria(stepId, spec, plan, blueprint, decision) {
     switch (stepId) {
         case "capability":
             return [
@@ -380,7 +409,8 @@ function buildTaskAcceptanceCriteria(stepId, spec, plan, decision) {
             ];
         case "implement":
             return [
-                `Implementation work stays aligned to the objective: ${spec.objective}`,
+                ...blueprintCategoryReferences(blueprint, "acceptance", 16),
+                ...blueprintCategoryReferences(blueprint, "interaction", 12).map((item) => `Implement observable interaction: ${item}`),
                 `Implementation work maps to the selected platform contract entrypoints: ${spec.platformContract.entrypoints.join(", ")}`,
                 decision.requiresSimulation
                     ? "Implementation notes call out explicit static simulation behavior for unsupported backend needs."
@@ -398,15 +428,33 @@ function buildTaskAcceptanceCriteria(stepId, spec, plan, decision) {
             ];
     }
 }
-function buildTaskInput(stepId, spec, plan, decision) {
+function buildTaskInput(stepId, spec, plan, blueprint, decision) {
     return {
         stepId,
         objective: spec.objective,
         deliveryMode: decision.deliveryMode,
         dependencies: plan.steps.find((step) => step.stepId === stepId)?.dependsOn ?? [],
         platformEntrypoints: [...spec.platformContract.entrypoints],
+        productBlueprintId: "product_blueprint",
+        sourceDocuments: blueprint.sourceDocuments.map((source) => source.path),
     };
 }
+function blueprintTexts(items, limit) {
+    return items.slice(0, limit).map((item) => `${item.text} [${item.sourcePath}:${item.line}]`);
+}
+function blueprintItems(blueprint, category) {
+    const ids = new Set(blueprint.categoryItemIds[category]);
+    return blueprint.items.filter((item) => ids.has(item.id));
+}
+function blueprintCategoryReferences(blueprint, category, limit) {
+    return blueprintItems(blueprint, category)
+        .slice(0, limit)
+        .map((item) => `Product blueprint item ${item.id} [${item.sourcePath}:${item.line}]`);
+}
+function renderBlueprintSection(title, items) {
+    return ["", `## ${title}`, ...renderList(blueprintTexts(items, MAX_SAFE_BLUEPRINT_ITEMS))];
+}
+const MAX_SAFE_BLUEPRINT_ITEMS = 40;
 function buildTaskOutputTemplate(stepId, decision) {
     return {
         stepId,

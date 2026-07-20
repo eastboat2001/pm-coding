@@ -15,6 +15,12 @@ export type * from "./agent-v2-outbox.js";
 export * from "./agent-v2-outbox-dispatcher.js";
 export * from "./agent-v2-readiness.js";
 export {
+	AGENT_V2_RESPONSE_LANGUAGES,
+	type AgentV2ResponseLanguage,
+	inferAgentV2ResponseLanguage,
+	normalizeAgentV2ResponseLanguage,
+} from "./agent-v2-response-language.js";
+export {
 	type AgentV2RunEventBus,
 	AgentV2RunEventProjectionConflictError,
 	agentV2RunEventStreamKey,
@@ -72,7 +78,15 @@ export {
 } from "./agent-v2-start-input.js";
 export type { AgentV2RunSnapshot } from "./agent-v2-types.js";
 export {
+	type AgentV2WorkerIdentityLease,
+	RedisAgentV2WorkerIdentityLease,
+	type RedisAgentV2WorkerIdentityLeaseClient,
+	type RedisAgentV2WorkerIdentityLeaseOptions,
+	workerIdentityLeaseKey,
+} from "./agent-v2-worker-identity-lease.js";
+export {
 	type AgentV2WorkerExecution,
+	AgentV2WorkerExecutionFailure,
 	type AgentV2WorkerExecutionInput,
 	AgentV2WorkerService,
 	type AgentV2WorkerServiceOptions,

@@ -13,6 +13,8 @@ import type {
 	AgentV2InputReferenceRecord,
 	AgentV2RunTransitionCommitInput,
 	AgentV2RunTransitionCommitResult,
+	AgentV2RunRetryCommitInput,
+	AgentV2RunRetryCommitResult,
 	AgentV2StartRunCommitInput,
 	AgentV2StartRunCommitResult,
 } from "./agent-v2-durable-store.js";
@@ -1692,6 +1694,9 @@ export class RuntimeDbStore implements RuntimeStore {
 	}
 
 	commitAgentV2RunTransition(input: AgentV2RunTransitionCommitInput): AgentV2RunTransitionCommitResult {
+		if (input.update.status === "queued") {
+			throw new Error("Agent v2 retry transitions must use commitAgentV2RunRetry");
+		}
 		if (
 			input.diagnostic &&
 			(input.diagnostic.clientId !== input.update.clientId || input.diagnostic.runId !== input.update.runId)
@@ -1734,6 +1739,103 @@ export class RuntimeDbStore implements RuntimeStore {
 				this.appendAgentV2DiagnosticWithDatabase(db, input.diagnostic);
 				outboxIntentIds.push(...this.insertDiagnosticOutboxWithDatabase(db, input.diagnostic));
 			}
+			return { update: { run: next, applied: true }, event, outboxIntentIds };
+		});
+	}
+
+	commitAgentV2RunRetry(input: AgentV2RunRetryCommitInput): AgentV2RunRetryCommitResult {
+		if (
+			input.diagnostic.clientId !== input.clientId ||
+			input.diagnostic.runId !== input.runId ||
+			input.nextAttempt !== input.expectedRun.attempt + 1 ||
+			input.nextAttempt > input.maxAttempts ||
+			!Number.isSafeInteger(input.retryWindowMs) ||
+			input.retryWindowMs <= 0
+		) {
+			throw new Error("Agent v2 run retry input is invalid");
+		}
+		assertAgentV2Timestamp(input.retryAt, "retryAt");
+		assertAgentV2Timestamp(input.scheduledAt, "scheduledAt");
+		if (!isCanonicalAgentV2Revision(input.retryAt) || !isCanonicalAgentV2Revision(input.scheduledAt)) {
+			throw new Error("Agent v2 run retry timestamps must be canonical");
+		}
+		const db = this.open();
+		return this.writeTransaction(db, () => {
+			const current = requiredRecord(this.getAgentV2RunWithDatabase(db, input.clientId, input.runId), "agent v2 run");
+			const currentTasks = this.listAgentV2TasksWithDatabase(db, input.clientId, input.runId);
+			const expectations = new Map(input.expectedTasks.map((task) => [task.taskId, task]));
+			const taskIds = new Set(input.tasks.map((task) => task.taskId));
+			const invalidTasks =
+				expectations.size !== input.expectedTasks.length ||
+				taskIds.size !== input.tasks.length ||
+				expectations.size !== taskIds.size ||
+				input.tasks.some(
+					(task) =>
+						task.clientId !== input.clientId ||
+						task.runId !== input.runId ||
+						task.status !== "ready" ||
+						task.updatedAt !== input.scheduledAt ||
+						!expectations.has(task.taskId),
+				) ||
+				input.expectedTasks.some((expected) => {
+					if ("absent" in expected) return true;
+					const task = currentTasks.find((candidate) => candidate.taskId === expected.taskId);
+					return !task || task.status !== expected.status || task.updatedAt !== expected.updatedAt;
+				});
+			if (
+				current.status !== "running" ||
+				Date.parse(input.retryAt) > Date.parse(current.startedAt ?? current.createdAt) + input.retryWindowMs ||
+				invalidTasks ||
+				!matchesAgentV2ExpectedRun(current, input.expectedRun) ||
+				!isCanonicalAgentV2Revision(input.expectedRun.updatedAt) ||
+				!isStrictlyNewerAgentV2Revision(input.scheduledAt, current.updatedAt)
+			) {
+				return { update: { run: current, applied: false }, outboxIntentIds: [] };
+			}
+			const next = applyAgentV2RunUpdate(current, {
+				clientId: input.clientId,
+				runId: input.runId,
+				status: "queued",
+				expectedStatuses: ["running"],
+				phase: input.phase,
+				attempt: input.nextAttempt,
+				updatedAt: input.scheduledAt,
+				error: input.error,
+			});
+			this.updateAgentV2RunWithDatabase(db, next);
+			for (const task of input.tasks) this.upsertAgentV2TaskWithDatabase(db, task);
+			this.appendAgentV2DiagnosticWithDatabase(db, input.diagnostic);
+			const event = this.appendAgentV2RunEventWithDatabase(db, {
+				clientId: input.clientId,
+				runId: input.runId,
+				type: "agent_v2.phase_changed",
+				payload: {
+					type: "agent_v2.phase_changed",
+					phase: input.phase,
+					status: "queued",
+					attempt: input.nextAttempt,
+					at: input.scheduledAt,
+				},
+				createdAt: input.scheduledAt,
+			});
+			const outboxIntentIds = [
+				this.insertAgentV2OutboxWithDatabase(
+					db,
+					input.clientId,
+					input.runId,
+					{ kind: "live_event", eventSeq: event.seq },
+					input.scheduledAt,
+				),
+				...this.insertDiagnosticOutboxWithDatabase(db, input.diagnostic),
+				this.insertAgentV2OutboxWithDatabase(
+					db,
+					input.clientId,
+					input.runId,
+					{ kind: "run_enqueue", queueName: input.queueName, attempt: input.nextAttempt },
+					input.scheduledAt,
+					input.retryAt,
+				),
+			];
 			return { update: { run: next, applied: true }, event, outboxIntentIds };
 		});
 	}
@@ -2403,24 +2505,26 @@ export class RuntimeDbStore implements RuntimeStore {
 		runId: string,
 		reference: AgentV2OutboxReference,
 		createdAt: string,
+		availableAt = createdAt,
 	): string {
 		const dedupeKey = outboxDedupeKey(clientId, runId, reference);
 		const intentId = agentV2OutboxIntentId(dedupeKey);
 		const referenceJson = stringifyAgentV2Json(reference);
 		const existing = db
-			.prepare("SELECT intent_id, reference_json FROM agent_v2_outbox WHERE dedupe_key = ?")
-			.get(dedupeKey) as { intent_id: string; reference_json: string } | undefined;
+			.prepare("SELECT intent_id, reference_json, available_at FROM agent_v2_outbox WHERE dedupe_key = ?")
+			.get(dedupeKey) as { intent_id: string; reference_json: string; available_at: string } | undefined;
 		if (existing) {
 			if (
 				existing.intent_id !== intentId ||
-				!equalAgentV2ProtocolValues(JSON.parse(existing.reference_json), reference)
+				!equalAgentV2ProtocolValues(JSON.parse(existing.reference_json), reference) ||
+				existing.available_at !== availableAt
 			)
 				throw new Error("Agent v2 outbox dedupe conflict");
 			return existing.intent_id;
 		}
 		db.prepare(
 			"INSERT INTO agent_v2_outbox (intent_id, dedupe_key, client_id, run_id, kind, status, available_at, created_at, updated_at, reference_json, attempt_count) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0)",
-		).run(intentId, dedupeKey, clientId, runId, reference.kind, createdAt, createdAt, createdAt, referenceJson);
+		).run(intentId, dedupeKey, clientId, runId, reference.kind, availableAt, createdAt, createdAt, referenceJson);
 		return intentId;
 	}
 
@@ -2769,7 +2873,9 @@ function toOutboxRecord(row: OutboxRow): AgentV2OutboxRecord {
 function outboxDedupeKey(clientId: string, runId: string, reference: AgentV2OutboxReference): string {
 	switch (reference.kind) {
 		case "run_enqueue":
-			return `run_enqueue:${clientId}:${runId}:${reference.queueName}`;
+			return reference.attempt === undefined
+				? `run_enqueue:${clientId}:${runId}:${reference.queueName}`
+				: `run_enqueue:${clientId}:${runId}:${reference.queueName}:attempt:${reference.attempt}`;
 		case "run_cancel":
 			return `run_cancel:${clientId}:${runId}:${reference.queueName}:${reference.cancelToken}`;
 		case "live_event":

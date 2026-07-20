@@ -10,6 +10,7 @@ export class StreamingMessageContainer extends LitElement {
 	@property({ type: Object }) pendingToolCalls?: ReadonlySet<string>;
 	@property({ type: Object }) toolResultsById?: Map<string, ToolResultMessage>;
 	@property({ type: String }) statusText = "";
+	@property({ attribute: false }) externalMessage?: AgentMessage;
 	@property({ attribute: false }) onCostClick?: () => void;
 
 	@state() private _message: AgentMessage | null = null;
@@ -69,8 +70,9 @@ export class StreamingMessageContainer extends LitElement {
 	}
 
 	override render() {
+		const message = this.externalMessage ?? this._message;
 		// Show loading indicator if loading but no message yet
-		if (!this._message) {
+		if (!message) {
 			if (this.isStreaming)
 				return html`<div class="flex flex-col gap-3 mb-3">
 					${this.renderStatus()}
@@ -78,7 +80,7 @@ export class StreamingMessageContainer extends LitElement {
 				</div>`;
 			return html``; // Empty until a message is set
 		}
-		const msg = this._message;
+		const msg = message;
 
 		if (msg.role === "toolResult") {
 			// Skip standalone tool result in streaming; the stable list will render paired tool-message

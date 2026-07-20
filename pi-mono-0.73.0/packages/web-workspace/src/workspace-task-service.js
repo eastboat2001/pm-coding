@@ -56,6 +56,7 @@ export class WorkspaceTaskService {
         if (body.task === "inspect")
             return this.recordTaskResult(base);
         const errors = [];
+        const warnings = [];
         if (files.length === 0)
             errors.push("Project workspace is empty.");
         if (!staticRoot) {
@@ -68,16 +69,20 @@ export class WorkspaceTaskService {
         if (staticRoot) {
             const quality = assessStaticPreviewQuality({ serveRoot: staticRoot });
             errors.push(...quality.errors.map((error) => `Static preview quality gate: ${error}`));
-            if (quality.errors.length === 0) {
-                const smoke = await runStaticPreviewSmokeGate({ serveRoot: staticRoot });
-                errors.push(...smoke.errors.map((error) => `Static preview smoke gate: ${error}`));
-            }
+            warnings.push(...quality.warnings.map((warning) => `Static preview quality gate: ${warning}`));
+            // Collect runtime evidence even when the static gate already found a
+            // repairable issue. Otherwise an early false positive or small markup
+            // defect hides broken interactions and forces serial repair cycles.
+            const smoke = await runStaticPreviewSmokeGate({ serveRoot: staticRoot });
+            errors.push(...smoke.errors.map((error) => `Static preview smoke gate: ${error}`));
+            warnings.push(...smoke.warnings.map((warning) => `Static preview smoke gate: ${warning}`));
         }
         return this.recordTaskResult({
             ...base,
             status: errors.length === 0 ? "passed" : "failed",
             valid: errors.length === 0,
             errors,
+            warnings,
         });
     }
     async buildStaticProject(options, signal) {

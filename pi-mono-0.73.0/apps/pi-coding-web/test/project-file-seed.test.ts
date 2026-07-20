@@ -1,7 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { collectProjectFilesFromMessages, prepareAttachmentProjectFileSeeds } from "../src/runtime/project-file-seed.js";
+import {
+	collectAgentV2ProjectFilesForRun,
+	collectProjectFilesFromMessages,
+	prepareAttachmentProjectFileSeeds,
+} from "../src/runtime/project-file-seed.js";
 
 describe("collectProjectFilesFromMessages", () => {
+	it("keeps source documents from earlier messages when a follow-up starts a new v2 run", () => {
+		const previousMessages = [
+			{
+				role: "user-with-attachments",
+				content: "先阅读需求文档",
+				attachments: [
+					{
+						type: "document",
+						extractedText: "# QDM Finished Lot Yield Dashboard",
+						projectFilePath: "attachments/requirements.md",
+					},
+				],
+			},
+		] as never;
+		const currentMessages = [{ role: "user", content: "请重新生成应用" }] as never;
+
+		expect(collectAgentV2ProjectFilesForRun(previousMessages, currentMessages)).toEqual([
+			{
+				filename: "attachments/requirements.md",
+				content: "# QDM Finished Lot Yield Dashboard",
+			},
+		]);
+	});
+
 	it("collects project files from handoff attachment metadata", () => {
 		const files = collectProjectFilesFromMessages([
 			{

@@ -15,6 +15,14 @@ describe("transient status state", () => {
 		});
 	});
 
+	it("separates elapsed activity progress without classifying it as a retry", () => {
+		expect(parseTransientStatusText("模型正在处理应用生成请求… (12s)")).toEqual({
+			kind: "waiting",
+			label: "模型正在处理应用生成请求…",
+			progress: "12s",
+		});
+	});
+
 	it("classifies recovery and waiting status without retry progress", () => {
 		expect(parseTransientStatusText("运行连接已中断，正在恢复更新...")).toEqual({
 			kind: "recovery",

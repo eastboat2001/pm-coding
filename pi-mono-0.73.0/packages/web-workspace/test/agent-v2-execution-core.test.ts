@@ -129,7 +129,7 @@ describe("agent v2 execution core", () => {
 		});
 	});
 
-	it("atomically expands a retryable validation failure into repair and revalidation tasks", async () => {
+	it("regenerates a complete application when validation finds an empty workspace", async () => {
 		const root = tempRoot();
 		const store = createStore(root);
 		store.createAgentV2Run({
@@ -203,6 +203,8 @@ describe("agent v2 execution core", () => {
 							message: "Workspace has no project files to validate.",
 							retryable: true,
 							source: "static_validate",
+							blocking: true,
+							fingerprint: expect.stringMatching(/^sha256:/),
 						}),
 					]),
 				}),
@@ -212,18 +214,27 @@ describe("agent v2 execution core", () => {
 			expect.arrayContaining([
 				expect.objectContaining({ taskId: "validate", status: "succeeded" }),
 				expect.objectContaining({
-					taskId: "repair:validate:1",
-					kind: "repair",
+					taskId: "regenerate:validate:1",
+					kind: "implementation",
 					dependsOn: ["validate"],
+					input: expect.objectContaining({ recoveryMode: "full_regeneration" }),
 				}),
 				expect.objectContaining({
 					taskId: "revalidate:validate:2",
 					kind: "validation",
-					dependsOn: ["repair:validate:1"],
+					dependsOn: ["regenerate:validate:1"],
 				}),
 				expect.objectContaining({ taskId: "deliver", dependsOn: ["revalidate:validate:2"] }),
 			]),
 		);
+		const revalidation = store
+			.listAgentV2Tasks("client-a", "run-validation")
+			.find((candidate) => candidate.taskId === "revalidate:validate:2");
+		const fingerprintAttempts = revalidation?.input.validationFingerprintAttempts;
+		expect(fingerprintAttempts).toEqual(expect.any(Object));
+		const attemptCounts = Object.values(fingerprintAttempts as Record<string, number>);
+		expect(attemptCounts.length).toBeGreaterThan(0);
+		expect(attemptCounts.every((count) => count === 1)).toBe(true);
 	});
 
 	it("stops before static validation when the execution signal is already aborted", async () => {
@@ -356,8 +367,9 @@ describe("agent v2 execution core", () => {
 			status: "failed",
 			error: expect.objectContaining({
 				code: "agent_v2.validation_failed",
-				message: "Static validation failed and cannot be repaired: Workspace has no project files to validate.",
-				retryable: false,
+				message:
+					"Static validation still failed after bounded recovery attempts: Workspace has no project files to validate.",
+				retryable: true,
 				data: expect.objectContaining({
 					attempt: 3,
 					maxAttempts: 3,
@@ -803,6 +815,20 @@ describe("agent v2 execution core", () => {
 		store.upsertAgentV2Task({
 			clientId: "client-a",
 			runId: "run-delivery-preview",
+			taskId: "validate",
+			kind: "validation",
+			title: "Validate built app",
+			status: "succeeded",
+			dependsOn: [],
+			acceptanceCriteria: ["Static validation passes."],
+			input: {},
+			output: { usedBuildStep: true },
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-delivery-preview",
 			taskId: "deliver",
 			kind: "delivery",
 			title: "Publish static preview",
@@ -835,14 +861,17 @@ describe("agent v2 execution core", () => {
 			status: "running",
 			previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
 		});
-		expect(store.listAgentV2Tasks("client-a", "run-delivery-preview")[0]).toMatchObject({
+		const deliveredTask = store
+			.listAgentV2Tasks("client-a", "run-delivery-preview")
+			.find((task) => task.taskId === "deliver");
+		expect(deliveredTask).toMatchObject({
 			status: "succeeded",
 			output: expect.objectContaining({
 				previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
 				projectId: "project-client-a-session-",
 			}),
 		});
-		expect(store.listAgentV2Tasks("client-a", "run-delivery-preview")[0]?.output).not.toHaveProperty("serveRoot");
+		expect(deliveredTask?.output).not.toHaveProperty("serveRoot");
 		expect(store.getAgentV2Run("client-a", "run-delivery-preview")).toMatchObject({ phase: "delivery" });
 		expect(commit).toHaveBeenCalledTimes(1);
 		expect(directTaskWrite).not.toHaveBeenCalled();
@@ -861,7 +890,7 @@ describe("agent v2 execution core", () => {
 			previewReadiness: { verified: true, ready: true, reasonCode: "ready" },
 			previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
 			validationStatus: "passed",
-			buildStatus: "not_required",
+			buildStatus: "passed",
 		});
 		expect(
 			JSON.stringify({ events, tasks: store.listAgentV2Tasks("client-a", "run-delivery-preview") }),
@@ -899,12 +928,21 @@ describe("agent v2 execution core", () => {
 	});
 
 	it("fails delivery when publication succeeds but the readiness probe does not", async () => {
+		vi.useFakeTimers();
 		const root = tempRoot();
 		const store = createStore(root);
 		createDeliveryTask(store, "run-delivery-not-ready", { running: true });
 		vi.spyOn(WorkspacePreviewService.prototype, "preview").mockResolvedValue(previewSuccess());
 
-		const result = await executeAgentV2NextTask({
+		const checkReadiness = vi.fn(async () => ({
+			ready: false,
+			reasonCode: "http_not_ok" as const,
+			projectId: "project-client-a-session-",
+			previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
+			status: "running",
+			detail: "HTTP 503",
+		}));
+		const execution = executeAgentV2NextTask({
 			...unusedExecutionDependencies(),
 			store: forbidLegacyRuntimeReads(store),
 			config: testConfig(root),
@@ -912,18 +950,15 @@ describe("agent v2 execution core", () => {
 			runId: "run-delivery-not-ready",
 			now: () => "2026-07-08T00:02:00.000Z",
 			previewReadinessChecker: {
-				check: vi.fn(async () => ({
-					ready: false,
-					reasonCode: "http_not_ok" as const,
-					projectId: "project-client-a-session-",
-					previewUrl: "http://localhost:5173/preview/project-client-a-session-/",
-					status: "running",
-					detail: "HTTP 503",
-				})),
+				check: checkReadiness,
 			},
 		});
+		await vi.advanceTimersByTimeAsync(3_500);
+		const result = await execution;
+		vi.useRealTimers();
 
 		expect(result).toMatchObject({ status: "task_failed", taskId: "deliver" });
+		expect(checkReadiness).toHaveBeenCalledTimes(3);
 		expect(
 			store.listAgentV2RunEvents("client-a", "run-delivery-not-ready", 0).map((event) => event.type),
 		).not.toContain("agent_v2.delivery_reported");

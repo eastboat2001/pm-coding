@@ -1,0 +1,64 @@
+- generic [ref=f6e5]:
+  - generic [ref=f6e6]:
+    - generic [ref=f6e7]:
+      - generic "AITC 平台标识" [ref=f6e8]:
+        - generic [ref=f6e9]: AT&S
+        - generic [ref=f6e10]: AITC
+      - generic [ref=f6e11]:
+        - button "新建会话" [ref=f6e12] [cursor=pointer]
+        - button "新建会话" [ref=f6e119]
+    - generic [ref=f6e14]:
+      - generic [ref=f6e15]:
+        - generic [ref=f6e16]: 应用生成
+        - combobox "Session mode" [disabled] [ref=f6e17]:
+          - option "对话"
+          - option "应用生成" [selected]
+      - button [ref=f6e19] [cursor=pointer]
+      - button "设置" [ref=f6e20] [cursor=pointer]
+  - main [ref=f6e21]:
+    - navigation "Workspace tools" [ref=f6e22]:
+      - button "Files" [ref=f6e23] [cursor=pointer]
+      - button "Generated Apps" [ref=f6e28] [cursor=pointer]:
+        - generic [ref=f6e32]: APP
+    - generic [ref=f6e121]:
+      - generic [ref=f6e124]:
+        - generic [ref=f6e155]:
+          - paragraph [ref=f6e161]: 生成一个简洁的中文销售仪表盘，包含三个指标卡、一个月度柱状图和月份筛选按钮，使用模拟数据
+          - generic [ref=f6e166]:
+            - paragraph [ref=f6e167]: 我正在按以下方式理解这次任务：
+            - list [ref=f6e168]:
+              - listitem [ref=f6e169]: 目标：生成一个简洁的中文销售仪表盘，包含三个指标卡、一个月度柱状图和月份筛选按钮，使用模拟数据
+              - listitem [ref=f6e170]: 交付：一个可以直接在浏览器运行和预览的应用
+              - listitem [ref=f6e171]: 重点：完成页面结构、核心交互、内容语言和响应式体验
+            - paragraph [ref=f6e172]: 接下来我会确定实现结构，再生成文件并运行校验。
+          - generic [ref=f6e177]:
+            - paragraph [ref=f6e178]: 现在开始实现：
+            - list [ref=f6e179]:
+              - listitem [ref=f6e180]: 生成页面结构、样式和交互代码；
+              - listitem [ref=f6e181]: 保持应用可以独立运行，避免不必要的依赖；
+              - listitem [ref=f6e182]: 完成后立即检查文件、脚本和浏览器启动状态。
+        - status "模型正在生成页面结构和核心内容… 5s" [ref=f6e186]:
+          - generic [ref=f6e190]: 模型正在生成页面结构和核心内容…
+          - generic [ref=f6e191]: 5s
+      - generic [ref=f6e126]:
+        - region "应用生成进度" [ref=f6e195]:
+          - generic [ref=f6e196]:
+            - generic [ref=f6e197]:
+              - generic [ref=f6e198]:
+                - generic [ref=f6e199]: ◌
+                - generic [ref=f6e200]: 正在运行
+              - paragraph [ref=f6e201]: 实现 · 第 3/5 阶段
+              - paragraph [ref=f6e202]: 实现
+            - generic [ref=f6e203]: 5s
+            - button "查看详情" [ref=f6e204] [cursor=pointer]
+        - generic [ref=f6e128]:
+          - textbox "输入消息..." [active] [ref=f6e129]
+          - generic [ref=f6e130]:
+            - generic [ref=f6e131]:
+              - button [ref=f6e132] [cursor=pointer]
+              - combobox [ref=f6e133]:
+                - generic [ref=f6e134]: 关闭
+              - button "扩展" [ref=f6e146] [cursor=pointer]
+            - generic [ref=f6e148]:
+              - button "mimo-v2.5" [ref=f6e149] [cursor=pointer]
+              - button [ref=f6e205] [cursor=pointer]

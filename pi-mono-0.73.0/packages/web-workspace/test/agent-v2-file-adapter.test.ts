@@ -62,7 +62,7 @@ describe("agent v2 file adapter", () => {
 	it("maps authorization errors to file.path_invalid without message matching", () => {
 		const root = tempRoot();
 		const files = new WorkspaceFileService(testConfig(root));
-		files.handle = () => {
+		files.readProjectFilePreview = () => {
 			throw new WorkspacePathAuthorizationError("path_symlink", "arbitrary authorization rejection");
 		};
 		const adapter = createAgentV2FileAdapter({

@@ -30,6 +30,13 @@ export interface AgentV2ProgressSectionView {
 	controlId: string;
 	expanded: boolean;
 	rows: string[];
+	emptyText: string;
+}
+
+export interface AgentV2ProgressMetricView {
+	id: Exclude<AgentV2ProgressSection, "technical">;
+	label: string;
+	value: string;
 }
 
 export interface AgentV2ProgressCardView {
@@ -38,6 +45,8 @@ export interface AgentV2ProgressCardView {
 	currentStage: string;
 	currentAction: string;
 	elapsedLabel: string;
+	activityLabel: string;
+	metrics: AgentV2ProgressMetricView[];
 	sections: AgentV2ProgressSectionView[];
 	deliveryHref?: string;
 	completion?: { validation: string; build: string; files: string; usageInstructions: string };
@@ -70,6 +79,8 @@ interface AgentV2ProgressCopy {
 	failureLabel: string;
 	openDeliveredApp: string;
 	noRecordedItems: string;
+	liveActivity: string;
+	evidence: string;
 	passed: string;
 	notRequired: string;
 	fileChanges(created: number, updated: number): string;
@@ -79,6 +90,8 @@ interface AgentV2ProgressCopy {
 	retryRun: string;
 	reviewDiagnostics: string;
 	sections: Record<AgentV2ProgressSection, string>;
+	emptySections: Record<AgentV2ProgressSection, string>;
+	metrics: Record<Exclude<AgentV2ProgressSection, "technical">, string>;
 	status: Record<
 		"repairing" | "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled" | "interrupted",
 		string
@@ -87,6 +100,8 @@ interface AgentV2ProgressCopy {
 	repairingAction(attempt: number | undefined, reason: string): string;
 	validationIssue: string;
 	working: string;
+	queuedAction: string;
+	phaseActions: Record<AgentV2UserStage, string>;
 	stageLabel(label: string, index: number, total: number): string;
 }
 
@@ -103,6 +118,8 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 			failureLabel: "失败原因",
 			openDeliveredApp: "打开生成的应用",
 			noRecordedItems: "暂无记录",
+			liveActivity: "实时动态",
+			evidence: "运行记录",
 			passed: "已通过",
 			notRequired: "无需执行",
 			fileChanges: (created, updated) => `新建 ${created} 个，更新 ${updated} 个`,
@@ -113,6 +130,14 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 			retryRun: "请重试本次运行",
 			reviewDiagnostics: "请查看诊断详情，然后修改需求或项目文件",
 			sections: { tasks: "任务", files: "文件", validation: "验证", skills: "技能与资源", technical: "技术详情" },
+			emptySections: {
+				tasks: "任务图正在准备，进入执行后会在这里持续更新。",
+				files: "模型完成当前步骤后，文件变更会显示在这里。",
+				validation: "文件生成后将自动开始校验，并记录每次结果。",
+				skills: "使用到的技能和资源会在加载后显示。",
+				technical: "暂无需要关注的技术诊断。",
+			},
+			metrics: { tasks: "任务", files: "文件", validation: "校验", skills: "技能" },
 			status: {
 				repairing: "正在修复",
 				queued: "已排队",
@@ -133,6 +158,14 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 			repairingAction: (attempt, reason) => `正在修复验证问题${attempt ? `（第 ${attempt} 次）` : ""}：${reason}`,
 			validationIssue: "验证问题",
 			working: "处理中",
+			queuedAction: "任务已进入队列，正在等待可用的 Worker。",
+			phaseActions: {
+				understanding: "正在分析需求、会话上下文与可用能力。",
+				planning: "正在整理实现计划、文件结构与验证目标。",
+				implementation: "正在生成应用代码并准备写入项目文件。",
+				validation: "正在检查页面结构、交互行为与预览状态。",
+				delivery: "正在整理交付结果、文件清单与预览地址。",
+			},
 			stageLabel: (label, index, total) => `${label} · 第 ${index}/${total} 阶段`,
 		};
 	}
@@ -148,6 +181,8 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 			failureLabel: "Fehler",
 			openDeliveredApp: "Erstellte App öffnen",
 			noRecordedItems: "Keine Einträge",
+			liveActivity: "Live-Aktivität",
+			evidence: "Ausführungsprotokoll",
 			passed: "Bestanden",
 			notRequired: "Nicht erforderlich",
 			fileChanges: (created, updated) => `${created} erstellt, ${updated} aktualisiert`,
@@ -164,6 +199,14 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 				skills: "Fähigkeiten und Ressourcen",
 				technical: "Technische Details",
 			},
+			emptySections: {
+				tasks: "Der Aufgabenplan wird vorbereitet und hier laufend aktualisiert.",
+				files: "Dateiänderungen erscheinen nach Abschluss des aktuellen Modellschritts.",
+				validation: "Die Validierung beginnt automatisch, sobald Dateien verfügbar sind.",
+				skills: "Verwendete Fähigkeiten und Ressourcen erscheinen nach dem Laden.",
+				technical: "Keine technischen Hinweise vorhanden.",
+			},
+			metrics: { tasks: "Aufgaben", files: "Dateien", validation: "Prüfungen", skills: "Fähigkeiten" },
 			status: {
 				repairing: "Reparatur läuft",
 				queued: "In Warteschlange",
@@ -185,6 +228,14 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 				`Validierungsproblem wird repariert${attempt ? ` (Versuch ${attempt})` : ""}: ${reason}`,
 			validationIssue: "Validierungsproblem",
 			working: "In Bearbeitung",
+			queuedAction: "Die Aufgabe wartet auf einen verfügbaren Worker.",
+			phaseActions: {
+				understanding: "Anforderungen, Kontext und verfügbare Fähigkeiten werden analysiert.",
+				planning: "Umsetzungsplan, Dateistruktur und Prüfziele werden vorbereitet.",
+				implementation: "Anwendungscode wird erzeugt und für das Projekt vorbereitet.",
+				validation: "Seitenstruktur, Interaktionen und Vorschau werden geprüft.",
+				delivery: "Ergebnisse, Dateien und Vorschauadresse werden zusammengestellt.",
+			},
 			stageLabel: (label, index, total) => `${label} · Phase ${index} von ${total}`,
 		};
 	}
@@ -200,6 +251,8 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 			failureLabel: "Kegagalan",
 			openDeliveredApp: "Buka aplikasi yang dijana",
 			noRecordedItems: "Tiada rekod",
+			liveActivity: "Aktiviti langsung",
+			evidence: "Rekod pelaksanaan",
 			passed: "Lulus",
 			notRequired: "Tidak diperlukan",
 			fileChanges: (created, updated) => `${created} dicipta, ${updated} dikemas kini`,
@@ -216,6 +269,14 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 				skills: "Kemahiran dan sumber",
 				technical: "Butiran teknikal",
 			},
+			emptySections: {
+				tasks: "Pelan tugas sedang disediakan dan akan dikemas kini di sini.",
+				files: "Perubahan fail akan muncul selepas langkah model semasa selesai.",
+				validation: "Pengesahan bermula secara automatik selepas fail tersedia.",
+				skills: "Kemahiran dan sumber yang digunakan akan muncul selepas dimuatkan.",
+				technical: "Tiada diagnostik teknikal untuk diberi perhatian.",
+			},
+			metrics: { tasks: "Tugas", files: "Fail", validation: "Semakan", skills: "Kemahiran" },
 			status: {
 				repairing: "Sedang membaiki",
 				queued: "Dalam baris gilir",
@@ -237,6 +298,14 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 				`Sedang membaiki isu pengesahan${attempt ? ` (cubaan ${attempt})` : ""}: ${reason}`,
 			validationIssue: "Isu pengesahan",
 			working: "Sedang diproses",
+			queuedAction: "Tugas sedang menunggu Worker yang tersedia.",
+			phaseActions: {
+				understanding: "Keperluan, konteks dan keupayaan tersedia sedang dianalisis.",
+				planning: "Pelan pelaksanaan, struktur fail dan sasaran semakan sedang disediakan.",
+				implementation: "Kod aplikasi sedang dijana dan disediakan untuk projek.",
+				validation: "Struktur halaman, interaksi dan pratonton sedang diperiksa.",
+				delivery: "Hasil, fail dan alamat pratonton sedang disusun.",
+			},
 			stageLabel: (label, index, total) => `${label} · fasa ${index} daripada ${total}`,
 		};
 	}
@@ -251,6 +320,8 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 		failureLabel: "Failure",
 		openDeliveredApp: "Open delivered app",
 		noRecordedItems: "No recorded items",
+		liveActivity: "Live activity",
+		evidence: "Run evidence",
 		passed: "Passed",
 		notRequired: "Not required",
 		fileChanges: (created, updated) => `${created} created, ${updated} modified`,
@@ -267,6 +338,14 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 			skills: "Skills and resources",
 			technical: "Technical details",
 		},
+		emptySections: {
+			tasks: "The task graph is being prepared and will update here as work starts.",
+			files: "File changes will appear after the current model step completes.",
+			validation: "Validation starts automatically when generated files are available.",
+			skills: "Applied skills and resources will appear after they are loaded.",
+			technical: "There are no technical diagnostics to review.",
+		},
+		metrics: { tasks: "Tasks", files: "Files", validation: "Checks", skills: "Skills" },
 		status: {
 			repairing: "Repairing",
 			queued: "Queued",
@@ -287,6 +366,14 @@ function progressCopy(language: AgentV2ResponseLanguage): AgentV2ProgressCopy {
 		repairingAction: (attempt, reason) => `Repairing${attempt ? ` (attempt ${attempt})` : ""}: ${reason}`,
 		validationIssue: "Validation issue",
 		working: "Working",
+		queuedAction: "This task is queued and waiting for an available Worker.",
+		phaseActions: {
+			understanding: "Analyzing the request, conversation context, and available capabilities.",
+			planning: "Preparing the implementation plan, file structure, and validation targets.",
+			implementation: "Generating application code and preparing project files.",
+			validation: "Checking page structure, interactions, and preview readiness.",
+			delivery: "Preparing the delivery summary, file list, and preview address.",
+		},
 		stageLabel: (label, index, total) => `${label} · stage ${index} of ${total}`,
 	};
 }
@@ -337,37 +424,57 @@ export class AgentV2ProgressCard extends LitElement {
 				aria-label=${copy.ariaLabel}
 			>
 				<header class="agent-v2-progress-card__header">
-					<div class="agent-v2-progress-card__announcement" aria-live=${this.terminal ? "off" : "polite"} aria-atomic="true">
+					<div class="agent-v2-progress-card__identity">
 						<div class="agent-v2-progress-card__status agent-v2-progress-card__status--${view.status.tone}">
 							<span class="agent-v2-progress-card__status-icon" aria-hidden="true">${statusGlyph(view.status.icon)}</span>
 							<span>${view.status.text}</span>
 						</div>
 						<p class="agent-v2-progress-card__phase">${view.currentStage}</p>
-						<p class="agent-v2-progress-card__action">${view.currentAction}</p>
 					</div>
-					<span class="agent-v2-progress-card__elapsed" aria-hidden="true">${view.elapsedLabel}</span>
-					<button
-						type="button"
-						class="agent-v2-progress-card__detail-toggle"
-						aria-expanded=${String(this.detailsExpanded)}
-						@click=${() => this.onDetailChange?.(!this.detailsExpanded)}
-					>${this.detailsExpanded ? copy.hideDetails : copy.viewDetails}</button>
+					<div class="agent-v2-progress-card__controls">
+						<span class="agent-v2-progress-card__elapsed" aria-label=${view.elapsedLabel}>${view.elapsedLabel}</span>
+						<button
+							type="button"
+							class="agent-v2-progress-card__detail-toggle"
+							aria-expanded=${String(this.detailsExpanded)}
+							@click=${() => this.onDetailChange?.(!this.detailsExpanded)}
+						>
+							<span>${this.detailsExpanded ? copy.hideDetails : copy.viewDetails}</span>
+							<span class="agent-v2-progress-card__toggle-icon" aria-hidden="true">${this.detailsExpanded ? "↑" : "↓"}</span>
+						</button>
+					</div>
 				</header>
 
-				${
-					this.detailsExpanded
-						? html`<ol class="agent-v2-progress-card__stages" aria-label=${copy.runPhases}>
+				<ol class="agent-v2-progress-card__stages" aria-label=${copy.runPhases}>
 					${view.stages.map(
-						(stage) => html`
+						(stage, index) => html`
 							<li class="agent-v2-progress-card__stage agent-v2-progress-card__stage--${stage.state}">
-								<span aria-hidden="true">${stageGlyph(stage.state)}</span>
-								<span>${stage.label}</span>
+								<span class="agent-v2-progress-card__stage-marker" aria-hidden="true">${stageGlyph(stage.state, index)}</span>
+								<span class="agent-v2-progress-card__stage-label">${stage.label}</span>
 							</li>
 						`,
 					)}
-				</ol>`
-						: ""
-				}
+				</ol>
+
+				<div class="agent-v2-progress-card__live" aria-live=${this.terminal ? "off" : "polite"} aria-atomic="true">
+					<div class="agent-v2-progress-card__announcement">
+						<p class="agent-v2-progress-card__activity-label">
+							<span class="agent-v2-progress-card__activity-dot" aria-hidden="true"></span>
+							${view.activityLabel}
+						</p>
+						<p class="agent-v2-progress-card__action">${view.currentAction}</p>
+					</div>
+					<dl class="agent-v2-progress-card__metrics">
+						${view.metrics.map(
+							(metric) => html`
+								<div class="agent-v2-progress-card__metric agent-v2-progress-card__metric--${metric.id}">
+									<dt>${metric.label}</dt>
+									<dd>${metric.value}</dd>
+								</div>
+							`,
+						)}
+					</dl>
+				</div>
 
 				${
 					view.completion
@@ -395,9 +502,12 @@ export class AgentV2ProgressCard extends LitElement {
 
 				${
 					this.detailsExpanded
-						? html`<div class="agent-v2-progress-card__sections">
-					${view.sections.map((section) => this.renderSection(section))}
-				</div>`
+						? html`<div class="agent-v2-progress-card__details">
+							<p class="agent-v2-progress-card__details-title">${copy.evidence}</p>
+							<div class="agent-v2-progress-card__sections">
+								${view.sections.map((section) => this.renderSection(section))}
+							</div>
+						</div>`
 						: ""
 				}
 
@@ -432,13 +542,17 @@ export class AgentV2ProgressCard extends LitElement {
 					aria-controls=${section.controlId}
 					@click=${() => this.onSectionChange?.(section.expanded ? null : section.id)}
 				>
-					<span>${section.label}</span><span aria-hidden="true">${section.expanded ? "−" : "+"}</span>
+					<span class="agent-v2-progress-card__section-heading">
+						<span>${section.label}</span>
+						<span class="agent-v2-progress-card__section-count">${section.rows.length}</span>
+					</span>
+					<span class="agent-v2-progress-card__section-icon" aria-hidden="true">${section.expanded ? "−" : "+"}</span>
 				</button>
 				<div id=${section.controlId} class="agent-v2-progress-card__section-content" ?hidden=${!section.expanded}>
 					${
 						section.rows.length > 0
 							? html`<ul>${section.rows.map((row) => html`<li>${row}</li>`)}</ul>`
-							: html`<p>${progressCopy(this.responseLanguage).noRecordedItems}</p>`
+							: html`<p class="agent-v2-progress-card__empty">${section.emptyText}</p>`
 					}
 				</div>
 			</div>
@@ -451,12 +565,17 @@ export function createAgentV2ProgressCardView(
 	options: AgentV2ProgressCardViewOptions,
 ): AgentV2ProgressCardView {
 	const copy = progressCopy(options.responseLanguage ?? "en");
-	const taskRows = taskEvents(presentation).map((task) => `${task.kind}: ${task.taskId} — ${task.status}`);
+	const tasks = taskEvents(presentation);
+	const artifacts = artifactEvents(presentation);
+	const validations = validationEvents(presentation);
+	const skills = skillEvents(presentation);
+	const resources = resourceEvents(presentation);
+	const taskRows = tasks.map((task) => `${task.kind}: ${task.taskId} · ${task.status}`);
 	const fileRows = artifactEvents(presentation).map(
-		(artifact) => `${artifact.path} — ${artifact.action}, ${artifact.validationStatus}`,
+		(artifact) => `${artifact.path} · ${artifact.action}, ${artifact.validationStatus}`,
 	);
 	const validationRows = validationEvents(presentation).map(
-		(validation) => `${validation.validationId} #${validation.attempt} — ${validation.status}: ${validation.summary}`,
+		(validation) => `${validation.validationId} #${validation.attempt} · ${validation.status}: ${validation.summary}`,
 	);
 	const skillRows = [
 		...skillEvents(presentation).map((skill) => skill.name),
@@ -505,12 +624,24 @@ export function createAgentV2ProgressCardView(
 		currentStage: currentStageLabel(presentation.status === "succeeded" ? "delivery" : presentation.stage, copy),
 		currentAction: currentAction(presentation, copy, options.responseLanguage ?? "en"),
 		elapsedLabel: elapsedLabel(presentation, options.now),
+		activityLabel: copy.liveActivity,
+		metrics: [
+			{
+				id: "tasks",
+				label: copy.metrics.tasks,
+				value: tasks.length > 0 ? `${tasks.filter((task) => task.status === "succeeded").length}/${tasks.length}` : "0",
+			},
+			{ id: "files", label: copy.metrics.files, value: String(artifacts.length) },
+			{ id: "validation", label: copy.metrics.validation, value: String(validations.length) },
+			{ id: "skills", label: copy.metrics.skills, value: String(skills.length + resources.length) },
+		],
 		sections: SECTION_IDS.map((id) => ({
 			id,
 			label: copy.sections[id],
 			controlId: `agent-v2-progress-${safeRunId}-${id}`,
 			expanded: options.expandedSection === id,
 			rows: rows[id],
+			emptyText: copy.emptySections[id],
 		})),
 		...(deliveryHref ? { deliveryHref } : {}),
 		...(completion ? { completion } : {}),
@@ -566,8 +697,9 @@ function currentAction(
 	const latestOutput = outputs.at(-1);
 	if (latestOutput) return latestOutput.summary;
 	const runningTask = taskEvents(presentation).find((task) => task.status === "running");
-	if (runningTask) return `${runningTask.kind}: ${runningTask.taskId}`;
-	return copy.stages[presentation.stage] ?? copy.working;
+	if (runningTask) return `${copy.phaseActions[presentation.stage]} (${runningTask.taskId})`;
+	if (presentation.status === "queued") return copy.queuedAction;
+	return copy.phaseActions[presentation.stage] ?? copy.working;
 }
 
 function elapsedLabel(presentation: AgentV2ProgressPresentation, now: number): string {
@@ -688,6 +820,6 @@ function statusGlyph(icon: AgentV2ProgressStatusView["icon"]): string {
 	return { circle: "○", spinner: "◌", check: "✓", warning: "!", error: "×" }[icon];
 }
 
-function stageGlyph(state: AgentV2ProgressStageView["state"]): string {
-	return { pending: "○", active: "●", complete: "✓", error: "×" }[state];
+function stageGlyph(state: AgentV2ProgressStageView["state"], index: number): string {
+	return state === "complete" ? "✓" : state === "error" ? "×" : String(index + 1);
 }

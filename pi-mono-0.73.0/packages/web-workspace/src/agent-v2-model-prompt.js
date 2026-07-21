@@ -4,6 +4,7 @@ import { inferAgentV2ResponseLanguage } from "./agent-v2-response-language.js";
 export const AGENT_V2_MODEL_PROMPT_LIMITS = Object.freeze({
     maxObjectiveChars: 32_768,
     maxSectionChars: 65_536,
+    maxSkillInstructionChars: 96_000,
     maxPromptChars: 262_144,
     maxItemsPerSection: 256,
     maxMaterializedInputs: 64,
@@ -179,7 +180,7 @@ function normalizeSkillContext(value) {
         if (location !== `skill://${encodeURIComponent(name)}/SKILL.md`) {
             throw new AgentV2ModelContractError("prompt_invalid");
         }
-        const content = requireBoundedText(candidate.content, AGENT_V2_MODEL_PROMPT_LIMITS.maxSectionChars);
+        const content = requireBoundedText(candidate.content, AGENT_V2_MODEL_PROMPT_LIMITS.maxSkillInstructionChars);
         if (!content.trim())
             throw new AgentV2ModelContractError("prompt_invalid");
         return { name, location, content };

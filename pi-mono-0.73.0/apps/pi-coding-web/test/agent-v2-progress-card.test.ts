@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SerializedAgentV2TerminalRunPresentation } from "../src/runtime/agent-v2-run-presentation.js";
+import type {
+	AgentV2RunPresentation,
+	SerializedAgentV2TerminalRunPresentation,
+} from "../src/runtime/agent-v2-run-presentation.js";
 
 describe("Agent v2 progress card", () => {
 	beforeEach(() => {
@@ -30,7 +33,7 @@ describe("Agent v2 progress card", () => {
 		expect(view.sections.every((section) => section.controlId.includes("run-success"))).toBe(true);
 	});
 
-	it("keeps the compact card to status, phase, action, elapsed time, and one detail button", async () => {
+	it("keeps live stage progress and counters visible in the compact card", async () => {
 		const { AgentV2ProgressCard } = await import("../src/runtime/agent-v2-progress-card.js");
 		const card = Object.create(AgentV2ProgressCard.prototype) as AgentV2ProgressCard;
 		Object.defineProperties(card, {
@@ -44,9 +47,32 @@ describe("Agent v2 progress card", () => {
 		const rendered = card.render();
 		const markup = templateMarkup(rendered);
 		expect(markup).toContain("agent-v2-progress-card__detail-toggle");
-		expect(markup).not.toContain("agent-v2-progress-card__stages");
+		expect(markup).toContain("agent-v2-progress-card__stages");
+		expect(markup).toContain("agent-v2-progress-card__metrics");
 		expect(markup).not.toContain("agent-v2-progress-card__sections");
 		expect(templateValues(rendered)).toContain("Delivery · stage 5 of 5");
+	});
+
+	it("explains active work and upcoming evidence instead of showing an empty card", async () => {
+		const { createAgentV2ProgressCardView } = await import("../src/runtime/agent-v2-progress-card.js");
+		const presentation = activePresentation();
+		const view = createAgentV2ProgressCardView(presentation, {
+			expandedSection: "files",
+			now: Date.parse("2026-07-16T00:00:45.000Z"),
+			responseLanguage: "zh",
+		});
+
+		expect(view.currentAction).toBe("正在生成应用代码并准备写入项目文件。");
+		expect(view.metrics.map((metric) => [metric.id, metric.value])).toEqual([
+			["tasks", "0"],
+			["files", "0"],
+			["validation", "0"],
+			["skills", "0"],
+		]);
+		expect(view.sections.find((section) => section.id === "files")?.emptyText).toBe(
+			"模型完成当前步骤后，文件变更会显示在这里。",
+		);
+
 	});
 
 	it("shows delivery as the terminal stage even when the final stored event still names implementation", async () => {
@@ -318,6 +344,26 @@ function failurePresentation(): SerializedAgentV2TerminalRunPresentation {
 			message: "Validation entry point is missing.",
 			retryable: true,
 		},
+	};
+}
+
+function activePresentation(): AgentV2RunPresentation {
+	return {
+		runId: "run-active",
+		status: "running",
+		phase: "implementation",
+		stage: "implementation",
+		active: true,
+		repairing: false,
+		startedAt: "2026-07-16T00:00:00.000Z",
+		updatedAt: "2026-07-16T00:00:30.000Z",
+		tasks: new Map(),
+		artifacts: new Map(),
+		validations: new Map(),
+		diagnostics: new Map(),
+		outputs: new Map(),
+		skills: new Map(),
+		resources: new Map(),
 	};
 }
 

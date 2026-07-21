@@ -371,15 +371,26 @@ body {
 }
 
 .agent-v2-progress-card {
+	--agent-v2-accent: #2563eb;
+	position: relative;
 	display: grid;
-	gap: 0.65rem;
-	border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-	border-radius: 0.75rem;
-	padding: 0.75rem;
-	background: color-mix(in srgb, var(--card) 95%, transparent);
+	overflow: hidden;
+	gap: 0.85rem;
+	border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+	border-radius: 0.9rem;
+	padding: 1rem;
+	background: var(--card);
 	color: var(--card-foreground);
-	font-size: 0.8rem;
-	box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--foreground) 6%, transparent);
+	font-size: 0.82rem;
+	box-shadow: 0 0.55rem 1.6rem color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.agent-v2-progress-card::before {
+	position: absolute;
+	inset: 0 auto 0 0;
+	width: 0.2rem;
+	background: var(--agent-v2-accent);
+	content: "";
 }
 
 .agent-v2-progress-card--terminal {
@@ -388,6 +399,8 @@ body {
 }
 
 .agent-v2-progress-card__header,
+.agent-v2-progress-card__identity,
+.agent-v2-progress-card__controls,
 .agent-v2-progress-card__status,
 .agent-v2-progress-card__detail-toggle,
 .agent-v2-progress-card__section-button,
@@ -400,29 +413,41 @@ body {
 
 .agent-v2-progress-card__header {
 	justify-content: space-between;
-	gap: 0.75rem;
+	gap: 1rem;
+}
+
+.agent-v2-progress-card__identity,
+.agent-v2-progress-card__controls {
+	min-width: 0;
+	gap: 0.65rem;
 }
 
 .agent-v2-progress-card__announcement {
 	display: grid;
 	min-width: 0;
-	gap: 0.15rem;
+	gap: 0.3rem;
 }
 
 .agent-v2-progress-card__phase {
 	margin: 0;
-	font-size: 0.72rem;
-	font-weight: 650;
-	color: var(--foreground);
+	color: var(--muted-foreground);
+	font-size: 0.76rem;
+	font-weight: 600;
 }
 
 .agent-v2-progress-card__status {
-	gap: 0.35rem;
+	min-height: 1.7rem;
+	gap: 0.4rem;
+	border: 1px solid currentColor;
+	border-radius: 0.4rem;
+	padding: 0.18rem 0.48rem;
+	font-size: 0.76rem;
 	font-weight: 700;
 }
 
 .agent-v2-progress-card__status--active {
-	color: #2563eb;
+	background: color-mix(in srgb, var(--agent-v2-accent) 8%, var(--card));
+	color: var(--agent-v2-accent);
 }
 
 .agent-v2-progress-card__status--success,
@@ -441,8 +466,8 @@ body {
 
 .agent-v2-progress-card__status-icon {
 	display: inline-grid;
-	width: 1rem;
-	height: 1rem;
+	width: 0.85rem;
+	height: 0.85rem;
 	place-items: center;
 }
 
@@ -451,28 +476,112 @@ body {
 }
 
 .agent-v2-progress-card__action {
-	overflow: hidden;
 	margin: 0;
-	color: var(--muted-foreground);
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	color: var(--foreground);
+	font-size: 0.88rem;
+	font-weight: 560;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
 }
 
 .agent-v2-progress-card__elapsed {
 	flex: none;
 	color: var(--muted-foreground);
+	font-size: 0.76rem;
+	font-weight: 650;
 	font-variant-numeric: tabular-nums;
 }
 
 .agent-v2-progress-card__detail-toggle {
 	flex: none;
-	border: 1px solid var(--border);
-	border-radius: 999px;
-	padding: 0.28rem 0.55rem;
+	gap: 0.3rem;
+	border: 0;
+	border-radius: 0.35rem;
+	padding: 0.3rem 0.35rem;
 	background: transparent;
 	color: var(--muted-foreground);
 	font: inherit;
 	cursor: pointer;
+}
+
+.agent-v2-progress-card__detail-toggle:hover {
+	background: var(--muted);
+	color: var(--foreground);
+}
+
+.agent-v2-progress-card__toggle-icon {
+	font-size: 0.7rem;
+	line-height: 1;
+}
+
+.agent-v2-progress-card__live {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(18rem, auto);
+	align-items: center;
+	gap: 1rem;
+	border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+	border-radius: 0.65rem;
+	padding: 0.75rem 0.85rem;
+	background: color-mix(in srgb, var(--muted) 42%, var(--card));
+}
+
+.agent-v2-progress-card__activity-label {
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 0.7rem;
+	font-weight: 700;
+	letter-spacing: 0.035em;
+}
+
+.agent-v2-progress-card__activity-dot {
+	width: 0.45rem;
+	height: 0.45rem;
+	border-radius: 50%;
+	background: var(--agent-v2-accent);
+	box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--agent-v2-accent) 12%, transparent);
+	animation: agent-v2-progress-pulse 1.8s ease-in-out infinite;
+}
+
+.agent-v2-progress-card--terminal .agent-v2-progress-card__activity-dot {
+	animation: none;
+}
+
+.agent-v2-progress-card__metrics {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(3.4rem, 1fr));
+	min-width: 18rem;
+	margin: 0;
+}
+
+.agent-v2-progress-card__metric {
+	display: grid;
+	gap: 0.12rem;
+	min-width: 0;
+	border-left: 1px solid var(--border);
+	padding: 0 0.65rem;
+}
+
+.agent-v2-progress-card__metric:first-child {
+	border-left: 0;
+}
+
+.agent-v2-progress-card__metric dt {
+	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 0.66rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-v2-progress-card__metric dd {
+	margin: 0;
+	color: var(--foreground);
+	font-size: 0.92rem;
+	font-weight: 720;
+	font-variant-numeric: tabular-nums;
 }
 
 .agent-v2-progress-card__completion {
@@ -484,37 +593,90 @@ body {
 .agent-v2-progress-card__stages {
 	display: grid;
 	grid-template-columns: repeat(5, minmax(0, 1fr));
-	gap: 0.35rem;
+	gap: 0;
 	margin: 0;
-	padding: 0;
+	padding: 0 0.15rem;
 	list-style: none;
 }
 
 .agent-v2-progress-card__stage {
+	position: relative;
 	display: flex;
-	align-items: center;
+	flex-direction: column;
+	align-items: flex-start;
 	min-width: 0;
-	gap: 0.3rem;
+	gap: 0.32rem;
 	color: var(--muted-foreground);
-	font-size: 0.72rem;
+	font-size: 0.68rem;
 }
 
-.agent-v2-progress-card__stage span:last-child {
+.agent-v2-progress-card__stage::before {
+	position: absolute;
+	top: 0.63rem;
+	right: 0;
+	left: 1.55rem;
+	height: 1px;
+	background: var(--border);
+	content: "";
+}
+
+.agent-v2-progress-card__stage:last-child::before {
+	display: none;
+}
+
+.agent-v2-progress-card__stage-marker {
+	position: relative;
+	z-index: 1;
+	display: inline-grid;
+	width: 1.3rem;
+	height: 1.3rem;
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	place-items: center;
+	background: var(--card);
+	font-size: 0.64rem;
+	font-weight: 720;
+}
+
+.agent-v2-progress-card__stage-label {
 	overflow: hidden;
+	max-width: calc(100% - 0.3rem);
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
+.agent-v2-progress-card__stage--complete::before {
+	background: color-mix(in srgb, #15803d 55%, var(--border));
+}
+
 .agent-v2-progress-card__stage--active {
-	color: var(--foreground);
+	color: var(--agent-v2-accent);
 	font-weight: 650;
+}
+
+.agent-v2-progress-card__stage--active .agent-v2-progress-card__stage-marker {
+	border-color: var(--agent-v2-accent);
+	background: var(--agent-v2-accent);
+	color: var(--primary-foreground);
+	box-shadow: 0 0 0 0.2rem color-mix(in srgb, var(--agent-v2-accent) 12%, transparent);
+}
+
+.agent-v2-progress-card__stage--complete .agent-v2-progress-card__stage-marker {
+	border-color: #15803d;
+	background: color-mix(in srgb, #15803d 9%, var(--card));
+}
+
+.agent-v2-progress-card__stage--error .agent-v2-progress-card__stage-marker {
+	border-color: #b91c1c;
+	background: color-mix(in srgb, #b91c1c 9%, var(--card));
 }
 
 .agent-v2-progress-card__failure {
 	flex-wrap: wrap;
 	gap: 0.3rem 0.45rem;
 	border-left: 0.2rem solid #dc2626;
-	padding: 0.45rem 0.6rem;
+	border-radius: 0.35rem;
+	padding: 0.6rem 0.7rem;
 	background: color-mix(in srgb, #dc2626 8%, var(--card));
 	color: var(--foreground);
 }
@@ -523,10 +685,25 @@ body {
 	color: var(--muted-foreground);
 }
 
+.agent-v2-progress-card__details {
+	display: grid;
+	gap: 0.5rem;
+	border-top: 1px solid var(--border);
+	padding-top: 0.75rem;
+}
+
+.agent-v2-progress-card__details-title {
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 0.7rem;
+	font-weight: 700;
+	letter-spacing: 0.035em;
+}
+
 .agent-v2-progress-card__sections {
 	display: grid;
-	grid-template-columns: repeat(5, minmax(0, 1fr));
-	gap: 0.35rem;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0.45rem;
 }
 
 .agent-v2-progress-card__section {
@@ -537,17 +714,49 @@ body {
 	grid-column: 1 / -1;
 }
 
+.agent-v2-progress-card__section:last-child {
+	grid-column: 1 / -1;
+}
+
 .agent-v2-progress-card__section-button {
 	width: 100%;
 	justify-content: space-between;
 	gap: 0.3rem;
 	border: 1px solid var(--border);
 	border-radius: 0.45rem;
-	padding: 0.35rem 0.45rem;
-	background: var(--muted);
+	padding: 0.52rem 0.6rem;
+	background: color-mix(in srgb, var(--muted) 38%, var(--card));
 	color: var(--foreground);
 	font: inherit;
 	cursor: pointer;
+}
+
+.agent-v2-progress-card__section-button:hover {
+	border-color: color-mix(in srgb, var(--agent-v2-accent) 45%, var(--border));
+	background: color-mix(in srgb, var(--agent-v2-accent) 4%, var(--card));
+}
+
+.agent-v2-progress-card__section-heading {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.agent-v2-progress-card__section-count {
+	display: inline-grid;
+	min-width: 1.25rem;
+	height: 1.15rem;
+	border-radius: 0.3rem;
+	place-items: center;
+	background: var(--muted);
+	color: var(--muted-foreground);
+	font-size: 0.66rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.agent-v2-progress-card__section-icon {
+	color: var(--muted-foreground);
+	font-size: 0.85rem;
 }
 
 .agent-v2-progress-card__section-button:focus-visible,
@@ -559,10 +768,11 @@ body {
 
 .agent-v2-progress-card__section-content {
 	grid-column: 1 / -1;
-	margin-top: 0.35rem;
+	margin-top: 0.4rem;
+	border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 	border-radius: 0.45rem;
-	padding: 0.45rem 0.55rem;
-	background: color-mix(in srgb, var(--muted) 65%, transparent);
+	padding: 0.62rem 0.7rem;
+	background: color-mix(in srgb, var(--muted) 34%, var(--card));
 	color: var(--muted-foreground);
 }
 
@@ -584,6 +794,10 @@ body {
 	overflow-wrap: anywhere;
 }
 
+.agent-v2-progress-card__empty {
+	line-height: 1.55;
+}
+
 .agent-v2-progress-card__delivery {
 	justify-self: start;
 	gap: 0.35rem;
@@ -601,19 +815,63 @@ body {
 }
 
 @media (max-width: 640px) {
-	.agent-v2-progress-card__stages,
-	.agent-v2-progress-card__sections {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+	.agent-v2-progress-card {
+		padding: 0.8rem;
 	}
 
-	.agent-v2-progress-card__stage:last-child,
+	.agent-v2-progress-card__header,
+	.agent-v2-progress-card__live {
+		align-items: stretch;
+		grid-template-columns: 1fr;
+	}
+
+	.agent-v2-progress-card__header {
+		display: grid;
+	}
+
+	.agent-v2-progress-card__controls {
+		justify-content: space-between;
+	}
+
+	.agent-v2-progress-card__metrics {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.45rem 0;
+		min-width: 0;
+	}
+
+	.agent-v2-progress-card__metric {
+		border-top: 1px solid var(--border);
+		padding: 0.35rem 0.55rem 0;
+	}
+
+	.agent-v2-progress-card__metric:nth-child(odd) {
+		border-left: 0;
+	}
+
+	.agent-v2-progress-card__metric:nth-child(-n + 2) {
+		border-top: 0;
+		padding-top: 0;
+	}
+
+	.agent-v2-progress-card__sections {
+		grid-template-columns: 1fr;
+	}
+
 	.agent-v2-progress-card__section:last-child {
 		grid-column: 1 / -1;
+	}
+
+	.agent-v2-progress-card__stage-label {
+		display: none;
 	}
 }
 
 @media (prefers-reduced-motion: reduce) {
 	.agent-v2-progress-card__status--active .agent-v2-progress-card__status-icon {
+		animation: none;
+	}
+
+	.agent-v2-progress-card__activity-dot {
 		animation: none;
 	}
 

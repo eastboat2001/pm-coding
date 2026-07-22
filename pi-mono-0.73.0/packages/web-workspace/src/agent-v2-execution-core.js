@@ -266,7 +266,7 @@ function classifyPreviewFailure(value) {
 }
 async function commitDeliveryFailure(input, run, task, proposedNow, failure) {
     const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt);
-    const diagnosticId = `${failure.code}:${task.taskId}`;
+    const diagnosticId = `${failure.code}:${task.taskId}:${run.attempt}`;
     const diagnostic = createAgentV2DiagnosticEvent({
         diagnosticId,
         clientId: input.context.clientId,
@@ -277,7 +277,7 @@ async function commitDeliveryFailure(input, run, task, proposedNow, failure) {
         phase: "preview",
         taskId: task.taskId,
         message: failure.message,
-        data: { retryable: failure.retryable, taxonomy: failure.taxonomy },
+        data: { retryable: failure.retryable, taxonomy: failure.taxonomy, attempt: run.attempt },
         createdAt: now,
     });
     const transitioned = transitionAgentV2Task({

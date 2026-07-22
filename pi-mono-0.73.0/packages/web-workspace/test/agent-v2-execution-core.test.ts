@@ -1162,7 +1162,7 @@ describe("agent v2 execution core", () => {
 		expect(result).toEqual({
 			status: "task_failed",
 			taskId: "deliver",
-			diagnosticIds: ["agent_v2.preview_missing_entry:deliver"],
+			diagnosticIds: ["agent_v2.preview_missing_entry:deliver:1"],
 		});
 		expect(store.listAgentV2Tasks("client-a", "run-delivery-failed")[0]).toMatchObject({
 			status: "failed",
@@ -1174,11 +1174,11 @@ describe("agent v2 execution core", () => {
 		});
 		expect(store.listAgentV2Diagnostics("client-a", "run-delivery-failed")).toEqual([
 			expect.objectContaining({
-				diagnosticId: "agent_v2.preview_missing_entry:deliver",
+				diagnosticId: "agent_v2.preview_missing_entry:deliver:1",
 				category: "preview",
 				code: "agent_v2.preview_missing_entry",
 				message: "Preview requires a browser-ready index.html in the project root, dist, build, or public.",
-				data: { retryable: true, taxonomy: "missing_entry" },
+				data: { retryable: true, taxonomy: "missing_entry", attempt: 1 },
 			}),
 		]);
 		const events = store.listAgentV2RunEvents("client-a", "run-delivery-failed", 0);
@@ -1189,6 +1189,45 @@ describe("agent v2 execution core", () => {
 			tasks: store.listAgentV2Tasks("client-a", "run-delivery-failed"),
 		});
 		expect(durableBoundary).not.toContain(root);
+	});
+
+	it("keys repeated preview failures by run attempt so durable retries do not conflict", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		createDeliveryTask(store, "run-delivery-retry", { running: true, attempt: 2 });
+		store.appendAgentV2Diagnostic({
+			diagnosticId: "agent_v2.preview_missing_entry:deliver:1",
+			clientId: "client-a",
+			runId: "run-delivery-retry",
+			severity: "error",
+			category: "preview",
+			code: "agent_v2.preview_missing_entry",
+			phase: "preview",
+			taskId: "deliver",
+			message: "Preview requires a browser-ready index.html in the project root, dist, build, or public.",
+			data: { retryable: true, taxonomy: "missing_entry", attempt: 1 },
+			createdAt: "2026-07-08T00:00:30.000Z",
+		});
+		writeProjectFile(root, "app.js", "console.log('still not previewable');");
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-delivery-retry",
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result).toEqual({
+			status: "task_failed",
+			taskId: "deliver",
+			diagnosticIds: ["agent_v2.preview_missing_entry:deliver:2"],
+		});
+		expect(store.listAgentV2Diagnostics("client-a", "run-delivery-retry").map((item) => item.diagnosticId)).toEqual([
+			"agent_v2.preview_missing_entry:deliver:1",
+			"agent_v2.preview_missing_entry:deliver:2",
+		]);
 	});
 
 	it("persists an unknown preview exception as bounded non-retryable diagnostics", async () => {
@@ -1211,7 +1250,7 @@ describe("agent v2 execution core", () => {
 		expect(result).toEqual({
 			status: "task_failed",
 			taskId: "deliver",
-			diagnosticIds: ["agent_v2.preview_publish_failed:deliver"],
+			diagnosticIds: ["agent_v2.preview_publish_failed:deliver:1"],
 		});
 		const durableBoundary = JSON.stringify({
 			diagnostics: store.listAgentV2Diagnostics("client-a", "run-delivery-exception"),
@@ -1273,7 +1312,11 @@ function createImplementationTask(store: RuntimeDbStore, runId: string): void {
 	});
 }
 
-function createDeliveryTask(store: RuntimeDbStore, runId: string, options: { running?: boolean } = {}): void {
+function createDeliveryTask(
+	store: RuntimeDbStore,
+	runId: string,
+	options: { running?: boolean; attempt?: number } = {},
+): void {
 	store.createAgentV2Run({
 		clientId: "client-a",
 		runId,
@@ -1288,6 +1331,7 @@ function createDeliveryTask(store: RuntimeDbStore, runId: string, options: { run
 			status: "running",
 			expectedStatuses: ["queued"],
 			phase: "preview",
+			attempt: options.attempt,
 			workerId: "worker-a",
 			updatedAt: "2026-07-08T00:01:00.000Z",
 		});

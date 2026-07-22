@@ -3,9 +3,11 @@ import { buildAgentV2PlanningBootstrap, toAgentV2PlanningCommit } from "./agent-
 import { AgentV2StartInputError, bindAgentV2StartPayload, normalizeAgentV2RunId, normalizeAgentV2StartPayload, } from "./agent-v2-start-input.js";
 export class AgentV2RunApiError extends Error {
     statusCode;
-    constructor(message, statusCode) {
+    code;
+    constructor(message, statusCode, code) {
         super(message);
         this.statusCode = statusCode;
+        this.code = code;
         this.name = "AgentV2RunApiError";
     }
 }
@@ -15,11 +17,13 @@ export class AgentV2RunApiService {
     now;
     queueName;
     store;
+    validateStart;
     wakeDispatcher;
     constructor(options) {
         this.store = options.store;
         this.events = options.events;
         this.queueName = requireQueueName(options.queueName);
+        this.validateStart = options.validateStart;
         this.wakeDispatcher = options.wakeDispatcher;
         this.now = options.now ?? (() => new Date().toISOString());
         this.createRunId = options.createRunId ?? (() => randomUUID());
@@ -29,6 +33,8 @@ export class AgentV2RunApiService {
         const runId = normalizeRunId(request.runId ?? this.createRunId());
         const payload = normalizeStartPayload(request, runId);
         const existing = hasExplicitRunId ? await this.store.getAgentV2Run(clientId, runId) : undefined;
+        if (!existing)
+            await this.validateStart?.({ clientId, payload });
         const createdAt = existing?.createdAt ?? this.now();
         let committed;
         try {

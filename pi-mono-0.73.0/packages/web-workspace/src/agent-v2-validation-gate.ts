@@ -7,6 +7,7 @@ import {
 	createAgentV2ToolRegistry,
 } from "./agent-v2-tool-governance.js";
 import { type AgentV2ValidationPolicyMetadata, classifyAgentV2ValidationPolicy } from "./agent-v2-validation-policy.js";
+import { isProjectEntryConflictMessage, isProjectManifestMissingMessage } from "./project-entry-consistency.js";
 import type { ProjectTaskResult, StorageConfig } from "./types.js";
 import { createWorkspaceTaskService } from "./workspace-task-factory.js";
 import type { WorkspaceTaskService } from "./workspace-task-service.js";
@@ -79,7 +80,11 @@ export async function runAgentV2StaticValidationGate(
 	const initialRawErrors = rawErrorsFor(initialTaskResult);
 	let buildResult: ProjectTaskResult | undefined;
 	let taskResult = initialTaskResult;
-	if (initialRawErrors.some(isBuildRequiredMessage)) {
+	const hasEntryConflict = initialRawErrors.some(isProjectEntryConflictMessage);
+	if (
+		!hasEntryConflict &&
+		(initialTaskResult.hasPackageJson === true || initialRawErrors.some(isBuildRequiredMessage))
+	) {
 		assertAgentV2ToolAllowed(registry, "validation.static_build", "validation");
 		throwIfAborted(input.signal);
 		buildResult = await tasks.run(
@@ -173,6 +178,9 @@ function isBuildRequiredMessage(message: string): boolean {
 function classifyBuildRunnerFailure(result: ProjectTaskResult, taskId: string): AgentV2ValidationFailure {
 	const code = result.failureCode ?? "build.execution_failed";
 	const sourceMessage = rawErrorsFor(result)[0] ?? "Static build failed.";
+	if (isProjectManifestMissingMessage(sourceMessage)) {
+		return missingBuildManifestFailure(sourceMessage, taskId);
+	}
 	return createFailure({
 		code,
 		message: sourceMessage,
@@ -186,7 +194,11 @@ function classifyBuildRunnerFailure(result: ProjectTaskResult, taskId: string): 
 function isBuildFailureRepairable(code: string, message: string): boolean {
 	if (code === "build.config_missing" || code === "build.output_escape") return false;
 	if (code !== "build.policy_rejected") return true;
-	return REPAIRABLE_BUILD_POLICY_MESSAGES.has(message);
+	return (
+		REPAIRABLE_BUILD_POLICY_MESSAGES.has(message) ||
+		isProjectEntryConflictMessage(message) ||
+		isProjectManifestMissingMessage(message)
+	);
 }
 
 function classifyStaticValidationFailure(message: string, taskId: string): AgentV2ValidationFailure {
@@ -206,6 +218,28 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 			taskId,
 			sourceMessage: message,
 		});
+	}
+
+	if (isProjectEntryConflictMessage(normalized)) {
+		const entries = normalized
+			.match(/entries are unreferenced: (.+?)\. Keep one authoritative implementation/)?.[1]
+			?.split(", ")
+			.map(normalizePath)
+			.filter(Boolean);
+		return createFailure({
+			code: "static.project_entry_conflict",
+			message:
+				"The project contains a standalone inline application and a separate unreferenced source implementation. Keep exactly one authoritative implementation and preview its build output.",
+			retryable: true,
+			source: "static_validate",
+			taskId,
+			path: "index.html",
+			data: { sourceEntries: entries ?? [] },
+			sourceMessage: message,
+		});
+	}
+	if (isProjectManifestMissingMessage(normalized)) {
+		return missingBuildManifestFailure(message, taskId);
 	}
 
 	const buildRequired = normalized.match(
@@ -231,7 +265,7 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 		return createFailure({
 			code: "static.preview_missing_entry",
 			message: "Static validation requires a browser-ready index.html in the project root, dist, build, or public.",
-			retryable: false,
+			retryable: true,
 			source: "preview",
 			taskId,
 			path: "index.html",
@@ -246,6 +280,23 @@ function classifyStaticValidationFailure(message: string, taskId: string): Agent
 		source: "static_validate",
 		taskId,
 		sourceMessage: message,
+	});
+}
+
+function missingBuildManifestFailure(sourceMessage: string, taskId: string): AgentV2ValidationFailure {
+	const sourceEntry = sourceMessage
+		.match(/project contains build source (.+?), but package\.json is missing/)?.[1]
+		?.trim();
+	return createFailure({
+		code: "static.build_manifest_missing",
+		message:
+			"The project uses a build-only source entry but has no package.json. Add a complete build manifest and lockfile for the existing source implementation, or convert it to one dependency-free browser application.",
+		retryable: true,
+		source: "static_validate",
+		taskId,
+		path: "package.json",
+		data: { ...(sourceEntry ? { sourceEntry: normalizePath(sourceEntry) } : {}) },
+		sourceMessage,
 	});
 }
 

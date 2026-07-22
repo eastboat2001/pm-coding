@@ -269,9 +269,7 @@ describe("agent v2 durable commit and outbox store", () => {
 			clientId: "client-a",
 			runId: "run-a",
 			expectedRun: expectedRunState(started),
-			expectedTasks: [
-				{ taskId: failedTask.taskId, status: failedTask.status, updatedAt: failedTask.updatedAt },
-			],
+			expectedTasks: [{ taskId: failedTask.taskId, status: failedTask.status, updatedAt: failedTask.updatedAt }],
 			tasks: [
 				{
 					...failedTask,
@@ -300,9 +298,7 @@ describe("agent v2 durable commit and outbox store", () => {
 			status: "ready",
 		});
 		expect(store.listAgentV2Tasks("client-a", "run-a")[0]?.error).toBeUndefined();
-		expect(retry.outboxIntentIds).toContain(
-			agentV2OutboxIntentId("run_enqueue:client-a:run-a:agent-v2:attempt:2"),
-		);
+		expect(retry.outboxIntentIds).toContain(agentV2OutboxIntentId("run_enqueue:client-a:run-a:agent-v2:attempt:2"));
 		expect(
 			store.leaseAgentV2Outbox({
 				ownerId: "dispatcher-a",

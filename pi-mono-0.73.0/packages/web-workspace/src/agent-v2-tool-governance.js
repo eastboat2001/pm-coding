@@ -28,6 +28,13 @@ const DEFAULT_CONTRACTS = [
         sideEffects: "workspace_files",
     },
     {
+        name: "file.delete",
+        allowedPhases: ["implementation", "repair"],
+        inputSchemaId: "agent-v2.file.delete.input.v1",
+        outputSchemaId: "agent-v2.file.delete.output.v1",
+        sideEffects: "workspace_files",
+    },
+    {
         name: "validation.static_build",
         allowedPhases: ["validation", "repair"],
         inputSchemaId: "agent-v2.validation.static_build.input.v1",

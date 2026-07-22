@@ -17,6 +17,14 @@ describe("agent v2 tool governance", () => {
 		expect(() => assertAgentV2ToolAllowed(registry, "file.write", "validation")).toThrow(
 			"Agent v2 tool file.write is not allowed during phase validation",
 		);
+		expect(registry.get("file.delete")).toMatchObject({
+			name: "file.delete",
+			sideEffects: "workspace_files",
+		});
+		expect(() => assertAgentV2ToolAllowed(registry, "file.delete", "repair")).not.toThrow();
+		expect(() => assertAgentV2ToolAllowed(registry, "file.delete", "validation")).toThrow(
+			"Agent v2 tool file.delete is not allowed during phase validation",
+		);
 	});
 
 	it("fails closed for unknown tools", () => {

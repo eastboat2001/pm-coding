@@ -279,9 +279,7 @@ describe("agent v2 model result parser", () => {
 			expectSafeError(() => parseAgentV2RepairResult(JSON.stringify(candidate), "task-1"));
 		}
 		expectSafeError(() => parseAgentV2ImplementationResult(JSON.stringify(value), "task-1"));
-		expectSafeError(() =>
-			parseAgentV2RepairResult(JSON.stringify({ ...value, files: [] }), "task-1"),
-		);
+		expectSafeError(() => parseAgentV2RepairResult(JSON.stringify({ ...value, files: [] }), "task-1"));
 	});
 
 	it("accepts checksum-bound repair patches and rejects ambiguous mixed writes", () => {
@@ -303,6 +301,24 @@ describe("agent v2 model result parser", () => {
 				JSON.stringify({ ...value, files: [{ path: "index.html", content: "rewrite" }] }),
 				"task-1",
 			),
+		);
+	});
+
+	it("accepts bounded disclosed deletion intents and rejects path collisions", () => {
+		const value = {
+			...repairValue(),
+			files: [],
+			deletedPaths: ["src/main.tsx", "package.json"],
+		};
+		expect(parseAgentV2RepairResult(JSON.stringify(value), "task-1")).toEqual(value);
+		expectSafeError(() =>
+			parseAgentV2RepairResult(
+				JSON.stringify({ ...value, files: [{ path: "src/main.tsx", content: "rewrite" }] }),
+				"task-1",
+			),
+		);
+		expectSafeError(() =>
+			parseAgentV2RepairResult(JSON.stringify({ ...value, deletedPaths: ["../outside.txt"] }), "task-1"),
 		);
 	});
 
@@ -328,9 +344,11 @@ describe("agent v2 model prompt renderer", () => {
 		expect(first).toEqual(second);
 		expect(first.systemPrompt).toContain("Application Generation Agent v2");
 		expect(first.systemPrompt).toContain("JSON");
-		expect(first.systemPrompt).toContain(
-			"For static_app delivery, produce a browser-ready root index.html without package.json or a build step.",
-		);
+		expect(first.systemPrompt).toContain("DELIVERY MODE LOCK: static_app");
+		expect(first.systemPrompt).toContain("Do not first create a framework project");
+		expect(first.systemPrompt).toContain("LOCAL OFFLINE ASSET CATALOG");
+		expect(first.systemPrompt).toContain("For static_app delivery, produce a browser-ready root index.html");
+		expect(first.systemPrompt).toContain("For static_simulation delivery, use the same dependency-free packaging");
 		expect(first.systemPrompt).toContain("never trade away visual hierarchy");
 		expect(first.systemPrompt).toContain("1440x900");
 		expect(first.systemPrompt).toContain("390x844");
@@ -338,6 +356,8 @@ describe("agent v2 model prompt renderer", () => {
 		expect(first.systemPrompt).toContain("never leave stale values");
 		expect(first.systemPrompt).toContain("Never leave KPI cards at bootstrap zero");
 		expect(first.systemPrompt).toContain("maintainAspectRatio:false");
+		expect(first.systemPrompt).toContain("dedicated non-flex child container");
+		expect(first.systemPrompt).toContain("canvas height attribute");
 		expect(first.systemPrompt).toContain(
 			"If dependencies are declared, include a valid package-lock.json; otherwise use dependency-free browser assets.",
 		);
@@ -354,6 +374,38 @@ describe("agent v2 model prompt renderer", () => {
 		expect(first.userPrompt).toContain('"version":1');
 		expect(first.userPrompt).toContain('"taskId"');
 		expect(first.userPrompt).not.toContain("addressedDiagnosticIds");
+	});
+
+	it("locks static simulation to one native browser stack before generation", () => {
+		const input = executionInput();
+		const capabilityDecision = input.contextPacket.documents.capabilityDecision;
+		if (!capabilityDecision) throw new Error("expected capability decision fixture");
+		const rendered = renderAgentV2ImplementationPrompt({
+			...input,
+			contextPacket: {
+				...input.contextPacket,
+				documents: {
+					...input.contextPacket.documents,
+					capabilityDecision: {
+						...capabilityDecision,
+						contentJson: {
+							kind: "capability_decision",
+							deliveryMode: "static_simulation",
+						} as AgentV2DocumentRecord["contentJson"],
+					},
+				},
+			},
+		});
+
+		expect(rendered.systemPrompt).toContain("DELIVERY MODE LOCK: static_simulation");
+		expect(rendered.systemPrompt).toContain("HTML, CSS, and plain JavaScript");
+		expect(rendered.systemPrompt).toContain(
+			"Do not generate package.json, lockfiles, src/, React, Vue, JSX/TSX, Vite",
+		);
+		expect(rendered.systemPrompt).toContain("Do not reference arbitrary remote CDN URLs");
+		expect(rendered.systemPrompt).toContain(
+			"perform both instance creation and the initial data render inside that handler in dependency order",
+		);
 	});
 
 	it("instructs the final fallback to regenerate a self-contained application", () => {
@@ -1150,7 +1202,10 @@ function documentRecord(
 		kind,
 		version: "1",
 		contentMarkdown,
-		contentJson: { kind } as AgentV2DocumentRecord["contentJson"],
+		contentJson:
+			kind === "capability_decision"
+				? ({ kind, deliveryMode: "static_app" } as AgentV2DocumentRecord["contentJson"])
+				: ({ kind } as AgentV2DocumentRecord["contentJson"]),
 		createdAt: "2026-07-10T00:00:00.000Z",
 		updatedAt: "2026-07-10T00:00:00.000Z",
 	};

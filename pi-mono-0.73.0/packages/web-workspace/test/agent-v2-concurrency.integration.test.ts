@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { AgentV2ExecutionStepResult } from "../src/agent-v2-execution-core.js";
 import { AgentV2OutboxDispatcher } from "../src/agent-v2-outbox-dispatcher.js";
-import { PostgresRuntimeStore } from "../src/postgres-runtime-store.js";
+import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import { RedisAgentV2RunEventBus } from "../src/agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "../src/agent-v2-run-event-log.js";
-import { AgentV2RunApiService } from "../src/agent-v2-run-api-service.js";
 import { createRedisAgentV2RunQueue } from "../src/agent-v2-run-queue.js";
 import type { AgentV2RunSnapshot } from "../src/agent-v2-types.js";
 import { AgentV2WorkerService } from "../src/agent-v2-worker-service.js";
+import { PostgresRuntimeStore } from "../src/postgres-runtime-store.js";
 import { createPostgresTestSchema } from "./helpers/postgres-test-schema.js";
 
 const postgresUrl = process.env.PI_TEST_POSTGRES_URL;
@@ -55,7 +55,7 @@ describeInfrastructure("agent v2 real infrastructure concurrency", () => {
 						},
 						model: { provider: "test", id: "concurrency-model" },
 					}),
-			),
+				),
 			);
 			expect(created).toHaveLength(20);
 			expect(created.every((run) => run.status === "queued" && run.attempt === 1)).toBe(true);

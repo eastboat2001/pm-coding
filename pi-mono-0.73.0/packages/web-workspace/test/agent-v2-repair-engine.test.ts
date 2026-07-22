@@ -26,6 +26,28 @@ describe("agent v2 repair engine", () => {
 		]);
 	});
 
+	it("regenerates a coherent application when the selected packaging lacks its build manifest", () => {
+		const [action] = planAgentV2RepairActions({
+			taskId: "validate",
+			failures: [
+				failure({
+					code: "static.build_manifest_missing",
+					path: "package.json",
+					source: "static_validate",
+				}),
+			],
+			attempt: 1,
+			maxAttempts: 5,
+		});
+
+		expect(action).toMatchObject({
+			type: "regenerate_app",
+			targetPath: "package.json",
+			retryable: true,
+			validationCode: "static.build_manifest_missing",
+		});
+	});
+
 	it("blocks when max repair attempts are exhausted", () => {
 		const actions = planAgentV2RepairActions({
 			taskId: "validate",
@@ -88,7 +110,7 @@ describe("agent v2 repair engine", () => {
 			type: "file_patch",
 			targetPath: "index.html",
 			reason:
-				"Responsive charts must use dedicated position:relative containers with bounded heights before delivery.",
+				"Responsive charts must use dedicated non-flex position:relative child containers with bounded heights before delivery. Do not use a flex-growing card-body, h-100 card, grid cell, canvas height attribute, or the canvas itself as the height boundary.",
 		});
 	});
 
@@ -119,9 +141,7 @@ describe("agent v2 repair engine", () => {
 	it("normalizes retryable target paths before deriving action identity", () => {
 		const [normalized] = planAgentV2RepairActions({
 			taskId: "validate",
-			failures: [
-				failure({ code: "static.loading_visible", path: "./src\\\\//main.ts", source: "static_smoke" }),
-			],
+			failures: [failure({ code: "static.loading_visible", path: "./src\\\\//main.ts", source: "static_smoke" })],
 			attempt: 1,
 			maxAttempts: 3,
 		});

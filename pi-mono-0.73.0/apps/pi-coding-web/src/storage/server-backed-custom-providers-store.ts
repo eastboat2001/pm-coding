@@ -2,7 +2,6 @@ import { type CustomProvider, CustomProvidersStore } from "@mariozechner/pi-web-
 import type { ConfiguredServerStorage } from "./configured-server-storage.js";
 
 type ServerCustomProvidersState = {
-	hasCustomProviders: boolean;
 	providers: CustomProvider[];
 };
 
@@ -15,66 +14,32 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 
 	override async get(id: string): Promise<CustomProvider | null> {
 		const serverState = await this.readServerCustomProviders();
-		if (serverState.hasCustomProviders && serverState.providers.length > 0) {
-			const provider = serverState.providers.find((item) => item.id === id) ?? null;
-			if (provider) {
-				void this.writeLocalProvider(provider);
-			} else {
-				void this.deleteLocalProvider(id);
-			}
-			return provider;
-		}
-
-		const localProvider = await this.readLocalProvider(id);
-		if (localProvider) {
-			await this.writeServerProviders(await this.readLocalProviders());
-		}
-		return localProvider;
+		const provider = serverState.providers.find((item) => item.id === id) ?? null;
+		if (provider) void this.writeLocalProvider(provider);
+		else void this.deleteLocalProvider(id);
+		return provider;
 	}
 
 	override async set(provider: CustomProvider): Promise<void> {
 		const serverState = await this.readServerCustomProviders();
-		const providers = await this.readProvidersForWrite(serverState);
-		const wroteServer = await this.writeServerProviders(upsertProvider(providers, provider));
-		if (wroteServer) {
-			void this.writeLocalProvider(provider);
-			return;
-		}
-		const wroteLocal = await this.writeLocalProvider(provider);
-		if (!wroteLocal) throw new Error("Failed to save provider settings.");
+		const wroteServer = await this.writeServerProviders(upsertProvider(serverState.providers, provider));
+		if (!wroteServer) throw new Error("Failed to synchronize provider settings with the PI server.");
+		void this.writeLocalProvider(provider);
 	}
 
 	override async delete(id: string): Promise<void> {
 		const serverState = await this.readServerCustomProviders();
-		const providers = await this.readProvidersForWrite(serverState);
-		const wroteServer = await this.writeServerProviders(providers.filter((provider) => provider.id !== id));
-		if (wroteServer) {
-			void this.deleteLocalProvider(id);
-			return;
-		}
-		const wroteLocal = await this.deleteLocalProvider(id);
-		if (!wroteLocal) throw new Error("Failed to delete provider settings.");
+		const wroteServer = await this.writeServerProviders(
+			serverState.providers.filter((provider) => provider.id !== id),
+		);
+		if (!wroteServer) throw new Error("Failed to synchronize provider deletion with the PI server.");
+		void this.deleteLocalProvider(id);
 	}
 
 	override async getAll(): Promise<CustomProvider[]> {
 		const serverState = await this.readServerCustomProviders();
-		if (serverState.hasCustomProviders) {
-			if (serverState.providers.length === 0) {
-				const localProviders = await this.readLocalProviders();
-				if (localProviders.length > 0) {
-					await this.writeServerProviders(localProviders);
-					return localProviders;
-				}
-			}
-			void this.replaceLocalProviders(serverState.providers);
-			return serverState.providers;
-		}
-
-		const localProviders = await this.readLocalProviders();
-		if (localProviders.length > 0) {
-			await this.writeServerProviders(localProviders);
-		}
-		return localProviders;
+		void this.replaceLocalProviders(serverState.providers);
+		return serverState.providers;
 	}
 
 	override async has(id: string): Promise<boolean> {
@@ -87,10 +52,10 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 		const providers = Array.isArray(rawProviders) ? rawProviders.filter(isCustomProvider) : [];
 		const normalizedProviders = providers.map(normalizeCustomProviderModelIdentities);
 		if (normalizedProviders.some((provider, index) => provider !== providers[index])) {
-			await this.writeServerProviders(normalizedProviders);
+			const wroteServer = await this.writeServerProviders(normalizedProviders);
+			if (!wroteServer) throw new Error("Failed to synchronize normalized provider settings with the PI server.");
 		}
 		return {
-			hasCustomProviders: Array.isArray(rawProviders),
 			providers: normalizedProviders,
 		};
 	}
@@ -99,13 +64,6 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 		return await this.configuredStorage.writeSettings({
 			customProviders: providers.map(normalizeCustomProviderModelIdentities),
 		});
-	}
-
-	private async readProvidersForWrite(serverState: ServerCustomProvidersState): Promise<CustomProvider[]> {
-		if (!serverState.hasCustomProviders || serverState.providers.length === 0) {
-			return await this.readLocalProviders();
-		}
-		return serverState.providers;
 	}
 
 	private async readLocalProviders(): Promise<CustomProvider[]> {
@@ -134,10 +92,6 @@ export class ServerBackedCustomProvidersStore extends CustomProvidersStore {
 				await this.deleteLocalProvider(provider.id);
 			}
 		}
-	}
-
-	private async readLocalProvider(id: string): Promise<CustomProvider | null> {
-		return await withTimeout(super.get(id), LOCAL_CACHE_TIMEOUT_MS, null);
 	}
 
 	private async writeLocalProvider(provider: CustomProvider): Promise<boolean> {

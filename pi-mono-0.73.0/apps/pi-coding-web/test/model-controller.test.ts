@@ -106,6 +106,54 @@ describe("ModelController", () => {
 		expect(refreshed?.baseUrl).toBe("https://new.example/v1");
 	});
 
+	it("prefers the server-selected model over a stale browser selection", async () => {
+		const providers = [
+			{
+				id: "provider-a",
+				name: "Server",
+				type: "openai-completions",
+				baseUrl: "https://server.example/v1",
+				models: [manualModel("custom-provider:provider-a", "server-model", "https://server.example/v1")],
+			},
+			{
+				id: "provider-b",
+				name: "Browser",
+				type: "openai-completions",
+				baseUrl: "https://browser.example/v1",
+				models: [manualModel("custom-provider:provider-b", "browser-model", "https://browser.example/v1")],
+			},
+		];
+		const controller = new ModelController(
+			{
+				customProviders: { getAll: async () => providers },
+				settings: {
+					get: async () => providers[1].models[0],
+					set: async () => undefined,
+				},
+			} as any,
+			{
+				readSettings: async () => ({ selectedModel: providers[0].models[0] }),
+				getStatus: async () => undefined,
+				writeSettings: async () => true,
+			} as any,
+		);
+
+		await expect(controller.getDefaultModel()).resolves.toMatchObject({
+			provider: "custom-provider:provider-a",
+			id: "server-model",
+		});
+	});
+
+	it("rejects a V2 model that only exists in stale browser state", async () => {
+		const controller = createController();
+
+		await expect(
+			controller.synchronizeSelectedModelForV2(
+				manualModel("custom-provider:removed-provider", "old-model", "https://old.example/v1"),
+			),
+		).rejects.toMatchObject({ code: "agent_v2.model.not_synchronized" });
+	});
+
 	it("requires sufficient output capacity without selecting another model", () => {
 		expect(
 			supportsApplicationGeneration({

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	cancelGeneratedAppRunWithRollback,
 	clampGeneratedAppsPanelWidth,
+	deleteGeneratedApp,
 	filterGeneratedApps,
 	formatGeneratedAppUpdatedAt,
 	type GeneratedAppRecord,
@@ -412,6 +413,55 @@ describe("generated apps state", () => {
 			},
 		]);
 		expect(project.title).toBe("AI Safety Center");
+	});
+
+	it("deletes a generated app through the server before local session cleanup", async () => {
+		const project = createProject("ai-safety-app", "AI Safety Center");
+		const calls: Array<{ url: string; init?: RequestInit }> = [];
+		const fetchImpl: typeof fetch = async (input, init) => {
+			calls.push({ url: String(input), init });
+			return jsonResponse({ projectId: project.projectId, sessionId: project.sessionId, deleted: true });
+		};
+
+		const result = await deleteGeneratedApp(project, fetchImpl, "http://localhost:5173");
+
+		expect(calls).toEqual([
+			{
+				url: `http://localhost:5173/api/pi-projects/${project.projectId}?sessionId=${project.sessionId}`,
+				init: {
+					method: "DELETE",
+					headers: { Accept: "application/json", "X-PI-Client-ID": clientId },
+				},
+			},
+		]);
+		expect(result).toEqual({ projectId: project.projectId, sessionId: project.sessionId, deleted: true });
+	});
+
+	it("keeps the card and local session when server project deletion fails", async () => {
+		vi.stubGlobal("HTMLElement", class {});
+		vi.stubGlobal("customElements", {
+			define: vi.fn(),
+			get: vi.fn(),
+		});
+		const { GeneratedAppsPanel } = await import("../src/app/GeneratedAppsPanel.js");
+		const project = createProject("delete-failure", "Delete Failure");
+		const panel = new GeneratedAppsPanel() as GeneratedAppsPanel & {
+			projects: GeneratedAppRecord[];
+			deleteError: string;
+			confirmDelete(project: GeneratedAppRecord): Promise<void>;
+		};
+		panel.projects = [project];
+		panel.deleteProject = vi.fn(async () => {
+			throw new Error("server delete failed");
+		});
+		panel.deleteSession = vi.fn(async () => undefined);
+
+		await panel.confirmDelete(project);
+
+		expect(panel.deleteProject).toHaveBeenCalledWith(project);
+		expect(panel.deleteSession).not.toHaveBeenCalled();
+		expect(panel.projects).toEqual([project]);
+		expect(panel.deleteError).toBe("server delete failed");
 	});
 
 	it("formats app card timestamps like the session list", () => {

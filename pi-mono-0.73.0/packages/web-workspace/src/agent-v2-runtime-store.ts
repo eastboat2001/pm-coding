@@ -4,10 +4,10 @@ import type {
 	AgentV2DiagnosticCommitResult,
 	AgentV2ExecutionMutationInput,
 	AgentV2ExecutionMutationResult,
-	AgentV2RunTransitionCommitInput,
-	AgentV2RunTransitionCommitResult,
 	AgentV2RunRetryCommitInput,
 	AgentV2RunRetryCommitResult,
+	AgentV2RunTransitionCommitInput,
+	AgentV2RunTransitionCommitResult,
 } from "./agent-v2-durable-store.js";
 import type {
 	AgentV2ArtifactRecord,

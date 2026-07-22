@@ -36,6 +36,19 @@ describe("configured server storage", () => {
 			expect(request.init?.headers).toMatchObject({ "X-PI-Client-ID": clientId });
 		}
 	});
+
+	it("does not report a failed settings request as a missing optional record", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("network unavailable");
+			}),
+		);
+
+		const storage = new ConfiguredServerStorage();
+		await expect(storage.readSettings()).rejects.toThrow("network unavailable");
+		await expect(storage.writeSettings({ currentSessionId: "session-1" })).rejects.toThrow("network unavailable");
+	});
 });
 
 function createStorage(clientId: string): Storage {

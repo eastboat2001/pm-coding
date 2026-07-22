@@ -9,10 +9,10 @@ import type {
 	AgentV2ExecutionMutationResult,
 	AgentV2InputBlobRecord,
 	AgentV2InputReferenceRecord,
-	AgentV2RunTransitionCommitInput,
-	AgentV2RunTransitionCommitResult,
 	AgentV2RunRetryCommitInput,
 	AgentV2RunRetryCommitResult,
+	AgentV2RunTransitionCommitInput,
+	AgentV2RunTransitionCommitResult,
 	AgentV2StartRunCommitInput,
 	AgentV2StartRunCommitResult,
 } from "./agent-v2-durable-store.js";
@@ -2931,7 +2931,16 @@ export class PostgresRuntimeStore implements RuntimeStore {
 		await this.query(
 			queryable,
 			"INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$7,$8,0)",
-			[intentId, dedupeKey, clientId, runId, reference.kind, availableAt, createdAt, stringifyAgentV2Json(reference)],
+			[
+				intentId,
+				dedupeKey,
+				clientId,
+				runId,
+				reference.kind,
+				availableAt,
+				createdAt,
+				stringifyAgentV2Json(reference),
+			],
 		);
 		return intentId;
 	}

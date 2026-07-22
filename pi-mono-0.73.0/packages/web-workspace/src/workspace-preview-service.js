@@ -3,9 +3,10 @@ import { basename, dirname, extname, join } from "node:path";
 import { PREVIEW_PREFIX, PROJECT_METADATA_FILE } from "./constants.js";
 import { readJsonFile, sendJson, writeJsonFile } from "./json.js";
 import { buildTrustedPreviewUrl } from "./preview-origin.js";
+import { assessProjectEntryConsistency } from "./project-entry-consistency.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import { WorkspacePathAuthorizationError, WorkspacePathGuard } from "./workspace-path-guard.js";
-import { listProjectSourceFiles, safeRelativePreviewPath, sanitizePathComponent, workspaceContext, } from "./workspace-paths.js";
+import { deleteSessionWorkspace, listProjectSourceFiles, projectSlug, safeRelativePreviewPath, sanitizePathComponent, workspaceContext, } from "./workspace-paths.js";
 export class WorkspacePreviewService {
     config;
     diagnostics;
@@ -72,6 +73,38 @@ export class WorkspacePreviewService {
         if (req && summary.status === "running")
             summary.previewUrl = buildPreviewUrl(this.config, req, summary.projectId);
         return summary;
+    }
+    deleteProject(projectId, sessionId, clientId) {
+        const safeProjectId = safePreviewProjectId(projectId);
+        if (!safeProjectId)
+            throw new WorkspaceProjectDeleteError("Invalid project id.", 400);
+        const normalizedSessionId = sessionId.trim();
+        if (!normalizedSessionId)
+            throw new WorkspaceProjectDeleteError("Session id is required.", 400);
+        let expectedProjectId;
+        try {
+            expectedProjectId = projectSlug(normalizedSessionId, clientId);
+        }
+        catch {
+            throw new WorkspaceProjectDeleteError("Invalid project identity.", 400);
+        }
+        if (safeProjectId !== expectedProjectId) {
+            throw new WorkspaceProjectDeleteError("Project and session identity do not match.", 409);
+        }
+        const record = this.findProjectMetadata(safeProjectId, clientId);
+        const summary = record ? projectPreviewSummary(record.metadata) : undefined;
+        if (record && !summary)
+            throw new WorkspaceProjectDeleteError("Project metadata is invalid.", 409);
+        if (summary && summary.sessionId !== normalizedSessionId) {
+            throw new WorkspaceProjectDeleteError("Project and session identity do not match.", 409);
+        }
+        const deleted = deleteSessionWorkspace(this.config.clientsRootDir, normalizedSessionId, clientId);
+        if (deleted) {
+            this.writeProjectLogEvent("project.deleted", clientId, normalizedSessionId, safeProjectId, {
+                status: "deleted",
+            });
+        }
+        return { projectId: safeProjectId, sessionId: normalizedSessionId, deleted };
     }
     servePreviewRequest(req, res) {
         if (!req.url)
@@ -148,6 +181,9 @@ export class WorkspacePreviewService {
         let previewUrl = buildPreviewUrl(this.config, options.req, options.projectId);
         try {
             const hasPackageJson = existsSync(packageJsonPath);
+            const consistency = assessProjectEntryConsistency(projectDir);
+            if (!consistency.valid)
+                throw new Error(consistency.errors[0]);
             if (hasPackageJson) {
                 logs.push("Static preview mode does not run package scripts, npm install, npm run build, or Node services.\n");
             }
@@ -156,7 +192,7 @@ export class WorkspacePreviewService {
             }
             const staticRoot = findStaticServeRoot(projectDir, staticServeRootCandidates(hasPackageJson));
             if (!staticRoot) {
-                const buildSourceEntry = findBuildSourceEntry(projectDir, ["", "public"]);
+                const buildSourceEntry = findBuildSourceEntry(projectDir, ["", "public"]) || (hasPackageJson ? packageJsonPath : undefined);
                 if (buildSourceEntry) {
                     throw new Error(`Static preview found a build source entry at ${buildSourceEntry}. Run project_task build_static before project_task preview so PI can serve browser-ready dist/build output.`);
                 }
@@ -251,6 +287,14 @@ export class WorkspacePreviewService {
                 },
             ],
         });
+    }
+}
+export class WorkspaceProjectDeleteError extends Error {
+    statusCode;
+    constructor(message, statusCode) {
+        super(message);
+        this.statusCode = statusCode;
+        this.name = "WorkspaceProjectDeleteError";
     }
 }
 function projectPreviewSummary(metadata) {

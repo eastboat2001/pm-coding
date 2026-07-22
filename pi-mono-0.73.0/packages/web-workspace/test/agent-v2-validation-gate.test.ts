@@ -36,18 +36,20 @@ describe("agent v2 validation gate", () => {
 		});
 
 		expect(result.status).toBe("failed");
-		expect(result.failures).toEqual(expect.arrayContaining([
-			expect.objectContaining({
-				code: "static.loading_visible",
-				retryable: true,
-				path: "index.html",
-				source: "static_quality",
-				severity: "warning",
-				blocking: false,
-				confidence: 0.55,
-				fingerprint: expect.stringMatching(/^sha256:/),
-			}),
-		]));
+		expect(result.failures).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: "static.loading_visible",
+					retryable: true,
+					path: "index.html",
+					source: "static_quality",
+					severity: "warning",
+					blocking: false,
+					confidence: 0.55,
+					fingerprint: expect.stringMatching(/^sha256:/),
+				}),
+			]),
+		);
 		expect(result.failures).toEqual(
 			expect.arrayContaining([expect.objectContaining({ code: "static.loading_visible", source: "static_smoke" })]),
 		);
@@ -86,6 +88,76 @@ describe("agent v2 validation gate", () => {
 		expect(result.validation).toMatchObject({ status: "passed", summary: "Static validation passed" });
 	});
 
+	it("keeps a missing build manifest repairable instead of invoking a doomed build", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const files = createAgentV2FileAdapter({ config, context });
+		files.writeFile({
+			path: "index.html",
+			content: '<!doctype html><div id="root"></div><script type="module" src="/src/main.tsx"></script>',
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+		files.writeFile({
+			path: "src/main.tsx",
+			content: "document.body.dataset.ready = 'true';",
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:01.000Z",
+		});
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result.status).toBe("failed");
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "static.build_manifest_missing",
+				retryable: true,
+				path: "package.json",
+				data: expect.objectContaining({ sourceEntry: "src/main.tsx" }),
+			}),
+		]);
+		expect(result.validation.details).toMatchObject({ usedBuildStep: false, retryableFailureCount: 1 });
+	});
+
+	it("keeps a missing browser entry repairable through full regeneration", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const files = createAgentV2FileAdapter({ config, context });
+		files.writeFile({
+			path: "README.md",
+			content: "Incomplete generated project",
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-08T00:02:00.000Z",
+		});
+
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "static.preview_missing_entry",
+				retryable: true,
+				path: "index.html",
+			}),
+		]);
+	});
+
 	it("preserves advisory findings without failing delivery", async () => {
 		const root = tempRoot();
 		const config = testConfig(root);
@@ -118,7 +190,7 @@ describe("agent v2 validation gate", () => {
 		});
 	});
 
-	it("keeps heuristic Chart.js layout findings advisory", async () => {
+	it("blocks high-confidence unbounded Chart.js layouts for bounded repair", async () => {
 		const root = tempRoot();
 		const config = testConfig(root);
 		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
@@ -146,14 +218,15 @@ describe("agent v2 validation gate", () => {
 			now: "2026-07-08T00:02:00.000Z",
 		});
 
-		expect(result.status).toBe("passed");
+		expect(result.status).toBe("failed");
 		expect(result.failures).toEqual([
 			expect.objectContaining({
 				code: "static.canvas_layout_unbounded",
-				severity: "warning",
-				blocking: false,
+				severity: "error",
+				blocking: true,
 				path: "index.html",
 				data: expect.objectContaining({ canvasIds: ["trend"] }),
+				repairBudget: { maxAttempts: 2, maxSameFingerprintAttempts: 2, maxChangedFiles: 2 },
 			}),
 		]);
 	});
@@ -515,6 +588,73 @@ document.getElementById('dateType').addEventListener('change', () => {
 		});
 	});
 
+	it("rebuilds package projects even when an older dist preview already validates", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const tasks = mockTaskSequence([
+			taskResult({ task: "validate", status: "passed", valid: true, errors: [], serveRoot: "C:/demo/project/dist" }),
+			taskResult({
+				task: "build_static",
+				status: "passed",
+				valid: true,
+				errors: [],
+				serveRoot: "C:/demo/project/dist",
+			}),
+			taskResult({ task: "validate", status: "passed", valid: true, errors: [], serveRoot: "C:/demo/project/dist" }),
+		]);
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-21T00:00:00.000Z",
+			tasks,
+		});
+
+		expect(tasks.calls).toEqual(["validate", "build_static", "validate"]);
+		expect(result.status).toBe("passed");
+		expect(result.validation.details).toMatchObject({ usedBuildStep: true });
+	});
+
+	it("blocks disconnected inline and source implementations before running a build", async () => {
+		const config = testConfig(tempRoot());
+		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
+		const sourceMessage =
+			"Build project entry conflict: root index.html contains a standalone inline application while source implementation entries are unreferenced: src/App.tsx, src/main.tsx. Keep one authoritative implementation and make preview output originate from that implementation's build.";
+		const tasks = mockTaskSequence([
+			taskResult({
+				task: "validate",
+				status: "failed",
+				valid: false,
+				errors: [sourceMessage],
+				serveRoot: "C:/demo/project/dist",
+			}),
+		]);
+
+		const result = await runAgentV2StaticValidationGate({
+			config,
+			context,
+			runId: "run-a",
+			taskId: "validate",
+			now: "2026-07-21T00:00:00.000Z",
+			tasks,
+		});
+
+		expect(tasks.calls).toEqual(["validate"]);
+		expect(result.status).toBe("failed");
+		expect(result.failures).toEqual([
+			expect.objectContaining({
+				code: "static.project_entry_conflict",
+				blocking: true,
+				retryable: true,
+				path: "index.html",
+				data: expect.objectContaining({ sourceEntries: ["src/App.tsx", "src/main.tsx"] }),
+			}),
+		]);
+		expect(result.validation.details).toMatchObject({ usedBuildStep: false });
+	});
+
 	it("uses the current formal workspace build-required message", async () => {
 		const config = testConfig(tempRoot());
 		const context = { clientId: "client-a", sessionId: "session-a", title: "Demo" };
@@ -544,8 +684,9 @@ document.getElementById('dateType').addEventListener('change', () => {
 		expect(result.rawResult.task).toBe("build_static");
 		expect(result.failures).toEqual([
 			expect.objectContaining({
-				code: "build.execution_failed",
-				message: "build_static requires package.json.",
+				code: "static.build_manifest_missing",
+				retryable: true,
+				path: "package.json",
 			}),
 		]);
 	});

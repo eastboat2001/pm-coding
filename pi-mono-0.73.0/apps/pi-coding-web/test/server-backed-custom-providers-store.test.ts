@@ -24,7 +24,7 @@ describe("ServerBackedCustomProvidersStore", () => {
 		({ ServerBackedCustomProvidersStore } = await import("../src/storage/server-backed-custom-providers-store.js"));
 	});
 
-	it("does not let an empty server customProviders array erase existing local providers", async () => {
+	it("treats an empty server customProviders array as authoritative over legacy browser providers", async () => {
 		const writes: unknown[] = [];
 		const store = new ServerBackedCustomProvidersStore({
 			readSettings: async () => ({ customProviders: [] }),
@@ -37,11 +37,11 @@ describe("ServerBackedCustomProvidersStore", () => {
 
 		const providers = await store.getAll();
 
-		expect(providers).toEqual([localProvider]);
-		expect(writes).toEqual([{ customProviders: [localProvider] }]);
+		expect(providers).toEqual([]);
+		expect(writes).toEqual([]);
 	});
 
-	it("preserves local providers when adding a provider while the server array is empty", async () => {
+	it("does not merge legacy browser providers into an explicit server write", async () => {
 		const newProvider = {
 			id: "manual-openai",
 			name: "Manual OpenAI",
@@ -61,7 +61,7 @@ describe("ServerBackedCustomProvidersStore", () => {
 
 		await store.set(newProvider);
 
-		expect(writes).toEqual([{ customProviders: [localProvider, newProvider] }]);
+		expect(writes).toEqual([{ customProviders: [newProvider] }]);
 	});
 
 	it("repairs stale manual model provider identities before returning server providers", async () => {

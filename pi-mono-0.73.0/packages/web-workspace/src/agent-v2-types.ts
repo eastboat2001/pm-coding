@@ -217,7 +217,7 @@ export type AgentV2TaskStatus = (typeof AGENT_V2_TASK_STATUSES)[number];
 
 export const AGENT_V2_VALIDATION_STATUSES = ["passed", "failed", "blocked", "warning"] as const;
 export type AgentV2ValidationStatus = (typeof AGENT_V2_VALIDATION_STATUSES)[number];
-export type AgentV2ArtifactValidationStatus = "not_started" | "pending" | "passed" | "failed" | "accepted";
+export type AgentV2ArtifactValidationStatus = "not_started" | "pending" | "passed" | "failed" | "accepted" | "deleted";
 
 export interface AgentV2ModelUsageSummary {
 	input: number;
@@ -242,7 +242,7 @@ export interface AgentV2ArtifactIndexedPayload {
 	validationStatus: AgentV2ArtifactValidationStatus;
 	revision: string;
 	checksum: string;
-	action: "created" | "updated";
+	action: "created" | "updated" | "deleted";
 	sourceTaskId: string;
 	at: string;
 }

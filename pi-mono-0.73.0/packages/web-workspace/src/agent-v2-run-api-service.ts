@@ -27,6 +27,7 @@ export interface AgentV2RunApiServiceOptions {
 	store: AgentV2DurableCommitStore & Pick<AgentV2RunApiStore, "getAgentV2Run" | "listAgentV2Runs">;
 	events: Pick<AgentV2RunEventLog, "list">;
 	queueName: string;
+	validateStart?: (input: { clientId: string; payload: AgentV2NormalizedStartPayload }) => void | Promise<void>;
 	wakeDispatcher?: () => void | Promise<void>;
 	now?: () => string;
 	createRunId?: () => string;
@@ -36,6 +37,7 @@ export class AgentV2RunApiError extends Error {
 	constructor(
 		message: string,
 		readonly statusCode: number,
+		readonly code?: string,
 	) {
 		super(message);
 		this.name = "AgentV2RunApiError";
@@ -48,12 +50,14 @@ export class AgentV2RunApiService {
 	private readonly now: () => string;
 	private readonly queueName: string;
 	private readonly store: AgentV2DurableCommitStore & Pick<AgentV2RunApiStore, "getAgentV2Run" | "listAgentV2Runs">;
+	private readonly validateStart?: AgentV2RunApiServiceOptions["validateStart"];
 	private readonly wakeDispatcher?: () => void | Promise<void>;
 
 	constructor(options: AgentV2RunApiServiceOptions) {
 		this.store = options.store;
 		this.events = options.events;
 		this.queueName = requireQueueName(options.queueName);
+		this.validateStart = options.validateStart;
 		this.wakeDispatcher = options.wakeDispatcher;
 		this.now = options.now ?? (() => new Date().toISOString());
 		this.createRunId = options.createRunId ?? (() => randomUUID());
@@ -64,6 +68,7 @@ export class AgentV2RunApiService {
 		const runId = normalizeRunId(request.runId ?? this.createRunId());
 		const payload = normalizeStartPayload(request, runId);
 		const existing = hasExplicitRunId ? await this.store.getAgentV2Run(clientId, runId) : undefined;
+		if (!existing) await this.validateStart?.({ clientId, payload });
 		const createdAt = existing?.createdAt ?? this.now();
 		let committed: AgentV2StartRunCommitResult;
 		try {

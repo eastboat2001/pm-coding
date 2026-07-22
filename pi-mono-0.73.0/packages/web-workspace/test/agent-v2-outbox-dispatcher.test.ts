@@ -119,7 +119,9 @@ describe("AgentV2OutboxDispatcher", () => {
 			now: () => NOW,
 		});
 
-		await expect(dispatcher.dispatchAvailable({ ownerId: "owner-a", limit: 10, maxAttempts: 2 })).resolves.toMatchObject({
+		await expect(
+			dispatcher.dispatchAvailable({ ownerId: "owner-a", limit: 10, maxAttempts: 2 }),
+		).resolves.toMatchObject({
 			delivered: 0,
 			retried: 1,
 			deadLettered: 0,
@@ -194,7 +196,11 @@ function intent(
 ): AgentV2OutboxRecord {
 	const reference =
 		kind === "run_enqueue"
-			? ({ kind, queueName: "agent-v2", ...(targetAttempt === undefined ? {} : { attempt: targetAttempt }) } as const)
+			? ({
+					kind,
+					queueName: "agent-v2",
+					...(targetAttempt === undefined ? {} : { attempt: targetAttempt }),
+				} as const)
 			: kind === "run_cancel"
 				? ({ kind, queueName: "agent-v2", cancelToken: "cancel-a" } as const)
 				: ({ kind, eventSeq } as const);

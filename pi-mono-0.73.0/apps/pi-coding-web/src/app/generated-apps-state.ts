@@ -31,6 +31,12 @@ type BatchProjectSummaryResponse = {
 	summaries?: unknown;
 };
 
+export type GeneratedAppDeleteResult = {
+	projectId: string;
+	sessionId: string;
+	deleted: boolean;
+};
+
 type SessionProjectSummary = {
 	projectId: string;
 	sessionId: string;
@@ -237,6 +243,31 @@ export async function renameGeneratedApp(
 	const record = toGeneratedAppRecord(result);
 	if (!record) throw new Error("Project API returned an invalid generated app record.");
 	return record;
+}
+
+export async function deleteGeneratedApp(
+	project: Pick<GeneratedAppRecord, "projectId" | "sessionId">,
+	fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
+	origin = globalThis.location?.origin || "http://localhost",
+): Promise<GeneratedAppDeleteResult> {
+	const endpoint = new URL(`/api/pi-projects/${encodeURIComponent(project.projectId)}`, origin);
+	endpoint.searchParams.set("sessionId", project.sessionId);
+	const response = await fetchImpl(endpoint.toString(), {
+		method: "DELETE",
+		headers: { Accept: "application/json", ...piClientHeaders() },
+	});
+	const result = (await response.json().catch(() => ({}))) as Partial<GeneratedAppDeleteResult> & { error?: unknown };
+	if (!response.ok) {
+		throw new Error(result.error ? String(result.error) : `Project API failed with HTTP ${response.status}`);
+	}
+	if (
+		result.projectId !== project.projectId ||
+		result.sessionId !== project.sessionId ||
+		typeof result.deleted !== "boolean"
+	) {
+		throw new Error("Project API returned an invalid delete result.");
+	}
+	return result as GeneratedAppDeleteResult;
 }
 
 export function clampGeneratedAppsPanelWidth(width: number, viewportWidth: number): number {

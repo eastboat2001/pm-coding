@@ -35,6 +35,7 @@
   "scripts": {
     "clean": "shx rm -rf dist",
     "build": "tsgo -p tsconfig.build.json",
+    "build:emit": "tsc -p tsconfig.build.json",
     "test": "npm run build && node test/workspace.test.mjs && tsx ../../node_modules/vitest/dist/cli.js --run --exclude test/workspace.test.mjs",
     "check": "tsgo --noEmit",
     "sync:source-mirrors": "node scripts/source-mirrors.mjs sync",

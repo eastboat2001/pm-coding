@@ -8,6 +8,17 @@ import { CONVERSATION_SNAPSHOT_MESSAGE_MAX_CHARS } from "./conversation-snapshot
 
 export const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 
+export class AgentV2RunApiClientError extends Error {
+	constructor(
+		message: string,
+		readonly statusCode: number,
+		readonly code?: string,
+	) {
+		super(message);
+		this.name = "AgentV2RunApiClientError";
+	}
+}
+
 const FAST_POLL_INTERVAL_MS = 150;
 const MAX_POLL_INTERVAL_MS = 1000;
 const IDLE_POLL_BACKOFF_MS = 150;
@@ -549,7 +560,15 @@ async function requestAgentV2RunApi<T>(path: string, init: RequestInit = {}): Pr
 			typeof result === "object" && result !== null && "error" in result
 				? String((result as { error: unknown }).error)
 				: "";
-		throw new Error(message || `Runtime API failed with HTTP ${response.status}`);
+		const code =
+			typeof result === "object" && result !== null && "code" in result
+				? String((result as { code: unknown }).code || "").trim() || undefined
+				: undefined;
+		throw new AgentV2RunApiClientError(
+			message || `Runtime API failed with HTTP ${response.status}`,
+			response.status,
+			code,
+		);
 	}
 	return result as T;
 }

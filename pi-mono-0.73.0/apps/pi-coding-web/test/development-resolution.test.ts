@@ -76,16 +76,24 @@ describe("development dependency resolution", () => {
 		expect(source).not.toContain('from "@mariozechner/pi-web-workspace"');
 	});
 
-	it("builds web-workspace before compiling the worker entry", () => {
+	it("emits web-workspace with stable tsc before compiling the worker entry", () => {
 		const packageJson = JSON.parse(readFileSync(resolve(appRoot, "package.json"), "utf8")) as {
 			scripts?: Record<string, string>;
 		};
 		const script = packageJson.scripts?.["build:worker"] ?? "";
 
-		const workspaceBuildIndex = script.indexOf("npm run build --workspace=@mariozechner/pi-web-workspace");
-		const workerBuildIndex = script.indexOf("tsgo -p tsconfig.worker.json");
+		const workspaceBuildIndex = script.indexOf("npm run build:emit --workspace=@mariozechner/pi-web-workspace");
+		const workerBuildIndex = script.indexOf("tsc -p tsconfig.worker.json");
 
 		expect(workspaceBuildIndex).toBeGreaterThanOrEqual(0);
 		expect(workerBuildIndex).toBeGreaterThan(workspaceBuildIndex);
+		expect(script).not.toContain("tsgo");
+	});
+
+	it("resolves worker web-workspace imports through emitted declarations", () => {
+		const workerConfig = readFileSync(resolve(appRoot, "tsconfig.worker.json"), "utf8");
+
+		expect(workerConfig).toContain("../../packages/web-workspace/dist/index.d.ts");
+		expect(workerConfig).not.toContain("../../packages/web-workspace/src/");
 	});
 });

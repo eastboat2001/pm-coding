@@ -1,0 +1,21 @@
+services:
+  pi-cutover-rehearsal:
+    image: ${PI_CODING_WEB_IMAGE:-pi-coding-web:0.73.0-intranet-20260721-r1}
+    pull_policy: ${PI_CODING_WEB_PULL_POLICY:-never}
+    init: true
+    command: ["node", "dist-worker/worker/cutover-rehearsal.js"]
+    env_file: ${PI_COMPOSE_ENV_FILE:-./.env}
+    environment:
+      NODE_ENV: production
+      PI_REDIS_URL: redis://redis:6379
+      PI_RUNTIME_STORE: ${PI_RUNTIME_STORE:-postgres}
+      PI_POSTGRES_URL: "${PI_POSTGRES_URL:-postgres://pi:pi@postgres:5432/pi_coding}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pi-coding-web:
+        condition: service_healthy
+      pi-worker:
+        condition: service_healthy

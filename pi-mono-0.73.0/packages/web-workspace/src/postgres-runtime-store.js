@@ -1919,7 +1919,16 @@ export class PostgresRuntimeStore {
                 throw new Error("Agent v2 outbox dedupe conflict");
             return existing.intent_id;
         }
-        await this.query(queryable, "INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$7,$8,0)", [intentId, dedupeKey, clientId, runId, reference.kind, availableAt, createdAt, stringifyAgentV2Json(reference)]);
+        await this.query(queryable, "INSERT INTO agent_v2_outbox (intent_id,dedupe_key,client_id,run_id,kind,status,available_at,created_at,updated_at,reference_json,attempt_count) VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$7,$8,0)", [
+            intentId,
+            dedupeKey,
+            clientId,
+            runId,
+            reference.kind,
+            availableAt,
+            createdAt,
+            stringifyAgentV2Json(reference),
+        ]);
         return intentId;
     }
     async withTransaction(callback) {

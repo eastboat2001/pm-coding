@@ -109,6 +109,9 @@ it("uses named storage and a proxy-only egress topology with hardened containers
 	const runs = executor.commands.filter(({ command }) => command.args[0] === "run");
 	const restore = runs.find(({ command }) => command.args.includes("ci"));
 	const build = runs.find(({ command }) => command.args.includes("build"));
+	const staleOutputCleanup = runs.find(
+		({ command }) => command.args.includes('rm -rf -- "$@"') && command.args.includes("dist"),
+	);
 	const proxy = runs.find(({ command }) => command.args.includes("--hostname") && command.args.includes("proxy"));
 	const containers = executor.commands.filter(
 		({ command }) => command.args[0] === "run" || command.args[0] === "create",
@@ -142,6 +145,7 @@ it("uses named storage and a proxy-only egress topology with hardened containers
 		]),
 	);
 	expect(build?.command.args).toEqual(expect.arrayContaining(["--network", "none"]));
+	expect(staleOutputCleanup?.command.args).toEqual(expect.arrayContaining(["--network", "none", "dist"]));
 	expect(proxy?.command.args).toContain("pi-build-fixed-id-internal");
 	expect(
 		executor.commands.some(

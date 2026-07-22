@@ -2,6 +2,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath } from "node:url";
 import { configuredStoragePlugin } from "../../packages/web-workspace/src/vite-plugin.js";
 import { defineConfig } from "vite";
+import { validateAgentV2ModelReadiness } from "./src/server/agent-v2-model-readiness.js";
 
 const webWorkspaceSource = fileURLToPath(new URL("../../packages/web-workspace/src/index.ts", import.meta.url));
 const webUiSource = fileURLToPath(new URL("../../packages/web-ui/src/index.ts", import.meta.url));
@@ -32,5 +33,5 @@ export default defineConfig({
 			{ find: /^@mariozechner\/pi-web-workspace$/u, replacement: webWorkspaceSource },
 		],
 	},
-	plugins: [configuredStoragePlugin(), tailwindcss()],
+	plugins: [configuredStoragePlugin(undefined, { validateAgentV2Start: validateAgentV2ModelReadiness }), tailwindcss()],
 });

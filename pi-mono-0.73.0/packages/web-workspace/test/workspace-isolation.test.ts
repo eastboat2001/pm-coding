@@ -50,6 +50,30 @@ describe("workspace client isolation and path safety", () => {
 		expect(existsSync(join(config.clientsRootDir, "client-a", "settings.json"))).toBe(true);
 	});
 
+	it("versions global model configuration and aligns each client's selected model on save", () => {
+		const sessions = new WorkspaceSessionService(config);
+		const selectedModel = { provider: "custom-provider:manual", id: "mimo" };
+
+		sessions.writeSettings({ customProviders: [] }, clientA);
+		sessions.writeSettings({ selectedModel }, clientA);
+		expect(sessions.readSettings(clientA)).toMatchObject({
+			modelConfigRevision: 1,
+			selectedModelConfigRevision: 1,
+		});
+
+		sessions.writeSettings({ providerKeys: { "custom-provider:manual": "new-key" } }, clientB);
+		expect(sessions.readSettings(clientA)).toMatchObject({
+			modelConfigRevision: 2,
+			selectedModelConfigRevision: 1,
+		});
+
+		sessions.writeSettings({ selectedModel }, clientA);
+		expect(sessions.readSettings(clientA)).toMatchObject({
+			modelConfigRevision: 2,
+			selectedModelConfigRevision: 2,
+		});
+	});
+
 	it("rejects unsafe client ids for client settings paths", () => {
 		const sessions = new WorkspaceSessionService(config);
 
@@ -250,6 +274,104 @@ describe("workspace client isolation and path safety", () => {
 		expect(response.body).not.toContain("projectRoot");
 	});
 
+	it("deletes the server project workspace and does not let it reappear in the project list", async () => {
+		const files = new WorkspaceFileService(config);
+		const previews = new WorkspacePreviewService(config);
+		const req = { headers: { host: "localhost:5173", "x-forwarded-proto": "http" } };
+		files.handle({
+			clientId: clientA,
+			sessionId: "session-delete",
+			title: "Delete me",
+			command: "create",
+			filename: "index.html",
+			content: "<h1>delete me</h1>",
+		});
+		files.handle({
+			clientId: clientB,
+			sessionId: "session-delete",
+			title: "Keep me",
+			command: "create",
+			filename: "index.html",
+			content: "<h1>keep me</h1>",
+		});
+		const projectA = await previews.preview(
+			{ clientId: clientA, sessionId: "session-delete", title: "Delete me" },
+			req,
+		);
+		await previews.preview({ clientId: clientB, sessionId: "session-delete", title: "Keep me" }, req);
+		const harness = await createProjectsApiHarness(config, files);
+
+		const response = await dispatchJson(
+			harness.middleware,
+			`/api/pi-projects/${projectA.projectId}?sessionId=session-delete`,
+			{ method: "DELETE", headers: { "x-pi-client-id": clientA } },
+		);
+
+		expect(response.statusCode).toBe(200);
+		expect(JSON.parse(response.body)).toEqual({
+			projectId: projectA.projectId,
+			sessionId: "session-delete",
+			deleted: true,
+		});
+		expect(existsSync(join(config.clientsRootDir, clientA, "sessions", "session-delete"))).toBe(false);
+		expect(existsSync(join(config.clientsRootDir, clientB, "sessions", "session-delete"))).toBe(true);
+		expect(previews.listProjects(req, clientA).projects).toEqual([]);
+
+		const repeated = await dispatchJson(
+			harness.middleware,
+			`/api/pi-projects/${projectA.projectId}?sessionId=session-delete`,
+			{ method: "DELETE", headers: { "x-pi-client-id": clientA } },
+		);
+		expect(repeated.statusCode).toBe(200);
+		expect(JSON.parse(repeated.body)).toMatchObject({ deleted: false });
+	});
+
+	it("blocks project deletion while the session has an active agent v2 run", async () => {
+		const files = new WorkspaceFileService(config);
+		const previews = new WorkspacePreviewService(config);
+		const req = { headers: { host: "localhost:5173", "x-forwarded-proto": "http" } };
+		files.handle({
+			clientId: clientA,
+			sessionId: "session-active",
+			title: "Active app",
+			command: "create",
+			filename: "index.html",
+			content: "<h1>active</h1>",
+		});
+		const project = await previews.preview(
+			{ clientId: clientA, sessionId: "session-active", title: "Active app" },
+			req,
+		);
+		const harness = await createProjectsApiHarness(config, files, {
+			runs: [
+				{
+					clientId: clientA,
+					runId: "run-active",
+					status: "running",
+					phase: "implementation",
+					attempt: 1,
+					input: { sessionId: "session-active" },
+					model: {},
+					createdAt: "2026-07-21T00:00:00.000Z",
+					updatedAt: "2026-07-21T00:00:01.000Z",
+				},
+			],
+		});
+
+		const response = await dispatchJson(
+			harness.middleware,
+			`/api/pi-projects/${project.projectId}?sessionId=session-active`,
+			{ method: "DELETE", headers: { "x-pi-client-id": clientA } },
+		);
+
+		expect(response.statusCode).toBe(409);
+		expect(JSON.parse(response.body)).toEqual({
+			error: "Stop the active app generation run before deleting this app.",
+			activeRunIds: ["run-active"],
+		});
+		expect(existsSync(join(config.clientsRootDir, clientA, "sessions", "session-active"))).toBe(true);
+	});
+
 	it("filters diagnostic events by client id", () => {
 		const diagnostics = new WorkspaceDiagnosticLogService(config);
 		diagnostics.ensureDirs();
@@ -350,6 +472,7 @@ type Middleware = (
 async function createProjectsApiHarness(
 	config: StorageConfig,
 	files: WorkspaceFileService,
+	options: { runs?: Awaited<ReturnType<TestServices["runtimeDb"]["listAgentV2Runs"]>> } = {},
 ): Promise<{ middleware: Middleware }> {
 	let middleware: Middleware | undefined;
 	const services = {
@@ -366,6 +489,7 @@ async function createProjectsApiHarness(
 		runtimeDb: {
 			ensureAgentV2Schema: async () => undefined,
 			ping: async () => undefined,
+			listAgentV2Runs: async () => options.runs || [],
 		} as unknown as TestServices["runtimeDb"],
 		diagnosticExports: {} as TestServices["diagnosticExports"],
 	} satisfies TestServices;
@@ -387,7 +511,7 @@ async function createProjectsApiHarness(
 async function dispatchJson(
 	middleware: Middleware,
 	url: string,
-	options: { headers?: Record<string, string>; body?: unknown } = {},
+	options: { method?: string; headers?: Record<string, string>; body?: unknown } = {},
 ): Promise<FakeResponse> {
 	const request = new FakeRequest(url, options);
 	const response = new FakeResponse();
@@ -399,16 +523,17 @@ async function dispatchJson(
 }
 
 class FakeRequest extends EventEmitter {
-	readonly method = "POST";
+	readonly method: string;
 	readonly headers: Record<string, string>;
 	private readonly rawBody: string;
 	private flushed = false;
 
 	constructor(
 		readonly url: string,
-		options: { headers?: Record<string, string>; body?: unknown },
+		options: { method?: string; headers?: Record<string, string>; body?: unknown },
 	) {
 		super();
+		this.method = options.method || "POST";
 		this.headers = options.headers || {};
 		this.rawBody = JSON.stringify(options.body || {});
 	}

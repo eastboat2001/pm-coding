@@ -16,109 +16,39 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173) in your browser.
 
-## Docker
+## Podman production deployment
 
-PI Coding Web requires three runtime services in Docker:
+The Linux intranet deployment runs PostgreSQL, Redis, the Web service, and the
+Agent v2 Worker with rootless Podman. Generated Vite/React applications are
+built in short-lived containers through the host user's Podman API socket; only
+the Worker receives that socket.
 
-- `redis`: queue and cancellation state for background runs.
-- `pi-coding-web`: Web UI, Vite middleware, session/run APIs, project APIs, and preview routes.
-- `pi-worker`: background Agent runner that consumes Redis queue items and writes run events to SQLite.
-
-Build the shared image from the repository root:
-
-```bash
-docker build -t pi-coding-web:0.73.0 -f apps/pi-coding-web/Dockerfile .
-```
-
-For server deployment, use the compose package under `docker/pi-coding-web`:
+Use the production package under `docker/pi-coding-web`:
 
 ```bash
 cd docker/pi-coding-web
 cp .env.example .env
-docker compose up -d
+podman compose up -d --no-build
 ```
 
-For an offline server, copy `docker-compose.yaml`, `.env.example`, and the image tar to the same server directory, then run:
-
-```bash
-docker load -i pi-coding-web-0.73.0.tar
-cp .env.example .env
-docker compose up -d
-```
-
-Open [http://localhost:5173](http://localhost:5173) in your browser, or use the address configured by `PI_CODING_WEB_PORT`.
-
-This image runs Vite preview instead of a static nginx server because the application depends on Vite server middleware for session storage, server-side project files, controlled project tasks, run APIs, and `/preview/<project-id>/` URLs.
-
-When deploying behind a domain or reverse proxy, set `PI_PREVIEW_BASE_URL` in `.env` to the public PI origin, for example `https://pi.example.com`. Keep `PI_REDIS_URL=redis://redis:6379` for compose deployment. Generated project workspaces, the runtime SQLite DB, Redis data, and diagnostic logs are stored under the mounted `docker/pi-coding-web/data` directory.
-
-Useful deployment checks:
-
-```bash
-docker compose ps
-docker compose logs -f pi-coding-web pi-worker redis
-docker compose exec pi-coding-web npm run logs -- --level error --limit 50
-```
-
-### Server Configuration
-
-PI uses three different address concepts during Docker deployment:
-
-1. **Container listen address**
-   - Configured in `Dockerfile`.
-   - Must stay as `0.0.0.0` so the Vite preview server listens on all container network interfaces.
-   - Example:
-
-```dockerfile
-CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]
-```
-
-2. **Docker host port**
-   - Configured in `docker-compose.yaml`.
-   - The default mapping exposes container port `5173` on server port `5173`.
-
-```yaml
-ports:
-  - "5173:5173"
-```
-
-3. **Public browser URL**
-   - Configured in `.env` as `PI_PREVIEW_BASE_URL`.
-   - This must be the address that users can open from their own computers.
-   - Do **not** use `0.0.0.0` here. `0.0.0.0` is only a listen address, not a browser address.
-   - Use `localhost` only for local testing on the same machine.
-
-Local test:
+Production uses two distinct preview origins:
 
 ```env
-PI_PREVIEW_BASE_URL=http://localhost:5173
-```
-
-Server IP:
-
-```env
+# Browser-accessible PI origin; required and never 0.0.0.0.
 PI_PREVIEW_BASE_URL=http://SERVER_IP:5173
+
+# Compose-network origin used by Worker readiness checks.
+PI_PREVIEW_INTERNAL_ORIGIN=http://pi-coding-web:5173
 ```
 
-Domain or reverse proxy:
+The second value must not be changed to `localhost`: inside `pi-worker`,
+localhost refers to the Worker container itself. The deployment template also
+requires the dedicated rootless Podman socket path and configures
+`PI_BUILD_CONTAINER_ENGINE=podman`.
 
-```env
-PI_PREVIEW_BASE_URL=https://pi.example.com
-```
-
-If PI is launched from PM, PM must point to the same public PI address:
-
-```env
-VITE_GO_CODING_URL=http://SERVER_IP:5173
-```
-
-The PM backend CORS configuration must also allow that PI origin:
-
-```env
-CORS_ORIGINS=http://SERVER_IP:5173
-```
-
-When using a domain, replace both values with the domain, for example `https://pi.example.com`.
+The complete service-account setup, Socket security boundary, fixed-digest
+build images, resource sizing, preflight checks, and rollout procedure are
+documented in `docker/pi-coding-web/README.md`.
 
 ## What's Included
 
@@ -210,6 +140,7 @@ PI_CLIENTS_ROOT_DIR=./data/clients
 PI_DB_FILE=./data/runtime/pi-runtime.sqlite
 PI_SKILLS_DIR=./data/skills
 PI_PREVIEW_BASE_URL=
+PI_PREVIEW_INTERNAL_ORIGIN=http://127.0.0.1:5173
 PI_DEFAULT_MODEL_PROVIDER=
 PI_DEFAULT_MODEL_ID=
 PI_HANDOFF_DEFAULT_THINKING_LEVEL=high
@@ -221,6 +152,13 @@ PI_WORKER_ID=pi-local-worker
 PI_BUILD_CONTAINER_ENGINE=docker
 PI_BUILD_TIMEOUT_MS=120000
 ```
+
+The container engine above is the local-development example. The production
+intranet template uses a rootless Podman API socket, sets
+`PI_BUILD_CONTAINER_ENGINE=podman`, and sets
+`PI_PREVIEW_INTERNAL_ORIGIN=http://pi-coding-web:5173`; see
+`docker/pi-coding-web/README.md` for the complete deployment and security
+requirements.
 
 Relative paths are resolved from `apps/pi-coding-web/`. Absolute paths are also supported.
 

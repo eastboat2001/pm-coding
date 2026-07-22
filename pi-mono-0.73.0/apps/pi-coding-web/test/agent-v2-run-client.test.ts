@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentV2RunEventRecord, AgentV2RunSnapshot } from "@mariozechner/pi-web-workspace";
 import {
 	AGENT_V2_RUNS_API_PREFIX,
+	AgentV2RunApiClientError,
 	cancelAgentV2Run,
 	connectAgentV2RunEvents,
 	getAgentV2Run,
@@ -121,6 +122,31 @@ describe("agent v2 run client", () => {
 		});
 
 		expect(JSON.parse(body ?? "{}").input.responseLanguage).toBe("zh");
+	});
+
+	it("preserves the server model synchronization error code for localized UI handling", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse(
+					{
+						error: "The selected model is not synchronized.",
+						code: "agent_v2.model.not_synchronized",
+					},
+					409,
+				),
+			),
+		);
+
+		const error = await startAgentV2Run({
+			sessionId: "session-stale",
+			title: "Build dashboard",
+			objective: "Build dashboard",
+			model: { provider: "custom-provider:legacy", id: "old-model" },
+		}).catch((caught: unknown) => caught);
+
+		expect(error).toBeInstanceOf(AgentV2RunApiClientError);
+		expect(error).toMatchObject({ code: "agent_v2.model.not_synchronized", statusCode: 409 });
 	});
 
 	it("rejects malformed conversation snapshots before fetch", async () => {
@@ -473,9 +499,9 @@ function createStorage(clientId: string): Storage {
 	};
 }
 
-function jsonResponse(body: unknown): Response {
+function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
-		status: 200,
+		status,
 		headers: { "Content-Type": "application/json" },
 	});
 }

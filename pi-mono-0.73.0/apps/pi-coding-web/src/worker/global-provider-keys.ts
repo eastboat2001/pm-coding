@@ -29,12 +29,19 @@ export interface AgentV2ServerSettingsSnapshot {
 	resolveApiKey(provider: string): string | undefined;
 	customProvider(id: string): Readonly<Record<string, unknown>> | undefined;
 	selectedModel(): Readonly<Record<string, unknown>> | undefined;
+	configurationState(): "ready" | "missing" | "invalid";
+	modelConfigRevision(): number;
+	selectedModelConfigRevision(): number;
+	isSelectedModelSynchronized(): boolean;
 }
 
 class AgentV2ServerSettingsSnapshotImplementation implements AgentV2ServerSettingsSnapshot {
 	readonly #providerKeys: ReadonlyMap<string, string>;
 	readonly #customProviders: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
 	readonly #selectedModel: Readonly<Record<string, unknown>> | undefined;
+	readonly #configurationState: "ready" | "missing" | "invalid";
+	readonly #modelConfigRevision: number;
+	readonly #selectedModelConfigRevision: number;
 
 	constructor(
 		token: typeof AGENT_V2_SERVER_SETTINGS_SNAPSHOT_CONSTRUCTION_TOKEN,
@@ -42,6 +49,9 @@ class AgentV2ServerSettingsSnapshotImplementation implements AgentV2ServerSettin
 			providerKeys: ReadonlyMap<string, string>;
 			customProviders: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
 			selectedModel?: Readonly<Record<string, unknown>>;
+			configurationState: "ready" | "missing" | "invalid";
+			modelConfigRevision: number;
+			selectedModelConfigRevision: number;
 		},
 	) {
 		if (token !== AGENT_V2_SERVER_SETTINGS_SNAPSHOT_CONSTRUCTION_TOKEN) {
@@ -50,6 +60,9 @@ class AgentV2ServerSettingsSnapshotImplementation implements AgentV2ServerSettin
 		this.#providerKeys = new Map(input.providerKeys);
 		this.#customProviders = new Map(input.customProviders);
 		this.#selectedModel = input.selectedModel;
+		this.#configurationState = input.configurationState;
+		this.#modelConfigRevision = input.modelConfigRevision;
+		this.#selectedModelConfigRevision = input.selectedModelConfigRevision;
 		Object.freeze(this);
 		VALID_AGENT_V2_SERVER_SETTINGS_SNAPSHOTS.add(this);
 	}
@@ -63,7 +76,23 @@ class AgentV2ServerSettingsSnapshotImplementation implements AgentV2ServerSettin
 	}
 
 	selectedModel(): Readonly<Record<string, unknown>> | undefined {
-		return this.#selectedModel;
+		return this.isSelectedModelSynchronized() ? this.#selectedModel : undefined;
+	}
+
+	configurationState(): "ready" | "missing" | "invalid" {
+		return this.#configurationState;
+	}
+
+	modelConfigRevision(): number {
+		return this.#modelConfigRevision;
+	}
+
+	selectedModelConfigRevision(): number {
+		return this.#selectedModelConfigRevision;
+	}
+
+	isSelectedModelSynchronized(): boolean {
+		return this.#modelConfigRevision === this.#selectedModelConfigRevision;
 	}
 }
 
@@ -74,15 +103,23 @@ export function loadAgentV2ServerSettingsSnapshot(
 	const readSettingsFile = sources.readSettingsFile ?? DEFAULT_SOURCES.readSettingsFile;
 	const getBuiltinProviders = sources.getBuiltinProviders ?? DEFAULT_SOURCES.getBuiltinProviders;
 	let settings: Record<string, unknown> | undefined;
+	let configurationState: "ready" | "missing" | "invalid" = "missing";
 	try {
 		const source = readSettingsFile(config.settingsFile);
 		if (Buffer.byteLength(source, "utf8") <= MAX_SETTINGS_BYTES) {
 			const parsed = JSON.parse(source) as unknown;
-			if (isPlainRecord(parsed) && freezePlainData(parsed) && hasValidAgentV2SettingsShape(parsed))
+			if (isPlainRecord(parsed) && freezePlainData(parsed) && hasValidAgentV2SettingsShape(parsed)) {
 				settings = parsed;
+				configurationState = "ready";
+			} else {
+				configurationState = "invalid";
+			}
+		} else {
+			configurationState = "invalid";
 		}
-	} catch {
+	} catch (error) {
 		settings = undefined;
+		configurationState = isMissingSettingsFileError(error) ? "missing" : "invalid";
 	}
 
 	const providerKeys = new Map<string, string>();
@@ -90,6 +127,7 @@ export function loadAgentV2ServerSettingsSnapshot(
 		for (const [provider, value] of Object.entries(settings.providerKeys)) {
 			if (!isProviderIdentity(provider) || provider.startsWith("custom-provider:") || typeof value !== "string") {
 				settings = undefined;
+				configurationState = "invalid";
 				providerKeys.clear();
 				break;
 			}
@@ -117,6 +155,7 @@ export function loadAgentV2ServerSettingsSnapshot(
 			const identity = `custom-provider:${id}`;
 			if (customProviders.has(id)) {
 				settings = undefined;
+				configurationState = "invalid";
 				providerKeys.clear();
 				customProviders.clear();
 				break;
@@ -132,11 +171,32 @@ export function loadAgentV2ServerSettingsSnapshot(
 	}
 
 	const selectedModel = settings && isPlainRecord(settings.selectedModel) ? settings.selectedModel : undefined;
+	const modelConfigRevision = settingsRevision(settings?.modelConfigRevision);
+	const selectedModelConfigRevision = settingsRevision(settings?.selectedModelConfigRevision);
 	return new AgentV2ServerSettingsSnapshotImplementation(AGENT_V2_SERVER_SETTINGS_SNAPSHOT_CONSTRUCTION_TOKEN, {
 		providerKeys,
 		customProviders,
 		selectedModel,
+		configurationState,
+		modelConfigRevision,
+		selectedModelConfigRevision,
 	});
+}
+
+export function loadAgentV2ServerSettingsSnapshotFromRecord(
+	settings: Readonly<Record<string, unknown>> | undefined,
+	sources: GlobalProviderApiKeySources = DEFAULT_SOURCES,
+): AgentV2ServerSettingsSnapshot {
+	return loadAgentV2ServerSettingsSnapshot(
+		{ settingsFile: "<effective-server-settings>" },
+		{
+			...sources,
+			readSettingsFile: () => {
+				if (settings) return JSON.stringify(settings);
+				throw Object.assign(new Error("PI server settings are not configured."), { code: "ENOENT" });
+			},
+		},
+	);
 }
 
 function readSettingsFileBounded(settingsFile: string): string {
@@ -156,7 +216,15 @@ function readSettingsFileBounded(settingsFile: string): string {
 	return bytes.toString("utf8", 0, offset);
 }
 
+function isMissingSettingsFileError(error: unknown): boolean {
+	return (
+		typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT"
+	);
+}
+
 function hasValidAgentV2SettingsShape(settings: Record<string, unknown>): boolean {
+	if (!isOptionalSettingsRevision(settings.modelConfigRevision)) return false;
+	if (!isOptionalSettingsRevision(settings.selectedModelConfigRevision)) return false;
 	if (settings.providerKeys !== undefined) {
 		if (!isPlainRecord(settings.providerKeys)) return false;
 		for (const key of Object.keys(settings.providerKeys)) {
@@ -181,6 +249,14 @@ function hasValidAgentV2SettingsShape(settings: Record<string, unknown>): boolea
 		}
 	}
 	return settings.selectedModel === undefined || isExactSelectedModel(settings.selectedModel);
+}
+
+function isOptionalSettingsRevision(value: unknown): boolean {
+	return value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
+}
+
+function settingsRevision(value: unknown): number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function isExactCustomProvider(value: unknown): value is Record<string, unknown> {

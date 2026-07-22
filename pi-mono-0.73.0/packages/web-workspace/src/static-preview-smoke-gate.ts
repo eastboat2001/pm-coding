@@ -90,10 +90,13 @@ export async function runStaticPreviewSmokeGate(
 	}
 	runtime.dispatchDocumentEvent("DOMContentLoaded", errors, warnings);
 	runtime.flushTimers(errors, warnings);
+	await runtime.settleAsyncCallbacks(errors, warnings);
 	runtime.dispatchWindowEvent("load", errors, warnings);
 	runtime.flushTimers(errors, warnings);
+	await runtime.settleAsyncCallbacks(errors, warnings);
 	runtime.exerciseInteractions(errors, warnings);
 	runtime.flushTimers(errors, warnings);
+	await runtime.settleAsyncCallbacks(errors, warnings);
 
 	errors.push(...runtime.validationErrors());
 	warnings.push(...runtime.validationWarnings());
@@ -200,6 +203,8 @@ class SmokeRuntime {
 	private readonly consoleErrors: string[] = [];
 	private readonly charts: SmokeChart[] = [];
 	private readonly missingSelectors = new Set<string>();
+	private pendingAsyncCallbackCount = 0;
+	private readonly asyncCallbackErrors: unknown[] = [];
 	private timerId = 0;
 
 	constructor(
@@ -260,6 +265,18 @@ class SmokeRuntime {
 			},
 			Chart: RuntimeSmokeChart,
 			Event: SmokeEvent,
+			Node: SmokeElement,
+			HTMLElement: SmokeElement,
+			__piSmokeAsyncStarted: () => {
+				this.pendingAsyncCallbackCount += 1;
+			},
+			__piSmokeAsyncFinished: () => {
+				this.pendingAsyncCallbackCount = Math.max(0, this.pendingAsyncCallbackCount - 1);
+			},
+			__piSmokeAsyncFailed: (error: unknown) => {
+				this.asyncCallbackErrors.push(error);
+				this.pendingAsyncCallbackCount = Math.max(0, this.pendingAsyncCallbackCount - 1);
+			},
 		};
 		windowObject.window = windowObject;
 		windowObject.self = windowObject;
@@ -415,6 +432,35 @@ class SmokeRuntime {
 		this.cancelledTimerIds.clear();
 	}
 
+	async settleAsyncCallbacks(errors: string[], warnings: string[]): Promise<void> {
+		// Browser event listeners and timer callbacks may be async. Observing the
+		// returned promises prevents an application rejection from escaping as a
+		// process-level unhandledRejection (which previously terminated the Worker).
+		// Alternate microtask turns with the deterministic timer queue so common
+		// `await delay(...)` startup flows can finish without real wall-clock waits.
+		for (let turn = 0; turn < 12; turn += 1) {
+			for (let microtask = 0; microtask < 8; microtask += 1) await Promise.resolve();
+			this.flushTimers(errors, warnings);
+			for (let microtask = 0; microtask < 16; microtask += 1) await Promise.resolve();
+			// Promises created inside a node:vm context may not deliver their host-side
+			// observation handlers until the next event-loop turn.
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			while (this.asyncCallbackErrors.length > 0) {
+				const error = this.asyncCallbackErrors.shift();
+				recordRuntimeIssue(
+					error,
+					`Runtime smoke gate: asynchronous callback failed: ${describeRuntimeError(error, this.sources)}`,
+					errors,
+					warnings,
+				);
+			}
+			if (this.pendingAsyncCallbackCount === 0 && this.timers.length === 0) return;
+		}
+		warnings.push(
+			`Runtime smoke gate stopped waiting for ${this.pendingAsyncCallbackCount} asynchronous callback(s) after bounded deterministic startup sampling.`,
+		);
+	}
+
 	validationErrors(): string[] {
 		const errors: string[] = [];
 		for (const message of this.consoleErrors) {
@@ -458,12 +504,13 @@ class SmokeRuntime {
 		this.contextValues.__piSmokeCallbackArgs = args;
 		this.contextValues.__piSmokeCallbackThis = thisArg;
 		try {
-			new Script("__piSmokeCallback.call(__piSmokeCallbackThis, ...__piSmokeCallbackArgs)").runInContext(
-				this.contextValues,
-				{
-					timeout: this.scriptTimeoutMs,
-				},
-			);
+			new Script(`(() => {
+				const result = __piSmokeCallback.call(__piSmokeCallbackThis, ...__piSmokeCallbackArgs);
+				if (result && typeof result.then === "function") {
+					__piSmokeAsyncStarted();
+					result.then(__piSmokeAsyncFinished, __piSmokeAsyncFailed);
+				}
+			})()`).runInContext(this.contextValues, { timeout: this.scriptTimeoutMs });
 		} finally {
 			delete this.contextValues.__piSmokeCallback;
 			delete this.contextValues.__piSmokeCallbackArgs;
@@ -541,6 +588,12 @@ class SmokeDocument extends SmokeEventTarget {
 			tagName.toLowerCase() === "canvas" ? new SmokeCanvasElement(this) : new SmokeElement(tagName, this);
 		this.track(element);
 		return element;
+	}
+
+	createTextNode(value: unknown): SmokeElement {
+		const node = new SmokeElement("#text", this);
+		node.textContent = value;
+		return node;
 	}
 
 	getElementById(id: string): SmokeElement | null {
@@ -632,7 +685,7 @@ class SmokeElement extends SmokeEventTarget {
 	clientWidth = 1024;
 	clientHeight = 768;
 	private text = "";
-	innerHTML = "";
+	private html = "";
 	value = "";
 	checked = false;
 	readonly children: SmokeElement[] = [];
@@ -658,15 +711,24 @@ class SmokeElement extends SmokeEventTarget {
 	}
 
 	get textContent(): string {
-		return this.text;
+		return this.text + this.children.map((child) => child.textContent).join("");
 	}
 
 	set textContent(value: unknown) {
 		this.text = value === null ? "" : String(value);
 	}
 
+	get innerHTML(): string {
+		return this.html;
+	}
+
+	set innerHTML(value: unknown) {
+		this.html = value === null ? "" : String(value);
+		if (this.html === "") this.children.length = 0;
+	}
+
 	get innerText(): string {
-		return this.text;
+		return this.textContent;
 	}
 
 	set innerText(value: unknown) {
@@ -756,7 +818,10 @@ class SmokeElement extends SmokeEventTarget {
 
 	hasMetricSignal(): boolean {
 		const signal = `${this.id} ${this.className}`;
-		return /\b(?:kpi|metric)-?value\b/i.test(this.className) || /(?:kpi|metric).*(?:value|yield|count|output|loss)$/i.test(signal);
+		return (
+			/\b(?:kpi|metric)-?value\b/i.test(this.className) ||
+			/(?:kpi|metric).*(?:value|yield|count|output|loss)$/i.test(signal)
+		);
 	}
 
 	hasOnlyZeroMetricValues(): boolean {
@@ -948,6 +1013,24 @@ class SmokeChart {
 		} catch {
 			return "[unserializable chart data]";
 		}
+	}
+
+	getElementsAtEventForMode(
+		_event: unknown,
+		_mode: unknown,
+		_options: unknown,
+		_useFinalPosition: unknown,
+	): Array<{ datasetIndex: number; index: number }> {
+		const labels = Array.isArray(this.data.labels) ? this.data.labels : [];
+		const datasets = Array.isArray(this.data.datasets) ? this.data.datasets : [];
+		const firstDataset = datasets[0];
+		const values =
+			firstDataset &&
+			typeof firstDataset === "object" &&
+			Array.isArray((firstDataset as Record<string, unknown>).data)
+				? ((firstDataset as Record<string, unknown>).data as unknown[])
+				: [];
+		return Math.max(labels.length, values.length) > 0 ? [{ datasetIndex: 0, index: 0 }] : [];
 	}
 
 	destroy(): void {

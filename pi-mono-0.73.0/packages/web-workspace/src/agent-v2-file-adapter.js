@@ -110,6 +110,18 @@ export function createAgentV2FileAdapter(input) {
                 return mapError(error, patch.path);
             }
         },
+        deleteFile(path) {
+            try {
+                const result = files.handle({ ...context, command: "delete", filename: path });
+                return {
+                    path: publicPath(typeof result.filename === "string" ? result.filename : path),
+                    action: "deleted",
+                };
+            }
+            catch (error) {
+                return mapError(error, path);
+            }
+        },
     };
 }
 function normalizeV2Path(path) {

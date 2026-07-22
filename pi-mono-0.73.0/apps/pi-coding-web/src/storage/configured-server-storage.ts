@@ -46,6 +46,8 @@ export interface ConfiguredStorageStatus {
 export interface ConfiguredSettingsRecord {
 	version: 1;
 	savedAt: string;
+	modelConfigRevision?: number;
+	selectedModelConfigRevision?: number;
 	currentSessionId?: string;
 	selectedModel?: Model<any>;
 	providerKeys?: Record<string, string>;
@@ -114,9 +116,6 @@ export class ConfiguredServerStorage {
 				throw new Error(data.error || `Configured storage request failed: ${response.status}`);
 			}
 			return data;
-		} catch (error) {
-			if (options.allowMissing) return null;
-			throw error;
 		} finally {
 			clearTimeout(timeoutId);
 		}

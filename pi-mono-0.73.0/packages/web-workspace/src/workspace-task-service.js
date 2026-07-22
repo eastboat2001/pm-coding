@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { BuildRunnerError } from "./build-runner.js";
+import { assessProjectEntryConsistency } from "./project-entry-consistency.js";
 import { findBuildSourceEntry, findStaticServeRoot, staticServeRootCandidates } from "./static-preview.js";
 import { assessStaticPreviewQuality } from "./static-preview-quality-gate.js";
 import { runStaticPreviewSmokeGate } from "./static-preview-smoke-gate.js";
@@ -59,14 +60,16 @@ export class WorkspaceTaskService {
         const warnings = [];
         if (files.length === 0)
             errors.push("Project workspace is empty.");
-        if (!staticRoot) {
+        const consistency = assessProjectEntryConsistency(projectDir);
+        errors.push(...consistency.errors);
+        if (!staticRoot && consistency.valid) {
             const buildSourceEntry = findBuildSourceEntry(projectDir, ["", "public"]) ||
                 (hasPackageJson ? join(projectDir, "package.json") : undefined);
             errors.push(buildSourceEntry
                 ? `Static preview found a build source entry at ${buildSourceEntry}. Run build_static before preview so PI can serve browser-ready dist/build output.`
                 : "Static preview requires an index.html in the project root, dist, build, or public. Package scripts, npm install, npm run build, and Node services are not started.");
         }
-        if (staticRoot) {
+        if (staticRoot && consistency.valid) {
             const quality = assessStaticPreviewQuality({ serveRoot: staticRoot });
             errors.push(...quality.errors.map((error) => `Static preview quality gate: ${error}`));
             warnings.push(...quality.warnings.map((warning) => `Static preview quality gate: ${warning}`));
@@ -94,8 +97,10 @@ export class WorkspaceTaskService {
             errors.push("build_static requires package.json.");
         if (options.files.length === 0)
             errors.push("Project workspace is empty.");
+        if (errors.length === 0)
+            errors.push(...assessProjectEntryConsistency(options.projectDir).errors);
         if (errors.length > 0)
-            return buildStaticResult(options, "failed", false, "", errors, logs);
+            return buildStaticResult(options, "failed", false, "", errors, logs, "build.policy_rejected");
         try {
             const build = await this.buildRunner.build({
                 projectId: "dist",

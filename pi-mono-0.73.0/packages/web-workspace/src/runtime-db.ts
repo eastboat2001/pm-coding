@@ -11,10 +11,10 @@ import type {
 	AgentV2ExecutionMutationResult,
 	AgentV2InputBlobRecord,
 	AgentV2InputReferenceRecord,
-	AgentV2RunTransitionCommitInput,
-	AgentV2RunTransitionCommitResult,
 	AgentV2RunRetryCommitInput,
 	AgentV2RunRetryCommitResult,
+	AgentV2RunTransitionCommitInput,
+	AgentV2RunTransitionCommitResult,
 	AgentV2StartRunCommitInput,
 	AgentV2StartRunCommitResult,
 } from "./agent-v2-durable-store.js";
@@ -1761,7 +1761,10 @@ export class RuntimeDbStore implements RuntimeStore {
 		}
 		const db = this.open();
 		return this.writeTransaction(db, () => {
-			const current = requiredRecord(this.getAgentV2RunWithDatabase(db, input.clientId, input.runId), "agent v2 run");
+			const current = requiredRecord(
+				this.getAgentV2RunWithDatabase(db, input.clientId, input.runId),
+				"agent v2 run",
+			);
 			const currentTasks = this.listAgentV2TasksWithDatabase(db, input.clientId, input.runId);
 			const expectations = new Map(input.expectedTasks.map((task) => [task.taskId, task]));
 			const taskIds = new Set(input.tasks.map((task) => task.taskId));

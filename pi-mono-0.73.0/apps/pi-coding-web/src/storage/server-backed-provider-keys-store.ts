@@ -10,28 +10,25 @@ export class ServerBackedProviderKeysStore extends ProviderKeysStore {
 	}
 
 	override async get(provider: string): Promise<string | null> {
-		const localKey = await super.get(provider);
-		if (localKey) {
-			await this.persistLocalKeyIfNeeded(provider, localKey);
-			return localKey;
-		}
-
 		const serverKeys = await this.readServerProviderKeys();
 		const serverKey = serverKeys[provider];
-		if (!serverKey) return await this.readCustomProviderApiKey(provider);
+		const authoritativeKey = serverKey || (await this.readCustomProviderApiKey(provider));
+		if (!authoritativeKey) return await super.get(provider);
 
-		await super.set(provider, serverKey);
-		return serverKey;
+		await super.set(provider, authoritativeKey);
+		return authoritativeKey;
 	}
 
 	override async set(provider: string, key: string): Promise<void> {
+		const synchronized = await this.configuredStorage.writeSettings({ providerKeys: { [provider]: key } });
+		if (!synchronized) throw new Error("Failed to synchronize provider credentials with the PI server.");
 		await super.set(provider, key);
-		await this.configuredStorage.writeSettings({ providerKeys: { [provider]: key } });
 	}
 
 	override async delete(provider: string): Promise<void> {
+		const synchronized = await this.configuredStorage.writeSettings({ providerKeys: { [provider]: null } });
+		if (!synchronized) throw new Error("Failed to synchronize provider credential deletion with the PI server.");
 		await super.delete(provider);
-		await this.configuredStorage.writeSettings({ providerKeys: { [provider]: null } });
 	}
 
 	override async list(): Promise<string[]> {
@@ -51,11 +48,5 @@ export class ServerBackedProviderKeysStore extends ProviderKeysStore {
 
 	private async readCustomProviderApiKey(provider: string): Promise<string | null> {
 		return (await this.getCustomProviderApiKey?.(provider)) || null;
-	}
-
-	private async persistLocalKeyIfNeeded(provider: string, key: string): Promise<void> {
-		const serverKeys = await this.readServerProviderKeys();
-		if (serverKeys[provider] === key) return;
-		await this.configuredStorage.writeSettings({ providerKeys: { [provider]: key } });
 	}
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -217,6 +217,69 @@ describe("agent v2 production repair loop", () => {
 		expect(renderedPrompt).toContain("PROMPT_WORKSPACE_SENTINEL");
 		expect(renderedPrompt).toContain("static.loading_visible");
 		expect(renderedPrompt).not.toContain("prompt raw validator secret");
+	});
+
+	it("deletes a disclosed obsolete implementation and persists an artifact tombstone", async () => {
+		const fixture = directRepairFixture("<!doctype html><main>Legacy root</main>");
+		const obsoletePath = join(fixture.projectRoot, "src", "main.tsx");
+		mkdirSync(join(fixture.projectRoot, "src"), { recursive: true });
+		const obsoleteContent = "ReactDOM.createRoot(document.getElementById('root')!).render(<App />);\n";
+		writeFileSync(obsoletePath, obsoleteContent);
+		fixture.store.upsertAgentV2Artifact({
+			clientId: "client-a",
+			runId: "run-direct-repair",
+			artifactId: "file:src/main.tsx",
+			kind: "source",
+			path: "src/main.tsx",
+			mediaType: "text/plain",
+			checksum: checksum(obsoleteContent),
+			version: checksum(obsoleteContent),
+			sourceTaskId: "implement",
+			validationStatus: "failed",
+			metadataJson: {},
+			createdAt: "2026-07-14T01:00:00.000Z",
+			updatedAt: "2026-07-14T01:00:00.000Z",
+		});
+
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async (input) => ({
+						result: {
+							version: 1 as const,
+							taskId: input.task.taskId,
+							summary: "Keep the standalone application.",
+							files: [{ path: "index.html", content: "<!doctype html><main>Ready</main>" }],
+							deletedPaths: ["src/main.tsx"],
+							addressedDiagnosticIds: input.diagnostics.map((item) => item.diagnosticId),
+						},
+						provider: "test",
+						model: "v2-test-model",
+					}),
+				},
+			}),
+		).resolves.toMatchObject({ status: "task_succeeded", taskId: "repair:validate:1" });
+
+		expect(existsSync(obsoletePath)).toBe(false);
+		expect(fixture.store.listAgentV2Artifacts("client-a", "run-direct-repair")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					artifactId: "file:src/main.tsx",
+					validationStatus: "deleted",
+					metadataJson: { action: "deleted" },
+				}),
+			]),
+		);
+		expect(
+			fixture.store
+				.listAgentV2RunEvents("client-a", "run-direct-repair", 0)
+				.find((event) => event.type === "agent_v2.artifact_indexed" && event.payload.path === "src/main.tsx")
+				?.payload,
+		).toMatchObject({ action: "deleted", validationStatus: "deleted" });
 	});
 
 	it("repairs a large source file through a checksum-bound excerpt patch instead of rejecting its byte size", async () => {

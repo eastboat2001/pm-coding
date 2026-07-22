@@ -12,6 +12,22 @@ type CustomProviderModelSource = {
 	useNonStreamingToolCalls?: boolean;
 };
 
+export type AgentV2ModelSynchronizationErrorCode =
+	| "agent_v2.model.not_synchronized"
+	| "agent_v2.model.settings_unavailable"
+	| "agent_v2.model.stale_configuration";
+
+export class AgentV2ModelSynchronizationError extends Error {
+	constructor(
+		readonly code: AgentV2ModelSynchronizationErrorCode,
+		message: string,
+		options?: ErrorOptions,
+	) {
+		super(message, options);
+		this.name = "AgentV2ModelSynchronizationError";
+	}
+}
+
 export class ModelController {
 	constructor(
 		private readonly storage: AppStorage,
@@ -19,10 +35,6 @@ export class ModelController {
 	) {}
 
 	async getDefaultModel(): Promise<Model<any> | undefined> {
-		const storedModel = await this.storage.settings.get<Model<any>>(SELECTED_MODEL_KEY);
-		const resolvedStoredModel = await this.resolveCustomModel(storedModel);
-		if (resolvedStoredModel) return resolvedStoredModel;
-
 		const configuredSettings = await this.configuredStorage.readSettings();
 		const resolvedConfiguredModel = await this.resolveCustomModel(configuredSettings?.selectedModel);
 		if (resolvedConfiguredModel) return resolvedConfiguredModel;
@@ -34,13 +46,70 @@ export class ModelController {
 		});
 		if (configuredDefault) return configuredDefault;
 
+		const storedModel = await this.storage.settings.get<Model<any>>(SELECTED_MODEL_KEY);
+		const resolvedStoredModel = await this.resolveCustomModel(storedModel);
+		if (resolvedStoredModel) return resolvedStoredModel;
+
 		return await this.getFirstManualCustomModel();
 	}
 
-	async persistSelectedModel(model: Model<any> | undefined): Promise<void> {
-		if (!(await this.isCustomProviderModel(model))) return;
-		await this.storage.settings.set(SELECTED_MODEL_KEY, model);
-		await this.configuredStorage.writeSettings({ selectedModel: model });
+	async persistSelectedModel(model: Model<any> | undefined): Promise<boolean> {
+		const resolvedModel = await this.resolveCustomModel(model);
+		if (!resolvedModel) return false;
+		try {
+			return (await this.persistResolvedCustomModel(resolvedModel)) === "ready";
+		} catch {
+			return false;
+		}
+	}
+
+	async synchronizeSelectedModelForV2(model: Model<any> | undefined): Promise<Model<any>> {
+		if (!model) {
+			throw new AgentV2ModelSynchronizationError(
+				"agent_v2.model.not_synchronized",
+				"当前没有可用于应用生成的模型，请先在模型选择器中选择并保存模型。",
+			);
+		}
+		if (!model.provider.startsWith("custom-provider:")) return model;
+
+		let resolvedModel: Model<any> | undefined;
+		try {
+			resolvedModel = await this.resolveCustomModel(model);
+		} catch (error) {
+			throw new AgentV2ModelSynchronizationError(
+				"agent_v2.model.settings_unavailable",
+				"无法读取服务器上的模型配置，请检查 PI 服务连接后重试。",
+				{ cause: error },
+			);
+		}
+		if (!resolvedModel) {
+			throw new AgentV2ModelSynchronizationError(
+				"agent_v2.model.not_synchronized",
+				"当前会话引用的是浏览器旧模型状态，但服务器没有对应配置。请在模型设置中重新保存该提供方和模型后重试。",
+			);
+		}
+
+		let status: Awaited<ReturnType<ModelController["persistResolvedCustomModel"]>>;
+		try {
+			status = await this.persistResolvedCustomModel(resolvedModel);
+		} catch (error) {
+			throw new AgentV2ModelSynchronizationError(
+				"agent_v2.model.settings_unavailable",
+				"模型配置无法同步到 PI 服务器，请检查服务连接和服务器存储权限后重试。",
+				{ cause: error },
+			);
+		}
+		if (status === "ready") return resolvedModel;
+		if (status === "stale") {
+			throw new AgentV2ModelSynchronizationError(
+				"agent_v2.model.stale_configuration",
+				"模型提供方配置已发生变化，当前选择尚未与新版本对齐。请重新选择该模型后重试。",
+			);
+		}
+		throw new AgentV2ModelSynchronizationError(
+			"agent_v2.model.settings_unavailable",
+			"模型配置未能写入并从 PI 服务器读回确认，请检查服务连接和服务器存储权限后重试。",
+		);
 	}
 
 	async resolveCustomModel(candidate: unknown): Promise<Model<any> | undefined> {
@@ -76,8 +145,19 @@ export class ModelController {
 		return await this.resolveCustomModel(currentModel);
 	}
 
-	private async isCustomProviderModel(model: Model<any> | undefined): Promise<boolean> {
-		return !!(await this.resolveCustomModel(model));
+	private async persistResolvedCustomModel(
+		model: Model<any>,
+	): Promise<"ready" | "write_failed" | "readback_failed" | "stale"> {
+		if (!(await this.configuredStorage.writeSettings({ selectedModel: model }))) return "write_failed";
+		const confirmed = await this.configuredStorage.readSettings();
+		if (confirmed?.selectedModel?.provider !== model.provider || confirmed.selectedModel.id !== model.id) {
+			return "readback_failed";
+		}
+		const modelRevision = confirmed.modelConfigRevision ?? 0;
+		const selectedRevision = confirmed.selectedModelConfigRevision ?? 0;
+		if (modelRevision !== selectedRevision) return "stale";
+		await this.storage.settings.set(SELECTED_MODEL_KEY, model);
+		return "ready";
 	}
 
 	private async getFirstManualCustomModel(): Promise<Model<any> | undefined> {

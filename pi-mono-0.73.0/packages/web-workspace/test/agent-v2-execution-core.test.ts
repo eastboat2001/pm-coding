@@ -369,7 +369,7 @@ describe("agent v2 execution core", () => {
 				code: "agent_v2.validation_failed",
 				message:
 					"Static validation still failed after bounded recovery attempts: Workspace has no project files to validate.",
-				retryable: true,
+				retryable: false,
 				data: expect.objectContaining({
 					attempt: 3,
 					maxAttempts: 3,
@@ -385,6 +385,77 @@ describe("agent v2 execution core", () => {
 				.listAgentV2Tasks("client-a", "run-validation-attempts")
 				.some((task) => task.taskId === "repair:validate:3"),
 		).toBe(false);
+	});
+
+	it("allows a second full regeneration when the first replacement still has a retryable runtime error", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-second-regeneration",
+			input: { prompt: "Build a static app" },
+			model: { provider: "test" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-second-regeneration",
+			taskId: "revalidate:validate:5",
+			kind: "validation",
+			title: "Validate replacement app",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: { baseValidationTaskId: "validate", validationAttempt: 5, fullRegenerationUsed: true },
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-second-regeneration",
+			taskId: "deliver",
+			kind: "delivery",
+			title: "Deliver",
+			status: "pending",
+			dependsOn: ["revalidate:validate:5"],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.001Z",
+			updatedAt: "2026-07-08T00:00:00.001Z",
+		});
+		writeProjectFile(
+			root,
+			"index.html",
+			"<!doctype html><main><h1>Broken</h1></main><script>throw new Error('still broken')</script>",
+		);
+
+		const result = await executeAgentV2NextTask({
+			...unusedExecutionDependencies(),
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+			runId: "run-second-regeneration",
+			now: () => "2026-07-08T00:02:00.000Z",
+			maxRepairAttempts: 6,
+		});
+
+		expect(result).toMatchObject({ status: "task_failed", taskId: "revalidate:validate:5" });
+		expect(store.listAgentV2Tasks("client-a", "run-second-regeneration")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					taskId: "regenerate:validate:5",
+					kind: "implementation",
+					input: expect.objectContaining({ recoveryMode: "full_regeneration" }),
+					acceptanceCriteria: expect.arrayContaining([expect.stringContaining("runtime evidence")]),
+				}),
+				expect.objectContaining({
+					taskId: "revalidate:validate:6",
+					dependsOn: ["regenerate:validate:5"],
+				}),
+			]),
+		);
 	});
 
 	it("persists passed validation records and transitions validation tasks to succeeded", async () => {
@@ -627,6 +698,81 @@ describe("agent v2 execution core", () => {
 		expect(durableBoundary).not.toContain("RAW_FILE_SENTINEL");
 		expect(durableBoundary).not.toContain("sk-model-summary-key-1234567890");
 		expect(store.listAgentV2Tasks("client-a", "run-implementation")[0]?.error).toBeUndefined();
+	});
+
+	it("replaces obsolete files during full regeneration instead of merging a second implementation", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-full-regeneration",
+			input: { objective: "Recover a static app" },
+			model: { provider: "test", id: "v2-test-model" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-full-regeneration",
+			taskId: "regenerate:validate:1",
+			kind: "implementation",
+			title: "Regenerate application",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: { recoveryMode: "full_regeneration" },
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+		writeProjectFile(root, "index.html", "<!doctype html><main>Old root</main>");
+		mkdirSync(join(root, "data", "clients", "client-a", "sessions", "session-a", "project", "src"), {
+			recursive: true,
+		});
+		writeProjectFile(root, "src/main.tsx", "ReactDOM.createRoot(root).render(<App />);\n");
+		for (const path of ["index.html", "src/main.tsx"]) {
+			store.upsertAgentV2Artifact({
+				clientId: "client-a",
+				runId: "run-full-regeneration",
+				artifactId: `file:${path}`,
+				kind: "source",
+				path,
+				mediaType: path.endsWith(".html") ? "text/html" : "text/plain",
+				checksum: `sha256:${"a".repeat(64)}`,
+				version: `sha256:${"a".repeat(64)}`,
+				sourceTaskId: "implement",
+				validationStatus: "failed",
+				metadataJson: {},
+				createdAt: "2026-07-08T00:00:00.000Z",
+				updatedAt: "2026-07-08T00:00:00.000Z",
+			});
+		}
+
+		await expect(
+			executeAgentV2NextTask({
+				store,
+				config: testConfig(root),
+				context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+				runId: "run-full-regeneration",
+				materializer: { materialize: async () => [] },
+				modelExecution: recordingModelExecution("regenerate:validate:1", [
+					{ path: "index.html", content: "<!doctype html><main>Recovered</main>" },
+				]),
+				now: () => "2026-07-08T00:02:00.000Z",
+			}),
+		).resolves.toMatchObject({ status: "task_succeeded", taskId: "regenerate:validate:1" });
+
+		expect(readFileSync(projectFile(root, "index.html"), "utf8")).toContain("Recovered");
+		expect(existsSync(projectFile(root, "src/main.tsx"))).toBe(false);
+		expect(store.listAgentV2Artifacts("client-a", "run-full-regeneration")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ artifactId: "file:index.html", validationStatus: "pending" }),
+				expect.objectContaining({
+					artifactId: "file:src/main.tsx",
+					validationStatus: "deleted",
+					metadataJson: { action: "deleted" },
+				}),
+			]),
+		);
 	});
 
 	it("blocks implementation file writes through restrictive production tool governance", async () => {

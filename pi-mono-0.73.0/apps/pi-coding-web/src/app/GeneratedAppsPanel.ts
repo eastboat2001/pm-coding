@@ -4,6 +4,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { AlertCircle, ExternalLink, PanelsTopLeft, Pencil, RefreshCw, Search, Square, Trash2, X } from "lucide";
 import {
 	cancelGeneratedAppRunWithRollback,
+	deleteGeneratedApp,
 	filterGeneratedApps,
 	formatGeneratedAppUpdatedAt,
 	type GeneratedAppRecord,
@@ -16,6 +17,9 @@ import {
 export class GeneratedAppsPanel extends LitElement {
 	@property({ attribute: false }) openSession: (sessionId: string) => Promise<unknown> | unknown = () => undefined;
 	@property({ attribute: false }) deleteSession: (sessionId: string) => Promise<unknown> | unknown = () => undefined;
+	@property({ attribute: false }) deleteProject: (project: GeneratedAppRecord) => Promise<unknown> | unknown = (
+		project,
+	) => deleteGeneratedApp(project);
 	@property({ attribute: false }) cancelRun: (runId: string) => Promise<unknown> | unknown = () => undefined;
 	@property({ attribute: false }) renameProject: (
 		project: GeneratedAppRecord,
@@ -453,6 +457,7 @@ export class GeneratedAppsPanel extends LitElement {
 		this.deletingProjectId = project.projectId;
 		this.deleteError = "";
 		try {
+			await this.deleteProject(project);
 			await this.deleteSession(project.sessionId);
 			this.projects = this.projects.filter((candidate) => candidate.projectId !== project.projectId);
 			this.deleteProjectId = "";

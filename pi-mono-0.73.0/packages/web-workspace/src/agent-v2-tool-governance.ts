@@ -5,6 +5,7 @@ export type AgentV2ToolName =
 	| "file.read"
 	| "file.write"
 	| "file.patch"
+	| "file.delete"
 	| "validation.static_build"
 	| "validation.static_quality"
 	| "validation.static_smoke"
@@ -60,6 +61,13 @@ const DEFAULT_CONTRACTS: AgentV2ToolContract[] = [
 		allowedPhases: ["implementation", "repair"],
 		inputSchemaId: "agent-v2.file.patch.input.v1",
 		outputSchemaId: "agent-v2.file.patch.output.v1",
+		sideEffects: "workspace_files",
+	},
+	{
+		name: "file.delete",
+		allowedPhases: ["implementation", "repair"],
+		inputSchemaId: "agent-v2.file.delete.input.v1",
+		outputSchemaId: "agent-v2.file.delete.output.v1",
 		sideEffects: "workspace_files",
 	},
 	{

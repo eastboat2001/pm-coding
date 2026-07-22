@@ -508,6 +508,12 @@ export interface ProjectPreviewListResult extends JsonObject {
 	projects: ProjectPreviewSummary[];
 }
 
+export interface ProjectPreviewDeleteResult extends JsonObject {
+	projectId: string;
+	sessionId: string;
+	deleted: boolean;
+}
+
 export type ProjectTaskName = "inspect" | "validate" | "build_static" | "preview" | "logs";
 
 export interface ProjectTaskRequest extends ProjectRequestContext {

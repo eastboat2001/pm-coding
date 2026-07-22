@@ -97,7 +97,12 @@ function repairActionForFailure(
 }
 
 function requiresFullRegeneration(code: string): boolean {
-	return code === "static.workspace_empty" || code === "static.preview_missing_entry";
+	return (
+		code === "static.workspace_empty" ||
+		code === "static.preview_missing_entry" ||
+		code === "static.build_manifest_missing" ||
+		code === "build.output_missing"
+	);
 }
 
 function isTransientRevalidationFailure(code: string): boolean {
@@ -112,10 +117,10 @@ function reasonForFailure(failure: AgentV2ValidationFailure): string {
 		return "Metric placeholders must be replaced with rendered values or an explicit empty state.";
 	}
 	if (failure.code === "static.script_error") {
-		return "Client script errors must be fixed before delivery.";
+		return `Client script errors must be fixed before delivery. Runtime evidence: ${failure.message}`;
 	}
 	if (failure.code === "static.canvas_layout_unbounded") {
-		return "Responsive charts must use dedicated position:relative containers with bounded heights before delivery.";
+		return "Responsive charts must use dedicated non-flex position:relative child containers with bounded heights before delivery. Do not use a flex-growing card-body, h-100 card, grid cell, canvas height attribute, or the canvas itself as the height boundary.";
 	}
 	if (failure.code === "static.control_unwired") {
 		return "Every visible select must read its selected value and use it to deterministically change KPIs, charts, tables, or an explicit empty state.";

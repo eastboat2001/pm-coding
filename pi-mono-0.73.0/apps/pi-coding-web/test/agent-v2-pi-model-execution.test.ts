@@ -117,7 +117,8 @@ describe("AgentV2PiModelExecution", () => {
 		expect(complete).toHaveBeenCalledTimes(2);
 		const recoveryContext = complete.mock.calls[1]?.[1];
 		expect(recoveryContext?.systemPrompt).toContain("OUTPUT-LENGTH RECOVERY");
-		expect(recoveryContext?.systemPrompt).toContain("prefer one root index.html");
+		expect(recoveryContext?.systemPrompt).toContain("For a static app, return only one root index.html");
+		expect(recoveryContext?.systemPrompt).toContain("return one connected build entry and source tree");
 		expect(recoveryContext?.systemPrompt).toContain("one complete bare JSON object");
 		expect(recoveryContext?.messages[0]?.content).toBe(complete.mock.calls[0]?.[1]?.messages[0]?.content);
 	});
@@ -153,6 +154,44 @@ describe("AgentV2PiModelExecution", () => {
 			expect(observed).toEqual([
 				{ baseUrl: "https://old.example/v1", apiKey: "old-key" },
 				{ baseUrl: "https://old.example/v1", apiKey: "old-key" },
+			]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("loads one fresh atomic server settings snapshot for each model task", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "agent-v2-model-refresh-"));
+		const settingsFile = join(dir, "settings.json");
+		try {
+			writeFileSync(settingsFile, JSON.stringify(customSettings("https://old.example/v1", "old-key")), "utf8");
+			const observed: Array<{ baseUrl: string; apiKey: string | undefined }> = [];
+			const execution = new AgentV2PiModelExecution({
+				loadServerSettingsSnapshot: () =>
+					loadAgentV2ServerSettingsSnapshot(
+						{ settingsFile },
+						{ getEnvApiKey: () => undefined, getBuiltinProviders: () => [] },
+					),
+				complete: vi.fn(async (model, _context, options) => {
+					observed.push({ baseUrl: model.baseUrl, apiKey: options?.apiKey });
+					return assistantMessage(implementationJson(), {
+						provider: "custom-provider:provider-a",
+						model: "custom-model",
+					});
+				}),
+			});
+
+			await execution.generateImplementation(
+				executionInput({ provider: "custom-provider:provider-a", id: "custom-model" }),
+			);
+			writeFileSync(settingsFile, JSON.stringify(customSettings("https://new.example/v1", "new-key")), "utf8");
+			await execution.generateImplementation(
+				executionInput({ provider: "custom-provider:provider-a", id: "custom-model" }),
+			);
+
+			expect(observed).toEqual([
+				{ baseUrl: "https://old.example/v1", apiKey: "old-key" },
+				{ baseUrl: "https://new.example/v1", apiKey: "new-key" },
 			]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

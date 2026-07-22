@@ -11,7 +11,7 @@ import { AgentV2RunApiError, AgentV2RunApiService, type AgentV2StartRunRequest }
 import { type AgentV2RunEventBus, RedisAgentV2RunEventBus } from "./agent-v2-run-event-bus.js";
 import { AgentV2RunEventLog } from "./agent-v2-run-event-log.js";
 import { type AgentV2RunQueue, createRedisAgentV2RunQueue } from "./agent-v2-run-queue.js";
-import type { AgentV2SchemaStore } from "./agent-v2-runtime-store.js";
+import type { AgentV2RunApiStore, AgentV2SchemaStore } from "./agent-v2-runtime-store.js";
 import type { AgentV2RunEventRecord } from "./agent-v2-store.js";
 import { normalizeClientId, readClientIdHeader } from "./client-id.js";
 import { loadStorageConfig } from "./config.js";
@@ -45,7 +45,7 @@ import type {
 } from "./types.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { sanitizePathComponent } from "./workspace-paths.js";
-import { WorkspacePreviewService } from "./workspace-preview-service.js";
+import { WorkspacePreviewService, WorkspaceProjectDeleteError } from "./workspace-preview-service.js";
 import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { createWorkspaceTaskService } from "./workspace-task-factory.js";
@@ -59,6 +59,15 @@ const VITE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const READINESS_REFRESH_INTERVAL_MS = 1_000;
 
 type RetiredApplicationGenerationRoute = { status: 404 | 410; error: string };
+type AgentV2StartValidationFailure = { code: string; message: string; statusCode?: number };
+
+export interface ConfiguredStoragePluginOptions {
+	validateAgentV2Start?: (input: {
+		clientId: string;
+		model: { provider: string; id: string };
+		settings: JsonObject | undefined;
+	}) => AgentV2StartValidationFailure | undefined | Promise<AgentV2StartValidationFailure | undefined>;
+}
 
 export interface ConfiguredStoragePluginTestServices {
 	config: StorageConfig;
@@ -68,7 +77,7 @@ export interface ConfiguredStoragePluginTestServices {
 	previews: WorkspacePreviewService;
 	tasks: WorkspaceTaskService;
 	skills: WorkspaceSkillService;
-	runtimeDb: AgentV2SchemaStore & { close?(): void | Promise<void> };
+	runtimeDb: AgentV2SchemaStore & Pick<AgentV2RunApiStore, "listAgentV2Runs"> & { close?(): void | Promise<void> };
 	diagnosticExports: WorkspaceDiagnosticExportService;
 	agentV2RunApi?: AgentV2RunApiService;
 	agentV2RunEventBus?: AgentV2RunEventBus;
@@ -78,7 +87,7 @@ export interface ConfiguredStoragePluginTestServices {
 	agentV2ReadinessGate?: AgentV2ReadinessGate;
 }
 
-export function configuredStoragePlugin(envFile?: string): Plugin {
+export function configuredStoragePlugin(envFile?: string, options: ConfiguredStoragePluginOptions = {}): Plugin {
 	const rootDir = process.cwd();
 	const config = loadStorageConfig(rootDir, envFile);
 	const diagnostics = new WorkspaceDiagnosticLogService(config);
@@ -115,6 +124,18 @@ export function configuredStoragePlugin(envFile?: string): Plugin {
 		store: runtimeDb,
 		events: agentV2RunEventLog,
 		queueName: config.agentV2.queueName,
+		validateStart: options.validateAgentV2Start
+			? async ({ clientId, payload }) => {
+					const failure = await options.validateAgentV2Start?.({
+						clientId,
+						model: payload.model,
+						settings: sessions.readSettings(clientId),
+					});
+					if (failure) {
+						throw new AgentV2RunApiError(failure.message, failure.statusCode ?? 409, failure.code);
+					}
+				}
+			: undefined,
 		wakeDispatcher: () => agentV2OutboxDispatcher.wake(),
 	});
 	return createConfiguredStoragePlugin({
@@ -308,7 +329,7 @@ function createConfiguredStoragePlugin({
 			const method = req.method || "GET";
 
 			if (isProjectsApi) {
-				await handleProjectsApi(method, route, req, res, config, files, previews, tasks);
+				await handleProjectsApi(method, route, url, req, res, config, files, previews, tasks, runtimeDb);
 				return;
 			}
 			if (isSkillsApi) {
@@ -496,12 +517,14 @@ async function handleSkillsApi(
 async function handleProjectsApi(
 	method: string,
 	route: string,
+	url: URL,
 	req: Connect.IncomingMessage,
 	res: ServerResponse,
 	config: StorageConfig,
 	files: WorkspaceFileService,
 	previews: WorkspacePreviewService,
 	tasks: WorkspaceTaskService,
+	runtimeDb: Pick<AgentV2RunApiStore, "listAgentV2Runs">,
 ): Promise<void> {
 	const clientId = readConfiguredApiClientId(req, config);
 
@@ -561,18 +584,52 @@ async function handleProjectsApi(
 		sendJson(res, await previews.preview({ ...body, sessionId: String(body.sessionId || "") }, req));
 		return;
 	}
-	const renameMatch = route.match(/^\/([^/]+)$/);
-	if (method === "PUT" && renameMatch) {
+	const projectMatch = route.match(/^\/([^/]+)$/);
+	if (method === "PUT" && projectMatch) {
 		const body = await readJsonBody(req);
 		sendJson(
 			res,
 			previews.renameProject(
-				decodeURIComponent(renameMatch[1]),
+				decodeURIComponent(String(projectMatch[1] || "")),
 				String((body as ProjectPreviewRenameRequest).title || ""),
 				req,
 				clientId,
 			),
 		);
+		return;
+	}
+	if (method === "DELETE" && projectMatch) {
+		if (!clientId) {
+			sendJson(res, { error: "Client id is required to delete a project." }, 400);
+			return;
+		}
+		const projectId = decodeURIComponent(String(projectMatch[1] || ""));
+		const sessionId = String(url.searchParams.get("sessionId") || "").trim();
+		const activeRuns = (await runtimeDb.listAgentV2Runs(clientId)).filter(
+			(run) =>
+				run.input.sessionId === sessionId &&
+				(run.status === "queued" || run.status === "running" || run.status === "cancelling"),
+		);
+		if (activeRuns.length > 0) {
+			sendJson(
+				res,
+				{
+					error: "Stop the active app generation run before deleting this app.",
+					activeRunIds: activeRuns.map((run) => run.runId),
+				},
+				409,
+			);
+			return;
+		}
+		try {
+			sendJson(res, previews.deleteProject(projectId, sessionId, clientId));
+		} catch (error) {
+			if (error instanceof WorkspaceProjectDeleteError) {
+				sendJson(res, { error: error.message }, error.statusCode);
+				return;
+			}
+			throw error;
+		}
 		return;
 	}
 	const logsMatch = route.match(/^\/([^/]+)\/logs$/);
@@ -1148,7 +1205,7 @@ function redactConnectionUrl(value: string): string {
 
 function sendRuntimeApiError(res: ServerResponse, error: unknown): void {
 	if (error instanceof AgentV2RunApiError) {
-		sendJson(res, { error: error.message }, error.statusCode);
+		sendJson(res, { error: error.message, ...(error.code ? { code: error.code } : {}) }, error.statusCode);
 		return;
 	}
 	const message = errorMessage(error);

@@ -629,7 +629,8 @@ export function createAgentV2ProgressCardView(
 			{
 				id: "tasks",
 				label: copy.metrics.tasks,
-				value: tasks.length > 0 ? `${tasks.filter((task) => task.status === "succeeded").length}/${tasks.length}` : "0",
+				value:
+					tasks.length > 0 ? `${tasks.filter((task) => task.status === "succeeded").length}/${tasks.length}` : "0",
 			},
 			{ id: "files", label: copy.metrics.files, value: String(artifacts.length) },
 			{ id: "validation", label: copy.metrics.validation, value: String(validations.length) },

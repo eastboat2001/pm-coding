@@ -662,10 +662,13 @@ export class AgentV2WorkerService {
         const retryDeadline = Date.parse(run.startedAt ?? run.createdAt) + this.runRetryWindowMs;
         if (Date.parse(retryAt) > retryDeadline)
             return false;
-        const allTasks = this.store.listAgentV2Tasks
-            ? await this.store.listAgentV2Tasks(run.clientId, run.runId)
-            : [];
-        const retryableFailedTasks = allTasks.filter((task) => task.status === "failed" && task.error?.retryable === true);
+        const allTasks = this.store.listAgentV2Tasks ? await this.store.listAgentV2Tasks(run.clientId, run.runId) : [];
+        const retryableFailedTasks = allTasks.filter((task) => task.status === "failed" &&
+            task.error?.retryable === true &&
+            // Validation retries use immutable (validationId, attempt) identities.
+            // Resetting the same validation task at run level only replays an
+            // already-persisted attempt and produces a validation-attempt conflict.
+            task.kind !== "validation");
         if ((run.phase === "failed" || code === "agent_v2.worker_task_blocked") && retryableFailedTasks.length === 0) {
             return false;
         }
@@ -726,8 +729,8 @@ export class AgentV2WorkerService {
             },
             diagnostic,
         });
-        return committed.update.applied ||
-            (committed.update.run.status === "queued" && committed.update.run.attempt >= nextAttempt);
+        return (committed.update.applied ||
+            (committed.update.run.status === "queued" && committed.update.run.attempt >= nextAttempt));
     }
     async failRun(run, code, message, retryable = false) {
         if (retryable && (await this.scheduleRunRetry(run, code, message)))

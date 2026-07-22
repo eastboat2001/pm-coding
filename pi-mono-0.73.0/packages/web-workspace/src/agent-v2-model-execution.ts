@@ -107,6 +107,7 @@ export interface AgentV2RepairResult {
 	summary: string;
 	files: AgentV2GeneratedFile[];
 	patches?: AgentV2RepairPatch[];
+	deletedPaths?: string[];
 	addressedDiagnosticIds: string[];
 }
 
@@ -174,6 +175,23 @@ export interface AgentV2ModelExecution {
 const IMPLEMENTATION_FIELDS = new Set(["version", "taskId", "summary", "files"]);
 const REPAIR_FIELDS = new Set(["version", "taskId", "summary", "files", "addressedDiagnosticIds"]);
 const REPAIR_PATCH_FIELDS = new Set(["version", "taskId", "summary", "files", "patches", "addressedDiagnosticIds"]);
+const REPAIR_DELETE_FIELDS = new Set([
+	"version",
+	"taskId",
+	"summary",
+	"files",
+	"deletedPaths",
+	"addressedDiagnosticIds",
+]);
+const REPAIR_PATCH_DELETE_FIELDS = new Set([
+	"version",
+	"taskId",
+	"summary",
+	"files",
+	"patches",
+	"deletedPaths",
+	"addressedDiagnosticIds",
+]);
 const FILE_FIELDS = new Set(["path", "content"]);
 const PATCH_FIELDS = new Set(["path", "expectedChecksum", "oldText", "newText"]);
 const BLOCKED_PATH_SEGMENTS = new Set([".git", ".pi", ".codex", ".superpowers", "node_modules", "agent-v2"]);
@@ -192,7 +210,17 @@ export function parseAgentV2RepairResult(text: string, expectedTaskId: string): 
 	const taskId = requireStableIdentifier(expectedTaskId);
 	const value = parseResponseObject(text);
 	const hasPatches = Object.hasOwn(value, "patches");
-	assertExactFields(value, hasPatches ? REPAIR_PATCH_FIELDS : REPAIR_FIELDS);
+	const hasDeletedPaths = Object.hasOwn(value, "deletedPaths");
+	assertExactFields(
+		value,
+		hasPatches
+			? hasDeletedPaths
+				? REPAIR_PATCH_DELETE_FIELDS
+				: REPAIR_PATCH_FIELDS
+			: hasDeletedPaths
+				? REPAIR_DELETE_FIELDS
+				: REPAIR_FIELDS,
+	);
 	const addressedDiagnosticIds = requireArray(value.addressedDiagnosticIds);
 	if (
 		addressedDiagnosticIds.length === 0 ||
@@ -202,12 +230,18 @@ export function parseAgentV2RepairResult(text: string, expectedTaskId: string): 
 	}
 	const common = parseCommonResult(value, taskId, true);
 	const patches = hasPatches ? parseRepairPatches(value.patches) : [];
-	if (common.files.length === 0 && patches.length === 0) {
+	const deletedPaths = hasDeletedPaths ? parseDeletedPaths(value.deletedPaths) : [];
+	if (common.files.length === 0 && patches.length === 0 && deletedPaths.length === 0) {
 		throw new AgentV2ModelContractError("invalid_schema");
 	}
 	const changedPathKeys = new Set(common.files.map((file) => file.path.toLocaleLowerCase("en-US")));
 	for (const patch of patches) {
 		const key = patch.path.toLocaleLowerCase("en-US");
+		if (changedPathKeys.has(key)) throw new AgentV2ModelContractError("duplicate_path");
+		changedPathKeys.add(key);
+	}
+	for (const deletedPath of deletedPaths) {
+		const key = deletedPath.toLocaleLowerCase("en-US");
 		if (changedPathKeys.has(key)) throw new AgentV2ModelContractError("duplicate_path");
 		changedPathKeys.add(key);
 	}
@@ -218,7 +252,27 @@ export function parseAgentV2RepairResult(text: string, expectedTaskId: string): 
 		seen.add(diagnosticId);
 		return diagnosticId;
 	});
-	return { ...common, ...(hasPatches ? { patches } : {}), addressedDiagnosticIds: parsedIds };
+	return {
+		...common,
+		...(hasPatches ? { patches } : {}),
+		...(hasDeletedPaths ? { deletedPaths } : {}),
+		addressedDiagnosticIds: parsedIds,
+	};
+}
+
+function parseDeletedPaths(value: unknown): string[] {
+	const rawPaths = requireArray(value);
+	if (rawPaths.length > AGENT_V2_MODEL_RESULT_LIMITS.maxFiles) {
+		throw new AgentV2ModelContractError("limit_exceeded");
+	}
+	const collisionKeys = new Set<string>();
+	return rawPaths.map((candidate) => {
+		const path = normalizeGeneratedPath(candidate);
+		const key = path.toLocaleLowerCase("en-US");
+		if (collisionKeys.has(key)) throw new AgentV2ModelContractError("duplicate_path");
+		collisionKeys.add(key);
+		return path;
+	});
 }
 
 function parseRepairPatches(value: unknown): AgentV2RepairPatch[] {

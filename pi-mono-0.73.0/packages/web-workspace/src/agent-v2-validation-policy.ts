@@ -38,7 +38,6 @@ export interface ClassifyAgentV2ValidationPolicyInput {
 const RULE_VERSION = "agent-v2-validation-policy-v2" as const;
 
 const STATIC_QUALITY_ADVISORY_CODES = new Set([
-	"static.canvas_layout_unbounded",
 	"static.selector_missing",
 	"static.loading_visible",
 	"static.metric_placeholder",
@@ -59,7 +58,11 @@ export function classifyAgentV2ValidationPolicy(
 		selector,
 		canvasIds: stringArrayData(input.data, "canvasIds"),
 		detectedPath: normalizePath(stringData(input.data, "detectedPath")),
+		sourceEntry: normalizePath(stringData(input.data, "sourceEntry")),
 		scripts: stringArrayData(input.data, "scripts")
+			.map(normalizePath)
+			.filter((value): value is string => Boolean(value)),
+		sourceEntries: stringArrayData(input.data, "sourceEntries")
 			.map(normalizePath)
 			.filter((value): value is string => Boolean(value)),
 	};
@@ -101,9 +104,11 @@ function severityFor(code: string, retryable: boolean, blocking: boolean): Agent
 }
 
 function confidenceFor(code: string, source: ClassifyAgentV2ValidationPolicyInput["source"]): number {
+	if (code === "static.canvas_layout_unbounded") return 0.95;
 	if (
 		code === "static.workspace_empty" ||
 		code === "static.preview_missing_entry" ||
+		code === "static.build_manifest_missing" ||
 		code === "static.local_script_missing" ||
 		code.startsWith("build.")
 	) {
@@ -119,7 +124,7 @@ function evidenceKindFor(
 	code: string,
 	source: ClassifyAgentV2ValidationPolicyInput["source"],
 ): AgentV2ValidationEvidenceKind {
-	if (code.startsWith("build.")) return "build";
+	if (code.startsWith("build.") || code === "static.build_manifest_missing") return "build";
 	if (code === "static.canvas_layout_unbounded") return "layout";
 	if (source === "static_smoke") return "runtime";
 	if (source === "preview") return "policy";
@@ -133,12 +138,12 @@ function evidenceSummary(code: string): string {
 function repairBudgetFor(code: string, retryable: boolean, blocking: boolean): AgentV2ValidationRepairBudget {
 	if (!retryable || !blocking) return { maxAttempts: 0, maxSameFingerprintAttempts: 0, maxChangedFiles: 0 };
 	if (code === "static.canvas_layout_unbounded") {
-		return { maxAttempts: 2, maxSameFingerprintAttempts: 2, maxChangedFiles: 1 };
+		return { maxAttempts: 2, maxSameFingerprintAttempts: 2, maxChangedFiles: 2 };
 	}
 	if (code === "static.script_error") {
 		return { maxAttempts: 4, maxSameFingerprintAttempts: 3, maxChangedFiles: 2 };
 	}
-	if (code.startsWith("build.")) {
+	if (code.startsWith("build.") || code === "static.build_manifest_missing") {
 		return { maxAttempts: 3, maxSameFingerprintAttempts: 2, maxChangedFiles: 2 };
 	}
 	return { maxAttempts: 4, maxSameFingerprintAttempts: 3, maxChangedFiles: 1 };

@@ -111,7 +111,11 @@ export function transitionAgentV2RunSnapshot(
 
 	const updatedAt = patch.updatedAt ?? new Date().toISOString();
 	const startedAt = to === "running" ? (patch.startedAt ?? snapshot.startedAt ?? updatedAt) : snapshot.startedAt;
-	const endedAt = TERMINAL_RUN_STATUSES.has(to) ? (patch.endedAt ?? updatedAt) : to === "queued" ? undefined : snapshot.endedAt;
+	const endedAt = TERMINAL_RUN_STATUSES.has(to)
+		? (patch.endedAt ?? updatedAt)
+		: to === "queued"
+			? undefined
+			: snapshot.endedAt;
 	const error = to === "running" ? patch.error : (patch.error ?? snapshot.error);
 
 	const next: AgentV2RunSnapshot = {

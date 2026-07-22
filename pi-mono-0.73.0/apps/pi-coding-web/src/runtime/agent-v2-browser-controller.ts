@@ -10,7 +10,7 @@ import type {
 	AgentV2ValidationStatus,
 } from "@mariozechner/pi-web-workspace";
 
-type AgentV2ArtifactValidationStatus = "not_started" | "pending" | "passed" | "failed" | "accepted";
+type AgentV2ArtifactValidationStatus = "not_started" | "pending" | "passed" | "failed" | "accepted" | "deleted";
 
 export interface AgentV2TaskUpdatedPayload {
 	type: "agent_v2.task_updated";
@@ -28,7 +28,7 @@ export interface AgentV2ArtifactIndexedPayload {
 	validationStatus: AgentV2ArtifactValidationStatus;
 	revision: string;
 	checksum: string;
-	action: "created" | "updated";
+	action: "created" | "updated" | "deleted";
 	sourceTaskId: string;
 	at: string;
 }
@@ -206,9 +206,16 @@ const TASK_KINDS = new Set<string>([
 	"artifact",
 	"delivery",
 ]);
-const ARTIFACT_VALIDATION_STATUSES = new Set<string>(["not_started", "pending", "passed", "failed", "accepted"]);
+const ARTIFACT_VALIDATION_STATUSES = new Set<string>([
+	"not_started",
+	"pending",
+	"passed",
+	"failed",
+	"accepted",
+	"deleted",
+]);
 const DIAGNOSTIC_SEVERITIES = new Set<string>(["debug", "info", "warn", "error"]);
-const ARTIFACT_ACTIONS = new Set<string>(["created", "updated"]);
+const ARTIFACT_ACTIONS = new Set<string>(["created", "updated", "deleted"]);
 const DELIVERY_VALIDATION_STATUSES = new Set<string>(["passed"]);
 const BUILD_STATUSES = new Set<string>(["not_required", "passed"]);
 const PREVIEW_STATUSES = new Set<string>(["running"]);
@@ -373,7 +380,10 @@ export class AgentV2BrowserController {
 					) as AgentV2ArtifactValidationStatus,
 					revision: nonEmptyString(payload.revision, `${type}.revision`),
 					checksum: requireSha256(payload.checksum, `${type}.checksum`),
-					action: requireSetValue(payload.action, ARTIFACT_ACTIONS, `${type}.action`) as "created" | "updated",
+					action: requireSetValue(payload.action, ARTIFACT_ACTIONS, `${type}.action`) as
+						| "created"
+						| "updated"
+						| "deleted",
 					sourceTaskId: nonEmptyString(payload.sourceTaskId, `${type}.sourceTaskId`),
 					at: requireTimestamp(payload.at, `${type}.at`),
 				};

@@ -107,6 +107,7 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 		try {
 			await this.createResources(resources, input.signal);
 			await this.seedProject(resources, input, input.signal);
+			await this.clearPreviousBuildOutputs(resources, outputDirectories, input.signal);
 			await this.startProxy(resources, input.signal);
 			if (plan.restoreCommand) {
 				await this.runBuildContainer(resources, plan.restoreCommand, "restore", input.signal, logs);
@@ -257,6 +258,38 @@ export class EphemeralContainerBuildRunner implements BuildRunner {
 			signal,
 		);
 		await this.required(["network", "connect", resources.egressNetwork, resources.proxy], signal);
+	}
+
+	private async clearPreviousBuildOutputs(
+		resources: Resources,
+		outputDirectories: readonly BuildOutputDirectory[],
+		signal?: AbortSignal,
+	): Promise<void> {
+		// public/ may be an input asset directory for Vite and similar tools. dist/
+		// and build/ are unambiguous generated outputs and must not survive into a
+		// new build, otherwise a no-op or failed script could republish stale code.
+		const removable = outputDirectories.filter((output) => output === "dist" || output === "build");
+		if (removable.length === 0) return;
+		await this.required(
+			[
+				"run",
+				"--rm",
+				"--network",
+				"none",
+				...this.containerHardening("1000:1000", "16m"),
+				"--mount",
+				`type=volume,src=${resources.workspace},dst=/workspace`,
+				"--workdir",
+				"/workspace",
+				this.config.image,
+				"sh",
+				"-c",
+				'rm -rf -- "$@"',
+				"sh",
+				...removable,
+			],
+			signal,
+		);
 	}
 
 	private async runBuildContainer(

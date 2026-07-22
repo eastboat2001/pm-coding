@@ -56,13 +56,14 @@ const CANVAS_TAG_PATTERN = /<canvas\b([^>]*)>/gi;
 const CSS_RULE_PATTERN = /([^{}]+)\{([^{}]*)\}/g;
 const CHART_CONSTRUCTOR_PATTERN = /\bnew\s+Chart\s*\(/u;
 const DISABLED_CHART_ASPECT_RATIO_PATTERN = /\bmaintainAspectRatio\s*:\s*false\b/u;
-const CHART_SIZE_SELECTOR_PATTERN = /(?:chart|canvas|graph|plot|visuali[sz]ation)/iu;
+const DEDICATED_CHART_CONTAINER_SELECTOR_PATTERN =
+	/(?:chart|graph|plot|visuali[sz]ation)(?:[-_ ]?(?:container|wrapper|frame|panel|region|area))|(?:container|wrapper|frame|panel|region|area)(?:[-_ ]?(?:chart|graph|plot|visuali[sz]ation))/iu;
 const BOUNDED_CHART_SIZE_PATTERN =
 	/(?:height|max-height|aspect-ratio)\s*:\s*(?!(?:auto|inherit|initial|unset|100%)\b)(?:clamp\(|min\(|max\(|\d+(?:\.\d+)?(?:px|rem|em|vh|vw)\b)/iu;
 const POSITION_RELATIVE_PATTERN = /\bposition\s*:\s*relative\b/iu;
-const CANVAS_HEIGHT_ATTRIBUTE_PATTERN = /\bheight\s*=\s*(?:['"]?)(\d+)(?:['"]?)/iu;
-const BOUNDED_INLINE_CANVAS_WRAPPER_PATTERN =
-	/<[^>]+\bstyle\s*=\s*(['"])(?=[^>]*\bposition\s*:\s*relative\b)(?=[^>]*(?:height|max-height|aspect-ratio)\s*:\s*(?:clamp\(|min\(|max\(|\d+(?:\.\d+)?(?:px|rem|em|vh|vw)\b))[^>]*\1[^>]*>\s*<canvas\b/iu;
+const INLINE_CANVAS_WRAPPER_PATTERN = /<([a-z][\w:-]*)\b([^>]*)>\s*<canvas\b/giu;
+const FLEX_GROWING_WRAPPER_CLASS_PATTERN = /(?:^|\s)(?:card-body|h-100|flex-fill|flex-grow-1)(?:\s|$)/iu;
+const FLEX_GROWING_WRAPPER_SELECTOR_PATTERN = /\.(?:card-body|h-100|flex-fill|flex-grow-1)\b/iu;
 const SELECT_TAG_PATTERN = /<select\b([^>]*)>[\s\S]*?<\/select>/giu;
 const GENERIC_SELECT_VALUE_HANDLER_PATTERN =
 	/(?:querySelectorAll|getElementsByTagName)\(\s*(['"`])select\1\s*\)[\s\S]{0,2048}(?:\.value\b|target\s*\.\s*value\b)/u;
@@ -211,7 +212,8 @@ function cssColorRules(source: string): Array<{
 	for (const match of source.matchAll(CSS_RULE_PATTERN)) {
 		const declarations = match[2] ?? "";
 		const foreground = declarationColor(declarations, "color");
-		const background = declarationColor(declarations, "background-color") ?? declarationColor(declarations, "background");
+		const background =
+			declarationColor(declarations, "background-color") ?? declarationColor(declarations, "background");
 		if (!foreground && !background) continue;
 		for (const selector of (match[1] ?? "").split(",").map((value) => value.trim())) {
 			if (!selector || /[:>+~\s]/u.test(selector)) continue;
@@ -256,7 +258,8 @@ function resolvedElementColors(
 		}
 	}
 	const inlineForeground = declarationColor(element.style, "color");
-	const inlineBackground = declarationColor(element.style, "background-color") ?? declarationColor(element.style, "background");
+	const inlineBackground =
+		declarationColor(element.style, "background-color") ?? declarationColor(element.style, "background");
 	return {
 		foreground: inlineForeground ?? foreground?.color,
 		background: inlineBackground ?? background?.color,
@@ -268,7 +271,9 @@ function winsCascade(
 	specificity: number,
 	order: number,
 ): boolean {
-	return !current || specificity > current.specificity || (specificity === current.specificity && order >= current.order);
+	return (
+		!current || specificity > current.specificity || (specificity === current.specificity && order >= current.order)
+	);
 }
 
 function simpleCssSelectorMatches(element: StaticTextElement, selector: string): boolean {
@@ -287,8 +292,13 @@ function selectorSpecificity(selector: string): number {
 	return ids * 100 + classes * 10 + tags;
 }
 
-function declarationColor(declarations: string, property: "color" | "background" | "background-color"): CssColor | undefined {
-	const matches = [...declarations.matchAll(new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;!]+)(?:!important)?`, "giu"))];
+function declarationColor(
+	declarations: string,
+	property: "color" | "background" | "background-color",
+): CssColor | undefined {
+	const matches = [
+		...declarations.matchAll(new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;!]+)(?:!important)?`, "giu")),
+	];
 	const value = matches.at(-1)?.[1]?.trim();
 	if (!value) return undefined;
 	const token = value.match(/(?:#[\da-f]{3,8}\b|rgba?\([^)]*\)|\b(?:white|black|transparent)\b)/iu)?.[0];
@@ -311,7 +321,9 @@ function parseCssColor(value: string): CssColor | undefined {
 			a: expanded.length === 8 ? Number.parseInt(expanded.slice(6, 8), 16) / 255 : 1,
 		};
 	}
-	const rgb = normalized.match(/^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*(\d+(?:\.\d+)?))?\s*\)$/u);
+	const rgb = normalized.match(
+		/^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*(\d+(?:\.\d+)?))?\s*\)$/u,
+	);
 	if (!rgb) return undefined;
 	return {
 		r: Math.min(255, Number(rgb[1])),
@@ -336,7 +348,7 @@ function contrastRatio(foreground: CssColor, background: CssColor): number {
 
 function attributeValueByName(attrs: string, name: string): string {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	return attrs.match(new RegExp(`\\b${escaped}\\s*=\\s*(['\"])(.*?)\\1`, "iu"))?.[2]?.trim() ?? "";
+	return attrs.match(new RegExp(`\\b${escaped}\\s*=\\s*(['"])(.*?)\\1`, "iu"))?.[2]?.trim() ?? "";
 }
 
 function readLocalStylesheets(guard: WorkspacePathGuard, html: string): LocalStylesheet[] {
@@ -371,14 +383,15 @@ function chartLayoutErrors(html: string, scripts: LocalScript[], stylesheets: Lo
 		...stylesheets.map((stylesheet) => stylesheet.content),
 	].join("\n");
 	for (const match of styleSource.matchAll(CSS_RULE_PATTERN)) {
-		if (!CHART_SIZE_SELECTOR_PATTERN.test(match[1] ?? "")) continue;
+		const selector = match[1] ?? "";
+		if (!DEDICATED_CHART_CONTAINER_SELECTOR_PATTERN.test(selector)) continue;
+		if (FLEX_GROWING_WRAPPER_SELECTOR_PATTERN.test(selector)) continue;
 		const declarations = match[2] ?? "";
 		if (POSITION_RELATIVE_PATTERN.test(declarations) && BOUNDED_CHART_SIZE_PATTERN.test(declarations)) return [];
 	}
 
 	const canvases = [...html.matchAll(CANVAS_TAG_PATTERN)];
-	if (BOUNDED_INLINE_CANVAS_WRAPPER_PATTERN.test(html)) return [];
-	if (canvases.every((match) => Number(CANVAS_HEIGHT_ATTRIBUTE_PATTERN.exec(match[1] ?? "")?.[1]) > 0)) return [];
+	if (hasDedicatedInlineCanvasWrapper(html)) return [];
 	const canvasIds = canvases
 		.map((match) => attributeValue(match[1] ?? "", "id"))
 		.filter(Boolean)
@@ -388,6 +401,17 @@ function chartLayoutErrors(html: string, scripts: LocalScript[], stylesheets: Lo
 	return [
 		`Chart.js uses maintainAspectRatio:false without a bounded chart or canvas height. Wrap each canvas in a dedicated position:relative chart container with an explicit responsive height or max-height to prevent runaway page growth.${affected}`,
 	];
+}
+
+function hasDedicatedInlineCanvasWrapper(html: string): boolean {
+	for (const match of html.matchAll(INLINE_CANVAS_WRAPPER_PATTERN)) {
+		const attrs = match[2] ?? "";
+		const className = attributeValueByName(attrs, "class");
+		if (FLEX_GROWING_WRAPPER_CLASS_PATTERN.test(className)) continue;
+		const style = attributeValueByName(attrs, "style");
+		if (POSITION_RELATIVE_PATTERN.test(style) && BOUNDED_CHART_SIZE_PATTERN.test(style)) return true;
+	}
+	return false;
 }
 
 function combinedScriptSource(html: string, scripts: LocalScript[]): string {

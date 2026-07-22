@@ -34,8 +34,9 @@ export interface AgentV2ServerModelRegistry {
 }
 
 export interface AgentV2PiModelExecutionOptions {
-	modelRegistry: AgentV2ServerModelRegistry;
-	resolveApiKey(provider: string): string | undefined;
+	modelRegistry?: AgentV2ServerModelRegistry;
+	resolveApiKey?(provider: string): string | undefined;
+	loadServerSettingsSnapshot?(clientId: string): AgentV2ServerSettingsSnapshot;
 	complete?: typeof completeSimple;
 	maxOutputTokens?: number;
 	streamIdleTimeoutMs?: number;
@@ -46,6 +47,10 @@ type AgentV2RepairExecutionInput = Parameters<AgentV2ModelExecution["generateRep
 export type AgentV2PiModelExecutionErrorCode =
 	| "invalid_model_reference"
 	| "unknown_model"
+	| "not_synchronized"
+	| "settings_invalid"
+	| "settings_unavailable"
+	| "stale_configuration"
 	| "missing_api_key"
 	| "provider_failed"
 	| "provider_identity_mismatch"
@@ -61,6 +66,10 @@ export type AgentV2PiModelExecutionErrorCode =
 const ERROR_MESSAGES: Readonly<Record<AgentV2PiModelExecutionErrorCode, string>> = Object.freeze({
 	invalid_model_reference: "Agent v2 model reference is invalid.",
 	unknown_model: "Agent v2 model reference is not configured on the server.",
+	not_synchronized: "Agent v2 model selection is not synchronized with the current server configuration.",
+	settings_invalid: "Agent v2 server model settings are invalid.",
+	settings_unavailable: "Agent v2 server model settings could not be loaded.",
+	stale_configuration: "Agent v2 model selection was saved against an older provider configuration.",
 	missing_api_key: "Agent v2 model provider credentials are not configured on the server.",
 	provider_failed: "Agent v2 model provider request failed.",
 	provider_identity_mismatch: "Agent v2 model provider returned an unexpected model identity.",
@@ -144,6 +153,11 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 	private readonly complete: typeof completeSimple;
 
 	constructor(private readonly options: AgentV2PiModelExecutionOptions) {
+		if (!options.loadServerSettingsSnapshot && (!options.modelRegistry || !options.resolveApiKey)) {
+			throw new Error(
+				"Agent v2 model execution requires a settings snapshot loader or a static model registry and key resolver.",
+			);
+		}
 		this.complete = options.complete ?? completeSimple;
 	}
 
@@ -173,7 +187,8 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 				const workspaceByPath = new Map(input.workspaceFiles.map((file) => [file.path, file.content]));
 				const changesContent =
 					result.files.some((file) => workspaceByPath.get(file.path) !== file.content) ||
-					(result.patches ?? []).some((patch) => patch.oldText !== patch.newText);
+					(result.patches ?? []).some((patch) => patch.oldText !== patch.newText) ||
+					(result.deletedPaths?.length ?? 0) > 0;
 				if (!changesContent) throw new AgentV2ModelContractError("invalid_schema");
 				return result;
 			},
@@ -189,6 +204,7 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 	): Promise<AgentV2ModelExecutionEnvelope<T>> {
 		throwIfAborted(input.signal);
 		const reference = parseModelReference(input.run.model);
+		const configuration = this.resolveExecutionConfiguration(input.run.clientId);
 		let trustedModel: {
 			model: Model<Api>;
 			api: Api;
@@ -197,7 +213,7 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 			maxTokens: number;
 		};
 		try {
-			const model = this.options.modelRegistry.resolve(reference);
+			const model = configuration.modelRegistry.resolve(reference);
 			if (!model) throw new Error("unresolved model");
 			const provider = model.provider;
 			const id = model.id;
@@ -208,18 +224,18 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 			}
 			trustedModel = { model, api: api as Api, provider, id, maxTokens };
 		} catch {
-			throw new AgentV2PiModelExecutionError("unknown_model");
+			throw new AgentV2PiModelExecutionError(modelResolutionErrorCode(reference, configuration.snapshot));
 		}
 		let authentication: AgentV2ModelAuthentication;
 		try {
-			authentication = this.options.modelRegistry.resolveAuthentication?.(reference) ?? "required";
+			authentication = configuration.modelRegistry.resolveAuthentication?.(reference) ?? "required";
 			if (!isModelAuthentication(authentication)) throw new Error("invalid authentication policy");
 		} catch {
 			throw new AgentV2PiModelExecutionError("provider_failed");
 		}
 		let apiKey: string | undefined;
 		try {
-			apiKey = usableKey(this.options.resolveApiKey(trustedModel.provider), authentication);
+			apiKey = usableKey(configuration.resolveApiKey(trustedModel.provider), authentication);
 		} catch {
 			throw new AgentV2PiModelExecutionError("missing_api_key");
 		}
@@ -279,6 +295,30 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 			}
 		}
 		throw new AgentV2PiModelExecutionError("provider_failed");
+	}
+
+	private resolveExecutionConfiguration(clientId: string): {
+		modelRegistry: AgentV2ServerModelRegistry;
+		resolveApiKey(provider: string): string | undefined;
+		snapshot?: AgentV2ServerSettingsSnapshot;
+	} {
+		if (!this.options.loadServerSettingsSnapshot) {
+			return {
+				modelRegistry: this.options.modelRegistry as AgentV2ServerModelRegistry,
+				resolveApiKey: this.options.resolveApiKey as (provider: string) => string | undefined,
+			};
+		}
+		let snapshot: AgentV2ServerSettingsSnapshot;
+		try {
+			snapshot = this.options.loadServerSettingsSnapshot(clientId);
+		} catch {
+			throw new AgentV2PiModelExecutionError("settings_unavailable");
+		}
+		return {
+			modelRegistry: new ConfiguredAgentV2ServerModelRegistry(snapshot),
+			resolveApiKey: (provider) => snapshot.resolveApiKey(provider),
+			snapshot,
+		};
 	}
 
 	private async completeProviderRequest(
@@ -380,7 +420,7 @@ function modelLengthRecoveryPrompt(
 		systemPrompt: `${prompt.systemPrompt}\n\nOUTPUT-LENGTH RECOVERY\nThe previous response reached the provider output limit. Regenerate the complete result in a substantially more compact form. ${
 			mode === "repair"
 				? "Prefer checksum-bound patches for existing files and replace only the smallest unique text disclosed in the repair workspace. Do not rewrite an excerpt-mode file."
-				: "Use the fewest files allowed by the delivery mode. For a static app, prefer one root index.html with concise inline CSS and JavaScript."
+				: "Use the fewest files allowed by the delivery mode. For a static app, return only one root index.html. For a build project, return one connected build entry and source tree; never combine it with a second standalone inline application."
 		} Remove comments, repeated sample records, verbose labels, and unnecessary abstractions. Reuse small data arrays instead of repeating markup. Return one complete bare JSON object; never continue or quote the truncated response.`,
 		userPrompt: prompt.userPrompt,
 	};
@@ -893,6 +933,21 @@ function isCanonicalModelIdentity(provider: unknown, id: unknown): provider is s
 	} catch {
 		return false;
 	}
+}
+
+function modelResolutionErrorCode(
+	reference: { provider: string; id: string },
+	snapshot: AgentV2ServerSettingsSnapshot | undefined,
+): AgentV2PiModelExecutionErrorCode {
+	if (snapshot?.configurationState() === "invalid") return "settings_invalid";
+	if (!reference.provider.startsWith("custom-provider:")) return "unknown_model";
+	if (!snapshot) return "unknown_model";
+	const provider = snapshot.customProvider(reference.provider.slice("custom-provider:".length));
+	if (!provider) return "not_synchronized";
+	if (isAutoDiscoveryType(provider.type) && !snapshot.isSelectedModelSynchronized()) {
+		return "stale_configuration";
+	}
+	return "not_synchronized";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

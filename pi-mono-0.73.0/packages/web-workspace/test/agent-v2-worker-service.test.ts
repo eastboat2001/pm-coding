@@ -20,7 +20,7 @@ import {
 	buildAgentV2Run,
 	type CreateAgentV2RunInput,
 } from "../src/agent-v2-store.js";
-import type { AgentV2RunSnapshot, AgentV2RunStatus } from "../src/agent-v2-types.js";
+import type { AgentV2RunSnapshot, AgentV2RunStatus, AgentV2TaskNode } from "../src/agent-v2-types.js";
 import {
 	type AgentV2WorkerExecution,
 	AgentV2WorkerExecutionFailure,
@@ -110,6 +110,52 @@ describe("AgentV2WorkerService", () => {
 			code: "agent_v2.worker_task_blocked",
 			message: "Agent v2 task graph is blocked: canvas.getContext is not a function",
 			retryable: true,
+		});
+	});
+
+	it("does not requeue a persisted validation attempt through the run retry path", async () => {
+		const store = new MemoryWorkerStore();
+		store.createQueuedRun("client-a", "run-validation-blocked");
+		store.setTasks("client-a", "run-validation-blocked", [
+			{
+				taskId: "validate",
+				kind: "validation",
+				title: "Validate",
+				status: "failed",
+				dependsOn: [],
+				acceptanceCriteria: [],
+				input: {},
+				output: { validationId: "static:validate", attempt: 1 },
+				createdAt: "2026-07-08T00:00:00.000Z",
+				updatedAt: "2026-07-08T00:00:01.000Z",
+				error: { code: "agent_v2.validation_failed", message: "Validation failed.", retryable: true },
+			},
+		]);
+		const queue = new RecordingQueue([{ clientId: "client-a", runId: "run-validation-blocked" }]);
+		const worker = new AgentV2WorkerService({
+			store,
+			queue,
+			events: new RecordingEventLog(),
+			execution: new SequencedExecution([
+				{
+					status: "task_blocked",
+					diagnosticIds: [],
+					blockingError: {
+						code: "agent_v2.validation_failed",
+						message: "Validation failed.",
+						retryable: true,
+					},
+				},
+			]),
+			workerId: "worker-a",
+		});
+
+		await expect(worker.processOne()).resolves.toBe(true);
+
+		expect(store.retryCommitCalls).toEqual([]);
+		expect(store.getRunSnapshot("client-a", "run-validation-blocked")).toMatchObject({
+			status: "failed",
+			error: { code: "agent_v2.worker_task_blocked" },
 		});
 	});
 
@@ -1608,6 +1654,7 @@ class MemoryWorkerStore {
 	private readonly commitGates = new Map<AgentV2RunStatus, Promise<void>>();
 	private readonly commitRejections = new Map<AgentV2RunStatus, Error>();
 	private readonly runs = new Map<string, AgentV2RunSnapshot>();
+	private readonly tasks = new Map<string, AgentV2TaskNode[]>();
 	private readonly staleReads = new Map<string, AgentV2RunSnapshot[]>();
 
 	async createAgentV2Run(input: CreateAgentV2RunInput): Promise<AgentV2RunSnapshot> {
@@ -1657,6 +1704,14 @@ class MemoryWorkerStore {
 
 	getRunSnapshot(clientId: string, runId: string): AgentV2RunSnapshot | undefined {
 		return this.runs.get(runKey(clientId, runId));
+	}
+
+	setTasks(clientId: string, runId: string, tasks: AgentV2TaskNode[]): void {
+		this.tasks.set(runKey(clientId, runId), tasks);
+	}
+
+	async listAgentV2Tasks(clientId: string, runId: string): Promise<AgentV2TaskNode[]> {
+		return this.tasks.get(runKey(clientId, runId)) ?? [];
 	}
 
 	returnStaleSnapshotOnNextRead(snapshot: AgentV2RunSnapshot): void {

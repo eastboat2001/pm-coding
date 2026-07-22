@@ -3,6 +3,12 @@ import type { AgentV2Error, AgentV2ResponseLanguage } from "@mariozechner/pi-web
 const CHINESE_ERROR_COPY: Readonly<Record<string, string>> = Object.freeze({
 	"agent_v2.model.invalid_model_reference": "当前模型配置无效，请在模型选择器中重新选择模型。",
 	"agent_v2.model.unknown_model": "服务器未配置当前模型，请在模型选择器中选择其他可用模型。",
+	"agent_v2.model.not_synchronized":
+		"当前会话引用的是浏览器旧模型状态，但服务器没有对应配置。请在模型设置中重新保存提供方和模型后重试。",
+	"agent_v2.model.settings_invalid": "服务器模型配置无效或已损坏，请重新保存模型配置后重试。",
+	"agent_v2.model.settings_unavailable": "无法读取或写入服务器模型配置，请检查 PI 服务连接和存储权限。",
+	"agent_v2.model.stale_configuration":
+		"模型提供方配置已更新，当前选择尚未与新版本对齐。请重新选择并保存该模型后重试。",
 	"agent_v2.model.missing_api_key": "服务器尚未配置当前模型提供方的访问凭据。",
 	"agent_v2.model.provider_failed": "模型服务请求失败，未能生成完整结果。",
 	"agent_v2.model.provider_identity_mismatch": "模型服务返回了与所选模型不一致的标识。",

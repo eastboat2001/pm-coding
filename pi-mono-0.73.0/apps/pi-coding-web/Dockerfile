@@ -8,6 +8,12 @@ ARG NPM_REPLACE_REGISTRY_HOST=npmjs
 ARG NPM_FETCH_TIMEOUT=600000
 ARG NPM_FETCH_RETRIES=5
 
+# The worker uses this CLI as a remote client for the host's rootless Podman
+# API service. The web container uses the same image but is not given a socket.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends podman \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 
 RUN npm ci \

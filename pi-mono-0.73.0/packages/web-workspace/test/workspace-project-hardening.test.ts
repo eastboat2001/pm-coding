@@ -70,6 +70,54 @@ describe("project execution and preview hardening", () => {
 		expect(result.logs?.join("\n")).toContain("isolated build");
 	});
 
+	it("blocks a duplicate inline app and unreferenced React source tree", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
+		mkdirSync(join(projectDir, "src"), { recursive: true });
+		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ scripts: { build: "vite build" } }), "utf8");
+		writeFileSync(join(projectDir, "src", "main.tsx"), "console.log('react entry')", "utf8");
+		writeFileSync(
+			join(projectDir, "index.html"),
+			`<!doctype html><style>${".card{display:grid}".repeat(40)}</style><body>${'<section class="card">inline</section>'.repeat(30)}<script>${"document.body.dataset.ready='true';".repeat(30)}</script></body>`,
+			"utf8",
+		);
+		const build = vi.fn<BuildRunner["build"]>();
+		const tasks = createWorkspaceTaskService(config, { buildRunner: { build } });
+		const previews = new WorkspacePreviewService(config);
+
+		const validation = await tasks.run({ task: "validate", clientId: "client-a", sessionId: "s1", title: "Split" });
+		const preview = await previews.preview(
+			{ clientId: "client-a", sessionId: "s1", title: "Split" },
+			{ headers: { host: "localhost:5173" } },
+		);
+
+		expect(validation.status).toBe("failed");
+		expect(validation.errors?.join("\n")).toContain("Build project entry conflict");
+		expect(preview.status).toBe("failed");
+		expect(preview.logs.join("\n")).toContain("Build project entry conflict");
+		expect(build).not.toHaveBeenCalled();
+	});
+
+	it("never previews a package project's root index before build output exists", async () => {
+		const root = tempRoot();
+		const config = testConfig(root);
+		const projectDir = projectDirectory(config.clientsRootDir, "s1", "client-a");
+		mkdirSync(projectDir, { recursive: true });
+		writeFileSync(join(projectDir, "package.json"), JSON.stringify({ scripts: { build: "vite build" } }), "utf8");
+		writeFileSync(join(projectDir, "index.html"), "<!doctype html><main>build source</main>", "utf8");
+		const previews = new WorkspacePreviewService(config);
+
+		const preview = await previews.preview(
+			{ clientId: "client-a", sessionId: "s1", title: "Build" },
+			{ headers: { host: "localhost:5173" } },
+		);
+
+		expect(preview.status).toBe("failed");
+		expect(preview.serveRoot).toBe("");
+		expect(preview.logs.join("\n")).toContain("Run project_task build_static before project_task preview");
+	});
+
 	it("rejects create rewrite delete and preview of trusted metadata", async () => {
 		const root = tempRoot();
 		const config = testConfig(root);

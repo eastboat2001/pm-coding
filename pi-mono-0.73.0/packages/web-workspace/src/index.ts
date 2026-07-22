@@ -40,6 +40,7 @@ export {
 	type AgentV2FileAdapter,
 	type AgentV2FileAdapterContext,
 	type AgentV2FileArtifactCandidate,
+	type AgentV2FileDeleteResult,
 	type AgentV2FileWriteMode,
 	type AgentV2FileWriteResult,
 	type CreateAgentV2FileAdapterInput,

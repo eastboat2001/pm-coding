@@ -35,8 +35,16 @@ export class WorkspaceSessionService {
                 delete record.currentSessionId;
             }
         }
-        if (Object.hasOwn(body, "selectedModel"))
-            record.selectedModel = body.selectedModel;
+        if (Object.hasOwn(body, "selectedModel")) {
+            if (body.selectedModel === undefined || body.selectedModel === null) {
+                delete record.selectedModel;
+                delete record.selectedModelConfigRevision;
+            }
+            else {
+                record.selectedModel = body.selectedModel;
+                record.selectedModelConfigRevision = this.currentModelConfigRevision();
+            }
+        }
         writeJsonFile(settingsPath, record);
         return record;
     }
@@ -71,6 +79,7 @@ export class WorkspaceSessionService {
                 delete record.customProviders;
             }
         }
+        record.modelConfigRevision = nextModelConfigRevision(record.modelConfigRevision);
         writeJsonFile(this.config.settingsFile, record);
         return record;
     }
@@ -95,6 +104,7 @@ export class WorkspaceSessionService {
         if (hasLegacyCustomProviders) {
             globalRecord.customProviders = mergeCustomProviders(Array.isArray(clientSettings.customProviders) ? clientSettings.customProviders : [], Array.isArray(globalRecord.customProviders) ? globalRecord.customProviders : []);
         }
+        globalRecord.modelConfigRevision = nextModelConfigRevision(globalRecord.modelConfigRevision);
         writeJsonFile(this.config.settingsFile, globalRecord);
         const nextClientSettings = {
             ...clientSettings,
@@ -103,6 +113,9 @@ export class WorkspaceSessionService {
         };
         delete nextClientSettings.providerKeys;
         delete nextClientSettings.customProviders;
+        if (nextClientSettings.selectedModel !== undefined) {
+            nextClientSettings.selectedModelConfigRevision = currentModelConfigRevision(globalRecord);
+        }
         writeJsonFile(settingsPath, nextClientSettings);
         return nextClientSettings;
     }
@@ -120,6 +133,9 @@ export class WorkspaceSessionService {
             savedAt: new Date().toISOString(),
         };
     }
+    currentModelConfigRevision() {
+        return currentModelConfigRevision(this.readSettingsFile(this.config.settingsFile));
+    }
     ensureDirs() {
         mkdirSync(this.config.clientsRootDir, { recursive: true });
     }
@@ -130,6 +146,14 @@ export class WorkspaceSessionService {
         assertInside(this.config.clientsRootDir, settingsPath);
         return settingsPath;
     }
+}
+function currentModelConfigRevision(settings) {
+    const revision = settings?.modelConfigRevision;
+    return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
+}
+function nextModelConfigRevision(value) {
+    const current = typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+    return current === Number.MAX_SAFE_INTEGER ? 1 : current + 1;
 }
 function hasGlobalSettingsUpdate(body) {
     return Object.hasOwn(body, "providerKeys") || Object.hasOwn(body, "customProviders");

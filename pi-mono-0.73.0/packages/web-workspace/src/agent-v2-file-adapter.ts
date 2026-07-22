@@ -37,6 +37,11 @@ export interface AgentV2FileWriteResult {
 	artifact: AgentV2FileArtifactCandidate;
 }
 
+export interface AgentV2FileDeleteResult {
+	path: string;
+	action: "deleted";
+}
+
 export interface AgentV2FileAdapter {
 	listFiles(): { files: string[] };
 	readFile(path: string): {
@@ -61,6 +66,7 @@ export interface AgentV2FileAdapter {
 		taskId: string;
 		now: string;
 	}): AgentV2FileWriteResult;
+	deleteFile(path: string): AgentV2FileDeleteResult;
 }
 
 export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): AgentV2FileAdapter {
@@ -176,6 +182,17 @@ export function createAgentV2FileAdapter(input: CreateAgentV2FileAdapterInput): 
 				};
 			} catch (error) {
 				return mapError(error, patch.path);
+			}
+		},
+		deleteFile(path) {
+			try {
+				const result = files.handle({ ...context, command: "delete", filename: path });
+				return {
+					path: publicPath(typeof result.filename === "string" ? result.filename : path),
+					action: "deleted",
+				};
+			} catch (error) {
+				return mapError(error, path);
 			}
 		},
 	};

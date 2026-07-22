@@ -10,6 +10,7 @@ import { transitionAgentV2Task } from "./agent-v2-task-engine.js";
 import { assertAgentV2ToolAllowed, createAgentV2ToolRegistry, } from "./agent-v2-tool-governance.js";
 import { runAgentV2StaticValidationGate, } from "./agent-v2-validation-gate.js";
 import { PreviewReadinessChecker } from "./preview-readiness-checker.js";
+import { isProjectEntryConflictMessage } from "./project-entry-consistency.js";
 import { WorkspacePreviewService } from "./workspace-preview-service.js";
 export async function executeAgentV2NextTask(input) {
     throwIfAborted(input.signal);
@@ -43,7 +44,7 @@ export async function executeAgentV2NextTask(input) {
         return executeValidationTask(input, snapshot.run, snapshot.tasks, snapshot.artifacts, task, now);
     }
     if (task.kind === "implementation") {
-        return executeImplementationTask(input, snapshot.run, snapshot.contextPacket, task, now);
+        return executeImplementationTask(input, snapshot.run, snapshot.contextPacket, snapshot.artifacts, task, now);
     }
     if (task.kind === "repair") {
         try {
@@ -239,6 +240,14 @@ function classifyPreviewFailure(value) {
             retryable: true,
         };
     }
+    if (messages.some(isProjectEntryConflictMessage)) {
+        return {
+            taxonomy: "publish_failed",
+            code: "agent_v2.preview_entry_conflict",
+            message: "Preview refused a project with multiple disconnected application implementations.",
+            retryable: true,
+        };
+    }
     if (messages.some((message) => message.includes("requires an index.html in the project root, dist, build, or public") ||
         message.includes("no index.html was found in the project root, dist, build, or public"))) {
         return {
@@ -299,7 +308,7 @@ async function commitDeliveryFailure(input, run, task, proposedNow, failure) {
         ? { status: "task_failed", taskId: task.taskId, diagnosticIds: [diagnosticId] }
         : { status: "task_conflict", taskId: task.taskId, diagnosticIds: [] };
 }
-async function executeImplementationTask(input, run, contextPacket, task, proposedNow) {
+async function executeImplementationTask(input, run, contextPacket, existingArtifacts, task, proposedNow) {
     const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
     assertAgentV2ToolAllowed(registry, "file.write", "implementation");
     const signal = input.signal ?? new AbortController().signal;
@@ -335,26 +344,46 @@ async function executeImplementationTask(input, run, contextPacket, task, propos
             throw new AgentV2ModelContractError("unsafe_path");
         return authorizedPath;
     });
-    assertNoWritePathCollisions(authorizedPaths, files.listFiles().files);
-    const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt);
+    const existingFiles = files.listFiles().files;
+    assertNoWritePathCollisions(authorizedPaths, existingFiles);
+    const generatedPathKeys = new Set(authorizedPaths.map(collisionKey));
+    const obsoletePaths = task.input.recoveryMode === "full_regeneration"
+        ? existingFiles.filter((path) => !generatedPathKeys.has(collisionKey(path)))
+        : [];
+    if (obsoletePaths.length > 0)
+        assertAgentV2ToolAllowed(registry, "file.delete", "implementation");
+    const obsoleteFiles = obsoletePaths.map((path) => ({ path, current: files.readFile(path) }));
+    const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt, ...existingArtifacts.map((artifact) => artifact.updatedAt));
     const writes = generatedFiles.map((file) => files.writeFile({ path: file.path, content: file.content, mode: "rewrite", taskId: task.taskId, now }));
-    const artifacts = writes.map((write) => ({
-        clientId: input.context.clientId,
-        runId: input.runId,
-        artifactId: write.artifact.artifactId,
-        kind: write.artifact.kind,
-        path: write.artifact.path,
-        mediaType: write.artifact.mediaType,
-        checksum: write.artifact.checksum,
-        version: write.artifact.checksum,
-        sourceTaskId: write.artifact.sourceTaskId,
-        validationStatus: "pending",
-        metadataJson: { action: write.action },
-        createdAt: now,
-        updatedAt: now,
-    }));
+    for (const obsolete of obsoleteFiles)
+        files.deleteFile(obsolete.path);
+    const artifactById = new Map(existingArtifacts.map((artifact) => [artifact.artifactId, artifact]));
+    const artifacts = [
+        ...writes.map((write) => ({
+            clientId: input.context.clientId,
+            runId: input.runId,
+            artifactId: write.artifact.artifactId,
+            kind: write.artifact.kind,
+            path: write.artifact.path,
+            mediaType: write.artifact.mediaType,
+            checksum: write.artifact.checksum,
+            version: write.artifact.checksum,
+            sourceTaskId: write.artifact.sourceTaskId,
+            validationStatus: "pending",
+            metadataJson: { action: write.action },
+            createdAt: artifactById.get(write.artifact.artifactId)?.createdAt ?? now,
+            updatedAt: now,
+        })),
+        ...obsoleteFiles.map((obsolete) => deletedArtifactUpdate(input, artifactById, obsolete.path, obsolete.current.checksum, task.taskId, now)),
+    ];
     const artifactIds = artifacts.map((artifact) => artifact.artifactId);
+    const implementationArtifactIds = artifacts
+        .filter((artifact) => artifact.validationStatus !== "deleted")
+        .map((artifact) => artifact.artifactId);
     const changedFiles = artifacts.map((artifact) => artifact.path);
+    const deletedFiles = artifacts
+        .filter((artifact) => artifact.validationStatus === "deleted")
+        .map((artifact) => artifact.path);
     const transitioned = transitionAgentV2Task({
         task,
         status: "succeeded",
@@ -364,9 +393,10 @@ async function executeImplementationTask(input, run, contextPacket, task, propos
             modelSummary: sanitizeUserVisibleSummary(result.summary, artifacts.length, "implementation", responseLanguage),
             artifactIds,
             changedFiles,
+            deletedFiles,
             phase4: {
                 ...readPhase4TaskOutput(task.output),
-                implementationArtifactIds: artifactIds,
+                implementationArtifactIds,
                 completedBy: "agent-v2-execution-core",
             },
         },
@@ -385,7 +415,7 @@ async function executeImplementationTask(input, run, contextPacket, task, propos
         type: "agent_v2.artifact_indexed",
         artifactId: artifact.artifactId,
         path: artifact.path,
-        validationStatus: "pending",
+        validationStatus: artifact.validationStatus === "deleted" ? "deleted" : "pending",
         revision: artifact.version,
         checksum: artifact.checksum,
         action: artifactAction(artifact),
@@ -426,10 +456,11 @@ async function executeImplementationTask(input, run, contextPacket, task, propos
     };
 }
 async function executeValidationTask(input, run, tasks, artifacts, task, proposedNow) {
-    // Validation attempts include the initial pass. Five attempts leave room for
-    // multi-file repairs and newly exposed fingerprints while per-fingerprint
-    // budgets still stop an unchanged repair loop early.
-    const maxAttempts = input.maxRepairAttempts ?? 5;
+    // Validation attempts include the initial pass. Six attempts leave room for
+    // one additional evidence-carrying full regeneration when the first complete
+    // replacement introduces a new runtime error; per-fingerprint budgets still
+    // stop unchanged localized repair loops early.
+    const maxAttempts = input.maxRepairAttempts ?? 6;
     const { baseTaskId, attempt } = validationCoordinates(task);
     const registry = input.toolRegistry ?? createAgentV2ToolRegistry();
     throwIfAborted(input.signal);
@@ -512,7 +543,6 @@ async function executeValidationTask(input, run, tasks, artifacts, task, propose
     let retryableActions = repairActions.filter((action) => action.retryable);
     const eligibleForFullRegenerationFallback = attempt < maxAttempts &&
         attempt >= 2 &&
-        task.input.fullRegenerationUsed !== true &&
         retryableActions.length === 0 &&
         result.failures.some((failure) => failure.blocking && failure.retryable);
     if (eligibleForFullRegenerationFallback) {
@@ -557,7 +587,11 @@ async function executeValidationTask(input, run, tasks, artifacts, task, propose
             error: {
                 code: "agent_v2.validation_failed",
                 message: terminalMessage,
-                retryable: true,
+                // Logical validation and repair retries are already represented by
+                // distinct durable tasks and attempt identities. Requeueing this same
+                // exhausted validation task would reuse its validation attempt key and
+                // fail with an append conflict instead of creating a real recovery.
+                retryable: false,
                 data: { validationId, attempt, maxAttempts, failureCodes },
             },
         });
@@ -723,6 +757,7 @@ async function executeRepairTask(input, run, contextPacket, artifacts, diagnosti
         throw new AgentV2ModelContractError("invalid_schema");
     const generatedFiles = [...result.files].sort((left, right) => compareStrings(left.path, right.path));
     const patches = [...(result.patches ?? [])].sort((left, right) => compareStrings(left.path, right.path));
+    const deletedPaths = [...(result.deletedPaths ?? [])].sort(compareStrings);
     const workspaceByPath = new Map(workspaceFiles.map((file) => [file.path, file]));
     const existingFiles = files.listFiles().files;
     const existingSet = new Set(existingFiles);
@@ -739,7 +774,16 @@ async function executeRepairTask(input, run, contextPacket, artifacts, diagnosti
         }
         return authorizedPath;
     });
-    assertNoWritePathCollisions([...authorizedPaths, ...authorizedPatchPaths], existingFiles);
+    const authorizedDeletedPaths = deletedPaths.map((path) => {
+        const authorizedPath = files.validateWritePath(path);
+        if (authorizedPath !== path || !existingSet.has(path) || !workspaceByPath.has(path)) {
+            throw new AgentV2ModelContractError("unsafe_path");
+        }
+        return authorizedPath;
+    });
+    assertNoWritePathCollisions([...authorizedPaths, ...authorizedPatchPaths, ...authorizedDeletedPaths], existingFiles);
+    if (authorizedDeletedPaths.length > 0)
+        assertAgentV2ToolAllowed(registry, "file.delete", "repair");
     for (const file of generatedFiles) {
         if (workspaceByPath.get(file.path)?.contentMode === "excerpt") {
             throw new AgentV2ModelContractError("invalid_schema");
@@ -767,8 +811,17 @@ async function executeRepairTask(input, run, contextPacket, artifacts, diagnosti
         }
         return patch.oldText !== patch.newText;
     });
+    const deletions = authorizedDeletedPaths.map((path) => {
+        const workspace = workspaceByPath.get(path);
+        if (!workspace)
+            throw new AgentV2ModelContractError("unsafe_path");
+        const current = files.readFile(path);
+        if (current.checksum !== workspace.checksum)
+            throw new AgentV2ModelContractError("invalid_schema");
+        return { path, checksum: current.checksum };
+    });
     const now = nextExecutionRevision(proposedNow, run.updatedAt, task.updatedAt, ...artifacts.map((artifact) => artifact.updatedAt));
-    if (changedFiles.length === 0 && changedPatches.length === 0) {
+    if (changedFiles.length === 0 && changedPatches.length === 0 && deletions.length === 0) {
         return commitNoChangeRepair(input, run, task, now);
     }
     const writes = [
@@ -782,24 +835,29 @@ async function executeRepairTask(input, run, contextPacket, artifacts, diagnosti
         })),
     ];
     const artifactById = new Map(artifacts.map((artifact) => [artifact.artifactId, artifact]));
-    const updatedArtifacts = writes.map((write) => {
-        const existing = artifactById.get(write.artifact.artifactId);
-        return {
-            clientId: input.context.clientId,
-            runId: input.runId,
-            artifactId: write.artifact.artifactId,
-            kind: write.artifact.kind,
-            path: write.artifact.path,
-            mediaType: write.artifact.mediaType,
-            checksum: write.artifact.checksum,
-            version: write.artifact.checksum,
-            sourceTaskId: task.taskId,
-            validationStatus: "pending",
-            metadataJson: { action: write.action },
-            createdAt: existing?.createdAt ?? now,
-            updatedAt: now,
-        };
-    });
+    for (const deletion of deletions)
+        files.deleteFile(deletion.path);
+    const updatedArtifacts = [
+        ...writes.map((write) => {
+            const existing = artifactById.get(write.artifact.artifactId);
+            return {
+                clientId: input.context.clientId,
+                runId: input.runId,
+                artifactId: write.artifact.artifactId,
+                kind: write.artifact.kind,
+                path: write.artifact.path,
+                mediaType: write.artifact.mediaType,
+                checksum: write.artifact.checksum,
+                version: write.artifact.checksum,
+                sourceTaskId: task.taskId,
+                validationStatus: "pending",
+                metadataJson: { action: write.action },
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now,
+            };
+        }),
+        ...deletions.map((deletion) => deletedArtifactUpdate(input, artifactById, deletion.path, deletion.checksum, task.taskId, now)),
+    ];
     const responseLanguage = inferAgentV2ResponseLanguage(run.input);
     const transitioned = transitionAgentV2Task({
         task,
@@ -810,6 +868,7 @@ async function executeRepairTask(input, run, contextPacket, artifacts, diagnosti
             modelSummary: repairOutputSummary(updatedArtifacts.length, responseLanguage),
             artifactIds: updatedArtifacts.map((artifact) => artifact.artifactId),
             changedFiles: updatedArtifacts.map((artifact) => artifact.path),
+            deletedFiles: deletions.map((deletion) => deletion.path),
             addressedDiagnosticIds: diagnosticIds,
         },
     });
@@ -817,7 +876,7 @@ async function executeRepairTask(input, run, contextPacket, artifacts, diagnosti
     const usage = sanitizedUsage(envelope.usage);
     const events = [
         taskEvent(transitioned, phase, now),
-        ...updatedArtifacts.map((artifact) => artifactEvent(artifact, "pending", now)),
+        ...updatedArtifacts.map((artifact) => artifactEvent(artifact, artifact.validationStatus === "deleted" ? "deleted" : "pending", now)),
         {
             type: "agent_v2.output_recorded",
             payload: {
@@ -885,6 +944,10 @@ function createRepairTask(baseTaskId, validationTask, validationId, attempt, dia
     };
 }
 function createFullRegenerationTask(baseTaskId, validationTask, validationId, attempt, diagnosticId, repairActions, now) {
+    const recoveryEvidence = repairActions
+        .map((action) => `${action.validationCode}: ${action.reason}`)
+        .join(" | ")
+        .slice(0, 4_000);
     return {
         taskId: `regenerate:${baseTaskId}:${attempt}`,
         parentTaskId: validationTask.taskId,
@@ -895,6 +958,9 @@ function createFullRegenerationTask(baseTaskId, validationTask, validationId, at
         acceptanceCriteria: [
             "Generate a complete browser-ready application entry point.",
             "Prefer a self-contained implementation that does not depend on previously failing files.",
+            ...(recoveryEvidence
+                ? [`Resolve the latest runtime evidence before returning files: ${recoveryEvidence}`]
+                : []),
         ],
         input: {
             baseValidationTaskId: baseTaskId,
@@ -925,7 +991,7 @@ function createFullRegenerationRepairAction(taskId, failures) {
         taskId,
         type: "regenerate_app",
         retryable: true,
-        reason: "Targeted repair made no durable progress; regenerate a complete self-contained application.",
+        reason: `Targeted repair made no durable progress; regenerate a complete self-contained application. Latest runtime evidence: ${failure.message.slice(0, 2_000)}`,
         validationCode: failure.code,
         validationFingerprint: failure.fingerprint,
     };
@@ -1008,6 +1074,25 @@ function validationArtifactUpdate(artifact, validationStatus, now) {
         validationStatus,
         metadataJson: artifact.metadataJson,
         createdAt: artifact.createdAt,
+        updatedAt: now,
+    };
+}
+function deletedArtifactUpdate(input, artifactById, path, checksum, sourceTaskId, now) {
+    const artifactId = `file:${path}`;
+    const existing = artifactById.get(artifactId);
+    return {
+        clientId: input.context.clientId,
+        runId: input.runId,
+        artifactId,
+        kind: existing?.kind ?? "source",
+        path,
+        mediaType: existing?.mediaType ?? "text/plain",
+        checksum,
+        version: checksum,
+        sourceTaskId,
+        validationStatus: "deleted",
+        metadataJson: { action: "deleted" },
+        createdAt: existing?.createdAt ?? now,
         updatedAt: now,
     };
 }
@@ -1219,7 +1304,7 @@ function collectRepairWorkspaceFiles(files, artifacts, diagnostics) {
         .sort((left, right) => compareStrings(left.path, right.path) || compareStrings(left.artifactId, right.artifactId));
     const diagnosticPaths = repairDiagnosticPaths(diagnostics);
     const targeted = eligible.filter((artifact) => diagnosticPaths.has(artifact.path));
-    const candidates = targeted.length > 0 ? targeted : eligible;
+    const candidates = hasCrossFileRepairDiagnostic(diagnostics) ? eligible : targeted.length > 0 ? targeted : eligible;
     if (candidates.length === 0)
         throw new AgentV2ModelContractError("invalid_schema");
     // Repair context is a batch budget, never a project/file-size admission rule.
@@ -1251,8 +1336,7 @@ function collectRepairWorkspaceFiles(files, artifacts, diagnostics) {
         const remainingFiles = selectedCandidates.length - index;
         const allocatedContextBytes = Math.min(AGENT_V2_REPAIR_WORKSPACE_LIMITS.maxContextBytesPerFile, Math.floor(remainingContextBytes / remainingFiles));
         const fullByteLength = current.byteLength;
-        const fullFits = !current.truncated &&
-            fullByteLength <= allocatedContextBytes;
+        const fullFits = !current.truncated && fullByteLength <= allocatedContextBytes;
         const content = fullFits
             ? current.content
             : buildRepairExcerpt(current.content, diagnostics, artifact.path, allocatedContextBytes);
@@ -1270,6 +1354,18 @@ function collectRepairWorkspaceFiles(files, artifacts, diagnostics) {
             contentMode: fullFits ? "full" : "excerpt",
             contentByteLength,
         };
+    });
+}
+function hasCrossFileRepairDiagnostic(diagnostics) {
+    const crossFileCodes = new Set([
+        "static.project_entry_conflict",
+        "static.build_manifest_missing",
+        "build.output_missing",
+    ]);
+    return diagnostics.some((diagnostic) => {
+        const failureCodes = diagnostic.data.failureCodes;
+        return (Array.isArray(failureCodes) &&
+            failureCodes.some((code) => typeof code === "string" && crossFileCodes.has(code)));
     });
 }
 function repairDiagnosticPaths(diagnostics) {
@@ -1320,7 +1416,10 @@ function buildRepairExcerpt(content, diagnostics, path, maxBytes) {
     for (const anchor of anchors) {
         let index = content.indexOf(anchor);
         while (index >= 0 && ranges.length < 16) {
-            ranges.push({ start: Math.max(0, index - radius), end: Math.min(content.length, index + anchor.length + radius) });
+            ranges.push({
+                start: Math.max(0, index - radius),
+                end: Math.min(content.length, index + anchor.length + radius),
+            });
             index = content.indexOf(anchor, index + anchor.length);
         }
     }
@@ -1432,6 +1531,8 @@ function skillEvents(context, now) {
     ];
 }
 function artifactAction(artifact) {
+    if (artifact.metadataJson?.action === "deleted")
+        return "deleted";
     return artifact.metadataJson?.action === "updated" ? "updated" : "created";
 }
 function sanitizeUserVisibleSummary(value, fileCount, mode, language) {

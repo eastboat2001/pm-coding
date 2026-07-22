@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import type { PreviewReadinessChecker } from "@mariozechner/pi-web-workspace";
+import { type PreviewReadinessChecker, WorkspaceSessionService } from "@mariozechner/pi-web-workspace";
 import {
 	type AgentV2InputMaterializer,
 	AgentV2ModelContractError,
@@ -25,8 +25,8 @@ import {
 	loadAgentV2SkillContext,
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
-	RedisAgentV2WorkerIdentityLease,
 	type RedisAgentV2RunEventBusOptions,
+	RedisAgentV2WorkerIdentityLease,
 	runAgentV2ShutdownSteps,
 	WorkspaceSkillService,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
@@ -41,15 +41,11 @@ import {
 	type StorageConfig,
 	WorkspaceDiagnosticLogService,
 } from "@mariozechner/pi-web-workspace/runtime-infra";
+import { AgentV2PiModelExecution, AgentV2PiModelExecutionError } from "./agent-v2-pi-model-execution.js";
 import {
-	AgentV2PiModelExecution,
-	AgentV2PiModelExecutionError,
-	ConfiguredAgentV2ServerModelRegistry,
-} from "./agent-v2-pi-model-execution.js";
-import {
-	createGlobalProviderApiKeyResolver,
 	type GlobalProviderApiKeySources,
 	loadAgentV2ServerSettingsSnapshot,
+	loadAgentV2ServerSettingsSnapshotFromRecord,
 } from "./global-provider-keys.js";
 import { runWorkerShutdownDeadline } from "./shutdown-deadline.js";
 
@@ -156,12 +152,15 @@ export function createAgentV2WorkerExecution(
 	readonly materializer: AgentV2InputMaterializer;
 	readonly modelExecution: AgentV2ModelExecution;
 } {
-	// Settings are intentionally a restart-scoped snapshot: endpoint, capabilities and credentials
-	// must never be paired across two file versions while concurrent tasks are executing.
-	const settingsSnapshot = loadAgentV2ServerSettingsSnapshot(config, dependencies.settingsSources);
+	const sessionSettings = new WorkspaceSessionService(config);
 	const modelExecution = new AgentV2PiModelExecution({
-		modelRegistry: new ConfiguredAgentV2ServerModelRegistry(settingsSnapshot),
-		resolveApiKey: createGlobalProviderApiKeyResolver(settingsSnapshot),
+		loadServerSettingsSnapshot: (clientId) =>
+			dependencies.settingsSources?.readSettingsFile
+				? loadAgentV2ServerSettingsSnapshot(config, dependencies.settingsSources)
+				: loadAgentV2ServerSettingsSnapshotFromRecord(
+						sessionSettings.readSettings(clientId),
+						dependencies.settingsSources,
+					),
 		complete: dependencies.complete,
 		maxOutputTokens: config.modelMaxOutputTokens,
 		streamIdleTimeoutMs: config.modelStreamIdleTimeoutMs,

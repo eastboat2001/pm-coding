@@ -18,7 +18,7 @@ import { isObject, readJsonBody, sendJson, sendPrettyJson } from "./json.js";
 import { createAgentV2RuntimeStore } from "./runtime-store-factory.js";
 import { WorkspaceFileService } from "./workspace-file-service.js";
 import { sanitizePathComponent } from "./workspace-paths.js";
-import { WorkspacePreviewService } from "./workspace-preview-service.js";
+import { WorkspacePreviewService, WorkspaceProjectDeleteError } from "./workspace-preview-service.js";
 import { WorkspaceSessionService } from "./workspace-session-service.js";
 import { WorkspaceSkillService } from "./workspace-skill-service.js";
 import { createWorkspaceTaskService } from "./workspace-task-factory.js";
@@ -28,7 +28,7 @@ const PROJECT_BATCH_SUMMARY_LIMIT = 200;
 const AGENT_V2_RUNS_API_PREFIX = "/api/agent-v2/runs";
 const VITE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const READINESS_REFRESH_INTERVAL_MS = 1_000;
-export function configuredStoragePlugin(envFile) {
+export function configuredStoragePlugin(envFile, options = {}) {
     const rootDir = process.cwd();
     const config = loadStorageConfig(rootDir, envFile);
     const diagnostics = new WorkspaceDiagnosticLogService(config);
@@ -65,6 +65,18 @@ export function configuredStoragePlugin(envFile) {
         store: runtimeDb,
         events: agentV2RunEventLog,
         queueName: config.agentV2.queueName,
+        validateStart: options.validateAgentV2Start
+            ? async ({ clientId, payload }) => {
+                const failure = await options.validateAgentV2Start?.({
+                    clientId,
+                    model: payload.model,
+                    settings: sessions.readSettings(clientId),
+                });
+                if (failure) {
+                    throw new AgentV2RunApiError(failure.message, failure.statusCode ?? 409, failure.code);
+                }
+            }
+            : undefined,
         wakeDispatcher: () => agentV2OutboxDispatcher.wake(),
     });
     return createConfiguredStoragePlugin({
@@ -232,7 +244,7 @@ function createConfiguredStoragePlugin({ config, diagnostics, sessions, files, p
             const route = url.pathname.slice(prefix.length) || "/";
             const method = req.method || "GET";
             if (isProjectsApi) {
-                await handleProjectsApi(method, route, req, res, config, files, previews, tasks);
+                await handleProjectsApi(method, route, url, req, res, config, files, previews, tasks, runtimeDb);
                 return;
             }
             if (isSkillsApi) {
@@ -392,7 +404,7 @@ async function handleSkillsApi(method, route, req, res, skills) {
     }
     sendJson(res, { error: "Not found." }, 404);
 }
-async function handleProjectsApi(method, route, req, res, config, files, previews, tasks) {
+async function handleProjectsApi(method, route, url, req, res, config, files, previews, tasks, runtimeDb) {
     const clientId = readConfiguredApiClientId(req, config);
     if (method === "GET" && (route === "/" || route === "")) {
         sendJson(res, previews.listProjects(req, clientId));
@@ -442,10 +454,38 @@ async function handleProjectsApi(method, route, req, res, config, files, preview
         sendJson(res, await previews.preview({ ...body, sessionId: String(body.sessionId || "") }, req));
         return;
     }
-    const renameMatch = route.match(/^\/([^/]+)$/);
-    if (method === "PUT" && renameMatch) {
+    const projectMatch = route.match(/^\/([^/]+)$/);
+    if (method === "PUT" && projectMatch) {
         const body = await readJsonBody(req);
-        sendJson(res, previews.renameProject(decodeURIComponent(renameMatch[1]), String(body.title || ""), req, clientId));
+        sendJson(res, previews.renameProject(decodeURIComponent(String(projectMatch[1] || "")), String(body.title || ""), req, clientId));
+        return;
+    }
+    if (method === "DELETE" && projectMatch) {
+        if (!clientId) {
+            sendJson(res, { error: "Client id is required to delete a project." }, 400);
+            return;
+        }
+        const projectId = decodeURIComponent(String(projectMatch[1] || ""));
+        const sessionId = String(url.searchParams.get("sessionId") || "").trim();
+        const activeRuns = (await runtimeDb.listAgentV2Runs(clientId)).filter((run) => run.input.sessionId === sessionId &&
+            (run.status === "queued" || run.status === "running" || run.status === "cancelling"));
+        if (activeRuns.length > 0) {
+            sendJson(res, {
+                error: "Stop the active app generation run before deleting this app.",
+                activeRunIds: activeRuns.map((run) => run.runId),
+            }, 409);
+            return;
+        }
+        try {
+            sendJson(res, previews.deleteProject(projectId, sessionId, clientId));
+        }
+        catch (error) {
+            if (error instanceof WorkspaceProjectDeleteError) {
+                sendJson(res, { error: error.message }, error.statusCode);
+                return;
+            }
+            throw error;
+        }
         return;
     }
     const logsMatch = route.match(/^\/([^/]+)\/logs$/);
@@ -941,7 +981,7 @@ function redactConnectionUrl(value) {
 }
 function sendRuntimeApiError(res, error) {
     if (error instanceof AgentV2RunApiError) {
-        sendJson(res, { error: error.message }, error.statusCode);
+        sendJson(res, { error: error.message, ...(error.code ? { code: error.code } : {}) }, error.statusCode);
         return;
     }
     const message = errorMessage(error);

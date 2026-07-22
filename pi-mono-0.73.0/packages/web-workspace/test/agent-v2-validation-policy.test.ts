@@ -38,10 +38,10 @@ describe("agent v2 validation policy", () => {
 
 		expect(policy.evidence).toEqual([expect.objectContaining({ kind: "layout", path: "index.html" })]);
 		expect(policy).toMatchObject({
-			severity: "warning",
-			confidence: 0.55,
-			blocking: false,
-			repairBudget: { maxAttempts: 0, maxSameFingerprintAttempts: 0, maxChangedFiles: 0 },
+			severity: "error",
+			confidence: 0.95,
+			blocking: true,
+			repairBudget: { maxAttempts: 2, maxSameFingerprintAttempts: 2, maxChangedFiles: 2 },
 		});
 	});
 
@@ -56,6 +56,24 @@ describe("agent v2 validation policy", () => {
 
 		expect(policy).toMatchObject({ severity: "error", confidence: 0.99, blocking: true });
 		expect(policy.repairBudget.maxAttempts).toBeGreaterThan(0);
+	});
+
+	it("allows a missing build manifest repair to create both manifest and lockfile", () => {
+		const policy = classifyAgentV2ValidationPolicy({
+			code: "static.build_manifest_missing",
+			source: "static_validate",
+			retryable: true,
+			path: "package.json",
+			data: { sourceEntry: "src/main.tsx" },
+		});
+
+		expect(policy).toMatchObject({
+			severity: "error",
+			confidence: 0.99,
+			blocking: true,
+			evidence: [expect.objectContaining({ kind: "build", path: "package.json" })],
+			repairBudget: { maxAttempts: 3, maxSameFingerprintAttempts: 2, maxChangedFiles: 2 },
+		});
 	});
 
 	it("keeps synthetic no-effect observations advisory", () => {

@@ -26,7 +26,10 @@ export function classifyStaticResourceReference(value) {
     }
 }
 export function staticServeRootCandidates(hasPackageJson) {
-    return hasPackageJson ? ["dist", "build", "public", ""] : ["", "dist", "build", "public"];
+    // A package project must be previewed from browser-ready build output. Falling
+    // back to its root index.html can silently serve a second inline application
+    // while framework sources under src/ remain unbuilt and unvalidated.
+    return hasPackageJson ? ["dist", "build", "public"] : ["", "dist", "build", "public"];
 }
 export function findStaticServeRoot(projectDir, candidates) {
     const guard = WorkspacePathGuard.forProjectContent(projectDir);

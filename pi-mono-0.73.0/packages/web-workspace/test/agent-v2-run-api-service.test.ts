@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentV2RunApiService, type AgentV2StartRunRequest } from "../src/agent-v2-run-api-service.js";
+import {
+	AgentV2RunApiError,
+	AgentV2RunApiService,
+	type AgentV2StartRunRequest,
+} from "../src/agent-v2-run-api-service.js";
 import type { AgentV2RunEventRecord } from "../src/agent-v2-store.js";
 import { RuntimeDbStore } from "../src/runtime-db.js";
 
@@ -91,6 +95,25 @@ describe("AgentV2RunApiService", () => {
 			status: "queued",
 		});
 		expect(store.listAgentV2RunEvents("client-a", "run-wake-fail", 0)).toHaveLength(2);
+	});
+
+	it("validates a new run before creating durable state or queue intents", async () => {
+		const store = createStore();
+		const service = createService(store, {
+			validateStart: ({ payload }) => {
+				throw new AgentV2RunApiError(
+					`Model ${payload.model.provider}/${payload.model.id} is not synchronized`,
+					409,
+					"agent_v2.model.not_synchronized",
+				);
+			},
+		});
+
+		await expect(service.startRun("client-a", startRequest("run-invalid-model"))).rejects.toMatchObject({
+			code: "agent_v2.model.not_synchronized",
+			statusCode: 409,
+		});
+		expect(store.listAgentV2Runs("client-a")).toEqual([]);
 	});
 
 	it("builds and commits the product blueprint from normalized PM document bytes", async () => {
@@ -664,6 +687,7 @@ function createService(
 		now?: () => string;
 		wakeDispatcher?: () => void | Promise<void>;
 		createRunId?: () => string;
+		validateStart?: ConstructorParameters<typeof AgentV2RunApiService>[0]["validateStart"];
 	} = {},
 ): AgentV2RunApiService {
 	return new AgentV2RunApiService({
@@ -676,6 +700,7 @@ function createService(
 		createRunId: overrides.createRunId ?? (() => "generated-run"),
 		now: overrides.now ?? (() => CREATED_AT),
 		wakeDispatcher: overrides.wakeDispatcher,
+		validateStart: overrides.validateStart,
 	});
 }
 

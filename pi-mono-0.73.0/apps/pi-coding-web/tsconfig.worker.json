@@ -9,15 +9,15 @@
 			"*": ["./*"],
 			"@mariozechner/pi-agent-core": ["../../packages/agent/dist/index.d.ts"],
 			"@mariozechner/pi-ai": ["../../packages/ai/dist/index.d.ts"],
-			"@mariozechner/pi-web-workspace": ["../../packages/web-workspace/src/index.ts"],
+			"@mariozechner/pi-web-workspace": ["../../packages/web-workspace/dist/index.d.ts"],
 			"@mariozechner/pi-web-workspace/agent-v2-runtime": [
-				"../../packages/web-workspace/src/agent-v2-runtime.ts"
+				"../../packages/web-workspace/dist/agent-v2-runtime.d.ts"
 			],
 			"@mariozechner/pi-web-workspace/runtime-infra": [
-				"../../packages/web-workspace/src/runtime-infra.ts"
+				"../../packages/web-workspace/dist/runtime-infra.d.ts"
 			],
 			"@mariozechner/pi-web-workspace/skill-tool-contract": [
-				"../../packages/web-workspace/src/skill-tool-contract.ts"
+				"../../packages/web-workspace/dist/skill-tool-contract.d.ts"
 			]
 		},
 		"declaration": false,

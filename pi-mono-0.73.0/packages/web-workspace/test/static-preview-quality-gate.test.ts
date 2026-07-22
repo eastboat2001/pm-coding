@@ -145,6 +145,34 @@ new Chart(document.getElementById('trend'), {options:{maintainAspectRatio:false}
 		expect(result.valid, result.errors.join("\n")).toBe(true);
 	});
 
+	it("rejects a canvas height attribute as the only bound when Chart.js disables aspect ratio", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<canvas id="trend" height="300"></canvas><script>
+new Chart(document.getElementById('trend'), {options:{maintainAspectRatio:false}});
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("dedicated position:relative chart container");
+	});
+
+	it("rejects a flex-growing card body as the Chart.js height boundary", () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<div class="card-body h-100" style="position:relative;height:400px"><canvas id="trend"></canvas></div><script>
+new Chart(document.getElementById('trend'), {options:{maintainAspectRatio:false}});
+</script></body></html>`,
+		});
+
+		const result = assessStaticPreviewQuality({ serveRoot: root });
+
+		expect(result.valid).toBe(false);
+		expect(result.errors.join("\n")).toContain("dedicated position:relative chart container");
+	});
+
 	it("rejects visible select controls that are never read by application JavaScript", () => {
 		const root = writeProject({
 			"index.html": `<!doctype html><html><body>

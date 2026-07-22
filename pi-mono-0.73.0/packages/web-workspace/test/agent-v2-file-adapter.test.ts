@@ -150,6 +150,28 @@ describe("agent v2 file adapter", () => {
 		expect(patch.artifact.artifactId).toBe("file:src/nested/foo.ts");
 		expect(adapter.readFile("src/nested/foo.ts").content).toContain('"b"');
 	});
+
+	it("deletes only an existing authorized project file", () => {
+		const root = tempRoot();
+		const adapter = createAgentV2FileAdapter({
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Demo" },
+		});
+		adapter.writeFile({
+			path: "src/obsolete.tsx",
+			content: "export default null;\n",
+			mode: "create",
+			taskId: "implement",
+			now: "2026-07-08T00:01:00.000Z",
+		});
+
+		expect(adapter.deleteFile("src/obsolete.tsx")).toEqual({
+			path: "src/obsolete.tsx",
+			action: "deleted",
+		});
+		expect(adapter.listFiles().files).toEqual([]);
+		expect(() => adapter.deleteFile("../outside.txt")).toThrow("file.path_invalid");
+	});
 });
 
 function tempRoot(): string {

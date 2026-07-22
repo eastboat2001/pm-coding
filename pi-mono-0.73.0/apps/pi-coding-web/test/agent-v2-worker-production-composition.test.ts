@@ -106,7 +106,7 @@ describe("agent v2 worker production composition", () => {
 
 		await expect(worker.processOne()).resolves.toBe(true);
 
-		expect(readSettingsFile).toHaveBeenCalledTimes(1);
+		expect(readSettingsFile).toHaveBeenCalledTimes(2);
 		expect(getEnvApiKey).not.toHaveBeenCalled();
 		expect(complete).toHaveBeenCalledTimes(2);
 		for (const [model, _context, options] of complete.mock.calls) {

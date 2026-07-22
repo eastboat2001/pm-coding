@@ -69,9 +69,11 @@ import {
 	type AgentV2BrowserProjectedEvent,
 	createAgentV2BrowserRunSink,
 } from "../runtime/agent-v2-browser-run-sink.js";
+import { agentV2UserFacingError } from "../runtime/agent-v2-error-copy.js";
 import type { AgentV2ProgressSection } from "../runtime/agent-v2-progress-card.js";
 import "../runtime/agent-v2-progress-card.js";
 import {
+	AgentV2RunApiClientError,
 	cancelAgentV2Run,
 	connectAgentV2RunEvents,
 	getAgentV2Run,
@@ -143,6 +145,7 @@ import {
 } from "./generated-apps-state.js";
 import {
 	AGENT_V2_MIN_MODEL_OUTPUT_TOKENS,
+	AgentV2ModelSynchronizationError,
 	ModelController,
 	SELECTED_MODEL_KEY,
 	supportsApplicationGeneration,
@@ -1603,6 +1606,14 @@ const startRemotePrompt = async (
 	images?: ImageContent[],
 ): Promise<void> => {
 	await ensureSessionIdentity();
+	try {
+		agent.state.model = await modelController.synchronizeSelectedModelForV2(agent.state.model);
+	} catch (error) {
+		if (error instanceof AgentV2ModelSynchronizationError) {
+			throw new Error(agentV2UserFacingError(error, currentAgentV2ErrorLanguage()));
+		}
+		throw error;
+	}
 	if (!supportsApplicationGeneration(agent.state.model)) {
 		const minimumTokens = AGENT_V2_MIN_MODEL_OUTPUT_TOKENS.toLocaleString();
 		const language = getCurrentLanguage().toLocaleLowerCase().split(/[-_]/u)[0];
@@ -1673,6 +1684,11 @@ const startRemotePrompt = async (
 		await saveSession();
 		renderApp();
 		requestChatPanelUpdate();
+		if (error instanceof AgentV2RunApiClientError && error.code) {
+			throw new Error(
+				agentV2UserFacingError({ code: error.code, message: error.message }, currentAgentV2ErrorLanguage()),
+			);
+		}
 		throw error;
 	}
 
@@ -1689,6 +1705,10 @@ const startRemotePrompt = async (
 	refreshGeneratedAppsPanel();
 	await agent.waitForIdle();
 };
+
+function currentAgentV2ErrorLanguage(): AgentV2ResponseLanguage {
+	return inferAgentV2ResponseLanguage({}, getCurrentLanguage());
+}
 
 const createAgent = async (initialState?: Partial<AgentState>) => {
 	if (agentUnsubscribe) {

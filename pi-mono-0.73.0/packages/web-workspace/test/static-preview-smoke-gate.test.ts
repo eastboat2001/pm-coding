@@ -91,6 +91,56 @@ document.addEventListener('DOMContentLoaded', () => {
 		expect(result.checkedFiles).toEqual(["index.html", "inline script 1"]);
 	});
 
+	it("settles async startup handlers and supports createTextNode with Node checks", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<div id="app"></div><script>
+document.addEventListener('DOMContentLoaded', async () => {
+  await Promise.all([
+    new Promise((resolve) => setTimeout(resolve, 25)),
+    new Promise((resolve) => setTimeout(resolve, 25))
+  ]);
+  const metric = document.createElement('strong');
+  metric.id = 'kpiYieldValue';
+  metric.className = 'kpi-value';
+  const text = document.createTextNode('94.7%');
+  if (text instanceof Node) metric.appendChild(text);
+  document.getElementById('app').appendChild(metric);
+});
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid).toBe(true);
+		expect(result.errors).toEqual([]);
+	});
+
+	it("records async callback failures without leaking an unhandled rejection", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body><div id="app"></div><script>
+document.addEventListener('DOMContentLoaded', async () => {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  throw new Error('async startup failed');
+});
+</script></body></html>`,
+		});
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => unhandled.push(reason);
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+			await new Promise<void>((resolve) => setImmediate(resolve));
+
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("asynchronous callback failed");
+			expect(result.errors.join("\n")).toContain("async startup failed");
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
 	it("warns without blocking when every visible KPI stays zero beside a chart", async () => {
 		const root = writeProject({
 			"index.html": `<!doctype html><html><body>
@@ -230,6 +280,26 @@ document.getElementById('customer').addEventListener('change', (event) => { docu
 		expect(result.valid).toBe(false);
 		expect(result.errors.join("\n")).toContain("chart click handler failed");
 		expect(result.errors.join("\n")).toContain("backgroundColor.map is not a function");
+	});
+
+	it("supports standard Chart.js element lookup inside drill-down handlers", async () => {
+		const root = writeProject({
+			"index.html": `<!doctype html><html><body>
+<div id="kpiOutput" class="kpi-value">120</div><canvas id="trend"></canvas><script>
+const trendChartInstance = new Chart(document.getElementById('trend'), {
+  data: { labels: ['W1'], datasets: [{ data: [94.2] }] },
+  options: { onClick: (event) => {
+    const points = trendChartInstance.getElementsAtEventForMode(event, 'nearest', { intersect: true }, false);
+    if (points.length > 0) document.getElementById('kpiOutput').textContent = String(points[0].index + 121);
+  } }
+});
+</script></body></html>`,
+		});
+
+		const result = await runStaticPreviewSmokeGate({ serveRoot: root });
+
+		expect(result.valid, result.errors.join("\n")).toBe(true);
+		expect(result.errors).toEqual([]);
 	});
 
 	it("bounds chart interaction sampling when a click re-renders replacement charts", async () => {

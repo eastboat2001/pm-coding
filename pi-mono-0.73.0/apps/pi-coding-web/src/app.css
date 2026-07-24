@@ -476,12 +476,25 @@ body {
 }
 
 .agent-v2-progress-card__action {
+	display: -webkit-box;
+	max-block-size: calc(1.5em * 3);
 	margin: 0;
+	overflow: hidden;
 	color: var(--foreground);
 	font-size: 0.88rem;
 	font-weight: 560;
 	line-height: 1.5;
 	overflow-wrap: anywhere;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+}
+
+.agent-v2-progress-card--details-expanded .agent-v2-progress-card__action {
+	display: block;
+	max-block-size: min(12rem, 30vh);
+	overflow: auto;
+	padding-inline-end: 0.35rem;
+	-webkit-line-clamp: unset;
 }
 
 .agent-v2-progress-card__elapsed {
@@ -517,7 +530,7 @@ body {
 .agent-v2-progress-card__live {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(18rem, auto);
-	align-items: center;
+	align-items: start;
 	gap: 1rem;
 	border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
 	border-radius: 0.65rem;
@@ -552,6 +565,7 @@ body {
 .agent-v2-progress-card__metrics {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(3.4rem, 1fr));
+	align-self: center;
 	min-width: 18rem;
 	margin: 0;
 }
@@ -834,9 +848,14 @@ body {
 	}
 
 	.agent-v2-progress-card__metrics {
+		align-self: stretch;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 0.45rem 0;
 		min-width: 0;
+	}
+
+	.agent-v2-progress-card--details-expanded .agent-v2-progress-card__action {
+		max-block-size: min(10rem, 28vh);
 	}
 
 	.agent-v2-progress-card__metric {

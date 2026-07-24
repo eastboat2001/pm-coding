@@ -419,7 +419,11 @@ export class AgentV2ProgressCard extends LitElement {
 		});
 		return html`
 			<section
-				class="agent-v2-progress-card ${this.terminal ? "agent-v2-progress-card--terminal" : ""}"
+				class="agent-v2-progress-card ${this.terminal ? "agent-v2-progress-card--terminal" : ""} ${
+					this.detailsExpanded
+						? "agent-v2-progress-card--details-expanded"
+						: "agent-v2-progress-card--details-collapsed"
+				}"
 				data-run-id=${this.presentation.runId}
 				aria-label=${copy.ariaLabel}
 			>

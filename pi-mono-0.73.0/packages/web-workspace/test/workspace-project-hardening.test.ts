@@ -405,8 +405,8 @@ document.addEventListener('DOMContentLoaded', () => {
 		expect(result.valid).toBe(false);
 		expect(result.errors?.join("\n")).toContain("Static preview smoke gate");
 		expect(result.errors?.join("\n")).toContain("missingRows");
-		expect(result.errors?.join("\n")).toContain("chartLoading");
-		expect(result.errors?.join("\n")).toContain("kpiYieldValue");
+		expect(result.errors?.join("\n")).not.toContain("loading element #chartLoading remained visible");
+		expect(result.errors?.join("\n")).not.toContain("metric placeholder #kpiYieldValue");
 	});
 });
 

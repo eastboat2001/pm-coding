@@ -46,6 +46,7 @@ describe("Agent v2 progress card", () => {
 
 		const rendered = card.render();
 		const markup = templateMarkup(rendered);
+		expect(templateValues(rendered)).toContain("agent-v2-progress-card--details-collapsed");
 		expect(markup).toContain("agent-v2-progress-card__detail-toggle");
 		expect(markup).toContain("agent-v2-progress-card__stages");
 		expect(markup).toContain("agent-v2-progress-card__metrics");
@@ -101,7 +102,9 @@ describe("Agent v2 progress card", () => {
 			expandedSection: { configurable: true, value: "files" },
 			now: { configurable: true, value: Date.parse("2026-07-16T00:02:00.000Z") },
 		});
-		const markup = templateMarkup(card.render());
+		const rendered = card.render();
+		const markup = templateMarkup(rendered);
+		expect(templateValues(rendered)).toContain("agent-v2-progress-card--details-expanded");
 		expect(markup).toContain("agent-v2-progress-card__stages");
 		expect(markup).toContain("agent-v2-progress-card__sections");
 	});

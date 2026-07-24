@@ -290,6 +290,16 @@ describe("agent v2 model result parser", () => {
 			patches: [{ path: "index.html", expectedChecksum: checksum, oldText: "before", newText: "after" }],
 		};
 		expect(parseAgentV2RepairResult(JSON.stringify(value), "task-1")).toEqual(value);
+		const multipleLocalizedPatches = {
+			...value,
+			patches: [
+				value.patches[0],
+				{ path: "index.html", expectedChecksum: checksum, oldText: "second before", newText: "second after" },
+			],
+		};
+		expect(parseAgentV2RepairResult(JSON.stringify(multipleLocalizedPatches), "task-1")).toEqual(
+			multipleLocalizedPatches,
+		);
 		expectSafeError(() =>
 			parseAgentV2RepairResult(
 				JSON.stringify({ ...value, patches: [{ ...value.patches[0], expectedChecksum: "sha256:bad" }] }),
@@ -351,13 +361,48 @@ describe("agent v2 model prompt renderer", () => {
 		expect(first.systemPrompt).toContain("For static_simulation delivery, use the same dependency-free packaging");
 		expect(first.systemPrompt).toContain("never trade away visual hierarchy");
 		expect(first.systemPrompt).toContain("1440x900");
-		expect(first.systemPrompt).toContain("390x844");
+		expect(first.systemPrompt).not.toContain("390x844");
+		expect(first.systemPrompt).toContain("1440x900 to 1280x800 to 1440x900");
 		expect(first.systemPrompt).toContain("Every visible filter");
+		expect(first.systemPrompt).toContain("Never derive a state key with id.split('-')[0]");
+		expect(first.systemPrompt).toContain("multi-word and hyphenated control ids");
+		expect(first.systemPrompt).toContain("compare its documented default with the next enabled option");
+		expect(first.systemPrompt).toContain("separate object paths containing identical values");
+		expect(first.systemPrompt).toContain("empty/sentinel values");
+		expect(first.systemPrompt).toContain("separate Apply button");
+		expect(first.systemPrompt).toContain("exact and case-sensitive");
+		expect(first.systemPrompt).toContain("invoke the actual Apply/Search handler");
+		expect(first.systemPrompt).toContain("never replace or omit a required detail table");
+		expect(first.systemPrompt).toContain("downstream surfaces named by its PM Blueprint scope");
 		expect(first.systemPrompt).toContain("never leave stale values");
+		expect(first.systemPrompt).toContain("containing undefined or NaN");
+		expect(first.systemPrompt).toContain("derive labels from the first and last rows actually included");
+		expect(first.systemPrompt).toContain("every PM-defined granularity selector");
+		expect(first.systemPrompt).toContain("fluid Grid/Flex layouts");
+		expect(first.systemPrompt).toContain("clamp()");
 		expect(first.systemPrompt).toContain("Never leave KPI cards at bootstrap zero");
 		expect(first.systemPrompt).toContain("maintainAspectRatio:false");
 		expect(first.systemPrompt).toContain("dedicated non-flex child container");
 		expect(first.systemPrompt).toContain("canvas height attribute");
+		expect(first.systemPrompt).toContain("prefer responsive SVG for ordinary vector visualizations");
+		expect(first.systemPrompt).toContain("viewBox matching the drawing width/height");
+		expect(first.systemPrompt).toContain("getBoundingClientRect().width and .height");
+		expect(first.systemPrompt).toContain("devicePixelRatio");
+		expect(first.systemPrompt).toContain("ctx.setTransform");
+		expect(first.systemPrompt).toContain("ResizeObserver");
+		expect(first.systemPrompt).toContain("meaningful deterministic demo dataset on first load");
+		expect(first.systemPrompt).toContain("without requiring file upload");
+		expect(first.systemPrompt).toContain("built-in demo provider");
+		expect(first.systemPrompt).toContain("optional Replace demo data action");
+		expect(first.systemPrompt).toContain("Reset to demo data path");
+		expect(first.systemPrompt).toContain("future API provider");
+		expect(first.systemPrompt).toContain("do not add a backend service");
+		expect(first.systemPrompt).toContain("explicit business order");
+		expect(first.systemPrompt).toContain("Y-axis tick values");
+		expect(first.systemPrompt).toContain("truthful and consistent about the actual chart technology");
+		expect(first.systemPrompt).toContain("Dashboard Grid/Flex children");
+		expect(first.systemPrompt).toContain("dedicated overflow-x:auto wrapper");
+		expect(first.systemPrompt).toContain("does not satisfy a cross-surface drill-down");
 		expect(first.systemPrompt).toContain(
 			"If dependencies are declared, include a valid package-lock.json; otherwise use dependency-free browser assets.",
 		);
@@ -636,20 +681,114 @@ describe("agent v2 model prompt renderer", () => {
 
 	it("renders only the trusted validation diagnostic, failure taxonomy and bounded current workspace", () => {
 		const input = repairPromptInput();
-		const rendered = renderAgentV2RepairPrompt(input);
+		const originalDiagnostic = input.diagnostics[0];
+		if (!originalDiagnostic) throw new Error("expected repair diagnostic");
+		const rendered = renderAgentV2RepairPrompt({
+			...input,
+			diagnostics: [
+				{
+					...originalDiagnostic,
+					data: {
+						...originalDiagnostic.data,
+						failureCount: 2,
+						failureCodes: ["static.loading_visible", "static.control_no_effect"],
+						failureDetails: [
+							...(originalDiagnostic.data.failureDetails as unknown[]),
+							{
+								code: "static.control_no_effect",
+								message: "ADVISORY_CONTROL_NO_EFFECT",
+								retryable: true,
+								source: "static_smoke",
+								blocking: false,
+							},
+						],
+					},
+				},
+			],
+		});
 		expect(rendered.userPrompt).toContain("agent_v2.validation_failed:task-1:1");
 		expect(rendered.userPrompt).toContain("static.loading_visible");
 		expect(rendered.userPrompt).toContain(
 			"Static validation found a visible loading placeholder that is never cleared: #load.",
 		);
 		expect(rendered.userPrompt).toContain("path=index.html");
+		expect(rendered.userPrompt).toContain("selector:#load");
+		expect(rendered.userPrompt).toContain("index.html:18 loading placeholder is still visible");
+		expect(rendered.userPrompt).not.toContain("ADVISORY_CONTROL_NO_EFFECT");
+		expect(rendered.userPrompt).not.toContain("static.control_no_effect");
 		expect(rendered.userPrompt).toContain("CURRENT_WORKSPACE_SENTINEL");
 		expect(rendered.userPrompt).not.toContain("RAW_VALIDATOR_MESSAGE");
 		expect(rendered.userPrompt).toContain("addressedDiagnosticIds");
 		expect(rendered.systemPrompt).toContain("repair");
 		expect(rendered.systemPrompt).toContain("smallest necessary change");
+		expect(rendered.systemPrompt).toContain("multiple patch entries for that path are allowed");
+		expect(rendered.systemPrompt).toContain("unique and non-overlapping");
+		expect(rendered.systemPrompt).toContain("copy the path exactly from CURRENT WORKSPACE FILE");
 		expect(rendered.systemPrompt).toContain("must not resurrect unrelated pages");
 		expect(rendered.systemPrompt).toContain("same name as an HTML id");
+		expect(rendered.systemPrompt).toContain("hiding overflow, deleting the chart");
+		expect(rendered.systemPrompt).toContain("static.invalid_rendered_data");
+		expect(rendered.systemPrompt).toContain("static.filter_empty_state_inconsistent");
+		expect(rendered.systemPrompt).toContain("static.blueprint_table_missing");
+		expect(rendered.systemPrompt).toContain("regression-test every other existing filter");
+		expect(rendered.systemPrompt).toContain("before reading filteredRows[0]");
+		expect(rendered.systemPrompt).toContain("Clamp aggregation buckets to available rows");
+		expect(rendered.systemPrompt).toContain("set files to [] and use patches only");
+	});
+
+	it("renders a patch-only response schema when every repair workspace file is an excerpt", () => {
+		const input = repairPromptInput();
+		const rendered = renderAgentV2RepairPrompt({
+			...input,
+			workspaceFiles: input.workspaceFiles.map((file) => ({
+				...file,
+				contentMode: "excerpt" as const,
+				contentByteLength: Buffer.byteLength(file.content, "utf8"),
+			})),
+		});
+
+		expect(rendered.systemPrompt).toContain('"files":[],"patches"');
+		expect(rendered.systemPrompt).not.toContain('"files":[{"path":"<relative path>"');
+	});
+
+	it("accepts the bounded first repair contract-retry identity and rejects a forged dependency", () => {
+		const input = repairPromptInput();
+		const retryTask: AgentV2TaskNode = {
+			...input.task,
+			taskId: "repair:task-1:1:contract-retry:1",
+			parentTaskId: "repair:task-1:1",
+			dependsOn: ["repair:task-1:1"],
+			input: { ...input.task.input, contractRecoveryAttempt: 1 },
+		};
+		const retryInput: AgentV2RepairModelExecutionInput = {
+			...input,
+			task: retryTask,
+			contextPacket: {
+				...input.contextPacket,
+				activeTask: retryTask,
+				taskSelection: {
+					...input.contextPacket.taskSelection,
+					task: retryTask,
+				},
+			},
+		};
+
+		const rendered = renderAgentV2RepairPrompt(retryInput);
+		expect(rendered.userPrompt).toContain("repair:task-1:1:contract-retry:1");
+		expect(() =>
+			renderAgentV2RepairPrompt({
+				...retryInput,
+				task: { ...retryTask, parentTaskId: "task-1", dependsOn: ["task-1"] },
+				contextPacket: {
+					...retryInput.contextPacket,
+					activeTask: { ...retryTask, parentTaskId: "task-1", dependsOn: ["task-1"] },
+					taskSelection: {
+						...retryInput.contextPacket.taskSelection,
+						task: { ...retryTask, parentTaskId: "task-1", dependsOn: ["task-1"] },
+					},
+				},
+			}),
+		).toThrowError(expect.objectContaining({ code: "prompt_invalid" }));
 	});
 
 	it("fails closed before rendering cross-run context, records, tasks or diagnostics", () => {
@@ -1146,6 +1285,14 @@ function repairPromptInput(): AgentV2RepairModelExecutionInput {
 					retryable: true,
 					source: "static_quality",
 					path: "index.html",
+					evidence: [
+						{
+							kind: "source",
+							summary: "index.html:18 loading placeholder is still visible",
+							path: "index.html",
+							selector: "#load",
+						},
+					],
 				},
 			],
 		},

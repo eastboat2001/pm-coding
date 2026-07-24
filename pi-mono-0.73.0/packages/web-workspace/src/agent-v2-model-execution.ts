@@ -235,11 +235,17 @@ export function parseAgentV2RepairResult(text: string, expectedTaskId: string): 
 		throw new AgentV2ModelContractError("invalid_schema");
 	}
 	const changedPathKeys = new Set(common.files.map((file) => file.path.toLocaleLowerCase("en-US")));
+	const patchPathKeys = new Set<string>();
 	for (const patch of patches) {
 		const key = patch.path.toLocaleLowerCase("en-US");
 		if (changedPathKeys.has(key)) throw new AgentV2ModelContractError("duplicate_path");
-		changedPathKeys.add(key);
+		// Several independent diagnostics can legitimately produce several
+		// localized edits for one disclosed file. Keep them as patches here; the
+		// execution layer verifies one shared checksum, unique source ranges, and
+		// non-overlap before applying the group atomically.
+		patchPathKeys.add(key);
 	}
+	for (const key of patchPathKeys) changedPathKeys.add(key);
 	for (const deletedPath of deletedPaths) {
 		const key = deletedPath.toLocaleLowerCase("en-US");
 		if (changedPathKeys.has(key)) throw new AgentV2ModelContractError("duplicate_path");

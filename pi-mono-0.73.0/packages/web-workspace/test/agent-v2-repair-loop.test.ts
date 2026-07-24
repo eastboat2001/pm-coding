@@ -63,7 +63,10 @@ describe("agent v2 production repair loop", () => {
 		});
 		const projectRoot = join(config.clientsRootDir, "client-a", "sessions", "session-a", "project");
 		mkdirSync(projectRoot, { recursive: true });
-		const brokenMarkup = '<!doctype html><div id="loading">Loading...</div>';
+		const brokenMarkup = `<!doctype html><style>.card{padding:16px}.chart-panel{height:320px}</style>
+<div class="card chart-panel"><div class="card-title">Yield Trend</div><canvas id="yieldTrend"></canvas></div><script>
+const canvas=document.getElementById('yieldTrend');function draw(){const ctx=canvas.getContext('2d');const parent=canvas.parentElement;const width=parent.clientWidth||300;const height=parent.clientHeight||240;canvas.width=width*2;canvas.height=height*2;ctx.scale(2,2);ctx.moveTo(0,height);ctx.lineTo(width,0);ctx.fillText('100',0,10)}draw();
+</script>`;
 		const initialContent = `${brokenMarkup}${" ".repeat(24_513 - Buffer.byteLength(brokenMarkup, "utf8"))}`;
 		expect(Buffer.byteLength(initialContent, "utf8")).toBe(24_513);
 		writeFileSync(join(projectRoot, "index.html"), initialContent);
@@ -83,17 +86,35 @@ describe("agent v2 production repair loop", () => {
 			updatedAt: "2026-07-14T00:00:00.000Z",
 		});
 
-		const generateRepair = vi.fn(async (input: Parameters<AgentV2ModelExecution["generateRepair"]>[0]) => ({
-			result: {
-				version: 1 as const,
-				taskId: input.task.taskId,
-				summary: "RAW_MODEL_SUMMARY_MUST_NOT_PERSIST",
-				files: [{ path: "index.html", content: "<!doctype html><main>Ready</main>" }],
-				addressedDiagnosticIds: input.diagnostics.map((diagnostic) => diagnostic.diagnosticId),
-			},
-			provider: "test",
-			model: "v2-test-model",
-		}));
+		let observedRepairContentMode: string | undefined;
+		const generateRepair = vi.fn(async (input: Parameters<AgentV2ModelExecution["generateRepair"]>[0]) => {
+			const workspace = input.workspaceFiles[0];
+			if (!workspace) throw new Error("missing repair workspace");
+			observedRepairContentMode = workspace.contentMode;
+			expect(workspace.contentByteLength).toBeLessThanOrEqual(workspace.byteLength);
+			// Exercise the production prompt validator here as well as the execution
+			// seam so excerpt metadata regressions cannot hide behind a mocked model.
+			renderAgentV2RepairPrompt(input);
+			return {
+				result: {
+					version: 1 as const,
+					taskId: input.task.taskId,
+					summary: "RAW_MODEL_SUMMARY_MUST_NOT_PERSIST",
+					files: [],
+					patches: [
+						{
+							path: "index.html",
+							expectedChecksum: workspace.checksum,
+							oldText: brokenMarkup,
+							newText: "<!doctype html><main>Ready</main>",
+						},
+					],
+					addressedDiagnosticIds: input.diagnostics.map((diagnostic) => diagnostic.diagnosticId),
+				},
+				provider: "test",
+				model: "v2-test-model",
+			};
+		});
 		const modelExecution: AgentV2ModelExecution = {
 			generateImplementation: async () => {
 				throw new Error("implementation must not run");
@@ -141,18 +162,35 @@ describe("agent v2 production repair loop", () => {
 			]),
 		);
 		expect(store.listAgentV2Artifacts("client-a", "run-repair")[0]?.validationStatus).toBe("failed");
+		expect(store.listAgentV2Diagnostics("client-a", "run-repair")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: "agent_v2.validation_failed",
+					data: expect.objectContaining({
+						failureCodes: expect.arrayContaining(["static.canvas_css_bitmap_mismatch"]),
+						failureDetails: expect.arrayContaining([
+							expect.objectContaining({
+								code: "static.canvas_css_bitmap_mismatch",
+								evidence: [expect.objectContaining({ selector: "#yieldTrend", path: "index.html" })],
+							}),
+						]),
+					}),
+				}),
+			]),
+		);
 
 		await expect(execute("2026-07-14T00:00:02.000Z")).resolves.toMatchObject({
 			status: "task_succeeded",
 			taskId: "repair:validate:1",
 		});
 		expect(generateRepair).toHaveBeenCalledTimes(1);
+		expect(observedRepairContentMode).toBe("excerpt");
 		expect(generateRepair.mock.calls[0]?.[0]).toMatchObject({
 			run: { model: { provider: "test", id: "v2-test-model" } },
 			task: { taskId: "repair:validate:1", kind: "repair" },
 			diagnostics: [expect.objectContaining({ code: "agent_v2.validation_failed" })],
 		});
-		expect(readFileSync(join(projectRoot, "index.html"), "utf8")).toBe("<!doctype html><main>Ready</main>");
+		expect(readFileSync(join(projectRoot, "index.html"), "utf8")).toMatch(/^<!doctype html><main>Ready<\/main>/u);
 		expect(store.listAgentV2Artifacts("client-a", "run-repair")[0]).toMatchObject({
 			artifactId: "file:index.html",
 			validationStatus: "pending",
@@ -332,6 +370,100 @@ describe("agent v2 production repair loop", () => {
 		expect(Buffer.byteLength(repaired, "utf8")).toBeGreaterThan(100_000);
 	});
 
+	it("applies several non-overlapping patches for one file as one atomic repair write", async () => {
+		const initialContent =
+			'<!doctype html><div id="loading">Loading...</div><script>const value = Math.random();</script>';
+		const fixture = directRepairFixture(initialContent);
+
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async (input) => {
+						const workspace = input.workspaceFiles[0];
+						if (!workspace) throw new Error("missing repair workspace");
+						return {
+							result: {
+								version: 1 as const,
+								taskId: input.task.taskId,
+								summary: "ignored",
+								files: [],
+								patches: [
+									{
+										path: "index.html",
+										expectedChecksum: workspace.checksum,
+										oldText: '<div id="loading">Loading...</div>',
+										newText: "<main>Ready</main>",
+									},
+									{
+										path: "index.html",
+										expectedChecksum: workspace.checksum,
+										oldText: "Math.random()",
+										newText: "0.5",
+									},
+								],
+								addressedDiagnosticIds: input.diagnostics.map((item) => item.diagnosticId),
+							},
+							provider: "test",
+							model: "v2-test-model",
+						};
+					},
+				},
+			}),
+		).resolves.toMatchObject({ status: "task_succeeded", taskId: "repair:validate:1" });
+
+		expect(readFileSync(join(fixture.projectRoot, "index.html"), "utf8")).toBe(
+			"<!doctype html><main>Ready</main><script>const value = 0.5;</script>",
+		);
+		const repairTask = fixture.store
+			.listAgentV2Tasks("client-a", "run-direct-repair")
+			.find((task) => task.taskId === "repair:validate:1");
+		expect(repairTask?.output.changedFiles).toEqual(["index.html"]);
+	});
+
+	it("rejects overlapping same-file patches before any workspace write", async () => {
+		const initialContent = "<!doctype html><main>abcdef</main>";
+		const fixture = directRepairFixture(initialContent);
+
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async (input) => {
+						const workspace = input.workspaceFiles[0];
+						if (!workspace) throw new Error("missing repair workspace");
+						return {
+							result: {
+								version: 1 as const,
+								taskId: input.task.taskId,
+								summary: "ignored",
+								files: [],
+								patches: [
+									{ path: "index.html", expectedChecksum: workspace.checksum, oldText: "abc", newText: "one" },
+									{ path: "index.html", expectedChecksum: workspace.checksum, oldText: "bcd", newText: "two" },
+								],
+								addressedDiagnosticIds: input.diagnostics.map((item) => item.diagnosticId),
+							},
+							provider: "test",
+							model: "v2-test-model",
+						};
+					},
+				},
+			}),
+		).resolves.toMatchObject({
+			status: "task_succeeded",
+			taskId: "repair:validate:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
+		});
+		expect(readFileSync(join(fixture.projectRoot, "index.html"), "utf8")).toBe(initialContent);
+	});
+
 	it("fails a no-change repair atomically and never enables revalidation", async () => {
 		const fixture = directRepairFixture("<!doctype html><main>unchanged</main>");
 		const generateRepair = vi.fn(async () => ({
@@ -378,8 +510,90 @@ describe("agent v2 production repair loop", () => {
 		).not.toContain("RAW_NO_CHANGE_SUMMARY");
 	});
 
-	it("continues with bounded revalidation when a repair result violates the model contract", async () => {
+	it("retries a malformed repair contract once before consuming another validation attempt", async () => {
 		const fixture = directRepairFixture("<!doctype html><main>unchanged</main>");
+		const generateRepair = vi.fn(async (input: Parameters<AgentV2ModelExecution["generateRepair"]>[0]) => ({
+			result: {
+				version: 1 as const,
+				taskId: input.task.taskId,
+				summary: "RAW_EMPTY_SUMMARY",
+				files: [],
+				addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+			},
+			provider: "test",
+			model: "v2-test-model",
+		}));
+		const execution = {
+			...fixture.execution,
+			modelExecution: {
+				generateImplementation: async () => {
+					throw new Error("implementation must not run");
+				},
+				generateRepair,
+			},
+		};
+
+		await expect(executeAgentV2NextTask(execution)).resolves.toEqual({
+			status: "task_succeeded",
+			taskId: "repair:validate:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
+		});
+		expect(fixture.store.listAgentV2Tasks("client-a", "run-direct-repair")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					taskId: "repair:validate:1",
+					status: "succeeded",
+					output: expect.objectContaining({
+						recoveryMode: "model_contract_retry",
+						modelContractCode: "invalid_schema",
+					}),
+				}),
+				expect.objectContaining({
+					taskId: "repair:validate:1:contract-retry:1",
+					status: "pending",
+					dependsOn: ["repair:validate:1"],
+				}),
+				expect.objectContaining({
+					taskId: "revalidate:validate:2",
+					dependsOn: ["repair:validate:1:contract-retry:1"],
+				}),
+			]),
+		);
+		expect(fixture.store.listAgentV2Diagnostics("client-a", "run-direct-repair")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: "agent_v2.repair_model_contract_recovery",
+					severity: "warn",
+					data: { modelContractCode: "invalid_schema", nextContractRecoveryAttempt: 1 },
+				}),
+			]),
+		);
+		expect(fixture.store.listAgentV2Validations("client-a", "run-direct-repair")).toHaveLength(1);
+
+		await expect(executeAgentV2NextTask(execution)).resolves.toEqual({
+			status: "task_succeeded",
+			taskId: "repair:validate:1:contract-retry:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1:contract-retry:1"],
+		});
+		expect(generateRepair).toHaveBeenCalledTimes(2);
+		expect(
+			fixture.store
+				.listAgentV2Tasks("client-a", "run-direct-repair")
+				.find((task) => task.taskId === "repair:validate:1:contract-retry:1"),
+		).toMatchObject({
+			status: "succeeded",
+			output: { recoveryMode: "model_contract_revalidation", modelContractCode: "invalid_schema" },
+		});
+		expect(fixture.store.listAgentV2Validations("client-a", "run-direct-repair")).toHaveLength(1);
+		expect(JSON.stringify(fixture.store.listAgentV2Tasks("client-a", "run-direct-repair"))).not.toContain(
+			"RAW_EMPTY_SUMMARY",
+		);
+	});
+
+	it("enforces the diagnostic maxChangedFiles budget before any repair write", async () => {
+		const original = "<!doctype html><main>before</main>";
+		const fixture = directRepairFixture(original, { maxChangedFiles: 1 });
+
 		await expect(
 			executeAgentV2NextTask({
 				...fixture.execution,
@@ -391,8 +605,11 @@ describe("agent v2 production repair loop", () => {
 						result: {
 							version: 1 as const,
 							taskId: "repair:validate:1",
-							summary: "RAW_EMPTY_SUMMARY",
-							files: [],
+							summary: "over-broad replacement",
+							files: [
+								{ path: "index.html", content: "<!doctype html><main>replacement</main>" },
+								{ path: "README.md", content: "replacement notes" },
+							],
 							addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
 						},
 						provider: "test",
@@ -405,29 +622,265 @@ describe("agent v2 production repair loop", () => {
 			taskId: "repair:validate:1",
 			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
 		});
-		expect(fixture.store.listAgentV2Tasks("client-a", "run-direct-repair")).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					taskId: "repair:validate:1",
-					status: "succeeded",
-					output: expect.objectContaining({
-						recoveryMode: "model_contract_revalidation",
-						modelContractCode: "invalid_schema",
+
+		expect(readFileSync(join(fixture.projectRoot, "index.html"), "utf8")).toBe(original);
+		expect(existsSync(join(fixture.projectRoot, "README.md"))).toBe(false);
+	});
+
+	it("allows one bounded file per explicit blocking path plus one related pathless finding", async () => {
+		const fixture = directRepairFixture(
+			'<!doctype html><link rel="stylesheet" href="styles.css"><script src="data.js"></script><script src="app.js"></script>',
+			{
+				failureDetails: [
+					{
+						code: "static.local_script_missing",
+						path: "data.js",
+						blocking: true,
+						repairBudget: { maxAttempts: 3, maxSameFingerprintAttempts: 2, maxChangedFiles: 1 },
+					},
+					{
+						code: "static.local_script_missing",
+						path: "app.js",
+						blocking: true,
+						repairBudget: { maxAttempts: 3, maxSameFingerprintAttempts: 2, maxChangedFiles: 1 },
+					},
+					{
+						code: "static.script_error",
+						blocking: true,
+						repairBudget: { maxAttempts: 3, maxSameFingerprintAttempts: 2, maxChangedFiles: 2 },
+					},
+				],
+			},
+		);
+
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async () => ({
+						result: {
+							version: 1 as const,
+							taskId: "repair:validate:1",
+							summary: "create the three referenced browser resources",
+							files: [
+								{ path: "data.js", content: "window.demoRows = [];" },
+								{ path: "app.js", content: "document.body.dataset.ready = 'true';" },
+								{ path: "styles.css", content: "body { margin: 0; }" },
+							],
+							addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+						},
+						provider: "test",
+						model: "v2-test-model",
 					}),
-				}),
-			]),
-		);
-		expect(fixture.store.listAgentV2Diagnostics("client-a", "run-direct-repair")).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					code: "agent_v2.repair_model_contract_recovery",
-					severity: "warn",
-					data: { modelContractCode: "invalid_schema" },
-				}),
-			]),
-		);
-		expect(JSON.stringify(fixture.store.listAgentV2Tasks("client-a", "run-direct-repair"))).not.toContain(
-			"RAW_EMPTY_SUMMARY",
+				},
+			}),
+		).resolves.toEqual({ status: "task_succeeded", taskId: "repair:validate:1", diagnosticIds: [] });
+
+		expect(readFileSync(join(fixture.projectRoot, "data.js"), "utf8")).toContain("demoRows");
+		expect(readFileSync(join(fixture.projectRoot, "app.js"), "utf8")).toContain("dataset.ready");
+		expect(readFileSync(join(fixture.projectRoot, "styles.css"), "utf8")).toContain("margin");
+	});
+
+	it("rejects a repair that adds an unreferenced source-tree implementation beside a static root app", async () => {
+		const fixture = directRepairFixture("<!doctype html><main>existing static app</main>");
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async () => ({
+						result: {
+							version: 1 as const,
+							taskId: "repair:validate:1",
+							summary: "parallel source implementation",
+							files: [{ path: "src/main.js", content: "document.body.textContent = 'replacement';" }],
+							addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+						},
+						provider: "test",
+						model: "v2-test-model",
+					}),
+				},
+			}),
+		).resolves.toEqual({
+			status: "task_succeeded",
+			taskId: "repair:validate:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
+		});
+		expect(existsSync(join(fixture.projectRoot, "src", "main.js"))).toBe(false);
+		expect(
+			fixture.store
+				.listAgentV2Tasks("client-a", "run-direct-repair")
+				.find((task) => task.taskId === "repair:validate:1"),
+		).toMatchObject({
+			status: "succeeded",
+			output: { recoveryMode: "model_contract_retry", modelContractCode: "invalid_schema" },
+		});
+	});
+
+	it("rejects a repair that turns an existing referenced source implementation into an orphan", async () => {
+		const original = '<!doctype html><main id="app"></main><script src="src/main.js"></script>';
+		const fixture = directRepairFixture(original);
+		mkdirSync(join(fixture.projectRoot, "src"), { recursive: true });
+		writeFileSync(join(fixture.projectRoot, "src", "main.js"), "document.body.dataset.ready = 'true';");
+		const inlineReplacement = `<!doctype html><style>${".panel{display:block}".repeat(40)}</style><body>${"<section>dashboard</section>".repeat(20)}<script>${"document.body.dataset.ready='true';".repeat(20)}</script></body>`;
+
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async () => ({
+						result: {
+							version: 1 as const,
+							taskId: "repair:validate:1",
+							summary: "inline replacement that accidentally orphans the existing source entry",
+							files: [{ path: "index.html", content: inlineReplacement }],
+							addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+						},
+						provider: "test",
+						model: "v2-test-model",
+					}),
+				},
+			}),
+		).resolves.toEqual({
+			status: "task_succeeded",
+			taskId: "repair:validate:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
+		});
+		expect(readFileSync(join(fixture.projectRoot, "index.html"), "utf8")).toBe(original);
+		expect(readFileSync(join(fixture.projectRoot, "src", "main.js"), "utf8")).toContain("dataset.ready");
+		expect(
+			fixture.store
+				.listAgentV2Tasks("client-a", "run-direct-repair")
+				.find((task) => task.taskId === "repair:validate:1"),
+		).toMatchObject({
+			status: "succeeded",
+			output: { recoveryMode: "model_contract_retry", modelContractCode: "invalid_schema" },
+		});
+	});
+
+	it("rejects a localized repair that deletes existing filters, chart hosts, or the detail table", async () => {
+		const original = `<!doctype html><main>
+<select id="plant-filter"><option>All</option><option>Fab 1</option></select>
+<div id="yield-trend-chart"><canvas id="yield-canvas"></canvas></div>
+<table><tbody><tr><td>Lot 1</td></tr></tbody></table>
+</main>`;
+		const fixture = directRepairFixture(original);
+
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async () => ({
+						result: {
+							version: 1 as const,
+							taskId: "repair:validate:1",
+							summary: "removed working dashboard surfaces",
+							files: [{ path: "index.html", content: "<!doctype html><main>Only a KPI remains</main>" }],
+							addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+						},
+						provider: "test",
+						model: "v2-test-model",
+					}),
+				},
+			}),
+		).resolves.toEqual({
+			status: "task_succeeded",
+			taskId: "repair:validate:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
+		});
+
+		expect(readFileSync(join(fixture.projectRoot, "index.html"), "utf8")).toBe(original);
+	});
+
+	it("allows a localized Canvas-to-SVG repair when existing interactive surfaces are preserved", async () => {
+		const original = `<!doctype html><main>
+<select id="plant-filter"><option>All</option><option>Fab 1</option></select>
+<div id="yield-trend-chart"><canvas id="yield-canvas"></canvas></div>
+<table><tbody><tr><td>Lot 1</td></tr></tbody></table>
+</main>`;
+		const replacement = `<!doctype html><main>
+<select id="plant-filter"><option>All</option><option>Fab 1</option></select>
+<div id="yield-trend-chart"><svg id="yield-canvas" viewBox="0 0 600 240"></svg></div>
+<table><tbody><tr><td>Lot 1</td></tr></tbody></table>
+</main>`;
+		const fixture = directRepairFixture(original);
+
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async () => ({
+						result: {
+							version: 1 as const,
+							taskId: "repair:validate:1",
+							summary: "responsive SVG replacement",
+							files: [{ path: "index.html", content: replacement }],
+							addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+						},
+						provider: "test",
+						model: "v2-test-model",
+					}),
+				},
+			}),
+		).resolves.toMatchObject({ status: "task_succeeded", taskId: "repair:validate:1", diagnosticIds: [] });
+
+		expect(readFileSync(join(fixture.projectRoot, "index.html"), "utf8")).toBe(replacement);
+	});
+
+	it("treats colliding repair output paths as bounded revalidation instead of a terminal run error", async () => {
+		const fixture = directRepairFixture("<!doctype html><main>unchanged</main>");
+		await expect(
+			executeAgentV2NextTask({
+				...fixture.execution,
+				modelExecution: {
+					generateImplementation: async () => {
+						throw new Error("implementation must not run");
+					},
+					generateRepair: async () => ({
+						result: {
+							version: 1 as const,
+							taskId: "repair:validate:1",
+							summary: "duplicate repair paths",
+							files: [
+								{ path: "index.html", content: "first" },
+								{ path: "INDEX.HTML", content: "second" },
+							],
+							addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
+						},
+						provider: "test",
+						model: "v2-test-model",
+					}),
+				},
+			}),
+		).resolves.toEqual({
+			status: "task_succeeded",
+			taskId: "repair:validate:1",
+			diagnosticIds: ["agent_v2.repair_model_contract_recovery:repair:validate:1"],
+		});
+		expect(
+			fixture.store
+				.listAgentV2Tasks("client-a", "run-direct-repair")
+				.find((task) => task.taskId === "repair:validate:1"),
+		).toMatchObject({
+			status: "succeeded",
+			output: { recoveryMode: "model_contract_retry", modelContractCode: "duplicate_path" },
+		});
+		expect(readFileSync(join(fixture.projectRoot, "index.html"), "utf8")).toBe(
+			"<!doctype html><main>unchanged</main>",
 		);
 	});
 
@@ -467,12 +920,12 @@ describe("agent v2 production repair loop", () => {
 				.find((task) => task.taskId === "repair:validate:1"),
 		).toMatchObject({ status: "succeeded", output: { modelContractCode: "invalid_schema" } });
 		expect(fixture.store.listAgentV2RunEvents("client-a", "run-direct-repair", 0)).toHaveLength(
-			beforeEvents.length + 2,
+			beforeEvents.length + 4,
 		);
 	});
 
 	it("keeps the base validation identity across repeated failure and stops with zero new tasks at max attempt", async () => {
-		const fixture = directRepairFixture('<!doctype html><div id="loading">Loading one...</div>');
+		const fixture = directRepairFixture('<!doctype html><script>throw new Error("broken one")</script>');
 		const generateRepair = vi.fn(async (input: Parameters<AgentV2ModelExecution["generateRepair"]>[0]) => ({
 			result: {
 				version: 1 as const,
@@ -483,8 +936,8 @@ describe("agent v2 production repair loop", () => {
 						path: "index.html",
 						content:
 							input.task.taskId === "repair:validate:1"
-								? '<!doctype html><div id="loading">Loading two...</div>'
-								: '<!doctype html><div id="loading">Loading three...</div>',
+								? '<!doctype html><script>throw new Error("broken two")</script>'
+								: '<!doctype html><script>throw new Error("broken three")</script>',
 					},
 				],
 				addressedDiagnosticIds: input.diagnostics.map((diagnostic) => diagnostic.diagnosticId),
@@ -537,6 +990,25 @@ describe("agent v2 production repair loop", () => {
 		expect(finalTasks.some((task) => task.taskId === "repair:validate:3")).toBe(false);
 		expect(finalTasks.some((task) => task.taskId === "revalidate:validate:4")).toBe(false);
 		expect(finalTasks.find((task) => task.taskId === "deliver")?.dependsOn).toEqual(["revalidate:validate:3"]);
+		expect(finalTasks.find((task) => task.taskId === "revalidate:validate:3")).toMatchObject({
+			output: expect.objectContaining({
+				attempt: 3,
+				maxAttempts: 3,
+				failureCodes: expect.any(Array),
+				diagnosticIds: ["agent_v2.validation_failed:validate:3"],
+			}),
+			error: expect.objectContaining({
+				retryable: false,
+				data: expect.objectContaining({
+					attempt: 3,
+					maxAttempts: 3,
+					failureCodes: expect.any(Array),
+					failureDetails: expect.any(Array),
+					diagnosticIds: ["agent_v2.validation_failed:validate:3"],
+					fingerprintAttempts: expect.any(Object),
+				}),
+			}),
+		});
 	});
 
 	it.each([
@@ -544,14 +1016,6 @@ describe("agent v2 production repair loop", () => {
 			name: "unsafe path",
 			files: [{ path: "../escape.txt", content: "escape" }],
 			message: "unsafe output path",
-		},
-		{
-			name: "colliding path set",
-			files: [
-				{ path: "index.html", content: "first" },
-				{ path: "INDEX.HTML", content: "second" },
-			],
-			message: "colliding output paths",
 		},
 	])("preflights repair $name before the first file or durable write", async ({ files, message }) => {
 		const fixture = directRepairFixture("<!doctype html><main>before</main>");
@@ -604,7 +1068,13 @@ describe("agent v2 production repair loop", () => {
 	});
 });
 
-function directRepairFixture(content: string) {
+function directRepairFixture(
+	content: string,
+	options: {
+		maxChangedFiles?: number;
+		failureDetails?: Array<Record<string, unknown>>;
+	} = {},
+) {
 	const root = mkdtempSync(join(tmpdir(), "pi-agent-v2-direct-repair-"));
 	roots.push(root);
 	const config = loadStorageConfig(root);
@@ -634,6 +1104,23 @@ function directRepairFixture(content: string) {
 				validationId: "static:validate",
 				attempt: 1,
 				failureCodes: ["static.loading_visible"],
+				...(options.failureDetails
+					? { failureDetails: options.failureDetails }
+					: options.maxChangedFiles === undefined
+						? {}
+						: {
+								failureDetails: [
+									{
+										code: "static.loading_visible",
+										blocking: true,
+										repairBudget: {
+											maxAttempts: 2,
+											maxSameFingerprintAttempts: 2,
+											maxChangedFiles: options.maxChangedFiles,
+										},
+									},
+								],
+							}),
 			},
 			createdAt: "2026-07-14T01:00:00.000Z",
 		}),
@@ -668,6 +1155,7 @@ function directRepairFixture(content: string) {
 			validationId: "static:validate",
 			validationAttempt: 1,
 			diagnosticIds: [diagnosticId],
+			repairStrategy: "targeted_patch",
 		},
 		output: {},
 		createdAt: "2026-07-14T01:00:00.000Z",

@@ -28,9 +28,12 @@ export function buildAgentV2ProductBlueprint(input) {
     const now = input.now ?? (() => new Date().toISOString());
     const sources = uniqueSourceDocuments(input.inputBlobs);
     const allLines = sources.flatMap((source) => source.lines);
-    const candidates = allLines
-        .map((line) => ({ line, categories: matchingCategories(line) }))
-        .filter((candidate) => candidate.categories.length > 0);
+    const candidates = prioritizedCandidates(allLines
+        .map((line) => {
+        const categories = matchingCategories(line);
+        return { line, categories, priority: candidatePriority(line, categories) };
+    })
+        .filter((candidate) => candidate.categories.length > 0));
     const items = [];
     let textChars = 0;
     let omittedItemCount = 0;
@@ -91,6 +94,47 @@ export function buildAgentV2ProductBlueprint(input) {
             truncated: omittedItemCount > 0,
         },
     };
+}
+function prioritizedCandidates(candidates) {
+    const sourceOrder = [...new Set(candidates.map((candidate) => candidate.line.inputId))];
+    const priorities = [...new Set(candidates.map((candidate) => candidate.priority))].sort((left, right) => left - right);
+    const result = [];
+    for (const priority of priorities) {
+        const queues = new Map(sourceOrder.map((sourceId) => [
+            sourceId,
+            candidates.filter((candidate) => candidate.priority === priority && candidate.line.inputId === sourceId),
+        ]));
+        const positions = new Map(sourceOrder.map((sourceId) => [sourceId, 0]));
+        let added = true;
+        while (added) {
+            added = false;
+            for (const sourceId of sourceOrder) {
+                const position = positions.get(sourceId) ?? 0;
+                const next = queues.get(sourceId)?.[position];
+                if (!next)
+                    continue;
+                result.push(next);
+                positions.set(sourceId, position + 1);
+                added = true;
+            }
+        }
+    }
+    return result;
+}
+function candidatePriority(line, categories) {
+    const evidence = `${line.heading} ${line.raw}`;
+    if (/(?:\bCH[-_ ]?\d+\b|all selected|default value|main chart|donut chart|right panel|acceptance criteria|definition of done|全选|默认值|主图|环形图|右侧面板|验收标准)/iu.test(evidence) ||
+        (line.raw.includes("|") &&
+            /(?:filter|query condition|chart inventory|page|function|acceptance|筛选|查询条件|图表清单|页面|功能|验收)/iu.test(line.heading))) {
+        return 0;
+    }
+    if (categories.includes("acceptance") ||
+        categories.includes("interaction") ||
+        categories.includes("page") ||
+        categories.includes("state")) {
+        return 1;
+    }
+    return 2;
 }
 function uniqueSourceDocuments(inputBlobs) {
     const sources = new Map();

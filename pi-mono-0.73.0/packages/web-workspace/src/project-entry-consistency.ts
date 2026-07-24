@@ -17,21 +17,46 @@ export interface ProjectEntryConsistencyAssessment {
 	sourceEntries: string[];
 }
 
+export interface ProjectEntryConsistencyFile {
+	path: string;
+	content: string;
+}
+
 export function assessProjectEntryConsistency(projectDir: string): ProjectEntryConsistencyAssessment {
 	const indexPath = join(projectDir, "index.html");
 	if (!existsSync(indexPath)) return validAssessment();
+	const sourceFiles = listProjectSourceFiles(projectDir).map((path) => ({
+		path: relative(projectDir, path).replaceAll("\\", "/"),
+		content: readFileSync(path, "utf8"),
+	}));
+	if (!sourceFiles.some((file) => file.path.toLowerCase() === "index.html")) {
+		sourceFiles.push({ path: "index.html", content: readFileSync(indexPath, "utf8") });
+	}
+	if (existsSync(join(projectDir, "package.json")) && !sourceFiles.some((file) => file.path === "package.json")) {
+		sourceFiles.push({ path: "package.json", content: "" });
+	}
+	return assessProjectEntryConsistencyFiles(sourceFiles);
+}
 
-	const sourceEntries = listProjectSourceFiles(projectDir)
-		.map((path) => relative(projectDir, path).replaceAll("\\", "/"))
+export function assessProjectEntryConsistencyFiles(
+	projectFiles: readonly ProjectEntryConsistencyFile[],
+): ProjectEntryConsistencyAssessment {
+	const normalizedFiles = projectFiles.map((file) => ({
+		path: file.path.replaceAll("\\", "/").replace(/^\.\//u, ""),
+		content: file.content,
+	}));
+	const html = normalizedFiles.find((file) => file.path.toLowerCase() === "index.html")?.content;
+	if (html === undefined) return validAssessment();
+	const sourceEntries = normalizedFiles
+		.map((file) => file.path)
 		.filter((path) => SOURCE_ENTRY.test(path) || COMPONENT_SOURCE.test(path))
 		.sort();
-	const html = readFileSync(indexPath, "utf8");
 	const referencedSources = referencedSourcePaths(html);
 	const referencesSourceImplementation = referencedSources.some((path) => path.startsWith("src/"));
 	if (sourceEntries.length > 0 && !referencesSourceImplementation && hasSubstantialInlineApplication(html)) {
 		return entryConflictAssessment(sourceEntries);
 	}
-	if (!existsSync(join(projectDir, "package.json"))) {
+	if (!normalizedFiles.some((file) => file.path.toLowerCase() === "package.json")) {
 		const buildSource =
 			referencedSources.find((path) => /\.(?:ts|tsx|jsx)$/i.test(path)) ??
 			sourceEntries.find((path) => /\.(?:ts|tsx|jsx)$/i.test(path));

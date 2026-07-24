@@ -24,6 +24,13 @@ import {
 	renderAgentV2ImplementationPrompt,
 	renderAgentV2RepairPrompt,
 } from "@mariozechner/pi-web-workspace/agent-v2-runtime";
+import {
+	type AgentV2AutomaticSkillSelectionEnvelope,
+	type AgentV2AutomaticSkillSelector,
+	type AgentV2AutomaticSkillSelectorInput,
+	parseAgentV2AutomaticSkillSelectionResult,
+	renderAgentV2AutomaticSkillSelectionPrompt,
+} from "./agent-v2-automatic-skill-selection.js";
 import type { AgentV2ServerSettingsSnapshot } from "./global-provider-keys.js";
 
 export type AgentV2ModelAuthentication = "required" | "ambient-or-key" | "trusted-local-optional";
@@ -43,6 +50,21 @@ export interface AgentV2PiModelExecutionOptions {
 }
 
 type AgentV2RepairExecutionInput = Parameters<AgentV2ModelExecution["generateRepair"]>[0];
+type ProviderExecutionInput = {
+	run: AgentV2ModelExecutionInput["run"];
+	task: Pick<AgentV2ModelExecutionInput["task"], "taskId">;
+	signal: AbortSignal;
+};
+type TrustedProvider = {
+	trustedModel: {
+		model: Model<Api>;
+		api: Api;
+		provider: string;
+		id: string;
+		maxTokens: number;
+	};
+	apiKey: string | undefined;
+};
 
 export type AgentV2PiModelExecutionErrorCode =
 	| "invalid_model_reference"
@@ -149,7 +171,7 @@ export class ConfiguredAgentV2ServerModelRegistry implements AgentV2ServerModelR
 	}
 }
 
-export class AgentV2PiModelExecution implements AgentV2ModelExecution {
+export class AgentV2PiModelExecution implements AgentV2ModelExecution, AgentV2AutomaticSkillSelector {
 	private readonly complete: typeof completeSimple;
 
 	constructor(private readonly options: AgentV2PiModelExecutionOptions) {
@@ -196,6 +218,47 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 		);
 	}
 
+	async selectAutomaticSkills(
+		input: AgentV2AutomaticSkillSelectorInput,
+	): Promise<AgentV2AutomaticSkillSelectionEnvelope> {
+		throwIfAborted(input.signal);
+		const prompt = renderAgentV2AutomaticSkillSelectionPrompt(input.request);
+		const { trustedModel, apiKey } = this.resolveTrustedProvider(input.run);
+		const selectionModel = {
+			...trustedModel,
+			maxTokens: Math.min(trustedModel.maxTokens, 768),
+		};
+		const providerInput: ProviderExecutionInput = {
+			run: input.run,
+			task: { taskId: "skill-selection" },
+			signal: input.signal,
+		};
+		const idleTimeoutMs = positiveInteger(this.options.streamIdleTimeoutMs);
+		const result = await this.completeProviderAttempt(providerInput, prompt, selectionModel, apiKey, idleTimeoutMs);
+		if ("error" in result) {
+			if (input.signal.aborted) throw createAbortError();
+			throw providerFailureFromThrownError(
+				result.error,
+				1,
+				idleTimeoutMs,
+				result.hadObservableOutput,
+				result.idleTimedOut,
+			);
+		}
+		if (input.signal.aborted) throw createAbortError();
+		const content = validateProviderMessage(result.message);
+		validateMessageIdentity(result.message, selectionModel);
+		const failure = providerFailureFromMessage(result, content, 1, idleTimeoutMs);
+		if (failure) throw failure;
+		const selection = parseAgentV2AutomaticSkillSelectionResult(collectText(content), input.request);
+		return {
+			...selection,
+			provider: selectionModel.provider,
+			model: selectionModel.id,
+			usage: normalizeUsage(result.message.usage),
+		};
+	}
+
 	private async execute<T>(
 		input: AgentV2ModelExecutionInput,
 		prompt: { systemPrompt: string; userPrompt: string },
@@ -203,45 +266,7 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 		mode: "implementation" | "repair",
 	): Promise<AgentV2ModelExecutionEnvelope<T>> {
 		throwIfAborted(input.signal);
-		const reference = parseModelReference(input.run.model);
-		const configuration = this.resolveExecutionConfiguration(input.run.clientId);
-		let trustedModel: {
-			model: Model<Api>;
-			api: Api;
-			provider: string;
-			id: string;
-			maxTokens: number;
-		};
-		try {
-			const model = configuration.modelRegistry.resolve(reference);
-			if (!model) throw new Error("unresolved model");
-			const provider = model.provider;
-			const id = model.id;
-			const api = model.api;
-			const maxTokens = trustedMaxTokens(model.maxTokens, this.options.maxOutputTokens);
-			if (provider !== reference.provider || id !== reference.id || !boundedNonEmptyString(api, 128)) {
-				throw new Error("invalid canonical model");
-			}
-			trustedModel = { model, api: api as Api, provider, id, maxTokens };
-		} catch {
-			throw new AgentV2PiModelExecutionError(modelResolutionErrorCode(reference, configuration.snapshot));
-		}
-		let authentication: AgentV2ModelAuthentication;
-		try {
-			authentication = configuration.modelRegistry.resolveAuthentication?.(reference) ?? "required";
-			if (!isModelAuthentication(authentication)) throw new Error("invalid authentication policy");
-		} catch {
-			throw new AgentV2PiModelExecutionError("provider_failed");
-		}
-		let apiKey: string | undefined;
-		try {
-			apiKey = usableKey(configuration.resolveApiKey(trustedModel.provider), authentication);
-		} catch {
-			throw new AgentV2PiModelExecutionError("missing_api_key");
-		}
-		if (!apiKey && authentication !== "trusted-local-optional") {
-			throw new AgentV2PiModelExecutionError("missing_api_key");
-		}
+		const { trustedModel, apiKey } = this.resolveTrustedProvider(input.run);
 
 		let activePrompt = prompt;
 		let cumulativeUsage: AgentV2ModelUsageSummary | undefined;
@@ -297,6 +322,43 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 		throw new AgentV2PiModelExecutionError("provider_failed");
 	}
 
+	private resolveTrustedProvider(run: AgentV2ModelExecutionInput["run"]): TrustedProvider {
+		const reference = parseModelReference(run.model);
+		const configuration = this.resolveExecutionConfiguration(run.clientId);
+		let trustedModel: TrustedProvider["trustedModel"];
+		try {
+			const model = configuration.modelRegistry.resolve(reference);
+			if (!model) throw new Error("unresolved model");
+			const provider = model.provider;
+			const id = model.id;
+			const api = model.api;
+			const maxTokens = trustedMaxTokens(model.maxTokens, this.options.maxOutputTokens);
+			if (provider !== reference.provider || id !== reference.id || !boundedNonEmptyString(api, 128)) {
+				throw new Error("invalid canonical model");
+			}
+			trustedModel = { model, api: api as Api, provider, id, maxTokens };
+		} catch {
+			throw new AgentV2PiModelExecutionError(modelResolutionErrorCode(reference, configuration.snapshot));
+		}
+		let authentication: AgentV2ModelAuthentication;
+		try {
+			authentication = configuration.modelRegistry.resolveAuthentication?.(reference) ?? "required";
+			if (!isModelAuthentication(authentication)) throw new Error("invalid authentication policy");
+		} catch {
+			throw new AgentV2PiModelExecutionError("provider_failed");
+		}
+		let apiKey: string | undefined;
+		try {
+			apiKey = usableKey(configuration.resolveApiKey(trustedModel.provider), authentication);
+		} catch {
+			throw new AgentV2PiModelExecutionError("missing_api_key");
+		}
+		if (!apiKey && authentication !== "trusted-local-optional") {
+			throw new AgentV2PiModelExecutionError("missing_api_key");
+		}
+		return { trustedModel, apiKey };
+	}
+
 	private resolveExecutionConfiguration(clientId: string): {
 		modelRegistry: AgentV2ServerModelRegistry;
 		resolveApiKey(provider: string): string | undefined;
@@ -322,7 +384,7 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 	}
 
 	private async completeProviderRequest(
-		input: AgentV2ModelExecutionInput,
+		input: ProviderExecutionInput,
 		prompt: { systemPrompt: string; userPrompt: string },
 		trustedModel: { model: Model<Api>; api: Api; provider: string; id: string; maxTokens: number },
 		apiKey: string | undefined,
@@ -355,7 +417,7 @@ export class AgentV2PiModelExecution implements AgentV2ModelExecution {
 	}
 
 	private async completeProviderAttempt(
-		input: AgentV2ModelExecutionInput,
+		input: ProviderExecutionInput,
 		prompt: { systemPrompt: string; userPrompt: string },
 		trustedModel: { model: Model<Api>; api: Api; provider: string; id: string; maxTokens: number },
 		apiKey: string | undefined,

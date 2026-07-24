@@ -387,7 +387,7 @@ describe("agent v2 execution core", () => {
 		).toBe(false);
 	});
 
-	it("allows a second full regeneration when the first replacement still has a retryable runtime error", async () => {
+	it("uses local repair for a new fingerprint introduced by a full regeneration", async () => {
 		const root = tempRoot();
 		const store = createStore(root);
 		store.createAgentV2Run({
@@ -445,14 +445,18 @@ describe("agent v2 execution core", () => {
 		expect(store.listAgentV2Tasks("client-a", "run-second-regeneration")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					taskId: "regenerate:validate:5",
-					kind: "implementation",
-					input: expect.objectContaining({ recoveryMode: "full_regeneration" }),
-					acceptanceCriteria: expect.arrayContaining([expect.stringContaining("runtime evidence")]),
+					taskId: "repair:validate:5",
+					kind: "repair",
+					input: expect.objectContaining({
+						repairStrategy: "targeted_patch",
+						repairActions: expect.arrayContaining([
+							expect.objectContaining({ validationCode: "static.script_error", type: "file_patch" }),
+						]),
+					}),
 				}),
 				expect.objectContaining({
 					taskId: "revalidate:validate:6",
-					dependsOn: ["regenerate:validate:5"],
+					dependsOn: ["repair:validate:5"],
 				}),
 			]),
 		);
@@ -698,6 +702,58 @@ describe("agent v2 execution core", () => {
 		expect(durableBoundary).not.toContain("RAW_FILE_SENTINEL");
 		expect(durableBoundary).not.toContain("sk-model-summary-key-1234567890");
 		expect(store.listAgentV2Tasks("client-a", "run-implementation")[0]?.error).toBeUndefined();
+	});
+
+	it("replaces technology and data-grid claims that are absent from generated source", async () => {
+		const root = tempRoot();
+		const store = createStore(root);
+		store.createAgentV2Run({
+			clientId: "client-a",
+			runId: "run-summary-evidence",
+			input: { objective: "Build a dashboard" },
+			model: { provider: "test", id: "v2-test-model" },
+			createdAt: "2026-07-08T00:00:00.000Z",
+		});
+		store.upsertAgentV2Task({
+			clientId: "client-a",
+			runId: "run-summary-evidence",
+			taskId: "implement",
+			kind: "implementation",
+			title: "Implement dashboard",
+			status: "ready",
+			dependsOn: [],
+			acceptanceCriteria: [],
+			input: {},
+			output: {},
+			createdAt: "2026-07-08T00:00:00.000Z",
+			updatedAt: "2026-07-08T00:00:00.000Z",
+		});
+
+		await executeAgentV2NextTask({
+			store: forbidLegacyRuntimeReads(store),
+			config: testConfig(root),
+			context: { clientId: "client-a", sessionId: "session-a", title: "Dashboard" },
+			runId: "run-summary-evidence",
+			materializer: { materialize: async () => [] },
+			modelExecution: recordingModelExecution(
+				"implement",
+				[
+					{ path: "index.html", content: '<canvas id="trend-chart"></canvas><script src="app.js"></script>' },
+					{
+						path: "app.js",
+						content: "document.getElementById('trend-chart').getContext('2d').fillRect(0, 0, 10, 10);",
+					},
+				],
+				"Implemented native SVG charts and a detailed data grid.",
+			),
+			now: () => "2026-07-08T00:02:00.000Z",
+		});
+
+		const events = store.listAgentV2RunEvents("client-a", "run-summary-evidence", 0);
+		expect(events.at(-1)?.payload).toMatchObject({ summary: "Generated 2 files." });
+		expect(store.listAgentV2Tasks("client-a", "run-summary-evidence")[0]?.output).toMatchObject({
+			modelSummary: "Generated 2 files.",
+		});
 	});
 
 	it("replaces obsolete files during full regeneration instead of merging a second implementation", async () => {
@@ -1373,10 +1429,11 @@ function previewSuccess(): ProjectPreviewResult {
 function recordingModelExecution(
 	taskId: string,
 	files: Array<{ path: string; content: string }>,
+	summary = "Generated files",
 ): AgentV2ModelExecution & { generateImplementation: ReturnType<typeof vi.fn> } {
 	return {
 		generateImplementation: vi.fn(async () => ({
-			result: { version: 1 as const, taskId, summary: "Generated files", files },
+			result: { version: 1 as const, taskId, summary, files },
 			provider: "test",
 			model: "v2-test-model",
 		})),

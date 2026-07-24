@@ -254,6 +254,12 @@ export class AgentV2BrowserController {
 		const seq = requirePositiveSafeInteger(event.seq, "event.seq");
 		if (seq <= this._lastSeq) return;
 		const payload = requireRecord(event.payload, "event.payload");
+		if (event.type === "diagnostic") {
+			assertOnlyPayloadFields(payload, "diagnostic", ["diagnosticId"]);
+			nonEmptyString(payload.diagnosticId, "diagnostic.diagnosticId");
+			this._lastSeq = seq;
+			return;
+		}
 		const payloadType = nonEmptyString(payload.type, "event.payload.type");
 		if (event.type !== payloadType) {
 			throw new Error(`Agent v2 event type ${event.type} does not match payload type ${payloadType}.`);

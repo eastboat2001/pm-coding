@@ -1256,7 +1256,7 @@ describe("AgentV2WorkerService", () => {
 		});
 	});
 
-	it("serializes lease and cancel control operations without accumulating stalled ticks", async () => {
+	it("keeps a healthy owned run active after a transient cancellation poll timeout", async () => {
 		vi.useFakeTimers();
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-serial-control");
@@ -1280,12 +1280,17 @@ describe("AgentV2WorkerService", () => {
 		await vi.advanceTimersByTimeAsync(40);
 		await expect(processing).resolves.toBe(true);
 
-		expect(queue.maxControlCallsInFlight).toBe(1);
-		expect(store.getRunSnapshot("client-a", "run-serial-control")).toMatchObject({ status: "interrupted" });
+		// The timed-out cancellation call may overlap one lease renewal, but
+		// repeated poll ticks must reuse it instead of accumulating new calls.
+		expect(queue.maxControlCallsInFlight).toBeLessThanOrEqual(2);
+		expect(store.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(["agent_v2.worker_cancel_poll_timeout"]);
+		expect(store.getRunSnapshot("client-a", "run-serial-control")).toMatchObject({ status: "succeeded" });
 		expect(store.diagnostics).toContainEqual(
 			expect.objectContaining({
 				code: "agent_v2.worker_cancel_poll_timeout",
-				message: "Agent v2 cancellation monitoring timed out; the run was stopped safely.",
+				severity: "warn",
+				message:
+					"Agent v2 cancellation monitoring timed out transiently and will be retried while lease ownership remains healthy.",
 			}),
 		);
 	});
@@ -1546,7 +1551,7 @@ describe("AgentV2WorkerService", () => {
 		);
 	});
 
-	it("turns cancellation poll rejection into a sanitized canonical diagnostic", async () => {
+	it("retries a rejected cancellation poll without interrupting healthy lease ownership", async () => {
 		vi.useFakeTimers();
 		const store = new MemoryWorkerStore();
 		store.createQueuedRun("client-a", "run-cancel-poll-reject");
@@ -1568,10 +1573,12 @@ describe("AgentV2WorkerService", () => {
 		await vi.advanceTimersByTimeAsync(40);
 		await expect(processing).resolves.toBe(true);
 
-		expect(store.getRunSnapshot("client-a", "run-cancel-poll-reject")).toMatchObject({ status: "interrupted" });
+		expect(store.getRunSnapshot("client-a", "run-cancel-poll-reject")).toMatchObject({ status: "succeeded" });
 		const diagnostic = store.diagnostics.find((item) => item.code === "agent_v2.worker_cancel_poll_failed");
 		expect(diagnostic).toMatchObject({
-			message: "Agent v2 cancellation monitoring failed; the run was stopped safely.",
+			severity: "warn",
+			message:
+				"Agent v2 cancellation monitoring failed transiently and will be retried while lease ownership remains healthy.",
 		});
 		expect(JSON.stringify(diagnostic)).not.toContain("secret");
 		expect(JSON.stringify(diagnostic)).not.toContain("redis://");

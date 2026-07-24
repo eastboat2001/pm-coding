@@ -153,6 +153,44 @@ describe("AgentV2BrowserController", () => {
 		expect(controller.lastSeq).toBe(11);
 	});
 
+	it("accepts a durable diagnostic reference without mistaking it for a projected browser event", () => {
+		const sink = createSink();
+		const controller = new AgentV2BrowserController(sink);
+		controller.start(createRun({ status: "running", phase: "validation" }));
+
+		controller.apply({
+			clientId: "client-1",
+			runId: "run-1",
+			seq: 1,
+			type: "diagnostic",
+			payload: { diagnosticId: "agent_v2.worker_cancel_poll_timeout:run-1" },
+			createdAt: NOW,
+		});
+		controller.apply(event(2, phasePayload("validation")));
+
+		expect(controller.lastSeq).toBe(2);
+		expect(sink.appendDiagnostic).not.toHaveBeenCalled();
+		expect(sink.setPhase).toHaveBeenLastCalledWith("validation", "running", NOW);
+	});
+
+	it("rejects malformed durable diagnostic references without advancing the checkpoint", () => {
+		const sink = createSink();
+		const controller = new AgentV2BrowserController(sink);
+		controller.start(createRun({ status: "running", phase: "validation" }));
+
+		expect(() =>
+			controller.apply({
+				clientId: "client-1",
+				runId: "run-1",
+				seq: 1,
+				type: "diagnostic",
+				payload: { diagnosticId: "diagnostic-1", message: "unexpected duplicate payload" },
+				createdAt: NOW,
+			}),
+		).toThrow("Invalid diagnostic payload fields");
+		expect(controller.lastSeq).toBe(0);
+	});
+
 	it("sorts hydration input, de-duplicates records, and resumes from a durable checkpoint", () => {
 		const sink = createSink();
 		const controller = new AgentV2BrowserController(sink);

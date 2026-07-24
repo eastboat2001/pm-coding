@@ -130,13 +130,13 @@ describe("agent v2 production chain rehearsal", () => {
 			workspaceFiles: [
 				expect.objectContaining({
 					path: "index.html",
-					content: '<!doctype html><div id="loading">Loading...</div>',
+					content: "<!doctype html><script>throw new Error('startup failed')</script>",
 				}),
 			],
 			diagnostics: [
 				expect.objectContaining({
 					code: "agent_v2.validation_failed",
-					data: expect.objectContaining({ failureCodes: ["static.loading_visible"] }),
+					data: expect.objectContaining({ failureCodes: ["static.script_error"] }),
 				}),
 			],
 		});
@@ -475,7 +475,9 @@ class RecordingModelExecution {
 				version: 1 as const,
 				taskId: input.task.taskId,
 				summary: "RAW_MODEL_SUMMARY_MUST_NOT_PERSIST",
-				files: [{ path: "index.html", content: '<!doctype html><div id="loading">Loading...</div>' }],
+				files: [
+					{ path: "index.html", content: "<!doctype html><script>throw new Error('startup failed')</script>" },
+				],
 			},
 			provider: "test",
 			model: "v2-test-model",

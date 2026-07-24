@@ -32,7 +32,7 @@ describe("agent v2 worker production composition", () => {
 		expect(onLost).toHaveBeenCalledWith("unavailable");
 	});
 
-	it("calls the production factory and constructs the PI adapter from one startup settings snapshot", () => {
+	it("constructs the PI adapter without reading model settings before a model task", () => {
 		const readSettingsFile = vi.fn(() => "{}");
 		const getEnvApiKey = vi.fn(() => undefined);
 		const execution = createAgentV2WorkerExecution(
@@ -46,7 +46,7 @@ describe("agent v2 worker production composition", () => {
 
 		expect(execution.modelExecution).toBeInstanceOf(AgentV2PiModelExecution);
 		expect(execution.materializer).toBeInstanceOf(DurableAgentV2InputMaterializer);
-		expect(readSettingsFile).toHaveBeenCalledTimes(1);
+		expect(readSettingsFile).not.toHaveBeenCalled();
 		expect(getEnvApiKey).not.toHaveBeenCalled();
 	});
 });

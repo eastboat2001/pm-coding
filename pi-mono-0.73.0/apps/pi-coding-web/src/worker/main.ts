@@ -22,7 +22,6 @@ import {
 	createAgentV2DiagnosticProjectionAdapters,
 	DurableAgentV2InputMaterializer,
 	executeAgentV2NextTask,
-	loadAgentV2SkillContext,
 	parseAgentV2RunContext,
 	RedisAgentV2RunEventBus,
 	type RedisAgentV2RunEventBusOptions,
@@ -41,6 +40,10 @@ import {
 	type StorageConfig,
 	WorkspaceDiagnosticLogService,
 } from "@mariozechner/pi-web-workspace/runtime-infra";
+import {
+	type AgentV2AutomaticSkillSelector,
+	resolveAgentV2SkillContextForRun,
+} from "./agent-v2-automatic-skill-selection.js";
 import { AgentV2PiModelExecution, AgentV2PiModelExecutionError } from "./agent-v2-pi-model-execution.js";
 import {
 	type GlobalProviderApiKeySources,
@@ -147,6 +150,7 @@ export function createAgentV2WorkerExecution(
 		settingsSources?: GlobalProviderApiKeySources;
 		complete?: ConstructorParameters<typeof AgentV2PiModelExecution>[0]["complete"];
 		previewReadinessChecker?: Pick<PreviewReadinessChecker, "check">;
+		automaticSkillSelector?: AgentV2AutomaticSkillSelector;
 	} = {},
 ): AgentV2WorkerExecution & {
 	readonly materializer: AgentV2InputMaterializer;
@@ -167,17 +171,21 @@ export function createAgentV2WorkerExecution(
 	});
 	const materializer = new DurableAgentV2InputMaterializer(store);
 	const skills = new WorkspaceSkillService(config);
+	const automaticSkillSelector = dependencies.automaticSkillSelector ?? modelExecution;
 	return {
 		materializer,
 		modelExecution,
 		async executeNextTask(
 			input: AgentV2WorkerExecutionInput,
 		): Promise<Awaited<ReturnType<typeof executeAgentV2NextTask>>> {
-			let skillContext: ReturnType<typeof loadAgentV2SkillContext>;
+			let skillContext: Awaited<ReturnType<typeof resolveAgentV2SkillContextForRun>>;
 			try {
-				skillContext = loadAgentV2SkillContext({
-					selectedSkillNames: readSelectedSkillNames(input.run.input.selectedSkillNames),
+				skillContext = await resolveAgentV2SkillContextForRun({
+					run: input.run,
+					store,
 					skills,
+					selector: automaticSkillSelector,
+					signal: input.signal,
 				});
 			} catch (error) {
 				const code = agentV2SkillLoadErrorCode(error);
@@ -209,7 +217,7 @@ export function createAgentV2WorkerExecution(
 					materializer,
 					modelExecution,
 					previewReadinessChecker: dependencies.previewReadinessChecker,
-					...(skillContext.skills.length > 0 || skillContext.resources.length > 0 ? { skillContext } : {}),
+					...(skillContext ? { skillContext } : {}),
 					signal: input.signal,
 				});
 			} catch (error) {
@@ -231,11 +239,6 @@ export function createAgentV2WorkerExecution(
 			}
 		},
 	};
-}
-
-function readSelectedSkillNames(value: unknown): string[] {
-	if (!Array.isArray(value) || value.some((name) => typeof name !== "string")) return [];
-	return value as string[];
 }
 
 function agentV2SkillLoadErrorCode(error: unknown): string {

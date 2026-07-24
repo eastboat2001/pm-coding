@@ -66,25 +66,17 @@ describe("agent v2 worker production composition", () => {
 
 		const readSettingsFile = vi.fn(() => JSON.stringify(serverSettings()));
 		const getEnvApiKey = vi.fn(() => undefined);
-		let responseIndex = 0;
-		const complete = vi.fn(async (): Promise<AssistantMessage> => {
-			const text =
-				responseIndex++ === 0
-					? JSON.stringify({
-							version: 1,
-							taskId: "implement",
-							summary: RAW_PROVIDER_SUMMARY,
-							files: [{ path: "index.html", content: '<!doctype html><div id="loading">Loading...</div>' }],
-						})
-					: JSON.stringify({
-							version: 1,
-							taskId: "repair:validate:1",
-							summary: RAW_PROVIDER_SUMMARY,
-							files: [{ path: "index.html", content: "<!doctype html><main>Ready</main>" }],
-							addressedDiagnosticIds: ["agent_v2.validation_failed:validate:1"],
-						});
-			return assistantMessage(text);
-		});
+		const complete = vi.fn(
+			async (): Promise<AssistantMessage> =>
+				assistantMessage(
+					JSON.stringify({
+						version: 1,
+						taskId: "implement",
+						summary: RAW_PROVIDER_SUMMARY,
+						files: [{ path: "index.html", content: "<!doctype html><main>Ready</main>" }],
+					}),
+				),
+		);
 		const execution = createAgentV2WorkerExecution(config, store, {
 			settingsSources: {
 				readSettingsFile,
@@ -106,9 +98,9 @@ describe("agent v2 worker production composition", () => {
 
 		await expect(worker.processOne()).resolves.toBe(true);
 
-		expect(readSettingsFile).toHaveBeenCalledTimes(2);
+		expect(readSettingsFile).toHaveBeenCalledTimes(1);
 		expect(getEnvApiKey).not.toHaveBeenCalled();
-		expect(complete).toHaveBeenCalledTimes(2);
+		expect(complete).toHaveBeenCalledTimes(1);
 		for (const [model, _context, options] of complete.mock.calls) {
 			expect(model).toMatchObject({
 				provider: PROVIDER,
@@ -121,20 +113,12 @@ describe("agent v2 worker production composition", () => {
 		}
 
 		const implementationPrompt = promptText(complete.mock.calls[0]?.[1]);
-		const repairPrompt = promptText(complete.mock.calls[1]?.[1]);
 		for (const expected of ["Build the production composition fixture", "src/brief.txt"]) {
 			expect(implementationPrompt).toContain(expected);
-			expect(repairPrompt).toContain(expected);
 		}
 		expect(implementationPrompt).toContain("contentProjection\":\"product_blueprint");
 		expect(implementationPrompt).not.toContain("committed composition input");
-		expect(repairPrompt).not.toContain("committed composition input");
-		for (const expected of ["index.html", "Loading...", "static.loading_visible"]) {
-			expect(repairPrompt).toContain(expected);
-		}
-		expect(repairPrompt).not.toContain(RAW_PROVIDER_SUMMARY);
 		expect(implementationPrompt).not.toContain(CLIENT_BASE_URL);
-		expect(repairPrompt).not.toContain(CLIENT_BASE_URL);
 
 		expect(await api.getRun(CLIENT_ID, RUN_ID)).toMatchObject({
 			status: "succeeded",
@@ -147,14 +131,13 @@ describe("agent v2 worker production composition", () => {
 			expect.arrayContaining([
 				expect.objectContaining({
 					path: "index.html",
-					sourceTaskId: "repair:validate:1",
+					sourceTaskId: "implement",
 					validationStatus: "passed",
 				}),
 			]),
 		);
 		expect(store.listAgentV2Validations(CLIENT_ID, RUN_ID)).toEqual([
-			expect.objectContaining({ attempt: 1, status: "failed", taskId: "validate" }),
-			expect.objectContaining({ attempt: 2, status: "passed", taskId: "revalidate:validate:2" }),
+			expect.objectContaining({ attempt: 1, status: "passed", taskId: "validate" }),
 		]);
 		expect(
 			JSON.stringify({

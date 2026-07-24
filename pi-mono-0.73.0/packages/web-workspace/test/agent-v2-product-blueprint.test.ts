@@ -123,6 +123,42 @@ describe("agent v2 product blueprint", () => {
 		expect(metadata.truncated).toBe(true);
 		expect(metadata.omittedItemCount).toBeGreaterThan(0);
 	});
+
+	it("keeps late structured PRD requirements when an alphabetically earlier design document exhausts the budget", () => {
+		const designLines = Array.from(
+			{ length: 140 },
+			(_, index) => `- Page design ${index + 1} must support filter interaction and responsive chart layout.`,
+		).join("\n");
+		const requirementFiller = Array.from(
+			{ length: 100 },
+			(_, index) => `- Requirement ${index + 1}: dashboard page should support operational review.`,
+		).join("\n");
+		const requirements = `${requirementFiller}
+## Filters
+| Filter | Control type | Default value | Applies to |
+| Project Type | Dropdown | Overall | All charts |
+## Chart Inventory
+| Chart ID | Chart name | Type | Interaction |
+| CH-02 | Defect Loss Ratio | Horizontal Bar | Click code to update department donut. |
+**Donut Chart:** Department attribution for the selected defect code.`;
+		const blueprint = buildAgentV2ProductBlueprint({
+			runId: "run-fair-selection",
+			objective: "Generate the source-backed dashboard",
+			responseLanguage: "en",
+			inputBlobs: [
+				textBlob("docs/Design Document.md", designLines),
+				textBlob("docs/Requirements Document.md", requirements),
+			],
+		});
+
+		const selectedText = blueprint.items.map((item) => item.text).join("\n");
+		expect(selectedText).toContain("Project Type | Dropdown | Overall | All charts");
+		expect(selectedText).toContain("CH-02 | Defect Loss Ratio | Horizontal Bar");
+		expect(selectedText).toContain("Donut Chart");
+		expect(blueprint.items.some((item) => item.sourcePath === "docs/Design Document.md")).toBe(true);
+		expect(blueprint.items.some((item) => item.sourcePath === "docs/Requirements Document.md")).toBe(true);
+		expect(blueprint.metadata).toMatchObject({ truncated: true });
+	});
 });
 
 function textBlob(logicalPath: string, content: string): AgentV2InputBlobRecord {

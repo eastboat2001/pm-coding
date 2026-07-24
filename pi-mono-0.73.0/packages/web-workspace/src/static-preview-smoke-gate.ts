@@ -39,11 +39,59 @@ const STYLE_ATTRIBUTE_PATTERN = /\bstyle\s*=\s*(['"])([^'"]*)\1/i;
 const WIDTH_ATTRIBUTE_PATTERN = /\bwidth\s*=\s*(['"]?)(\d+)\1/i;
 const HEIGHT_ATTRIBUTE_PATTERN = /\bheight\s*=\s*(['"]?)(\d+)\1/i;
 const VALUE_ATTRIBUTE_PATTERN = /\bvalue\s*=\s*(['"])([^'"]*)\1/i;
+const SELECTED_ATTRIBUTE_PATTERN = /\bselected(?:\s*=\s*(?:['"]selected['"]|selected))?\b/i;
 const OPEN_TAG_PATTERN = /<([a-z][\w:-]*)\b([^>]*)>/gi;
+const HTML_TAG_TOKEN_PATTERN = /<(\/)?([a-z][\w:-]*)\b([^>]*)>/gi;
+const VOID_HTML_TAG_PATTERN = /^(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/iu;
 const DATA_ATTRIBUTE_PATTERN = /\bdata-([a-z0-9_.:-]+)\s*=\s*(['"])([^'"]*)\2/gi;
 const DEFAULT_SCRIPT_TIMEOUT_MS = 500;
 const MAX_TIMER_FLUSH = 50;
 const MAX_CHART_INTERACTION_SAMPLES = 32;
+const MAX_FILTER_PAIR_SAMPLES = 48;
+const MAX_EMPTY_STATE_CHART_MISMATCH_REPORTS = 4;
+const VISUALIZATION_SEMANTIC_SOURCE =
+	"(?:chart|trend|graph|plot|yield|defect|donut|pareto|visuali[sz]ation|viz|heatmap|treemap|choropleth|map|gauge|network|diagram|timeline|calendar|matrix)";
+const VISUALIZATION_SEMANTIC_PATTERN = new RegExp(VISUALIZATION_SEMANTIC_SOURCE, "iu");
+const BROWSER_GLOBALS_NOT_SIMULATED = new Set([
+	"AbortController",
+	"Audio",
+	"Blob",
+	"CSS",
+	"CustomEvent",
+	"DOMParser",
+	"File",
+	"FileReader",
+	"FormData",
+	"Headers",
+	"Image",
+	"IntersectionObserver",
+	"MutationObserver",
+	"Request",
+	"Response",
+	"TextDecoder",
+	"TextEncoder",
+	"URL",
+	"Worker",
+	"atob",
+	"btoa",
+	"crypto",
+	"fetch",
+	"getComputedStyle",
+	"indexedDB",
+	"matchMedia",
+	"performance",
+]);
+const BROWSER_MEMBERS_NOT_SIMULATED = new Set([
+	"document.createDocumentFragment",
+	"document.elementFromPoint",
+	"document.getElementsByClassName",
+	"document.getElementsByName",
+	"document.getElementsByTagName",
+	"navigator.clipboard.writeText",
+	"navigator.share",
+	"window.getComputedStyle",
+	"window.matchMedia",
+]);
 
 export async function runStaticPreviewSmokeGate(
 	input: StaticPreviewSmokeGateInput,
@@ -80,25 +128,52 @@ export async function runStaticPreviewSmokeGate(
 	const scripts = readScripts(guard, html, errors, warnings);
 	checkedFiles.push(...scripts.map((script) => script.label));
 	checkedFiles.push(...authorizeLinkedResources(guard, html, errors));
+	const hasUnsimulatedExternalScripts = warnings.some((warning) =>
+		warning.startsWith("Runtime smoke gate skipped external script "),
+	);
 
 	const timeout = input.scriptTimeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS;
-	const runtime = new SmokeRuntime(html, new Map(scripts.map((script) => [script.label, script.content])), timeout);
+	const runtime = new SmokeRuntime(
+		html,
+		new Map(scripts.map((script) => [script.label, script.content])),
+		timeout,
+		hasUnsimulatedExternalScripts,
+	);
 	const context = runtime.context();
+	const startupErrorCount = errors.length;
 	for (const script of scripts) {
 		runScript(script, context, timeout, "script evaluation", errors, warnings);
 		runtime.flushTimers(errors, warnings);
 	}
 	runtime.dispatchDocumentEvent("DOMContentLoaded", errors, warnings);
+	// DOMContentLoaded is dispatched at document and bubbles through window in a
+	// browser. Generated static apps commonly register the startup listener on
+	// window, so exercise that path too instead of silently skipping initialization.
+	runtime.dispatchWindowEvent("DOMContentLoaded", errors, warnings);
 	runtime.flushTimers(errors, warnings);
 	await runtime.settleAsyncCallbacks(errors, warnings);
 	runtime.dispatchWindowEvent("load", errors, warnings);
 	runtime.flushTimers(errors, warnings);
 	await runtime.settleAsyncCallbacks(errors, warnings);
-	runtime.exerciseInteractions(errors, warnings);
-	runtime.flushTimers(errors, warnings);
-	await runtime.settleAsyncCallbacks(errors, warnings);
+	if (hasUnsimulatedExternalScripts) downgradeExternalScriptGlobalErrors(errors, warnings);
+	runtime.captureDefaultView();
+	// Once startup has failed, exercising every select and pairwise combination
+	// only creates cascades from the same uninitialized state. Preserve the first
+	// actionable root error and avoid flooding repair context with derivative
+	// failures that cannot add confidence.
+	const startupSucceeded = errors.length === startupErrorCount;
+	if (startupSucceeded) {
+		runtime.exerciseInteractions(errors, warnings);
+		runtime.flushTimers(errors, warnings);
+		await runtime.settleAsyncCallbacks(errors, warnings);
+	}
+	if (hasUnsimulatedExternalScripts) downgradeExternalScriptGlobalErrors(errors, warnings);
 
-	errors.push(...runtime.validationErrors());
+	// A failed startup commonly leaves every KPI placeholder and loading element
+	// untouched. Those are consequences of the root exception, not independent
+	// repair targets. Keep console.error evidence, but suppress derivative rendered-
+	// state failures until startup itself succeeds.
+	errors.push(...runtime.validationErrors(startupSucceeded));
 	warnings.push(...runtime.validationWarnings());
 
 	return {
@@ -206,17 +281,86 @@ class SmokeRuntime {
 	private pendingAsyncCallbackCount = 0;
 	private readonly asyncCallbackErrors: unknown[] = [];
 	private timerId = 0;
+	private successfulFilterInteraction = false;
+	private defaultMetricCount = 0;
+	private defaultMetricsAllEmpty = false;
+	private defaultMetricsAllZero = false;
+	private defaultHasVisibleCanvas = false;
+	private defaultMetricsRepresentative = false;
+	private readonly reportedInvalidRenderedData = new Set<string>();
+	private readonly reportedEmptyStateChartMismatch = new Set<string>();
+	private readonly hasDeterministicFixtureData: boolean;
+	private readonly hasSourceDashboardDataSurfaces: boolean;
 
 	constructor(
 		html: string,
 		private readonly sources: Map<string, string>,
 		private readonly scriptTimeoutMs: number,
+		private readonly hasUnsimulatedExternalScripts: boolean,
 	) {
 		this.document = new SmokeDocument(html, this.missingSelectors);
+		this.hasDeterministicFixtureData = [...sources.values()].some((source) => {
+			const namedFixture =
+				/\b(?:(?:const|let|var)\s+(?=[A-Za-z_$][\w$]*\b)(?=[\w$]*(?:mock|fixture|demo|sample))[A-Za-z_$][\w$]*\s*=\s*(?:\{|\[|(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>|(?:generate|build|create)[A-Za-z_$][\w$]*\s*\()|function\s+(?=[A-Za-z_$][\w$]*\b)(?=[\w$]*(?:mock|fixture|demo|sample))[A-Za-z_$][\w$]*\s*\()/iu.test(
+					source,
+				);
+			// Generated static dashboards often disclose deterministic fixtures in a
+			// comment while using business-specific names such as WEEKS/DEFECTS and
+			// genWeekData. Require that explicit disclosure plus local literal data;
+			// a generic "simulation" word alone is not sufficient.
+			const fixtureDisclosure = (source.match(/\/\/[^\r\n]*|\/\*[\s\S]*?\*\//gu) ?? []).some((comment) =>
+				/(?:deterministic[\s\S]{0,80}(?:mock|fixture|demo|sample|simulation)|(?:mock|fixture|demo|sample|simulation)[\s\S]{0,80}deterministic)/iu.test(
+					comment,
+				),
+			);
+			const hasLocalLiteralData =
+				/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*\[/u.test(source) ||
+				/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*\{[\s\S]{0,4096}?\b[A-Za-z_$][\w$]*\s*:\s*\[/u.test(source);
+			const explicitlyDisclosedFixture = fixtureDisclosure && hasLocalLiteralData;
+			return namedFixture || explicitlyDisclosedFixture;
+		});
+		const combinedSource = `${html}\n${[...sources.values()].join("\n")}`;
+		const sourceChartSurfaceCount = (
+			combinedSource.match(
+				new RegExp(
+					String.raw`(?:\b(?:id|class)\s*=\s*["'][^"']*${VISUALIZATION_SEMANTIC_SOURCE}[^"']*["']|(?:getElementById|querySelector)\s*\(\s*["'][^"']*${VISUALIZATION_SEMANTIC_SOURCE}[^"']*["']\s*\))`,
+					"giu",
+				),
+			) ?? []
+		).length;
+		this.hasSourceDashboardDataSurfaces =
+			sourceChartSurfaceCount >= 2 &&
+			/(?:<table\b|<tbody\b|\b(?:render|update|refresh)(?:Detail|Table|Results?)\b|\b(?:detail|result)[-_ ]?(?:table|grid)\b)/iu.test(
+				combinedSource,
+			);
 	}
 
 	context(): Context {
 		const charts = this.charts;
+		class RuntimeSmokeResizeObserver {
+			private readonly observed = new Set<SmokeElement>();
+
+			constructor(
+				private readonly callback: (
+					entries: Array<{ target: SmokeElement; contentRect: ReturnType<SmokeElement["getBoundingClientRect"]> }>,
+					observer: RuntimeSmokeResizeObserver,
+				) => void,
+			) {}
+
+			observe(target: SmokeElement): void {
+				if (!(target instanceof SmokeElement) || this.observed.has(target)) return;
+				this.observed.add(target);
+				this.callback([{ target, contentRect: target.getBoundingClientRect() }], this);
+			}
+
+			unobserve(target: SmokeElement): void {
+				this.observed.delete(target);
+			}
+
+			disconnect(): void {
+				this.observed.clear();
+			}
+		}
 		class RuntimeSmokeChart extends SmokeChart {
 			constructor(context: unknown, config: unknown) {
 				super(context, config);
@@ -252,6 +396,7 @@ class SmokeRuntime {
 			requestAnimationFrame: (listener: (time: number) => void) =>
 				this.enqueueTimer("animation_frame", () => listener(Date.now())),
 			cancelAnimationFrame: (timerId: number) => this.cancelTimer(timerId),
+			devicePixelRatio: 2,
 			localStorage: new SmokeStorage(),
 			sessionStorage: new SmokeStorage(),
 			location: { href: "http://localhost/preview/", pathname: "/preview/", search: "", hash: "" },
@@ -264,6 +409,7 @@ class SmokeRuntime {
 				},
 			},
 			Chart: RuntimeSmokeChart,
+			ResizeObserver: RuntimeSmokeResizeObserver,
 			Event: SmokeEvent,
 			Node: SmokeElement,
 			HTMLElement: SmokeElement,
@@ -278,21 +424,122 @@ class SmokeRuntime {
 				this.pendingAsyncCallbackCount = Math.max(0, this.pendingAsyncCallbackCount - 1);
 			},
 		};
-		windowObject.window = windowObject;
-		windowObject.self = windowObject;
-		windowObject.globalThis = windowObject;
 		Object.assign(this.contextValues, windowObject);
+		// A browser's Window is also the classic-script global object. Keeping a
+		// separate stand-in makes `window.foo = ...; foo()` fail only in the VM and
+		// also drops HTML named globals. Point all aliases at the context object so
+		// global property assignment and identifier lookup share browser semantics.
+		this.contextValues.window = this.contextValues;
+		this.contextValues.self = this.contextValues;
+		this.contextValues.globalThis = this.contextValues;
 		return createContext(this.contextValues);
 	}
 
+	captureDefaultView(): void {
+		const metrics = this.document.visibleMetricElements();
+		this.defaultMetricCount = metrics.length;
+		this.defaultMetricsAllEmpty = metrics.length >= 2 && metrics.every((metric) => metric.hasEmptyMetricValue());
+		this.defaultMetricsAllZero = metrics.length >= 2 && metrics.every((metric) => metric.hasOnlyZeroMetricValues());
+		this.defaultMetricsRepresentative =
+			metrics.length >= 2 && !this.defaultMetricsAllEmpty && !this.defaultMetricsAllZero;
+		this.defaultHasVisibleCanvas = this.document.elementsByTagName("canvas").some((canvas) => canvas.isVisible());
+	}
+
 	exerciseInteractions(errors: string[], warnings: string[]): void {
-		for (const element of this.document.elementsByTagName("select")) {
+		const filterActions = this.document.filterActionElements();
+		const selects = this.document.elementsByTagName("select");
+		const originalSelectValues = new Map(selects.map((element) => [element, element.value]));
+		if (filterActions.length > 0 && this.hasDeterministicFixtureData && this.defaultMetricsRepresentative) {
+			const before = this.observableDataFingerprint();
+			let defaultApplyFailed = false;
+			try {
+				for (const action of filterActions) {
+					action.dispatchEvent(new SmokeEvent("click"), (listener, event) =>
+						this.invokeCallback(listener, [event], action),
+					);
+					this.flushTimers(errors, warnings);
+				}
+			} catch (error) {
+				defaultApplyFailed = true;
+				recordRuntimeIssue(
+					error,
+					`Runtime smoke gate: default filter action handler failed: ${describeRuntimeError(error, this.sources)}`,
+					errors,
+					warnings,
+				);
+			}
+			this.recordInvalidRenderedData(errors, "after the unchanged default filter action");
+			this.recordEmptyStateChartMismatch(errors, "after the unchanged default filter action");
+			if (
+				!defaultApplyFailed &&
+				before !== this.observableDataFingerprint() &&
+				this.document.visibleMetricsAllZeroOrEmpty()
+			) {
+				const evidence = this.fixtureFieldMismatchEvidence();
+				errors.push(
+					evidence
+						? `Runtime smoke gate: applying unchanged default filters replaced representative KPI data with an empty result; ${evidence.path}:${evidence.line} filter predicate reads missing fixture field ${evidence.field}.`
+						: "Runtime smoke gate: applying unchanged default filters replaced representative KPI data with an empty result.",
+				);
+			}
+		}
+		let combinedFilterInteractionWorked = false;
+		if (filterActions.length > 0) {
+			const before = this.observableDataFingerprint();
+			for (const element of selects) {
+				const [candidate] = element.interactionCandidates();
+				if (candidate !== undefined) element.value = candidate;
+			}
+			try {
+				for (const action of filterActions) {
+					action.dispatchEvent(new SmokeEvent("click"), (listener, event) =>
+						this.invokeCallback(listener, [event], action),
+					);
+					this.flushTimers(errors, warnings);
+				}
+				combinedFilterInteractionWorked = before !== this.observableDataFingerprint();
+				if (combinedFilterInteractionWorked) this.successfulFilterInteraction = true;
+				this.recordInvalidRenderedData(errors, "after combined filter options changed");
+				this.recordEmptyStateChartMismatch(errors, "after combined filter options changed");
+			} catch (error) {
+				recordRuntimeIssue(
+					error,
+					`Runtime smoke gate: filter action handler failed: ${describeRuntimeError(error, this.sources)}`,
+					errors,
+					warnings,
+				);
+			}
+			for (const [element, value] of originalSelectValues) element.value = value;
+			try {
+				for (const action of filterActions) {
+					action.dispatchEvent(new SmokeEvent("click"), (listener, event) =>
+						this.invokeCallback(listener, [event], action),
+					);
+					this.flushTimers(errors, warnings);
+				}
+			} catch (error) {
+				recordRuntimeIssue(
+					error,
+					`Runtime smoke gate: filter action reset handler failed: ${describeRuntimeError(error, this.sources)}`,
+					errors,
+					warnings,
+				);
+			}
+		}
+		for (const element of selects) {
+			const canExercise = element.hasListeners("change") || filterActions.length > 0;
+			// Delegated events, form submission, or framework handlers are not fully
+			// represented by the synthetic DOM. Without a direct change listener or an
+			// explicit Apply/Search action, do not manufacture an inert-control error.
+			if (!canExercise) continue;
 			const originalValue = element.value;
 			const testValues = element.interactionCandidates();
 			if (testValues.length === 0) continue;
+			const beforeSnapshot = this.document.observableDataSnapshot();
 			const before = this.observableDataFingerprint();
 			let changedObservableData = false;
 			let interactionFailed = false;
+			const partialUpdateGaps = new Set<string>();
 			for (const testValue of testValues) {
 				element.value = testValue;
 				try {
@@ -300,7 +547,39 @@ class SmokeRuntime {
 						this.invokeCallback(listener, [event], element),
 					);
 					this.flushTimers(errors, warnings);
-					changedObservableData = before !== this.observableDataFingerprint();
+					if (before === this.observableDataFingerprint()) {
+						for (const action of filterActions) {
+							action.dispatchEvent(new SmokeEvent("click"), (listener, event) =>
+								this.invokeCallback(listener, [event], action),
+							);
+							this.flushTimers(errors, warnings);
+							if (before !== this.observableDataFingerprint()) break;
+						}
+					}
+					changedObservableData = changedObservableData || before !== this.observableDataFingerprint();
+					if (changedObservableData) this.successfulFilterInteraction = true;
+					if (
+						before !== this.observableDataFingerprint() &&
+						this.hasDeterministicFixtureData &&
+						!this.hasUnsimulatedExternalScripts &&
+						this.document.isSharedGlobalDashboardFilter(element) &&
+						element.listenerMatches(
+							"change",
+							/(?:renderAll|renderDashboard|updateDashboard|refreshDashboard)\s*\(/iu,
+						)
+					) {
+						for (const gap of synchronizedSurfaceGaps(beforeSnapshot, this.document.observableDataSnapshot())) {
+							partialUpdateGaps.add(gap);
+						}
+					}
+					this.recordInvalidRenderedData(
+						errors,
+						element.id ? `after select #${element.id} changed` : "after a select changed",
+					);
+					this.recordEmptyStateChartMismatch(
+						errors,
+						element.id ? `after select #${element.id} changed` : "after a select changed",
+					);
 				} catch (error) {
 					interactionFailed = true;
 					recordRuntimeIssue(
@@ -320,6 +599,12 @@ class SmokeRuntime {
 						this.invokeCallback(listener, [event], element),
 					);
 					this.flushTimers(errors, warnings);
+					for (const action of filterActions) {
+						action.dispatchEvent(new SmokeEvent("click"), (listener, event) =>
+							this.invokeCallback(listener, [event], action),
+						);
+						this.flushTimers(errors, warnings);
+					}
 				} catch (error) {
 					interactionFailed = true;
 					recordRuntimeIssue(
@@ -329,15 +614,37 @@ class SmokeRuntime {
 						warnings,
 					);
 				}
-
-				if (changedObservableData || interactionFailed) break;
 			}
-			if (!changedObservableData && !interactionFailed) {
+			const combinedInteractionExplainsEmptyDefault =
+				combinedFilterInteractionWorked && (this.defaultMetricsAllEmpty || this.defaultMetricsAllZero);
+			if (partialUpdateGaps.size > 0 && !interactionFailed) {
 				errors.push(
-					`Runtime smoke gate: select${element.id ? ` #${element.id}` : ""} changed value but did not change rendered metrics, chart data, results, or empty state.`,
+					`Runtime smoke gate: deterministic global select${element.id ? ` #${element.id}` : ""} changed some dashboard data but left synchronized surfaces unchanged: ${[...partialUpdateGaps].join(", ")}.`,
 				);
 			}
+			if (!changedObservableData && !interactionFailed && !combinedInteractionExplainsEmptyDefault) {
+				const hasFilterAction = filterActions.some((action) =>
+					/(?:filter|apply|search|query|筛选|应用|查询)/iu.test(
+						`${action.id} ${action.className} ${action.textContent}`,
+					),
+				);
+				const hasDashboardRenderListener = element.listenerMatches(
+					"change",
+					/(?:renderAll|renderDashboard|updateDashboard|refreshDashboard|applyFilters)\s*\(/iu,
+				);
+				const deterministicDashboardEvidence =
+					this.hasDeterministicFixtureData &&
+					!this.hasUnsimulatedExternalScripts &&
+					(this.defaultMetricCount >= 2 ||
+						this.document.hasDashboardDataSurfaces() ||
+						this.hasSourceDashboardDataSurfaces) &&
+					Boolean(element.id) &&
+					(this.document.isDashboardDataFilter(element) || hasDashboardRenderListener || hasFilterAction);
+				const noEffectMessage = `Runtime smoke gate: ${deterministicDashboardEvidence ? "deterministic fixture " : ""}select${element.id ? ` #${element.id}` : ""} changed value but did not change rendered metrics, chart data, results, or empty state.`;
+				(deterministicDashboardEvidence ? errors : warnings).push(noEffectMessage);
+			}
 		}
+		this.exercisePairwiseFilterStates(selects, filterActions, originalSelectValues, errors, warnings);
 		// Chart callbacks commonly re-render the page and create replacement Chart
 		// instances. Iterate a bounded snapshot: walking the live array would also
 		// visit every replacement appended by the callback and can grow forever.
@@ -354,6 +661,7 @@ class SmokeRuntime {
 			if (!onClick) continue;
 			try {
 				this.invokeCallback(onClick, [new SmokeEvent("click"), [{ index: 0 }], chart]);
+				this.recordInvalidRenderedData(errors, "after a chart mark click");
 			} catch (error) {
 				recordRuntimeIssue(
 					error,
@@ -365,6 +673,97 @@ class SmokeRuntime {
 		}
 	}
 
+	private exercisePairwiseFilterStates(
+		selects: SmokeElement[],
+		filterActions: SmokeElement[],
+		originalValues: Map<SmokeElement, string>,
+		errors: string[],
+		warnings: string[],
+	): void {
+		if (
+			!this.hasDeterministicFixtureData ||
+			(!this.document.hasDashboardDataSurfaces() && !this.hasSourceDashboardDataSurfaces)
+		) {
+			return;
+		}
+		let samples = 0;
+		outer: for (let leftIndex = 0; leftIndex < selects.length; leftIndex += 1) {
+			for (let rightIndex = leftIndex + 1; rightIndex < selects.length; rightIndex += 1) {
+				const left = selects[leftIndex];
+				const right = selects[rightIndex];
+				if (!left || !right) continue;
+				for (const leftValue of left.interactionCandidates().slice(0, 4)) {
+					for (const rightValue of right.interactionCandidates().slice(0, 4)) {
+						if (samples >= MAX_FILTER_PAIR_SAMPLES) break outer;
+						samples += 1;
+						left.value = leftValue;
+						right.value = rightValue;
+						try {
+							for (const element of [left, right]) {
+								element.dispatchEvent(new SmokeEvent("change"), (listener, event) =>
+									this.invokeCallback(listener, [event], element),
+								);
+								this.flushTimers(errors, warnings);
+							}
+							for (const action of filterActions) {
+								action.dispatchEvent(new SmokeEvent("click"), (listener, event) =>
+									this.invokeCallback(listener, [event], action),
+								);
+								this.flushTimers(errors, warnings);
+							}
+							const phase = `after selects ${left.selectorIdentity()}=${leftValue} and ${right.selectorIdentity()}=${rightValue} changed`;
+							this.recordInvalidRenderedData(errors, phase);
+							this.recordEmptyStateChartMismatch(errors, phase);
+						} catch (error) {
+							recordRuntimeIssue(
+								error,
+								`Runtime smoke gate: pairwise select handlers failed for ${left.selectorIdentity()} and ${right.selectorIdentity()}: ${describeRuntimeError(error, this.sources)}`,
+								errors,
+								warnings,
+							);
+						} finally {
+							left.value = originalValues.get(left) ?? "";
+							right.value = originalValues.get(right) ?? "";
+							for (const element of [left, right]) {
+								try {
+									element.dispatchEvent(new SmokeEvent("change"), (listener, event) =>
+										this.invokeCallback(listener, [event], element),
+									);
+									this.flushTimers(errors, warnings);
+								} catch {
+									// The original interaction error above already carries bounded evidence.
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	private recordInvalidRenderedData(errors: string[], phase: string): void {
+		const [evidence] = this.document.invalidRenderedDataSurfaces();
+		if (!evidence) return;
+		const key = `${evidence.selector}\u0000${evidence.token}\u0000${phase}`;
+		if (this.reportedInvalidRenderedData.has(key)) return;
+		this.reportedInvalidRenderedData.add(key);
+		errors.push(
+			`Runtime smoke gate: dashboard data surface ${evidence.selector} rendered invalid token ${evidence.token} ${phase}. Evidence: ${evidence.sample}`,
+		);
+	}
+
+	private recordEmptyStateChartMismatch(errors: string[], phase: string): void {
+		const evidence = this.document.dashboardEmptyStateWithChartData();
+		if (!evidence) return;
+		if (this.reportedEmptyStateChartMismatch.size >= MAX_EMPTY_STATE_CHART_MISMATCH_REPORTS) return;
+		const key = `${evidence.emptySelector}\u0000${evidence.chartSelectors.join(",")}\u0000${phase}`;
+		if (this.reportedEmptyStateChartMismatch.has(key)) return;
+		this.reportedEmptyStateChartMismatch.add(key);
+		errors.push(
+			`Runtime smoke gate: dashboard rendered explicit empty state in ${evidence.emptySelector} while chart surfaces ${evidence.chartSelectors.join(", ")} still contained data ${phase}.`,
+		);
+	}
+
 	private observableDataFingerprint(): string {
 		const activeCharts = this.charts.filter((chart) => !chart.isDestroyed()).map((chart) => chart.dataSnapshot());
 		return JSON.stringify({
@@ -372,6 +771,26 @@ class SmokeRuntime {
 			charts: activeCharts,
 			location: this.contextValues.location,
 		});
+	}
+
+	private fixtureFieldMismatchEvidence(): { path: string; line: number; field: string } | undefined {
+		const combinedSource = [...this.sources.values()].join("\n");
+		for (const [path, source] of this.sources) {
+			for (const match of source.matchAll(
+				/\.filter\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>[\s\S]{0,500}?\b\1\.([A-Za-z_$][\w$]*)/gu,
+			)) {
+				const field = match[2];
+				if (!field) continue;
+				const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+				if (new RegExp(`\\b${escaped}\\s*:`, "u").test(combinedSource)) continue;
+				return {
+					path,
+					line: source.slice(0, match.index ?? 0).split(/\r?\n/).length,
+					field,
+				};
+			}
+		}
+		return undefined;
 	}
 
 	dispatchDocumentEvent(type: string, errors: string[], warnings: string[]): void {
@@ -461,11 +880,13 @@ class SmokeRuntime {
 		);
 	}
 
-	validationErrors(): string[] {
+	validationErrors(includeRenderedState = true): string[] {
 		const errors: string[] = [];
+		if (includeRenderedState) this.recordInvalidRenderedData(errors, "during initial or restored rendering");
 		for (const message of this.consoleErrors) {
 			errors.push(`Runtime smoke gate: console.error was called with ${message}.`);
 		}
+		if (!includeRenderedState) return errors;
 		for (const element of this.document.visibleLoadingElements()) {
 			errors.push(`Runtime smoke gate: loading element #${element.id} remained visible after startup.`);
 		}
@@ -476,14 +897,14 @@ class SmokeRuntime {
 	}
 
 	validationWarnings(): string[] {
-		const metrics = this.document.visibleMetricElements();
-		if (
-			metrics.length >= 2 &&
-			this.document.elementsByTagName("canvas").some((canvas) => canvas.isVisible()) &&
-			metrics.every((metric) => metric.hasOnlyZeroMetricValues())
-		) {
+		if (this.successfulFilterInteraction && this.defaultMetricsAllEmpty) {
 			return [
-				`Runtime smoke gate: all ${metrics.length} visible KPI metrics remain zero after startup while chart content is present; verify the default view renders representative data or an explicit empty state.`,
+				`Runtime smoke gate: the default filter state leaves all ${this.defaultMetricCount} visible KPI metrics empty even though a valid filter interaction renders data; verify empty multi-select placeholders are excluded from filter values.`,
+			];
+		}
+		if (this.defaultMetricsAllZero && this.defaultHasVisibleCanvas) {
+			return [
+				`Runtime smoke gate: all ${this.defaultMetricCount} visible KPI metrics remain zero after startup while chart content is present; verify the default view renders representative data or an explicit empty state.`,
 			];
 		}
 		return [];
@@ -552,9 +973,26 @@ class SmokeEventTarget {
 		);
 	}
 
+	hasListeners(type: string): boolean {
+		return (this.listeners.get(type)?.length ?? 0) > 0 || typeof this.eventHandlerProperty(type) === "function";
+	}
+
+	listenerMatches(type: string, pattern: RegExp): boolean {
+		const propertyHandler = this.eventHandlerProperty(type);
+		return (
+			(this.listeners.get(type) ?? []).some((listener) => pattern.test(listener.toString())) ||
+			(typeof propertyHandler === "function" && pattern.test(propertyHandler.toString()))
+		);
+	}
+
 	dispatchEvent(event: SmokeEvent, invokeListener?: ListenerInvoker): boolean {
 		event.target = this;
-		for (const listener of this.listeners.get(event.type) ?? []) {
+		const propertyHandler = this.eventHandlerProperty(event.type);
+		const listeners = [
+			...(typeof propertyHandler === "function" ? [propertyHandler as Listener] : []),
+			...(this.listeners.get(event.type) ?? []),
+		];
+		for (const listener of listeners) {
 			try {
 				if (invokeListener) invokeListener(listener, event);
 				else listener(event);
@@ -564,11 +1002,16 @@ class SmokeEventTarget {
 		}
 		return !event.defaultPrevented;
 	}
+
+	private eventHandlerProperty(type: string): unknown {
+		return (this as unknown as Record<string, unknown>)[`on${type}`];
+	}
 }
 
 class SmokeDocument extends SmokeEventTarget {
 	readonly body: SmokeElement;
 	readonly documentElement: SmokeElement;
+	readonly head: SmokeElement;
 	readyState = "loading";
 	private readonly elements: SmokeElement[] = [];
 	private readonly byId = new Map<string, SmokeElement>();
@@ -579,6 +1022,7 @@ class SmokeDocument extends SmokeEventTarget {
 	) {
 		super("document");
 		this.documentElement = this.createElement("html");
+		this.head = this.createElement("head");
 		this.body = this.createElement("body");
 		this.parse(html);
 	}
@@ -588,6 +1032,10 @@ class SmokeDocument extends SmokeEventTarget {
 			tagName.toLowerCase() === "canvas" ? new SmokeCanvasElement(this) : new SmokeElement(tagName, this);
 		this.track(element);
 		return element;
+	}
+
+	createElementNS(_namespace: string | null, qualifiedName: string): SmokeElement {
+		return this.createElement(qualifiedName);
 	}
 
 	createTextNode(value: unknown): SmokeElement {
@@ -600,6 +1048,11 @@ class SmokeDocument extends SmokeEventTarget {
 		const element = this.byId.get(id) ?? null;
 		if (!element) this.missingSelectors.add(`#${id}`);
 		return element;
+	}
+
+	updateElementId(element: SmokeElement, previousId: string, nextId: string): void {
+		if (previousId && this.byId.get(previousId) === element) this.byId.delete(previousId);
+		if (nextId) this.byId.set(nextId, element);
 	}
 
 	querySelector(selector: string): SmokeElement | null {
@@ -645,18 +1098,146 @@ class SmokeDocument extends SmokeEventTarget {
 		return this.elements.filter((element) => element.isVisible() && element.hasMetricSignal());
 	}
 
+	visibleMetricsAllZeroOrEmpty(): boolean {
+		const metrics = this.visibleMetricElements();
+		return (
+			metrics.length >= 2 &&
+			metrics.every((metric) => metric.hasEmptyMetricValue() || metric.hasOnlyZeroMetricValues())
+		);
+	}
+
+	hasDashboardDataSurfaces(): boolean {
+		const semanticChartCount = this.elements.filter((element) => {
+			if (!/^(?:canvas|svg)$/iu.test(element.tagName)) return false;
+			if (!element.isVisible()) return false;
+			return VISUALIZATION_SEMANTIC_PATTERN.test(`${element.id} ${element.className}`);
+		}).length;
+		const hasDetailResult = this.elements.some((element) => {
+			const signal = `${element.id} ${element.className} ${element.tagName}`;
+			return /(?:table|tbody|detail|result)/iu.test(signal);
+		});
+		return semanticChartCount >= 2 && hasDetailResult;
+	}
+
+	dashboardEmptyStateWithChartData(): { emptySelector: string; chartSelectors: string[] } | undefined {
+		const metrics = this.visibleMetricElements();
+		if (
+			metrics.length < 2 ||
+			!metrics.every((metric) => metric.hasEmptyMetricValue() || metric.hasOnlyZeroMetricValues())
+		) {
+			return undefined;
+		}
+		const emptyResult = this.elements.find((element) => element.hasExplicitEmptyResult());
+		if (!emptyResult) return undefined;
+		const charts = this.elements.filter(
+			(element) =>
+				/^(?:canvas|svg)$/iu.test(element.tagName) &&
+				element.isVisible() &&
+				VISUALIZATION_SEMANTIC_PATTERN.test(`${element.id} ${element.className}`) &&
+				element.hasRenderedChartData(),
+		);
+		if (charts.length < 2) return undefined;
+		return {
+			emptySelector: emptyResult.selectorIdentity(),
+			chartSelectors: charts.slice(0, 8).map((chart) => chart.selectorIdentity()),
+		};
+	}
+
+	invalidRenderedDataSurfaces(): Array<{ selector: string; token: "NaN" | "undefined"; sample: string }> {
+		if (!this.hasDashboardDataSurfaces()) return [];
+		return this.elements.flatMap((element) => {
+			const invalid = element.invalidRenderedData();
+			if (!invalid) return [];
+			return [
+				{
+					selector: element.selectorIdentity(),
+					token: invalid.token,
+					sample: invalid.sample,
+				},
+			];
+		});
+	}
+
 	observableDataSnapshot(): unknown[] {
-		return this.elements.flatMap((element) => element.observableDataSnapshot());
+		const snapshots: unknown[] = [];
+		const canvases = new Map<string, unknown>();
+		for (const element of this.elements) {
+			if (element instanceof SmokeCanvasElement) {
+				const identity = element.id || element.className;
+				if (identity) canvases.set(identity, element.observableCanvasSnapshot());
+				continue;
+			}
+			snapshots.push(...element.observableDataSnapshot());
+		}
+		return [...snapshots, ...canvases.values()];
 	}
 
 	elementsByTagName(tagName: string): SmokeElement[] {
 		return this.elements.filter((element) => element.tagName.toLowerCase() === tagName.toLowerCase());
 	}
 
+	elementSibling(element: SmokeElement, direction: -1 | 1): SmokeElement | null {
+		const parent = element.parentElement;
+		const start = this.elements.indexOf(element);
+		if (start < 0) return null;
+		for (let index = start + direction; index >= 0 && index < this.elements.length; index += direction) {
+			const candidate = this.elements[index];
+			if (candidate?.parentElement === parent) return candidate;
+		}
+		return null;
+	}
+
+	elementChildren(parent: SmokeElement): SmokeElement[] {
+		return this.elements.filter((candidate) => candidate !== parent && candidate.parentElement === parent);
+	}
+
+	elementSiblingBoundary(parent: SmokeElement, direction: -1 | 1): SmokeElement | null {
+		const children = this.elementChildren(parent);
+		return direction === 1 ? (children[0] ?? null) : (children.at(-1) ?? null);
+	}
+
+	filterActionElements(): SmokeElement[] {
+		return this.elements.filter((element) => {
+			if (!/^(?:button|input)$/i.test(element.tagName) || !element.hasListeners("click")) return false;
+			return /(?:apply|filter|search|refresh|update|run)/i.test(
+				`${element.id} ${element.className} ${element.textContent}`,
+			);
+		});
+	}
+
+	isSharedGlobalDashboardFilter(element: SmokeElement): boolean {
+		let scope = element.parentElement;
+		while (scope && scope !== this.body) {
+			if (
+				/(?:^|\s)(?:filters?|filter-bar|filter-section|dashboard-filters?)(?:\s|$)/iu.test(
+					`${scope.id} ${scope.className}`,
+				)
+			) {
+				const selectCount = this.elements.filter(
+					(candidate) => candidate.tagName.toLowerCase() === "select" && scope?.contains(candidate),
+				).length;
+				return selectCount >= 2;
+			}
+			scope = scope.parentElement;
+		}
+		return false;
+	}
+
+	isDashboardDataFilter(element: SmokeElement): boolean {
+		if (/(?:filter|facet|search|query|筛选|过滤|查询)/iu.test(`${element.id} ${element.className}`)) return true;
+		if (Object.keys(element.dataset).some((key) => /(?:filter|facet|scope|query)/iu.test(key))) return true;
+		let scope = element.parentElement;
+		while (scope && scope !== this.body) {
+			if (/(?:filter|facet|search|query|筛选|过滤|查询)/iu.test(`${scope.id} ${scope.className}`)) return true;
+			scope = scope.parentElement;
+		}
+		return false;
+	}
+
 	private parse(html: string): void {
 		for (const match of html.matchAll(OPEN_TAG_PATTERN)) {
 			const tagName = match[1] ?? "";
-			if (/^(script|link|meta|title|html|body)$/i.test(tagName)) continue;
+			if (/^(script|link|meta|title|html|head|body)$/i.test(tagName)) continue;
 			const attrs = match[2] ?? "";
 			const element = this.createElement(tagName);
 			element.id = attributeMatch(attrs, ID_ATTRIBUTE_PATTERN);
@@ -667,30 +1248,73 @@ class SmokeDocument extends SmokeEventTarget {
 				element.height = numericAttributeMatch(attrs, HEIGHT_ATTRIBUTE_PATTERN, element.height);
 			}
 			element.textContent = elementText(html, tagName, match);
-			if (tagName.toLowerCase() === "select") element.setInteractionValues(selectOptionValues(html, match));
+			if (tagName.toLowerCase() === "select") element.setSelectMarkup(selectInnerMarkup(html, match));
 			for (const [name, value] of dataAttributes(attrs)) element.dataset[name] = value;
 			if (element.id) this.byId.set(element.id, element);
+		}
+		this.assignParsedParents(html);
+	}
+
+	private assignParsedParents(html: string): void {
+		const parsedElements = this.elements.slice(3);
+		const stack: Array<{ element: SmokeElement; tagName: string }> = [
+			{ element: this.documentElement, tagName: "html" },
+		];
+		let parsedIndex = 0;
+		for (const token of html.matchAll(HTML_TAG_TOKEN_PATTERN)) {
+			const closing = token[1] === "/";
+			const tagName = (token[2] ?? "").toLowerCase();
+			if (closing) {
+				let stackIndex = -1;
+				for (let index = stack.length - 1; index >= 0; index -= 1) {
+					if (stack[index]?.tagName === tagName) {
+						stackIndex = index;
+						break;
+					}
+				}
+				if (stackIndex > 0) stack.splice(stackIndex);
+				continue;
+			}
+			if (tagName === "html") continue;
+			if (tagName === "head") {
+				stack.splice(1, stack.length, { element: this.head, tagName });
+				continue;
+			}
+			if (tagName === "body") {
+				stack.splice(1, stack.length, { element: this.body, tagName });
+				continue;
+			}
+			if (/^(?:script|link|meta|title)$/iu.test(tagName)) continue;
+			const element = parsedElements[parsedIndex++];
+			if (!element) break;
+			element.setParsedParent(stack.at(-1)?.element ?? this.body);
+			const selfClosing = /\/\s*>$/u.test(token[0]);
+			if (!selfClosing && !VOID_HTML_TAG_PATTERN.test(tagName)) stack.push({ element, tagName });
 		}
 	}
 
 	private track(element: SmokeElement): void {
 		this.elements.push(element);
-		if (element.id) this.byId.set(element.id, element);
+		if (element.id) this.updateElementId(element, "", element.id);
 	}
 }
 
 class SmokeElement extends SmokeEventTarget {
-	id = "";
+	private identifier = "";
 	className = "";
 	clientWidth = 1024;
 	clientHeight = 768;
 	private text = "";
 	private html = "";
-	value = "";
+	private currentValue = "";
+	private hasExplicitSelection = false;
+	private appendedParent: SmokeElement | null = null;
+	private parsedParent: SmokeElement | null = null;
 	checked = false;
 	readonly children: SmokeElement[] = [];
 	readonly dataset: Record<string, string> = {};
 	readonly style = new SmokeStyle();
+	private readonly attributes = new Map<string, string>();
 	private interactionValues: string[] = [];
 
 	constructor(
@@ -700,18 +1324,120 @@ class SmokeElement extends SmokeEventTarget {
 		super(tagName);
 	}
 
+	get id(): string {
+		return this.identifier;
+	}
+
+	set id(value: string) {
+		const next = String(value ?? "");
+		const previous = this.identifier;
+		this.identifier = next;
+		this.ownerDocument.updateElementId(this, previous, next);
+	}
+
 	get classList(): SmokeClassList {
 		return new SmokeClassList(this);
 	}
 
 	get parentElement(): SmokeElement | null {
+		if (this.appendedParent) return this.appendedParent;
+		if (this.parsedParent) return this.parsedParent;
 		if (this.tagName.toLowerCase() === "html") return null;
-		if (this.tagName.toLowerCase() === "body") return this.ownerDocument.documentElement ?? null;
+		if (/^(?:head|body)$/iu.test(this.tagName)) return this.ownerDocument.documentElement ?? null;
 		return this.ownerDocument.body ?? null;
 	}
 
+	get nextElementSibling(): SmokeElement | null {
+		return this.ownerDocument.elementSibling(this, 1);
+	}
+
+	get previousElementSibling(): SmokeElement | null {
+		return this.ownerDocument.elementSibling(this, -1);
+	}
+
+	get parentNode(): SmokeElement | null {
+		return this.parentElement;
+	}
+
+	get firstElementChild(): SmokeElement | null {
+		return this.ownerDocument.elementSiblingBoundary(this, 1);
+	}
+
+	get lastElementChild(): SmokeElement | null {
+		return this.ownerDocument.elementSiblingBoundary(this, -1);
+	}
+
+	get firstChild(): SmokeElement | null {
+		return this.firstElementChild;
+	}
+
+	get lastChild(): SmokeElement | null {
+		return this.lastElementChild;
+	}
+
+	get childElementCount(): number {
+		return this.ownerDocument.elementChildren(this).length;
+	}
+
+	setParsedParent(parent: SmokeElement): void {
+		this.parsedParent = parent;
+	}
+
+	matches(selector: string): boolean {
+		return selectorMatches(this, selector);
+	}
+
+	closest(selector: string): SmokeElement | null {
+		let candidate: SmokeElement | null = this;
+		while (candidate) {
+			if (candidate.matches(selector)) return candidate;
+			candidate = candidate.parentElement;
+		}
+		return null;
+	}
+
+	contains(candidate: SmokeElement | null): boolean {
+		let current = candidate;
+		while (current) {
+			if (current === this) return true;
+			current = current.parentElement;
+		}
+		return false;
+	}
+
+	getBoundingClientRect(): {
+		x: number;
+		y: number;
+		left: number;
+		top: number;
+		right: number;
+		bottom: number;
+		width: number;
+		height: number;
+		toJSON: () => Record<string, number>;
+	} {
+		const width = this.clientWidth;
+		const height = this.clientHeight;
+		return {
+			x: 0,
+			y: 0,
+			left: 0,
+			top: 0,
+			right: width,
+			bottom: height,
+			width,
+			height,
+			toJSON: () => ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height }),
+		};
+	}
+
 	get textContent(): string {
-		return this.text + this.children.map((child) => child.textContent).join("");
+		return (
+			this.text +
+			this.children
+				.map((child) => child.textContent || stripTags(child.innerHTML).replace(/\s+/gu, " ").trim())
+				.join("")
+		);
 	}
 
 	set textContent(value: unknown) {
@@ -725,6 +1451,30 @@ class SmokeElement extends SmokeEventTarget {
 	set innerHTML(value: unknown) {
 		this.html = value === null ? "" : String(value);
 		if (this.html === "") this.children.length = 0;
+		if (this.tagName.toLowerCase() === "select") this.setSelectMarkup(this.html);
+	}
+
+	get value(): string {
+		return this.currentValue;
+	}
+
+	set value(value: unknown) {
+		this.currentValue = value === null || value === undefined ? "" : String(value);
+		if (this.tagName.toLowerCase() === "select") this.hasExplicitSelection = true;
+	}
+
+	get selectedOptions(): Array<{ value: string }> {
+		if (this.tagName.toLowerCase() !== "select") return [];
+		return this.hasExplicitSelection || this.currentValue ? [{ value: this.currentValue }] : [];
+	}
+
+	get options(): Array<{ value: string; selected: boolean }> {
+		if (this.tagName.toLowerCase() !== "select") return [];
+		// HTMLSelectElement.options is an iterable HTMLOptionsCollection in a real
+		// browser. The smoke runtime only needs stable value/selection semantics;
+		// exposing undefined here turns valid Array.from(select.options) code into
+		// a VM-only TypeError and then floods every exercised filter interaction.
+		return this.interactionValues.map((value) => ({ value, selected: value === this.currentValue }));
 	}
 
 	get innerText(): string {
@@ -736,6 +1486,7 @@ class SmokeElement extends SmokeEventTarget {
 	}
 
 	setAttribute(name: string, value: string): void {
+		this.attributes.set(name, value);
 		if (name === "id") this.id = value;
 		else if (name === "class") this.className = value;
 		else if (name === "style") this.style.cssText = value;
@@ -747,31 +1498,123 @@ class SmokeElement extends SmokeEventTarget {
 		if (name === "class") return this.className || null;
 		if (name === "style") return this.style.cssText || null;
 		if (name.startsWith("data-")) return this.dataset[toDatasetName(name.slice("data-".length))] ?? null;
-		return null;
+		return this.attributes.get(name) ?? null;
+	}
+
+	hasAttribute(name: string): boolean {
+		return this.getAttribute(name) !== null;
+	}
+
+	removeAttribute(name: string): void {
+		this.attributes.delete(name);
+		if (name === "id") this.id = "";
+		else if (name === "class") this.className = "";
+		else if (name === "style") this.style.cssText = "";
+		else if (name.startsWith("data-")) delete this.dataset[toDatasetName(name.slice("data-".length))];
+	}
+
+	toggleAttribute(name: string, force?: boolean): boolean {
+		const present = this.hasAttribute(name);
+		const next = force ?? !present;
+		if (next) this.setAttribute(name, "");
+		else this.removeAttribute(name);
+		return next;
 	}
 
 	appendChild(child: SmokeElement): SmokeElement {
 		this.children.push(child);
+		child.appendedParent = this;
 		if (this.tagName.toLowerCase() === "select" && child.tagName.toLowerCase() === "option") {
 			const optionValue = child.value || child.textContent;
 			if (optionValue && !this.interactionValues.includes(optionValue)) this.interactionValues.push(optionValue);
-			if (!this.value) this.value = optionValue;
+			if (!this.currentValue && !this.hasExplicitSelection) this.currentValue = optionValue;
 		}
 		return child;
 	}
 
-	setInteractionValues(values: string[]): void {
-		this.interactionValues = [...new Set(values.filter(Boolean))];
-		if (!this.value && this.interactionValues[0]) this.value = this.interactionValues[0];
+	append(...nodes: Array<SmokeElement | string>): void {
+		for (const node of nodes) this.appendChild(this.asSmokeNode(node));
+	}
+
+	prepend(...nodes: Array<SmokeElement | string>): void {
+		for (const node of [...nodes].reverse()) {
+			const child = this.asSmokeNode(node);
+			this.children.unshift(child);
+			child.appendedParent = this;
+		}
+	}
+
+	replaceChildren(...nodes: Array<SmokeElement | string>): void {
+		for (const child of this.children) child.appendedParent = null;
+		this.children.length = 0;
+		this.text = "";
+		this.html = "";
+		this.append(...nodes);
+	}
+
+	add(option: SmokeElement): void {
+		if (this.tagName.toLowerCase() !== "select" || option.tagName.toLowerCase() !== "option") {
+			throw new TypeError("HTMLSelectElement.add requires an option element.");
+		}
+		this.appendChild(option);
+	}
+
+	removeChild(child: SmokeElement): SmokeElement {
+		const index = this.children.indexOf(child);
+		if (index >= 0) this.children.splice(index, 1);
+		child.appendedParent = null;
+		child.remove();
+		return child;
+	}
+
+	insertRow(index = -1): SmokeElement {
+		return this.insertChildAt(this.ownerDocument.createElement("tr"), index);
+	}
+
+	deleteRow(index: number): void {
+		this.deleteChildAt(index);
+	}
+
+	insertCell(index = -1): SmokeElement {
+		return this.insertChildAt(this.ownerDocument.createElement("td"), index);
+	}
+
+	deleteCell(index: number): void {
+		this.deleteChildAt(index);
+	}
+
+	setSelectMarkup(markup: string): void {
+		const options = selectOptions(markup);
+		this.interactionValues = [...new Set(options.map((option) => option.value).filter(Boolean))];
+		const selected = options.find((option) => option.selected);
+		const browserDefault = selected ?? options[0];
+		this.hasExplicitSelection = browserDefault !== undefined;
+		this.currentValue = browserDefault?.value ?? "";
 	}
 
 	interactionCandidates(): string[] {
 		return this.interactionValues.filter((value) => value !== this.value);
 	}
 
+	private insertChildAt(child: SmokeElement, index: number): SmokeElement {
+		const insertionIndex = index < 0 || index >= this.children.length ? this.children.length : index;
+		this.children.splice(insertionIndex, 0, child);
+		child.appendedParent = this;
+		return child;
+	}
+
+	private deleteChildAt(index: number): void {
+		const deletionIndex = index < 0 ? this.children.length - 1 : index;
+		if (deletionIndex < 0 || deletionIndex >= this.children.length) return;
+		this.children.splice(deletionIndex, 1);
+	}
+
 	observableDataSnapshot(): unknown[] {
 		const signal = `${this.id} ${this.className}`;
 		const content = `${this.textContent} ${this.innerHTML}`.trim();
+		if (this.tagName.toLowerCase() === "svg" && VISUALIZATION_SEMANTIC_PATTERN.test(signal)) {
+			return [[this.id || this.className, "chart", content, this.style.display]];
+		}
 		const metric =
 			/\b(?:kpi|metric)-?value\b/i.test(this.className) ||
 			/(?:kpi|metric).*(?:value|yield|count|output|loss)$/i.test(this.id) ||
@@ -779,10 +1622,41 @@ class SmokeElement extends SmokeEventTarget {
 		if (metric) {
 			return [[this.id, "metric", content.match(/--|-?\d[\d,.]*(?:%|\s*Lots?)?/gi) ?? [], this.style.display]];
 		}
-		if (/\b(?:result|table|tbody|detail|empty|error)\b/i.test(signal) || /^(?:table|tbody)$/i.test(this.tagName)) {
+		if (/(?:result|table|tbody|detail|empty|error)/i.test(signal) || /^(?:table|tbody)$/i.test(this.tagName)) {
 			return [[this.id, "result", content, this.style.display]];
 		}
 		return [];
+	}
+
+	selectorIdentity(): string {
+		if (this.id) return `#${this.id}`;
+		const [firstClass] = this.className.trim().split(/\s+/u).filter(Boolean);
+		return firstClass ? `.${firstClass}` : this.tagName.toLowerCase();
+	}
+
+	invalidRenderedData(): { token: "NaN" | "undefined"; sample: string } | undefined {
+		if (!this.isVisible() || this.observableDataSnapshot().length === 0) return undefined;
+		const rendered = `${this.textContent} ${this.innerHTML}`
+			.replace(/<[^>]*>/gu, " ")
+			.replace(/\s+/gu, " ")
+			.trim();
+		if (!rendered) return undefined;
+		const metric = this.hasMetricSignal();
+		if (
+			/\bNaN\b/u.test(rendered) &&
+			(metric || /(?:\d|%|\b(?:week|month|quarter|date|lot|yield|rate|count|total)\b)/iu.test(rendered))
+		) {
+			return { token: "NaN", sample: rendered.slice(0, 180) };
+		}
+		const invalidUndefined =
+			metric ||
+			/(?:\d|[-–—:/,([])\s*undefined\b|\bundefined\s*(?:[-–—:/,)\]]|$)|\b(?:week|month|quarter|date|lot|yield|rate|count|total)\s*[:#-]?\s*undefined\b/iu.test(
+				rendered,
+			);
+		if (/\bundefined\b/u.test(rendered) && invalidUndefined) {
+			return { token: "undefined", sample: rendered.slice(0, 180) };
+		}
+		return undefined;
 	}
 
 	remove(): void {
@@ -790,11 +1664,34 @@ class SmokeElement extends SmokeEventTarget {
 	}
 
 	querySelector(selector: string): SmokeElement | null {
-		return this.ownerDocument.querySelector(selector);
+		return this.querySelectorAll(selector)[0] ?? null;
 	}
 
 	querySelectorAll(selector: string): SmokeElement[] {
-		return this.ownerDocument.querySelectorAll(selector);
+		return this.ownerDocument
+			.querySelectorAll(selector)
+			.filter((candidate) => candidate !== this && this.contains(candidate));
+	}
+
+	click(): void {
+		this.dispatchEvent(new SmokeEvent("click"));
+	}
+
+	focus(): void {
+		this.dispatchEvent(new SmokeEvent("focus"));
+	}
+
+	blur(): void {
+		this.dispatchEvent(new SmokeEvent("blur"));
+	}
+
+	scrollIntoView(): void {
+		// Geometry/scroll position is intentionally not simulated. The method is a
+		// safe no-op so valid navigation code is not reported as a script defect.
+	}
+
+	animate(): { cancel: () => void; play: () => void; finished: Promise<void> } {
+		return { cancel: () => undefined, play: () => undefined, finished: Promise.resolve() };
 	}
 
 	isVisible(): boolean {
@@ -817,7 +1714,7 @@ class SmokeElement extends SmokeEventTarget {
 	}
 
 	hasMetricSignal(): boolean {
-		const signal = `${this.id} ${this.className}`;
+		const signal = `${this.id} ${this.className}`.trim();
 		return (
 			/\b(?:kpi|metric)-?value\b/i.test(this.className) ||
 			/(?:kpi|metric).*(?:value|yield|count|output|loss)$/i.test(signal)
@@ -829,19 +1726,84 @@ class SmokeElement extends SmokeEventTarget {
 		if (!values?.length) return false;
 		return values.every((value) => Number(value.replace(/,/g, "")) === 0);
 	}
+
+	hasEmptyMetricValue(): boolean {
+		return /^(?:\s*|--|—|n\/?a|no\s+data|null|undefined)$/i.test(this.textContent.trim());
+	}
+
+	hasExplicitEmptyResult(): boolean {
+		if (!this.isVisible()) return false;
+		const signal = `${this.id} ${this.className} ${this.tagName}`;
+		if (!/(?:result|table|tbody|detail|empty)/iu.test(signal)) return false;
+		const rendered = `${this.textContent} ${this.innerHTML}`
+			.replace(/<[^>]*>/gu, " ")
+			.replace(/\s+/gu, " ")
+			.trim();
+		return /(?:no\s+(?:data|records?|results?)|nothing\s+to\s+show|暂无(?:数据|记录)|无数据)/iu.test(rendered);
+	}
+
+	hasRenderedChartData(): boolean {
+		if (this.tagName.toLowerCase() !== "svg") return false;
+		return /<(?:path|rect|circle|polyline|polygon|line)\b/iu.test(this.innerHTML) || this.hasChartShapeDescendant();
+	}
+
+	private hasChartShapeDescendant(): boolean {
+		return this.children.some(
+			(child) =>
+				/^(?:path|rect|circle|polyline|polygon|line)$/iu.test(child.tagName) || child.hasChartShapeDescendant(),
+		);
+	}
+
+	private asSmokeNode(node: SmokeElement | string): SmokeElement {
+		return typeof node === "string" ? this.ownerDocument.createTextNode(node) : node;
+	}
 }
 
 class SmokeCanvasElement extends SmokeElement {
-	width = 300;
-	height = 150;
-	private readonly context2d = new SmokeCanvasRenderingContext2D();
+	private bitmapWidth = 300;
+	private bitmapHeight = 150;
+	private context2d: SmokeCanvasRenderingContext2D | undefined;
 
 	constructor(ownerDocument: SmokeDocument) {
 		super("canvas", ownerDocument);
+		this.context2d = new SmokeCanvasRenderingContext2D(this);
+	}
+
+	get width(): number {
+		return this.bitmapWidth;
+	}
+
+	set width(value: number) {
+		this.bitmapWidth = normalizedCanvasDimension(value, 300);
+		this.context2d?.resetForBitmapResize();
+	}
+
+	get height(): number {
+		return this.bitmapHeight;
+	}
+
+	override hasRenderedChartData(): boolean {
+		return this.context2d?.hasDrawingCommands() === true;
+	}
+
+	set height(value: number) {
+		this.bitmapHeight = normalizedCanvasDimension(value, 150);
+		this.context2d?.resetForBitmapResize();
 	}
 
 	getContext(contextId: string): SmokeCanvasRenderingContext2D | null {
-		return contextId.toLowerCase() === "2d" ? this.context2d : null;
+		return contextId.toLowerCase() === "2d" ? (this.context2d ?? null) : null;
+	}
+
+	observableCanvasSnapshot(): unknown[] {
+		return [
+			this.id || this.className,
+			"canvas",
+			this.width,
+			this.height,
+			this.context2d?.snapshot() ?? [],
+			this.style.display,
+		];
 	}
 }
 
@@ -854,37 +1816,153 @@ class SmokeCanvasRenderingContext2D {
 	font = "10px sans-serif";
 	textAlign = "start";
 	globalAlpha = 1;
+	private lineDash: number[] = [];
+	private readonly commands: string[] = [];
 
-	beginPath(): void {}
-	closePath(): void {}
-	moveTo(_x: number, _y: number): void {}
-	lineTo(_x: number, _y: number): void {}
-	quadraticCurveTo(_controlX: number, _controlY: number, _x: number, _y: number): void {}
+	constructor(readonly canvas: SmokeCanvasElement) {}
+
+	beginPath(): void {
+		this.record("beginPath", []);
+	}
+	closePath(): void {
+		this.record("closePath", []);
+	}
+	moveTo(x: number, y: number): void {
+		this.record("moveTo", [x, y]);
+	}
+	lineTo(x: number, y: number): void {
+		this.record("lineTo", [x, y]);
+	}
+	quadraticCurveTo(controlX: number, controlY: number, x: number, y: number): void {
+		this.record("quadraticCurveTo", [controlX, controlY, x, y]);
+	}
 	bezierCurveTo(
-		_controlX1: number,
-		_controlY1: number,
-		_controlX2: number,
-		_controlY2: number,
-		_x: number,
-		_y: number,
-	): void {}
-	arcTo(_x1: number, _y1: number, _x2: number, _y2: number, _radius: number): void {}
-	rect(_x: number, _y: number, _width: number, _height: number): void {}
-	arc(_x: number, _y: number, _radius: number, _startAngle: number, _endAngle: number): void {}
-	fill(): void {}
-	stroke(): void {}
-	fillRect(_x: number, _y: number, _width: number, _height: number): void {}
-	strokeRect(_x: number, _y: number, _width: number, _height: number): void {}
-	clearRect(_x: number, _y: number, _width: number, _height: number): void {}
-	fillText(_text: string, _x: number, _y: number): void {}
-	strokeText(_text: string, _x: number, _y: number): void {}
-	save(): void {}
-	restore(): void {}
-	translate(_x: number, _y: number): void {}
-	rotate(_angle: number): void {}
-	scale(_x: number, _y: number): void {}
-	setTransform(..._values: number[]): void {}
-	drawImage(..._values: unknown[]): void {}
+		controlX1: number,
+		controlY1: number,
+		controlX2: number,
+		controlY2: number,
+		x: number,
+		y: number,
+	): void {
+		this.record("bezierCurveTo", [controlX1, controlY1, controlX2, controlY2, x, y]);
+	}
+	arcTo(x1: number, y1: number, x2: number, y2: number, radius: number): void {
+		this.record("arcTo", [x1, y1, x2, y2, radius]);
+	}
+	rect(x: number, y: number, width: number, height: number): void {
+		this.record("rect", [x, y, width, height]);
+	}
+	roundRect(x: number, y: number, width: number, height: number, radii?: unknown): void {
+		this.record("roundRect", [x, y, width, height, radii]);
+	}
+	arc(x: number, y: number, radius: number, startAngle: number, endAngle: number): void {
+		this.record("arc", [x, y, radius, startAngle, endAngle]);
+	}
+	ellipse(
+		x: number,
+		y: number,
+		radiusX: number,
+		radiusY: number,
+		rotation: number,
+		startAngle: number,
+		endAngle: number,
+		anticlockwise?: boolean,
+	): void {
+		this.record("ellipse", [x, y, radiusX, radiusY, rotation, startAngle, endAngle, anticlockwise]);
+	}
+	fill(): void {
+		this.record("fill", [this.fillStyle, this.globalAlpha]);
+	}
+	stroke(): void {
+		this.record("stroke", [this.strokeStyle, this.lineWidth, this.lineDash, this.globalAlpha]);
+	}
+	fillRect(x: number, y: number, width: number, height: number): void {
+		this.record("fillRect", [x, y, width, height, this.fillStyle, this.globalAlpha]);
+	}
+	strokeRect(x: number, y: number, width: number, height: number): void {
+		this.record("strokeRect", [x, y, width, height, this.strokeStyle, this.lineWidth, this.lineDash]);
+	}
+	clearRect(x: number, y: number, width: number, height: number): void {
+		this.commands.length = 0;
+		this.record("clearRect", [x, y, width, height]);
+	}
+	fillText(text: string, x: number, y: number): void {
+		this.record("fillText", [text, x, y, this.fillStyle, this.font, this.textAlign, this.globalAlpha]);
+	}
+	strokeText(text: string, x: number, y: number): void {
+		this.record("strokeText", [text, x, y, this.strokeStyle, this.font, this.textAlign, this.globalAlpha]);
+	}
+	save(): void {
+		this.record("save", []);
+	}
+	restore(): void {
+		this.record("restore", []);
+	}
+	translate(x: number, y: number): void {
+		this.record("translate", [x, y]);
+	}
+	rotate(angle: number): void {
+		this.record("rotate", [angle]);
+	}
+	scale(x: number, y: number): void {
+		this.record("scale", [x, y]);
+	}
+	transform(a: number, b: number, c: number, d: number, e: number, f: number): void {
+		this.record("transform", [a, b, c, d, e, f]);
+	}
+	setTransform(...values: number[]): void {
+		this.record("setTransform", values);
+	}
+	resetTransform(): void {
+		this.record("resetTransform", []);
+	}
+	setLineDash(values: number[]): void {
+		this.lineDash = [...values];
+	}
+	getLineDash(): number[] {
+		return [...this.lineDash];
+	}
+	clip(): void {
+		this.record("clip", []);
+	}
+	measureText(text: string): { width: number } {
+		return { width: String(text).length * 6 };
+	}
+	createLinearGradient(): { addColorStop: (_offset: number, _color: string) => void } {
+		return { addColorStop: (_offset: number, _color: string) => undefined };
+	}
+	createRadialGradient(): { addColorStop: (_offset: number, _color: string) => void } {
+		return { addColorStop: (_offset: number, _color: string) => undefined };
+	}
+	drawImage(...values: unknown[]): void {
+		this.record("drawImage", values.slice(1));
+	}
+
+	snapshot(): string[] {
+		return [...this.commands];
+	}
+
+	hasDrawingCommands(): boolean {
+		return this.commands.some((command) => !command.startsWith('["clearRect"'));
+	}
+
+	resetForBitmapResize(): void {
+		this.commands.length = 0;
+		this.fillStyle = "#000000";
+		this.strokeStyle = "#000000";
+		this.lineWidth = 1;
+		this.shadowColor = "rgba(0, 0, 0, 0)";
+		this.shadowBlur = 0;
+		this.font = "10px sans-serif";
+		this.textAlign = "start";
+		this.globalAlpha = 1;
+		this.lineDash = [];
+	}
+
+	private record(name: string, values: unknown[]): void {
+		this.commands.push(JSON.stringify([name, ...values]));
+		if (this.commands.length > 512) this.commands.splice(0, this.commands.length - 512);
+	}
 }
 
 class SmokeClassList {
@@ -1050,6 +2128,45 @@ function numericAttributeMatch(attrs: string, pattern: RegExp, fallback: number)
 	return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
+function normalizedCanvasDimension(value: number, fallback: number): number {
+	const numeric = Number(value);
+	return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : fallback;
+}
+
+function synchronizedSurfaceGaps(before: readonly unknown[], after: readonly unknown[]): string[] {
+	const beforeByKey = observableSurfaceMap(before);
+	const afterByKey = observableSurfaceMap(after);
+	const changedKinds = new Set<string>();
+	for (const [key, snapshot] of beforeByKey) {
+		const next = afterByKey.get(key);
+		if (next !== undefined && next !== snapshot) changedKinds.add(key.split("\u0000", 1)[0] ?? "");
+	}
+	const gaps: string[] = [];
+	for (const kind of ["chart", "result"] as const) {
+		if (changedKinds.has(kind)) continue;
+		const selectors = [...beforeByKey.keys()]
+			.filter((key) => key.startsWith(`${kind}\u0000`))
+			.map((key) => key.slice(kind.length + 1))
+			.filter(Boolean)
+			.slice(0, 4);
+		if (selectors.length > 0) gaps.push(`${kind} ${selectors.join("/")}`);
+	}
+	return gaps;
+}
+
+function observableSurfaceMap(snapshots: readonly unknown[]): Map<string, string> {
+	const values = new Map<string, string>();
+	for (const snapshot of snapshots) {
+		if (!Array.isArray(snapshot) || snapshot.length < 2) continue;
+		const identity = typeof snapshot[0] === "string" ? snapshot[0] : "";
+		const rawKind = typeof snapshot[1] === "string" ? snapshot[1] : "";
+		const kind = /^(?:canvas|chart)$/u.test(rawKind) ? "chart" : rawKind;
+		if (!identity || !/^(?:chart|metric|result)$/u.test(kind)) continue;
+		values.set(`${kind}\u0000${identity.startsWith("#") ? identity : `#${identity}`}`, JSON.stringify(snapshot));
+	}
+	return values;
+}
+
 function dataAttributes(attrs: string): Array<[string, string]> {
 	const values: Array<[string, string]> = [];
 	DATA_ATTRIBUTE_PATTERN.lastIndex = 0;
@@ -1066,17 +2183,24 @@ function elementText(html: string, tagName: string, match: RegExpMatchArray): st
 	return stripTags(inner).trim();
 }
 
-function selectOptionValues(html: string, match: RegExpMatchArray): string[] {
+function selectInnerMarkup(html: string, match: RegExpMatchArray): string {
 	const contentStart = (match.index ?? 0) + match[0].length;
 	const closeIndex = html.toLowerCase().indexOf("</select>", contentStart);
-	if (closeIndex < 0) return [];
-	const inner = html.slice(contentStart, closeIndex);
-	const values: string[] = [];
-	for (const option of inner.matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi)) {
-		const value = attributeMatch(option[1] ?? "", VALUE_ATTRIBUTE_PATTERN) || stripTags(option[2] ?? "").trim();
-		if (value) values.push(value);
+	return closeIndex < 0 ? "" : html.slice(contentStart, closeIndex);
+}
+
+function selectOptions(markup: string): Array<{ value: string; selected: boolean }> {
+	const options: Array<{ value: string; selected: boolean }> = [];
+	for (const option of markup.matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi)) {
+		const attrs = option[1] ?? "";
+		VALUE_ATTRIBUTE_PATTERN.lastIndex = 0;
+		const valueMatch = VALUE_ATTRIBUTE_PATTERN.exec(attrs);
+		options.push({
+			value: valueMatch ? (valueMatch[2] ?? "") : stripTags(option[2] ?? "").trim(),
+			selected: SELECTED_ATTRIBUTE_PATTERN.test(attrs),
+		});
 	}
-	return [...new Set(values)];
+	return options;
 }
 
 function selectorMatches(element: SmokeElement, selector: string): boolean {
@@ -1118,7 +2242,34 @@ function recordRuntimeIssue(error: unknown, message: string, errors: string[], w
 		warnings.push(`Runtime smoke gate skipped unsupported browser capability ${error.capability}.`);
 		return;
 	}
+	const unsupportedCapability = unsupportedSmokeCapabilityFromError(error);
+	if (unsupportedCapability) {
+		warnings.push(`Runtime smoke gate skipped unsupported browser capability ${unsupportedCapability}.`);
+		return;
+	}
 	errors.push(message);
+}
+
+function unsupportedSmokeCapabilityFromError(error: unknown): string | undefined {
+	const message = error instanceof Error ? error.message : String(error);
+	const missingGlobal = message.match(/^(?:ReferenceError:\s*)?([A-Za-z_$][\w$]*) is not defined\b/u)?.[1];
+	if (missingGlobal && BROWSER_GLOBALS_NOT_SIMULATED.has(missingGlobal)) return missingGlobal;
+	const missingMember = message.match(
+		/(?:^TypeError:\s*|\b)((?:document|navigator|window)\.[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?) is not a function\b/u,
+	)?.[1];
+	return missingMember && BROWSER_MEMBERS_NOT_SIMULATED.has(missingMember) ? missingMember : undefined;
+}
+
+function downgradeExternalScriptGlobalErrors(errors: string[], warnings: string[]): void {
+	for (let index = errors.length - 1; index >= 0; index -= 1) {
+		const message = errors[index] ?? "";
+		const missingGlobal = message.match(/(?:^|:\s*)(?:ReferenceError:\s*)?([A-Za-z_$][\w$]*) is not defined\b/u)?.[1];
+		if (!missingGlobal) continue;
+		errors.splice(index, 1);
+		warnings.push(
+			`Runtime smoke gate could not evaluate ${missingGlobal} because an external script was not simulated; this observation is advisory.`,
+		);
+	}
 }
 
 function enrichListenerError(error: unknown, listener: Listener): Error {

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Canvas Quality Dashboard Fixture</title>
+		<style>
+			:root {
+				font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+				color: #172033;
+				background: #f3f6fb;
+			}
+			* { box-sizing: border-box; }
+			body { margin: 0; min-width: 0; }
+			main { width: min(1180px, 100%); margin: 0 auto; padding: 24px; }
+			header { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+			h1 { margin: 0; font-size: clamp(1.5rem, 3vw, 2.15rem); }
+			.subtitle { margin: 6px 0 0; color: #526078; }
+			.status { color: #3154a4; font-weight: 700; }
+			.filters { display: flex; flex-wrap: wrap; gap: 12px; padding: 14px; margin-bottom: 16px; background: #fff; border: 1px solid #dce3ee; border-radius: 14px; }
+			label { display: grid; gap: 5px; color: #48566e; font-size: 0.78rem; font-weight: 700; }
+			select { min-width: 180px; padding: 9px 34px 9px 10px; border: 1px solid #aab7cc; border-radius: 8px; background: #fff; color: #172033; }
+			.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+			.card { min-width: 0; padding: 16px; background: #fff; border: 1px solid #dce3ee; border-radius: 14px; box-shadow: 0 8px 24px rgb(28 49 86 / 8%); }
+			.kpi-label { color: #526078; font-size: 0.82rem; font-weight: 700; }
+			.kpi-value { margin-top: 8px; font-size: 1.8rem; font-weight: 800; }
+			.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+			.chart-card h2 { margin: 0 0 4px; font-size: 1rem; }
+			.chart-card p { margin: 0 0 12px; color: #68758b; font-size: 0.78rem; }
+			.chart-viewport { width: 100%; height: clamp(240px, 30vw, 310px); min-width: 0; }
+			.chart-viewport canvas { display: block; width: 100%; height: 100%; }
+			.table-card h2 { margin: 0 0 12px; font-size: 1rem; }
+			.table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid #dce3ee; border-radius: 10px; }
+			table { width: 100%; border-collapse: collapse; }
+			th, td { padding: 10px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid #e8edf4; }
+			th { background: #edf3ff; color: #30405c; font-size: 0.76rem; }
+			.empty { padding: 28px 12px; text-align: center; color: #68758b; }
+			@media (max-width: 640px) {
+				main { padding: 14px; }
+				header { align-items: start; flex-direction: column; }
+				.filters, .kpis, .charts { grid-template-columns: 1fr; }
+				.filters { display: grid; }
+				select { width: 100%; min-width: 0; }
+				.chart-viewport { height: 250px; }
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<header>
+				<div><h1>Finished Lot Quality</h1><p class="subtitle">Deterministic native Canvas acceptance fixture</p></div>
+				<div class="status" id="resultSummary">12 lots · All families · All steps</div>
+			</header>
+			<section class="filters" aria-label="Dashboard filters">
+				<label>Product family<select id="familyFilter"><option value="">All families</option><option>Alpha</option><option>Beta</option></select></label>
+				<label>Process step<select id="stepFilter"><option value="">All steps</option><option>SMT</option><option>AOI</option><option>Reflow</option><option>Test</option><option>Packaging</option></select></label>
+			</section>
+			<section class="kpis" aria-label="Quality KPIs">
+				<article class="card"><div class="kpi-label">Yield</div><div class="kpi-value" id="kpiYield">--</div></article>
+				<article class="card"><div class="kpi-label">First pass yield</div><div class="kpi-value" id="kpiFpy">--</div></article>
+				<article class="card"><div class="kpi-label">Scrap rate</div><div class="kpi-value" id="kpiScrap">--</div></article>
+			</section>
+			<section class="charts" aria-label="Quality charts">
+				<article class="card chart-card"><h2>Yield by process step</h2><p>Explicit manufacturing flow order</p><div class="chart-viewport"><canvas id="yieldChart" aria-label="Yield by process step"></canvas></div></article>
+				<article class="card chart-card"><h2>Scrap rate by process step</h2><p>Higher values plot closer to the top tick</p><div class="chart-viewport"><canvas id="scrapChart" aria-label="Scrap by process step"></canvas></div></article>
+			</section>
+			<section class="card table-card"><h2>Lot details</h2><div class="table-scroll"><table><thead><tr><th>Lot</th><th>Family</th><th>Step</th><th>Status</th><th>First pass</th></tr></thead><tbody id="lotTableBody"></tbody></table></div></section>
+		</main>
+		<script>
+			const PROCESS_ORDER = ["SMT", "AOI", "Reflow", "Test", "Packaging"];
+			const LOTS = [
+				{ lot: "LOT-001", family: "Alpha", step: "SMT", status: "Pass", firstPass: true },
+				{ lot: "LOT-002", family: "Alpha", step: "AOI", status: "Pass", firstPass: true },
+				{ lot: "LOT-003", family: "Alpha", step: "Reflow", status: "Fail", firstPass: false },
+				{ lot: "LOT-004", family: "Alpha", step: "Test", status: "Pass", firstPass: false },
+				{ lot: "LOT-005", family: "Alpha", step: "Packaging", status: "Scrap", firstPass: false },
+				{ lot: "LOT-006", family: "Alpha", step: "SMT", status: "Pass", firstPass: true },
+				{ lot: "LOT-007", family: "Beta", step: "SMT", status: "Pass", firstPass: true },
+				{ lot: "LOT-008", family: "Beta", step: "AOI", status: "Fail", firstPass: false },
+				{ lot: "LOT-009", family: "Beta", step: "Reflow", status: "Pass", firstPass: true },
+				{ lot: "LOT-010", family: "Beta", step: "Test", status: "Pass", firstPass: true },
+				{ lot: "LOT-011", family: "Beta", step: "Packaging", status: "Pass", firstPass: true },
+				{ lot: "LOT-012", family: "Beta", step: "Packaging", status: "Scrap", firstPass: false }
+			];
+			const familyFilter = document.getElementById("familyFilter");
+			const stepFilter = document.getElementById("stepFilter");
+			const kpiYield = document.getElementById("kpiYield");
+			const kpiFpy = document.getElementById("kpiFpy");
+			const kpiScrap = document.getElementById("kpiScrap");
+			const lotTableBody = document.getElementById("lotTableBody");
+			const resultSummary = document.getElementById("resultSummary");
+			const yieldChart = document.getElementById("yieldChart");
+			const scrapChart = document.getElementById("scrapChart");
+			let filteredLots = LOTS;
+
+			function rate(rows, predicate) { return rows.length ? rows.filter(predicate).length / rows.length * 100 : 0; }
+			function formatRate(value) { return `${value.toFixed(1)}%`; }
+			function chartSeries(rows, predicate) {
+				return PROCESS_ORDER.map((label) => {
+					const stepRows = rows.filter((row) => row.step === label);
+					return { label, value: rate(stepRows, predicate) };
+				});
+			}
+
+			function drawLineChart(canvas, points, color) {
+				const viewport = canvas.parentElement;
+				const rect = viewport.getBoundingClientRect();
+				if (rect.width <= 0 || rect.height <= 0) return;
+				canvas.dataset.seriesSignature = points.map((point) => `${point.label}:${point.value.toFixed(2)}`).join("|");
+				const dpr = Math.max(1, window.devicePixelRatio || 1);
+				canvas.width = Math.round(rect.width * dpr);
+				canvas.height = Math.round(rect.height * dpr);
+				const ctx = canvas.getContext("2d");
+				ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+				ctx.clearRect(0, 0, rect.width, rect.height);
+				const margin = { top: 18, right: 14, bottom: 42, left: 42 };
+				const plotWidth = rect.width - margin.left - margin.right;
+				const plotHeight = rect.height - margin.top - margin.bottom;
+				ctx.font = "11px system-ui";
+				ctx.lineWidth = 1;
+				for (let index = 0; index <= 4; index += 1) {
+					const y = margin.top + plotHeight * index / 4;
+					const tick = 100 - index * 25;
+					ctx.strokeStyle = "#e2e8f2";
+					ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(rect.width - margin.right, y); ctx.stroke();
+					ctx.fillStyle = "#637089"; ctx.textAlign = "right"; ctx.fillText(`${tick}%`, margin.left - 7, y + 4);
+				}
+				ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.beginPath();
+				points.forEach((point, index) => {
+					const x = margin.left + plotWidth * index / Math.max(points.length - 1, 1);
+					const y = margin.top + plotHeight * (1 - point.value / 100);
+					if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+				});
+				ctx.stroke();
+				points.forEach((point, index) => {
+					const x = margin.left + plotWidth * index / Math.max(points.length - 1, 1);
+					const y = margin.top + plotHeight * (1 - point.value / 100);
+					ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
+					ctx.fillStyle = "#526078"; ctx.textAlign = "center"; ctx.fillText(point.label, x, rect.height - 15);
+				});
+			}
+
+			function render() {
+				const familyValue = familyFilter.value === "All families" ? "" : familyFilter.value;
+				const stepValue = stepFilter.value === "All steps" ? "" : stepFilter.value;
+				filteredLots = LOTS.filter((row) => (!familyValue || row.family === familyValue) && (!stepValue || row.step === stepValue));
+				kpiYield.textContent = formatRate(rate(filteredLots, (row) => row.status === "Pass"));
+				kpiFpy.textContent = formatRate(rate(filteredLots, (row) => row.status === "Pass" && row.firstPass));
+				kpiScrap.textContent = formatRate(rate(filteredLots, (row) => row.status === "Scrap"));
+				resultSummary.textContent = `${filteredLots.length} lots · ${familyValue || "All families"} · ${stepValue || "All steps"}`;
+				lotTableBody.innerHTML = filteredLots.length ? filteredLots.map((row) => `<tr><td>${row.lot}</td><td>${row.family}</td><td>${row.step}</td><td>${row.status}</td><td>${row.firstPass ? "Yes" : "No"}</td></tr>`).join("") : '<tr><td colspan="5" class="empty">No matching lots</td></tr>';
+				drawLineChart(yieldChart, chartSeries(filteredLots, (row) => row.status === "Pass"), "#3154a4");
+				drawLineChart(scrapChart, chartSeries(filteredLots, (row) => row.status === "Scrap"), "#b4472f");
+			}
+
+			familyFilter.addEventListener("change", render);
+			stepFilter.addEventListener("change", render);
+			const resizeObserver = new ResizeObserver(render);
+			document.querySelectorAll(".chart-viewport").forEach((viewport) => resizeObserver.observe(viewport));
+			render();
+		</script>
+	</body>
+</html>

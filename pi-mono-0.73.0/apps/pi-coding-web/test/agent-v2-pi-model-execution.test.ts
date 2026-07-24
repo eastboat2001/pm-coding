@@ -30,6 +30,97 @@ const SECRET_KEY = "task5-secret-api-key";
 const RAW_PROVIDER_SECRET = "raw-provider-secret";
 
 describe("AgentV2PiModelExecution", () => {
+	it("uses the selected App Generation model for one bounded automatic Skill routing call", async () => {
+		const complete = vi.fn(async () =>
+			assistantMessage(
+				JSON.stringify({
+					selectedSkillNames: ["dashboard-design"],
+					reason: "The dashboard requirement clearly matches.",
+				}),
+			),
+		);
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete,
+		});
+		const input = executionInput();
+		const selection = await execution.selectAutomaticSkills({
+			run: input.run,
+			request: {
+				catalogFingerprint: `sha256:${"a".repeat(64)}`,
+				candidates: [
+					{
+						name: "dashboard-design",
+						description: "Use this skill when building dashboards. Do not use for games.",
+					},
+				],
+				candidateCount: 1,
+				omittedCandidateCount: 0,
+				maxSelections: 2,
+				productContext: {
+					title: "Operations dashboard",
+					objective: "Build an operations dashboard.",
+					blueprintTitle: "Dashboard",
+					blueprintSummary: "Charts and filters",
+					requirements: ["Show KPI cards and charts."],
+				},
+			},
+			signal: new AbortController().signal,
+		});
+
+		expect(selection).toMatchObject({
+			selectedSkillNames: ["dashboard-design"],
+			provider: "trusted-provider",
+			model: "trusted-model",
+		});
+		expect(complete).toHaveBeenCalledTimes(1);
+		expect(complete.mock.calls[0]?.[1]?.systemPrompt).toContain("optional Skill router");
+		expect(complete.mock.calls[0]?.[2]).toMatchObject({
+			apiKey: SECRET_KEY,
+			maxTokens: 768,
+			sessionId: "agent-v2:run-a:skill-selection",
+			maxRetries: 0,
+		});
+	});
+
+	it("does not retry malformed optional Skill routing output", async () => {
+		const complete = vi.fn(async () => assistantMessage("not-json"));
+		const execution = new AgentV2PiModelExecution({
+			modelRegistry: registry(trustedModel()),
+			resolveApiKey: () => SECRET_KEY,
+			complete,
+		});
+		const input = executionInput();
+
+		await expect(
+			execution.selectAutomaticSkills({
+				run: input.run,
+				request: {
+					catalogFingerprint: `sha256:${"a".repeat(64)}`,
+					candidates: [
+						{
+							name: "dashboard-design",
+							description: "Use this skill when building dashboards. Do not use for games.",
+						},
+					],
+					candidateCount: 1,
+					omittedCandidateCount: 0,
+					maxSelections: 2,
+					productContext: {
+						title: "Dashboard",
+						objective: "Build a dashboard.",
+						blueprintTitle: "",
+						blueprintSummary: "",
+						requirements: [],
+					},
+				},
+				signal: new AbortController().signal,
+			}),
+		).rejects.toThrow(/valid JSON/i);
+		expect(complete).toHaveBeenCalledTimes(1);
+	});
+
 	it("shares the canonical start model-reference contract with the worker adapter", async () => {
 		expect(AGENT_V2_MODEL_PROVIDER_MAX_LENGTH).toBe(128);
 		expect(AGENT_V2_MODEL_ID_MAX_LENGTH).toBe(256);

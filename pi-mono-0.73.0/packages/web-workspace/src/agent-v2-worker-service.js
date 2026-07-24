@@ -4,7 +4,10 @@ import { runAgentV2ShutdownSteps, } from "./agent-v2-lifecycle.js";
 import { phaseForAgentV2Task } from "./agent-v2-state-machine.js";
 import { transitionAgentV2Task } from "./agent-v2-task-engine.js";
 const DEFAULT_CLAIM_TIMEOUT_MS = 250;
-const DEFAULT_CANCEL_POLL_INTERVAL_MS = 50;
+// Cancellation is user-facing control state, not lease ownership state. Polling
+// Redis twenty times per second per active run adds avoidable load and makes a
+// transient slow command more likely to be mistaken for an unsafe claim.
+const DEFAULT_CANCEL_POLL_INTERVAL_MS = 250;
 const DEFAULT_CONTROL_OPERATION_TIMEOUT_MS = 1_000;
 const DEFAULT_EXPIRED_CLAIM_RECOVERY_INTERVAL_MS = 5_000;
 const DEFAULT_IDLE_SLEEP_MS = 25;
@@ -212,12 +215,12 @@ export class AgentV2WorkerService {
         await this.queue.requeueActive(this.workerId);
         await this.recoverExpiredClaims();
     }
-    async appendDiagnostic(run, code, message, retryable) {
+    async appendDiagnostic(run, code, message, retryable, severity = "error") {
         const diagnostic = createAgentV2DiagnosticEvent({
             diagnosticId: `${code}:${run.runId}:${randomUUID()}`,
             clientId: run.clientId,
             runId: run.runId,
-            severity: "error",
+            severity,
             category: "worker",
             code,
             phase: run.phase,
@@ -441,6 +444,7 @@ export class AgentV2WorkerService {
             controlAbortController: new AbortController(),
             controlPromise: Promise.resolve(),
             currentStepAbortController: undefined,
+            cancelPollPromise: undefined,
             cancelRequested: false,
             ownership: "owned",
             ownershipResolutionPromise: undefined,
@@ -513,14 +517,30 @@ export class AgentV2WorkerService {
         }
     }
     async monitorCancellation(control) {
-        const poll = await runBoundedControl(this.queue.isCancelRequested({ clientId: control.claim.clientId, runId: control.claim.runId }), this.controlOperationTimeoutMs);
+        let operation = control.cancelPollPromise;
+        if (!operation) {
+            operation = this.queue.isCancelRequested({ clientId: control.claim.clientId, runId: control.claim.runId });
+            control.cancelPollPromise = operation;
+            void operation
+                .then((cancelRequested) => {
+                if (!cancelRequested)
+                    return;
+                control.cancelRequested = true;
+                control.abortController.abort();
+            }, () => undefined)
+                .finally(() => {
+                if (control.cancelPollPromise === operation)
+                    control.cancelPollPromise = undefined;
+            });
+        }
+        const poll = await runBoundedControl(operation, this.controlOperationTimeoutMs);
         if (poll.kind === "timeout") {
-            this.markControlUnsafe(control, "agent_v2.worker_cancel_poll_timeout", "Agent v2 cancellation monitoring timed out; the run was stopped safely.");
-            return false;
+            this.addControlDiagnostic(control, "agent_v2.worker_cancel_poll_timeout", "Agent v2 cancellation monitoring timed out transiently and will be retried while lease ownership remains healthy.", true, "warn");
+            return true;
         }
         if (poll.kind === "rejected") {
-            this.markControlUnsafe(control, "agent_v2.worker_cancel_poll_failed", "Agent v2 cancellation monitoring failed; the run was stopped safely.");
-            return false;
+            this.addControlDiagnostic(control, "agent_v2.worker_cancel_poll_failed", "Agent v2 cancellation monitoring failed transiently and will be retried while lease ownership remains healthy.", true, "warn");
+            return true;
         }
         if (!poll.value)
             return true;
@@ -624,7 +644,7 @@ export class AgentV2WorkerService {
     async flushControlDiagnostics(run, control) {
         for (const diagnostic of control.pendingDiagnostics.splice(0)) {
             try {
-                await this.appendDiagnostic(run, diagnostic.code, diagnostic.message, diagnostic.retryable);
+                await this.appendDiagnostic(run, diagnostic.code, diagnostic.message, diagnostic.retryable, diagnostic.severity);
             }
             catch {
                 console.error("[agent_v2.worker_control_diagnostic_failed] Agent v2 worker could not persist a control diagnostic.");
@@ -647,10 +667,10 @@ export class AgentV2WorkerService {
         control.ownership = "uncertain";
         control.currentStepAbortController?.abort(OWNERSHIP_CONTROL_ABORT_REASON);
     }
-    addControlDiagnostic(control, code, message, retryable) {
+    addControlDiagnostic(control, code, message, retryable, severity = "error") {
         if (control.pendingDiagnostics.some((diagnostic) => diagnostic.code === code))
             return;
-        control.pendingDiagnostics.push({ code, message, retryable });
+        control.pendingDiagnostics.push({ code, message, retryable, severity });
     }
     async scheduleRunRetry(run, code, message) {
         if (run.status !== "running" || run.attempt >= this.maxRunAttempts || !this.store.commitAgentV2RunRetry) {
